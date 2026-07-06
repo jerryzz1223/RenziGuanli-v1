@@ -244,6 +244,10 @@ for (const marker of [
 	"离职",
 	"合同记录",
 	"办理人事异动",
+	"编辑资料",
+	"can_edit_employee_detail",
+	"data-action=\"edit-employee\"",
+	"frappe.set_route(\"Form\", \"Employee\", this.employee)",
 	"修改部门、岗位、职务、职级等信息建议通过人事异动完成",
 	"添加更多员工档案字段",
 	"hrms-employee-detail-readonly-notice",
@@ -269,10 +273,14 @@ for (const marker of [
 	mustInclude(employeeDetailJs + employeeApi, marker, `Employee detail page is missing: ${marker}`);
 }
 
-for (const forbiddenMarker of ["data-edit-section", "frappe.prompt(", "quick_update_employee_roster", "frappe.set_route(\"Form\", \"Employee\""]) {
+for (const forbiddenMarker of ["data-edit-section", "frappe.prompt(", "quick_update_employee_roster"]) {
 	if (employeeDetailJs.includes(forbiddenMarker)) {
 		throw new Error(`Employee detail page must be read-only and route edits through personnel actions, but found: ${forbiddenMarker}`);
 	}
+}
+
+if (!employeeDetailJs.includes("Administrator") || !employeeDetailJs.includes("System Manager")) {
+	throw new Error("Employee detail edit action must be restricted to Administrator/System Manager.");
 }
 
 console.log("Personnel roster uses real Frappe Employee routes and custom interactive assets.");

@@ -129,6 +129,7 @@ class HybridOrganizationChart {
 		if (action === "edit-department") this.edit_department();
 		if (action === "delete-department") this.delete_department();
 		if (action === "open-employee") this.open_employee(element?.dataset.employee);
+		if (action === "open-person") this.show_person_detail(this.read_person_payload(element));
 	}
 
 	load_tree() {
@@ -201,7 +202,7 @@ class HybridOrganizationChart {
 					class="hrms-org-node hrms-org-node--${frappe.utils.escape_html(node.node_type || "default")}"
 					data-node-id="${frappe.utils.escape_html(node.node_id)}"
 					data-node-type="${frappe.utils.escape_html(node.node_type)}"
-					data-search-text="${frappe.utils.escape_html([node.name, node.title, node.department].filter(Boolean).join(" "))}"
+					data-search-text="${frappe.utils.escape_html(this.node_search_text(node))}"
 				>
 					<div class="hrms-org-node-bar"></div>
 					<div class="hrms-org-node-body">
@@ -221,7 +222,24 @@ class HybridOrganizationChart {
 		`;
 	}
 
+	node_search_text(node) {
+		const people = (node.people || [])
+			.flatMap((person) => [person.name, person.employee_name, person.department, person.designation])
+			.filter(Boolean);
+		return [node.name, node.title, node.department, ...people].filter(Boolean).join(" ");
+	}
+
 	render_node_lines(node) {
+		if (node.people && node.people.length) {
+			const visible_people = node.people.slice(0, 8);
+			const hidden_count = Math.max(node.people.length - visible_people.length, 0);
+			return `
+				<div class="hrms-org-node-lines">
+					${this.render_person_tokens(visible_people)}
+					${hidden_count ? `<span class="hrms-org-person-more">${__("+{0} 人", [hidden_count])}</span>` : ""}
+				</div>
+			`;
+		}
 		const lines = (node.employee_names && node.employee_names.length ? node.employee_names : node.lines) || [];
 		if (!lines.length) return "";
 		const visible_lines = lines.slice(0, 8);
@@ -232,6 +250,49 @@ class HybridOrganizationChart {
 				${hidden_count ? `<em>${__("+{0} 人", [hidden_count])}</em>` : ""}
 			</div>
 		`;
+	}
+
+	render_person_tokens(people, options = {}) {
+		const list = options.limit ? people.slice(0, options.limit) : people;
+		return list
+			.map((person) => {
+				const matched = Boolean(person.employee || person.matched_employee);
+				const meta = [person.role, person.designation, person.department_label || person.department]
+					.filter(Boolean)
+					.join(" · ");
+				const label = [person.role, person.employee_name || person.name].filter(Boolean).join("：");
+				return `
+					<button
+						type="button"
+						class="hrms-org-person-token ${matched ? "" : "is-unmatched"}"
+						data-action="open-person"
+						data-person-name="${frappe.utils.escape_html(person.name || person.employee_name || "")}"
+						data-employee="${frappe.utils.escape_html(person.employee || "")}"
+						data-person-payload="${frappe.utils.escape_html(this.person_payload(person))}"
+						title="${frappe.utils.escape_html([person.match_status, meta].filter(Boolean).join(" · "))}"
+					>
+						<span>${frappe.utils.escape_html(label || "")}</span>
+						${options.showMeta && meta ? `<small>${frappe.utils.escape_html(meta)}</small>` : ""}
+					</button>
+				`;
+			})
+			.join("");
+	}
+
+	person_payload(person) {
+		return encodeURIComponent(JSON.stringify(person || {}));
+	}
+
+	read_person_payload(element) {
+		try {
+			return JSON.parse(decodeURIComponent(element?.dataset.personPayload || "{}"));
+		} catch (error) {
+			return {
+				name: element?.dataset.personName || "",
+				employee: element?.dataset.employee || "",
+				employee_name: element?.dataset.personName || "",
+			};
+		}
 	}
 
 	select_node(node_id, node_type) {
@@ -288,6 +349,7 @@ class HybridOrganizationChart {
 				<strong>${__("花名册字段匹配")}</strong>
 				<p>${__("现职务/职位 -> 岗位，部门 -> 部门，上级主管/直接上级 -> 汇报对象，职级 -> 员工等级。")}</p>
 			</div>
+			${this.render_people_list(detail.people || [])}
 			${this.render_employee_list(detail.employees || [])}
 		`;
 	}
@@ -301,6 +363,18 @@ class HybridOrganizationChart {
 		`;
 	}
 
+	render_people_list(people) {
+		if (!people.length) return "";
+		return `
+			<div class="hrms-org-people">
+				<div class="hrms-org-section-title">${__("职位与人员匹配")}</div>
+				<div class="hrms-org-person-grid">
+					${this.render_person_tokens(people, { showMeta: true })}
+				</div>
+			</div>
+		`;
+	}
+
 	render_employee_list(employees) {
 		if (!employees.length) {
 			return `<div class="hrms-org-empty">${__("当前节点没有匹配员工。")}</div>`;
@@ -310,16 +384,37 @@ class HybridOrganizationChart {
 				<div class="hrms-org-section-title">${__("员工清单")}</div>
 				${employees
 					.map(
-						(employee) => `
+						(employee) => {
+							const matched = Boolean(employee.name && employee.matched_employee !== false);
+							const person_payload = this.person_payload({
+								name: employee.employee_name || employee.name,
+								employee: matched ? employee.name : "",
+								employee_name: employee.employee_name || employee.name,
+								employee_code: employee.employee_code,
+								department: employee.department,
+								designation: employee.designation,
+								grade: employee.grade,
+								reports_to: employee.reports_to,
+								branch: employee.branch,
+								cell_number: employee.cell_number,
+								matched_employee: matched,
+								match_status: employee.match_status || (matched ? __("已匹配员工档案") : __("待匹配员工档案")),
+							});
+							return `
 							<div class="hrms-org-employee-row" data-employee="${frappe.utils.escape_html(employee.name || "")}">
 								<div class="hrms-org-avatar">${frappe.utils.escape_html((employee.employee_name || employee.name || "?").slice(0, 1))}</div>
 								<div>
 									<strong>${frappe.utils.escape_html(employee.employee_name || employee.name || "")}</strong>
 									<span>${frappe.utils.escape_html([employee.employee_code, employee.designation, employee.grade].filter(Boolean).join(" · "))}</span>
-									<small>${frappe.utils.escape_html([employee.department, employee.branch, employee.cell_number].filter(Boolean).join(" · "))}</small>
+									<small>${frappe.utils.escape_html([employee.department, employee.branch, employee.cell_number, employee.match_status].filter(Boolean).join(" · "))}</small>
 								</div>
-								<button class="btn btn-xs btn-link" data-action="open-employee" data-employee="${frappe.utils.escape_html(employee.name || "")}">${__("资料")}</button>
-							</div>`,
+								${
+									matched
+										? `<button class="btn btn-xs btn-link" data-action="open-employee" data-employee="${frappe.utils.escape_html(employee.name || "")}">${__("资料")}</button>`
+										: `<button class="btn btn-xs btn-link" data-action="open-person" data-person-name="${frappe.utils.escape_html(employee.employee_name || "")}" data-person-payload="${frappe.utils.escape_html(person_payload)}">${__("详情")}</button>`
+								}
+							</div>`;
+						},
 					)
 					.join("")}
 			</div>
@@ -525,6 +620,43 @@ class HybridOrganizationChart {
 		if (employee) {
 			frappe.set_route("Form", "Employee", employee);
 		}
+	}
+
+	show_person_detail(person) {
+		if (!person || !(person.employee_name || person.name)) return;
+		const employee = person.employee || "";
+		const fields = [
+			[__("匹配状态"), person.match_status || (employee ? __("已匹配员工档案") : __("待匹配员工档案"))],
+			[__("员工编号"), person.employee_code],
+			[__("部门"), person.department_label || person.department],
+			[__("职位"), person.designation || person.role],
+			[__("职级"), person.grade],
+			[__("上级"), person.reports_to],
+			[__("分支/区域"), person.branch],
+			[__("联系电话"), person.cell_number],
+		].filter((row) => row[1]);
+		this.wrapper.querySelector("[data-detail]").innerHTML = `
+			<div class="hrms-org-detail-head">
+				<div>
+					<h3>${frappe.utils.escape_html(person.employee_name || person.name)}</h3>
+					<p>${frappe.utils.escape_html([person.role, person.match_status].filter(Boolean).join(" · "))}</p>
+				</div>
+				<div class="hrms-org-detail-actions">
+					${employee ? `<button class="btn btn-xs btn-default" data-action="open-employee" data-employee="${frappe.utils.escape_html(employee)}">${__("打开员工档案")}</button>` : ""}
+				</div>
+			</div>
+			<div class="hrms-org-person-detail">
+				${fields
+					.map(
+						([label, value]) => `
+							<div>
+								<span>${frappe.utils.escape_html(label)}</span>
+								<strong>${frappe.utils.escape_html(value || "")}</strong>
+							</div>`,
+					)
+					.join("")}
+			</div>
+		`;
 	}
 
 	get_selected_department() {

@@ -165,6 +165,11 @@ class EmployeeDetailPage {
 					justify-content: flex-end;
 					max-width: 390px;
 				}
+				.hrms-employee-detail-section-tools {
+					display: flex;
+					align-items: center;
+					gap: 8px;
+				}
 				.hrms-employee-detail-action-strip .btn-primary {
 					background-color: var(--hrms-accent);
 					border-color: var(--hrms-accent);
@@ -520,6 +525,7 @@ class EmployeeDetailPage {
 						</div>
 					</div>
 					<div class="hrms-employee-detail-actions hrms-employee-detail-action-strip">
+						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="edit-employee">${__("编辑资料")}</button>` : ""}
 						<button class="btn btn-default btn-sm" data-action="compare">${__("员工对比")}</button>
 						<button class="btn btn-primary btn-sm" data-action="transfer">${__("办理人事异动")}</button>
 						<button class="btn btn-default btn-sm" data-action="promotion">${__("转正")}</button>
@@ -663,7 +669,10 @@ class EmployeeDetailPage {
 			<div class="hrms-employee-detail-section hrms-employee-detail-section-card">
 				<div class="hrms-employee-detail-section__header">
 					<h3>${frappe.utils.escape_html(__(tab_label))}</h3>
-					<span class="text-muted">${__("只读")}</span>
+					<div class="hrms-employee-detail-section-tools">
+						<span class="text-muted">${__("只读")}</span>
+						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-xs" data-action="edit-employee">${__("编辑资料")}</button>` : ""}
+					</div>
 				</div>
 				${
 					fields.length
@@ -823,6 +832,16 @@ class EmployeeDetailPage {
 				frappe.set_route("staff-attribute-settings");
 			});
 		});
+		this.wrapper.querySelectorAll("[data-action='edit-employee']").forEach((button) => {
+			button.addEventListener("click", (event) => {
+				event.preventDefault();
+				if (!this.can_edit_employee_detail()) {
+					frappe.msgprint(__("只有管理员可以编辑员工资料。"));
+					return;
+				}
+				frappe.set_route("Form", "Employee", this.employee);
+			});
+		});
 		this.wrapper.querySelectorAll("[data-action='promotion']").forEach((button) => {
 			button.addEventListener("click", () => frappe.new_doc("Employee Promotion", { employee: this.employee }));
 		});
@@ -855,6 +874,16 @@ class EmployeeDetailPage {
 
 	join_values(values) {
 		return values.filter((value) => value !== null && value !== undefined && value !== "").join(" / ");
+	}
+
+	can_edit_employee_detail() {
+		const serverPermission = this.detail?.permissions?.can_edit_employee_detail;
+		if (serverPermission !== undefined) {
+			return Boolean(serverPermission);
+		}
+		const user = frappe.session?.user || "";
+		const roles = frappe.boot?.user?.roles || [];
+		return user === "Administrator" || roles.includes("System Manager");
 	}
 
 	calculate_service_years(date_of_joining) {

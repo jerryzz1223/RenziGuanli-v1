@@ -280,6 +280,44 @@
 	line-height: 1.35;
 }
 
+.hrms-org-person-token {
+	background: transparent;
+	border: 0;
+	border-radius: 4px;
+	color: #1f2933;
+	display: block;
+	font-size: 11px;
+	line-height: 1.35;
+	margin: 1px auto;
+	max-width: 100%;
+	padding: 1px 3px;
+	text-align: center;
+	width: fit-content;
+}
+
+.hrms-org-person-token:hover {
+	background: #e8f7ef;
+	color: #087a4a;
+}
+
+.hrms-org-person-token.is-unmatched {
+	color: #a15c00;
+}
+
+.hrms-org-person-token small {
+	color: #667085;
+	display: block;
+	font-size: 10px;
+	margin-top: 1px;
+}
+
+.hrms-org-person-more {
+	color: #8a94a6;
+	display: block;
+	font-size: 11px;
+	margin-top: 2px;
+}
+
 .hrms-org-node-toggle {
 	background: #fff;
 	border: 1px solid #d9e0e7;
@@ -353,6 +391,50 @@
 	font-size: 14px;
 	font-weight: 700;
 	margin: 16px 0 8px;
+}
+
+.hrms-org-person-grid {
+	display: grid;
+	gap: 6px;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hrms-org-person-grid .hrms-org-person-token {
+	background: #f7f9fb;
+	border: 1px solid #e5e9ef;
+	padding: 7px;
+	text-align: left;
+	width: 100%;
+}
+
+.hrms-org-person-grid .hrms-org-person-token:hover {
+	border-color: #b9e7d2;
+}
+
+.hrms-org-person-detail {
+	display: grid;
+	gap: 8px;
+	margin-top: 14px;
+}
+
+.hrms-org-person-detail div {
+	background: #f7f9fb;
+	border: 1px solid #e5e9ef;
+	border-radius: 6px;
+	padding: 9px;
+}
+
+.hrms-org-person-detail span {
+	color: #667085;
+	display: block;
+	font-size: 12px;
+}
+
+.hrms-org-person-detail strong {
+	color: #1f2933;
+	display: block;
+	font-size: 14px;
+	margin-top: 2px;
 }
 
 .hrms-org-employee-row {

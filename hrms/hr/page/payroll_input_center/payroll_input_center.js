@@ -5,8 +5,14 @@ frappe.pages["payroll-input-center"].on_page_load = function (wrapper) {
 		single_column: true,
 	});
 
-	const view = new PayrollInputCenter(page);
-	view.show();
+	wrapper.payroll_input_center = new PayrollInputCenter(page);
+	wrapper.payroll_input_center.show();
+};
+
+frappe.pages["payroll-input-center"].on_page_show = function (wrapper) {
+	if (wrapper.payroll_input_center) {
+		wrapper.payroll_input_center.refresh_from_route();
+	}
 };
 
 class PayrollInputCenter {
@@ -18,7 +24,7 @@ class PayrollInputCenter {
 		this.data_closure_file_url = "";
 		this.payroll_month = frappe.datetime.str_to_obj(frappe.datetime.get_today()).toISOString().slice(0, 7);
 		this.can_edit_payroll_rules = false;
-		this.active_tab = frappe.get_route()[1] || "salary-rules";
+		this.show_all_settlement_details = false;
 		this.tabs = [
 			{ key: "employee-salary", label: "员工薪资" },
 			{ key: "monthly-payroll", label: "月工资表" },
@@ -35,12 +41,50 @@ class PayrollInputCenter {
 			{ key: "annual-bonus", label: "年终奖计算" },
 			{ key: "salary-slips", label: "发送工资条" },
 		];
+		this.active_tab = this.resolve_tab(frappe.get_route()[1] || "salary-rules");
 	}
 
 	show() {
 		this.page.set_primary_action(__("上传薪资变量"), () => this.open_uploader());
+		this.bind_route_events();
 		this.render();
 		this.load_active_tab();
+	}
+
+	bind_route_events() {
+		if (this.route_events_bound) return;
+		this.route_events_bound = true;
+		this.handle_hrms_route_change = (event) => {
+			const tab = this.tab_from_route_detail(event.detail);
+			if (tab) this.refresh_from_route(tab);
+		};
+		window.addEventListener("hrms:route-change", this.handle_hrms_route_change);
+	}
+
+	tab_from_current_route() {
+		const route = frappe.get_route ? frappe.get_route() : [];
+		return this.resolve_tab(route[1] || "salary-rules");
+	}
+
+	tab_from_route_detail(detail) {
+		const value = String((detail && (detail.slug || detail.route)) || "");
+		const normalized = value.replace(/^\/desk\/?/, "").replace(/^\/app\/?/, "").replace(/\/$/, "");
+		const parts = normalized.split("/").filter(Boolean);
+		if (parts[0] !== "payroll-input-center") return "";
+		return this.resolve_tab(parts[1] || "salary-rules");
+	}
+
+	refresh_from_route(tab = "") {
+		const next_tab = this.resolve_tab(tab || this.tab_from_current_route());
+		const has_body = Boolean(this.body());
+		if (next_tab === this.active_tab && has_body) return;
+		this.active_tab = next_tab;
+		this.render();
+		this.load_active_tab();
+	}
+
+	resolve_tab(tab) {
+		return this.tabs.some((item) => item.key === tab) ? tab : "salary-rules";
 	}
 
 	render() {
@@ -855,11 +899,19 @@ class PayrollInputCenter {
 				</div>
 				<div data-preview>${result ? this.render_preview(result) : `<div class="text-muted">${frappe.utils.escape_html(__("上传后会先预览各工作表行数，不会立即写入。"))}</div>`}</div>
 			</div>
+			<div class="hrms-payroll-input-panel">
+				<div class="hrms-payroll-input-list-head">
+					<h3>${frappe.utils.escape_html(__("导入批次"))}</h3>
+					<div class="text-muted">${frappe.utils.escape_html(__("可追溯上次导入来源表单；删除批次会同步清空同月份薪资输入表，结算表不会自动删除。"))}</div>
+				</div>
+				<div data-import-batch-table></div>
+			</div>
 			<div data-variable-table></div>
 		`;
 		this.body().querySelector("[data-upload-zone]").addEventListener("click", () => this.open_uploader());
 		const importButton = this.body().querySelector("[data-import]");
 		if (importButton) importButton.addEventListener("click", () => this.import_payroll_variable_workbook());
+		this.load_import_batches();
 		this.load_variables();
 	}
 
@@ -908,8 +960,86 @@ class PayrollInputCenter {
 			})
 			.then(() => {
 				frappe.show_alert({ message: __("薪资变量导入完成"), indicator: "green" });
+				this.load_import_batches();
 				this.load_variables();
 			});
+	}
+
+	load_import_batches() {
+		frappe.call({
+			method: "hrms.api.payroll_input.list_payroll_variable_import_batches",
+			args: { payroll_month: this.payroll_month },
+			callback: (response) => {
+				const target = this.wrapper.querySelector("[data-import-batch-table]");
+				if (!target) return;
+				this.render_import_batches(target, response.message || []);
+			},
+		});
+	}
+
+	render_import_batches(target, rows) {
+		target.innerHTML = `
+			<div class="hrms-payroll-table-wrap">
+				<table class="table table-bordered hrms-payroll-input-table">
+					<thead>
+						<tr>
+							<th>${frappe.utils.escape_html(__("薪资月份"))}</th>
+							<th>${frappe.utils.escape_html(__("来源文件"))}</th>
+							<th>${frappe.utils.escape_html(__("来源工作表"))}</th>
+							<th>${frappe.utils.escape_html(__("变量行数"))}</th>
+							<th>${frappe.utils.escape_html(__("导入人"))}</th>
+							<th>${frappe.utils.escape_html(__("导入时间"))}</th>
+							<th>${frappe.utils.escape_html(__("状态"))}</th>
+							<th>${frappe.utils.escape_html(__("操作"))}</th>
+						</tr>
+					</thead>
+					<tbody>
+						${
+							rows.length
+								? rows.map((row) => `
+									<tr>
+										<td>${frappe.utils.escape_html(row.payroll_month || "")}</td>
+										<td>${frappe.utils.escape_html(row.source_file_label || row.source_file || "")}</td>
+										<td>${frappe.utils.escape_html(row.source_sheets || "")}</td>
+										<td>${frappe.utils.escape_html(String(row.actual_variable_rows ?? row.variable_rows ?? 0))}</td>
+										<td>${frappe.utils.escape_html(row.imported_by || "")}</td>
+										<td>${frappe.utils.escape_html(row.imported_on || "")}</td>
+										<td>${frappe.utils.escape_html(row.status || "")}</td>
+										<td><button class="btn btn-danger btn-xs" data-delete-import-batch="${frappe.utils.escape_html(row.name)}">${frappe.utils.escape_html(__("删除批次"))}</button></td>
+									</tr>
+								`).join("")
+								: `<tr><td colspan="8" class="text-muted">${frappe.utils.escape_html(__("暂无导入批次"))}</td></tr>`
+						}
+					</tbody>
+				</table>
+			</div>
+		`;
+		target.querySelectorAll("[data-delete-import-batch]").forEach((button) => {
+			button.addEventListener("click", () => this.delete_import_batch(button.dataset.deleteImportBatch));
+		});
+	}
+
+	delete_import_batch(batch_name) {
+		frappe.confirm(
+			__("确认删除该导入批次？同月份薪资输入表已清空，请重新生成；结算表不会自动删除。"),
+			() => {
+				frappe.call({
+					method: "hrms.api.payroll_input.delete_payroll_variable_import_batch",
+					args: { batch_name },
+					freeze: true,
+					freeze_message: __("正在删除导入批次..."),
+					callback: (response) => {
+						const result = response.message || {};
+						frappe.show_alert({
+							message: result.message || __("导入批次已删除，同月份薪资输入表已清空，请重新生成；结算表不会自动删除。"),
+							indicator: "orange",
+						});
+						this.load_import_batches();
+						this.load_variables();
+					},
+				});
+			},
+		);
 	}
 
 	load_variables() {
@@ -919,53 +1049,108 @@ class PayrollInputCenter {
 			callback: (response) => {
 				const target = this.wrapper.querySelector("[data-variable-table]");
 				if (!target) return;
-				target.innerHTML = this.render_table("薪资变量记录", ["姓名", "工号", "部门", "变量类型", "金额", "来源工作表"], response.message || [], (row) => [
-					row.employee_name,
-					row.employee_code,
-					row.department,
-					row.variable_type,
-					row.amount,
-					row.source_sheet,
-				]);
+				this.render_variable_records(target, response.message || []);
 			},
 		});
+	}
+
+	render_variable_records(target, rows) {
+		target.innerHTML = `
+			<div class="hrms-payroll-table-wrap">
+				<table class="table table-bordered hrms-payroll-input-table">
+					<thead>
+						<tr>
+							<th>${frappe.utils.escape_html(__("姓名"))}</th>
+							<th>${frappe.utils.escape_html(__("工号"))}</th>
+							<th>${frappe.utils.escape_html(__("部门"))}</th>
+							<th>${frappe.utils.escape_html(__("变量类型"))}</th>
+							<th>${frappe.utils.escape_html(__("金额"))}</th>
+							<th>${frappe.utils.escape_html(__("来源工作表"))}</th>
+							<th>${frappe.utils.escape_html(__("导入批次"))}</th>
+							<th>${frappe.utils.escape_html(__("操作"))}</th>
+						</tr>
+					</thead>
+					<tbody>
+						${
+							rows.length
+								? rows.map((row) => `
+									<tr>
+										<td>${frappe.utils.escape_html(row.employee_name || "")}</td>
+										<td>${frappe.utils.escape_html(row.employee_code || "")}</td>
+										<td>${frappe.utils.escape_html(row.department || "")}</td>
+										<td>${frappe.utils.escape_html(row.variable_type || "")}</td>
+										<td>${frappe.utils.escape_html(this.format_money(row.amount))}</td>
+										<td>${frappe.utils.escape_html(row.source_sheet || "")}</td>
+										<td>${frappe.utils.escape_html(row.import_batch || "")}</td>
+										<td><button class="btn btn-default btn-xs" data-edit-variable-record="${frappe.utils.escape_html(row.name)}">${frappe.utils.escape_html(__("编辑"))}</button></td>
+									</tr>
+								`).join("")
+								: `<tr><td colspan="8" class="text-muted">${frappe.utils.escape_html(__("薪资变量记录暂无数据"))}</td></tr>`
+						}
+					</tbody>
+				</table>
+			</div>
+		`;
+		target.querySelectorAll("[data-edit-variable-record]").forEach((button) => {
+			const row = rows.find((item) => item.name === button.dataset.editVariableRecord);
+			button.addEventListener("click", () => this.edit_variable_record(row));
+		});
+	}
+
+	edit_variable_record(row) {
+		if (!row) return;
+		frappe.prompt(
+			[
+				{ fieldname: "employee", fieldtype: "Link", options: "Employee", label: __("员工"), default: row.employee },
+				{ fieldname: "employee_code", fieldtype: "Data", label: __("工号"), default: row.employee_code },
+				{ fieldname: "employee_name", fieldtype: "Data", label: __("姓名"), default: row.employee_name },
+				{ fieldname: "department", fieldtype: "Link", options: "Department", label: __("部门"), default: row.department },
+				{ fieldname: "variable_type", fieldtype: "Select", label: __("变量类型"), options: "全勤奖\n住房补贴\n学历补贴\n宿舍扣款\n社保个人\n公积金个人\n其他奖金\n其他扣款\n底薪\n职能津贴\n证书及多能工津贴\n薪资小计\n生产奖\n提案改善奖\n继续服务奖\n所得税\n年终奖所得税\n水电费及扣款\n社保公司\n公积金公司\n已发福利\n夜班津贴\n迟到金额+全勤奖扣款", default: row.variable_type },
+				{ fieldname: "amount", fieldtype: "Currency", label: __("金额"), default: row.amount },
+				{ fieldname: "source_sheet", fieldtype: "Data", label: __("来源工作表"), default: row.source_sheet },
+				{ fieldname: "remarks", fieldtype: "Small Text", label: __("备注"), default: row.remarks },
+			],
+			(values) => {
+				frappe.call({
+					method: "hrms.api.payroll_input.update_payroll_variable_record",
+					args: Object.assign({ name: row.name }, values),
+					freeze: true,
+					freeze_message: __("正在保存薪资变量明细..."),
+					callback: (response) => {
+						frappe.show_alert({
+							message: response.message?.message || __("薪资变量明细已保存；同月份薪资输入表已清空，请重新生成；结算表不会自动删除。"),
+							indicator: "green",
+						});
+						this.load_variables();
+					},
+				});
+			},
+			__("编辑薪资变量明细"),
+		);
 	}
 
 	load_inputs() {
 		this.body().innerHTML = `
 			<div class="hrms-payroll-input-list-head">
-				<h3>${frappe.utils.escape_html(__("薪资输入表"))}</h3>
+				<div>
+					<h3>${frappe.utils.escape_html(__("薪资输入表"))}</h3>
+					<div class="text-muted">${frappe.utils.escape_html(__("按员工花名册、考勤终稿和福利扣款来源生成计薪输入，先核对工时和变量，再进入结算。"))}</div>
+				</div>
 				<button class="btn btn-primary btn-sm" data-generate>${frappe.utils.escape_html(__("生成薪资输入表"))}</button>
+			</div>
+			<div data-input-cards></div>
+			<div class="hrms-payroll-filter-row">
+				<input class="form-control" data-input-search placeholder="${frappe.utils.escape_html(__("姓名、工号、部门"))}">
+				<span class="text-muted" data-input-count></span>
 			</div>
 			<div data-input-table></div>
 		`;
 		this.body().querySelector("[data-generate]").addEventListener("click", () => this.generate_payroll_input_records());
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_input_records",
-			args: { payroll_month: this.payroll_month },
+			args: { payroll_month: this.payroll_month, page_length: 500 },
 			callback: (response) => {
-				const target = this.wrapper.querySelector("[data-input-table]");
-				if (!target) return;
-				target.innerHTML = this.render_table("薪资输入表", ["姓名", "工号", "部门", "标准工时", "实际出勤", "调整后工时", "1.5倍加班", "2倍加班", "3倍加班", "红绿苹果", "全勤奖", "住房补贴", "学历补贴", "宿舍扣款", "社保个人", "公积金个人", "应发前置合计", "应扣前置合计"], response.message || [], (row) => [
-					row.employee_name,
-					row.employee_code,
-					row.department,
-					row.standard_hours,
-					row.actual_attendance_hours,
-					row.adjusted_working_hours,
-					row.overtime_1_5_hours,
-					row.overtime_2_hours,
-					row.overtime_3_hours,
-					row.apple_reward_amount,
-					row.full_attendance_bonus,
-					row.housing_subsidy,
-					row.education_subsidy,
-					row.dormitory_deduction,
-					row.social_security_personal,
-					row.housing_fund_personal,
-					row.preliminary_earning_total,
-					row.preliminary_deduction_total,
-				]);
+				this.render_payroll_input_rows(response.message || []);
 			},
 		});
 	}
@@ -980,53 +1165,213 @@ class PayrollInputCenter {
 		});
 	}
 
+	render_payroll_input_rows(rows) {
+		const search = this.wrapper.querySelector("[data-input-search]");
+		const cardsTarget = this.wrapper.querySelector("[data-input-cards]");
+		const tableTarget = this.wrapper.querySelector("[data-input-table]");
+		const countTarget = this.wrapper.querySelector("[data-input-count]");
+		if (!tableTarget) return;
+		const render = () => {
+			const filteredRows = this.filter_people_rows(rows, search && search.value);
+			if (countTarget) countTarget.textContent = __("{0} 条 / 共 {1} 条", [filteredRows.length, rows.length]);
+			if (cardsTarget) {
+				cardsTarget.innerHTML = this.render_metric_cards([
+					{ label: "员工", value: rows.length },
+					{ label: "实际出勤", value: this.format_number(this.sum(rows, "actual_attendance_hours")) },
+					{ label: "调整后工时", value: this.format_number(this.sum(rows, "adjusted_working_hours")) },
+					{ label: "加班合计", value: this.format_number(this.sum(rows, "overtime_1_5_hours") + this.sum(rows, "overtime_2_hours") + this.sum(rows, "overtime_3_hours")) },
+				]);
+			}
+			tableTarget.innerHTML = this.render_table("薪资输入表", ["姓名", "工号", "部门", "标准工时", "实际出勤", "调整后工时", "1.5倍加班", "2倍加班", "3倍加班", "红绿苹果", "全勤奖", "住房补贴", "学历补贴", "宿舍扣款", "社保个人", "公积金个人", "应发前置合计", "应扣前置合计", "状态"], filteredRows, (row) => [
+				row.employee_name,
+				row.employee_code,
+				row.department,
+				this.format_number(row.standard_hours),
+				this.format_number(row.actual_attendance_hours),
+				this.format_number(row.adjusted_working_hours),
+				this.format_number(row.overtime_1_5_hours),
+				this.format_number(row.overtime_2_hours),
+				this.format_number(row.overtime_3_hours),
+				this.format_money(row.apple_reward_amount),
+				this.format_money(row.full_attendance_bonus),
+				this.format_money(row.housing_subsidy),
+				this.format_money(row.education_subsidy),
+				this.format_money(row.dormitory_deduction),
+				this.format_money(row.social_security_personal),
+				this.format_money(row.housing_fund_personal),
+				this.format_money(row.preliminary_earning_total),
+				this.format_money(row.preliminary_deduction_total),
+				row.settlement_status,
+			]);
+		};
+		if (search) search.addEventListener("input", render);
+		render();
+	}
+
 	load_settlements() {
 		this.body().innerHTML = `
 			<div class="hrms-payroll-input-list-head">
-				<h3>${frappe.utils.escape_html(__("薪资结算表"))}</h3>
-				<button class="btn btn-primary btn-sm" data-generate-settlement>${frappe.utils.escape_html(__("生成薪资结算表"))}</button>
+				<div>
+					<h3>${frappe.utils.escape_html(__("薪资结算表"))}</h3>
+					<div class="text-muted">${frappe.utils.escape_html(__("由薪资主数据、月度考勤终稿、福利扣款来源和薪资输入表计算生成；导入完整薪资表时也会保留同口径字段。"))}</div>
+				</div>
+				<div class="hrms-payroll-action-group">
+					<button class="btn btn-default btn-sm" data-toggle-settlement-details>
+						${frappe.utils.escape_html(__(this.show_all_settlement_details ? "收起细项" : "显示所有细项"))}
+					</button>
+					<button class="btn btn-primary btn-sm" data-generate-settlement>${frappe.utils.escape_html(__("生成薪资结算表"))}</button>
+				</div>
 			</div>
-			<div class="text-muted">
-				${frappe.utils.escape_html(__("按公司薪资结算表口径汇总底薪、加班费、夜班津贴、奖金、扣款、计税工资、实发工资和公司实际负担总计。"))}
+			<div data-settlement-dependencies></div>
+			<div data-settlement-cards></div>
+			<div class="hrms-payroll-filter-row">
+				<input class="form-control" data-settlement-search placeholder="${frappe.utils.escape_html(__("姓名、工号、部门"))}">
+				<span class="text-muted" data-settlement-count></span>
 			</div>
 			<div data-settlement-table></div>
 		`;
 		this.body().querySelector("[data-generate-settlement]").addEventListener("click", () => this.generate_payroll_settlement_records());
+		this.body().querySelector("[data-toggle-settlement-details]").addEventListener("click", () => {
+			this.show_all_settlement_details = !this.show_all_settlement_details;
+			this.load_settlements();
+		});
+		this.load_settlement_dependencies();
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_settlement_records",
-			args: { payroll_month: this.payroll_month },
+			args: { payroll_month: this.payroll_month, page_length: 500 },
 			callback: (response) => {
-				const target = this.wrapper.querySelector("[data-settlement-table]");
-				if (!target) return;
-				target.innerHTML = this.render_table("薪资结算表", ["姓名", "工号", "部门", "底薪", "薪资小计", "标准工时", "基本出勤", "平日加班", "周末加班", "节假日加班", "加班费小计", "夜班津贴", "出勤工资", "奖金小计", "惩处小计", "应付工资", "社保个人", "公积金个人", "计税工资", "所得税", "水电费及扣款", "实发工资", "社保公司", "公积金公司", "公司实际负担总计"], response.message || [], (row) => [
-					row.employee_name,
-					row.employee_code,
-					row.department,
-					row.base_salary,
-					row.salary_subtotal,
-					row.standard_hours,
-					row.basic_attendance_hours,
-					row.weekday_overtime_hours,
-					row.weekend_overtime_hours,
-					row.holiday_overtime_hours,
-					row.overtime_pay_total,
-					row.night_shift_allowance,
-					row.attendance_wage,
-					row.bonus_total,
-					row.punishment_total,
-					row.gross_pay,
-					row.social_security_personal,
-					row.housing_fund_personal,
-					row.taxable_salary,
-					row.income_tax,
-					row.utilities_deduction,
-					row.net_pay,
-					row.social_security_company,
-					row.housing_fund_company,
-					row.company_cost_total,
-				]);
+				this.render_payroll_settlement_rows(response.message || []);
 			},
 		});
+	}
+
+	load_settlement_dependencies() {
+		frappe.call({
+			method: "hrms.api.payroll_input.list_payroll_dependency_status",
+			args: { payroll_month: this.payroll_month },
+			callback: (response) => {
+				const target = this.wrapper.querySelector("[data-settlement-dependencies]");
+				if (!target) return;
+				const rows = (response.message || []).filter((row) =>
+					["员工花名册", "薪资主数据/薪资异动", "月度考勤终稿", "福利扣款来源", "薪资输入表", "薪资结算表"].includes(row.source),
+				);
+				target.innerHTML = this.render_dependency_strip(rows);
+			},
+		});
+	}
+
+	render_payroll_settlement_rows(rows) {
+		const search = this.wrapper.querySelector("[data-settlement-search]");
+		const cardsTarget = this.wrapper.querySelector("[data-settlement-cards]");
+		const tableTarget = this.wrapper.querySelector("[data-settlement-table]");
+		const countTarget = this.wrapper.querySelector("[data-settlement-count]");
+		if (!tableTarget) return;
+		const render = () => {
+			const filteredRows = this.filter_people_rows(rows, search && search.value);
+			if (countTarget) countTarget.textContent = __("{0} 条 / 共 {1} 条", [filteredRows.length, rows.length]);
+			if (cardsTarget) {
+				cardsTarget.innerHTML = this.render_metric_cards([
+					{ label: "员工", value: rows.length },
+					{ label: "应付工资", value: this.format_money(this.sum(rows, "gross_pay")) },
+					{ label: "实发工资", value: this.format_money(this.sum(rows, "net_pay")) },
+					{ label: "公司负担", value: this.format_money(this.sum(rows, "company_cost_total")) },
+				]);
+			}
+			const columns = this.settlement_columns(this.show_all_settlement_details);
+			tableTarget.innerHTML = this.render_table("薪资结算表", columns.map((column) => column.label), filteredRows, (row) =>
+				columns.map((column) => this.format_settlement_cell(row, column)),
+			);
+		};
+		if (search) search.addEventListener("input", render);
+		render();
+	}
+
+	settlement_columns(show_all_details) {
+		const core = [
+			{ label: "姓名", field: "employee_name", type: "text" },
+			{ label: "工号", field: "employee_code", type: "text" },
+			{ label: "部门", field: "department", type: "text" },
+			{ label: "底薪", field: "base_salary", type: "money" },
+			{ label: "薪资小计", field: "salary_subtotal", type: "money" },
+			{ label: "标准工时", field: "standard_hours", type: "number" },
+			{ label: "基本出勤", field: "basic_attendance_hours", type: "number" },
+			{ label: "平日加班", field: "weekday_overtime_hours", type: "number" },
+			{ label: "周末加班", field: "weekend_overtime_hours", type: "number" },
+			{ label: "节假日加班", field: "holiday_overtime_hours", type: "number" },
+			{ label: "加班费", field: "overtime_pay_total", type: "money" },
+			{ label: "夜班津贴", field: "night_shift_allowance", type: "money" },
+			{ label: "出勤工资", field: "attendance_wage", type: "money" },
+			{ label: "奖金", field: "bonus_total", type: "money" },
+			{ label: "惩处", field: "punishment_total", type: "money" },
+			{ label: "应付工资", field: "gross_pay", type: "money" },
+			{ label: "社保个人", field: "social_security_personal", type: "money" },
+			{ label: "公积金个人", field: "housing_fund_personal", type: "money" },
+			{ label: "计税工资", field: "taxable_salary", type: "money" },
+			{ label: "所得税", field: "income_tax", type: "money" },
+			{ label: "水电扣款", field: "utilities_deduction", type: "money" },
+			{ label: "实发工资", field: "net_pay", type: "money" },
+			{ label: "社保公司", field: "social_security_company", type: "money" },
+			{ label: "公积金公司", field: "housing_fund_company", type: "money" },
+			{ label: "公司负担", field: "company_cost_total", type: "money" },
+			{ label: "状态", field: "calculation_status", type: "text" },
+		];
+		if (!show_all_details) return core;
+		return [
+			{ label: "姓名", field: "employee_name", type: "text" },
+			{ label: "工号", field: "employee_code", type: "text" },
+			{ label: "部门", field: "department", type: "text" },
+			{ label: "底薪", field: "base_salary", type: "money" },
+			{ label: "职能津贴", field: "function_allowance", type: "money" },
+			{ label: "证书及多能工津贴", field: "certificate_skill_allowance", type: "money" },
+			{ label: "薪资小计", field: "salary_subtotal", type: "money" },
+			{ label: "标准工时", field: "standard_hours", type: "number" },
+			{ label: "基本出勤工时", field: "basic_attendance_hours", type: "number" },
+			{ label: "缺勤工时", field: "missing_hours", type: "number" },
+			{ label: "调整前周末加班", field: "raw_weekend_overtime_hours", type: "number" },
+			{ label: "调整后缺勤工时", field: "adjusted_absence_hours", type: "number" },
+			{ label: "缺勤扣除金额", field: "absence_deduction_amount", type: "money" },
+			{ label: "调整后周末加班", field: "weekend_overtime_hours", type: "number" },
+			{ label: "平日加班时数", field: "weekday_overtime_hours", type: "number" },
+			{ label: "节假日加班时数", field: "holiday_overtime_hours", type: "number" },
+			{ label: "平日加班工资", field: "weekday_overtime_pay", type: "money" },
+			{ label: "周末加班工资", field: "weekend_overtime_pay", type: "money" },
+			{ label: "节假日加班工资", field: "holiday_overtime_pay", type: "money" },
+			{ label: "加班费小计", field: "overtime_pay_total", type: "money" },
+			{ label: "大夜班次数", field: "large_night_shift_count", type: "number" },
+			{ label: "小夜班次数", field: "small_night_shift_count", type: "number" },
+			{ label: "夜班津贴", field: "night_shift_allowance", type: "money" },
+			{ label: "出勤工资", field: "attendance_wage", type: "money" },
+			{ label: "提案改善奖", field: "proposal_improvement_bonus", type: "money" },
+			{ label: "红绿苹果", field: "apple_reward_amount", type: "money" },
+			{ label: "补贴奖金合计", field: "subsidy_bonus_total", type: "money" },
+			{ label: "生产奖", field: "production_bonus", type: "money" },
+			{ label: "奖金合计", field: "bonus_total", type: "money" },
+			{ label: "旷工时数", field: "absenteeism_hours", type: "number" },
+			{ label: "旷工扣款", field: "absenteeism_deduction", type: "money" },
+			{ label: "迟到/全勤扣款", field: "late_full_attendance_deduction", type: "money" },
+			{ label: "惩处小计", field: "punishment_total", type: "money" },
+			{ label: "应付工资", field: "gross_pay", type: "money" },
+			{ label: "社保个人", field: "social_security_personal", type: "money" },
+			{ label: "公积金个人", field: "housing_fund_personal", type: "money" },
+			{ label: "已发福利", field: "paid_proposal_birthday_welfare", type: "money" },
+			{ label: "计税工资", field: "taxable_salary", type: "money" },
+			{ label: "继续服务奖", field: "continuing_service_bonus", type: "money" },
+			{ label: "所得税", field: "income_tax", type: "money" },
+			{ label: "年终奖所得税", field: "year_end_bonus_tax", type: "money" },
+			{ label: "水电费及扣款", field: "utilities_deduction", type: "money" },
+			{ label: "实发工资", field: "net_pay", type: "money" },
+			{ label: "社保公司", field: "social_security_company", type: "money" },
+			{ label: "公积金公司", field: "housing_fund_company", type: "money" },
+			{ label: "公司实际负担总计", field: "company_cost_total", type: "money" },
+			{ label: "调整后实发工资", field: "export_tax_adjusted_net_pay", type: "money" },
+			{ label: "状态", field: "calculation_status", type: "text" },
+		];
+	}
+
+	format_settlement_cell(row, column) {
+		if (column.type === "money") return this.format_money(row[column.field]);
+		if (column.type === "number") return this.format_number(row[column.field]);
+		return row[column.field];
 	}
 
 	generate_payroll_settlement_records() {
@@ -1175,6 +1520,31 @@ class PayrollInputCenter {
 		});
 	}
 
+	filter_people_rows(rows, keyword) {
+		const text = String(keyword || "").trim().toLowerCase();
+		if (!text) return rows;
+		return rows.filter((row) =>
+			[row.employee_name, row.employee_code, row.department, row.designation, row.calculation_status, row.settlement_status]
+				.some((value) => String(value || "").toLowerCase().includes(text)),
+		);
+	}
+
+	sum(rows, fieldname) {
+		return rows.reduce((total, row) => total + (Number(row[fieldname]) || 0), 0);
+	}
+
+	format_number(value) {
+		const number = Number(value);
+		if (!Number.isFinite(number)) return "";
+		return number.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+	}
+
+	format_money(value) {
+		const number = Number(value);
+		if (!Number.isFinite(number)) return "";
+		return number.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+	}
+
 	render_metric_cards(cards) {
 		return `
 			<div class="hrms-payroll-metric-grid">
@@ -1192,18 +1562,38 @@ class PayrollInputCenter {
 		`;
 	}
 
+	render_dependency_strip(rows) {
+		return `
+			<div class="hrms-payroll-source-strip">
+				${rows
+					.map(
+						(row) => `
+							<div class="hrms-payroll-source-item">
+								<span>${frappe.utils.escape_html(__(row.source || ""))}</span>
+								<strong>${frappe.utils.escape_html(String(row.count ?? 0))}</strong>
+								<em>${frappe.utils.escape_html(__(row.status || ""))}</em>
+							</div>
+						`,
+					)
+					.join("")}
+			</div>
+		`;
+	}
+
 	render_table(title, columns, rows, mapRow) {
 		return `
-			<table class="table table-bordered hrms-payroll-input-table">
-				<thead><tr>${columns.map((column) => `<th>${frappe.utils.escape_html(__(column))}</th>`).join("")}</tr></thead>
-				<tbody>
-					${
-						rows.length
-							? rows.map((row) => `<tr>${mapRow(row).map((cell) => `<td>${frappe.utils.escape_html(String(cell ?? ""))}</td>`).join("")}</tr>`).join("")
-							: `<tr><td colspan="${columns.length}" class="text-muted">${frappe.utils.escape_html(__(`${title}暂无数据`))}</td></tr>`
-					}
-				</tbody>
-			</table>
+			<div class="hrms-payroll-table-wrap">
+				<table class="table table-bordered hrms-payroll-input-table">
+					<thead><tr>${columns.map((column) => `<th>${frappe.utils.escape_html(__(column))}</th>`).join("")}</tr></thead>
+					<tbody>
+						${
+							rows.length
+								? rows.map((row) => `<tr>${mapRow(row).map((cell) => `<td>${frappe.utils.escape_html(String(cell ?? ""))}</td>`).join("")}</tr>`).join("")
+								: `<tr><td colspan="${columns.length}" class="text-muted">${frappe.utils.escape_html(__(`${title}暂无数据`))}</td></tr>`
+						}
+					</tbody>
+				</table>
+			</div>
 		`;
 	}
 }

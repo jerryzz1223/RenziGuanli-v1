@@ -1915,6 +1915,104 @@ def import_payroll_variable_workbook(file_url: str, payroll_month: str = ""):
 	return {"batch": batch.name, "variable_rows": len(created), **settlement_result}
 
 
+def _source_file_label(file_url):
+	return (file_url or "").split("/")[-1] or file_url or ""
+
+
+@frappe.whitelist()
+def list_payroll_variable_import_batches(payroll_month: str = "", page_length: int = 20):
+	filters = {"payroll_month": payroll_month} if payroll_month else {}
+	batches = frappe.get_all(
+		VARIABLE_BATCH_DOCTYPE,
+		filters=filters,
+		fields=["name", "payroll_month", "source_file", "status", "variable_rows", "imported_by", "imported_on", "modified"],
+		order_by="imported_on desc, modified desc",
+		limit_page_length=int(page_length or 20),
+	)
+	for batch in batches:
+		rows = frappe.get_all(
+			VARIABLE_RECORD_DOCTYPE,
+			filters={"import_batch": batch.name},
+			fields=["source_sheet"],
+			limit_page_length=1000,
+		)
+		source_sheets = sorted({row.source_sheet for row in rows if row.source_sheet})
+		batch["source_file_label"] = _source_file_label(batch.source_file)
+		batch["source_sheets"] = "、".join(source_sheets)
+		batch["actual_variable_rows"] = len(rows)
+		batch["can_delete"] = 1
+	return batches
+
+
+@frappe.whitelist()
+def delete_payroll_variable_import_batch(batch_name: str):
+	if not batch_name or not frappe.db.exists(VARIABLE_BATCH_DOCTYPE, batch_name):
+		frappe.throw(_("导入批次不存在"))
+
+	batch = frappe.get_doc(VARIABLE_BATCH_DOCTYPE, batch_name)
+	variable_names = frappe.get_all(VARIABLE_RECORD_DOCTYPE, filters={"import_batch": batch.name}, pluck="name")
+	input_names = frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters={"payroll_month": batch.payroll_month}, pluck="name")
+
+	for name in variable_names:
+		frappe.delete_doc(VARIABLE_RECORD_DOCTYPE, name, ignore_permissions=True, force=True)
+	for name in input_names:
+		frappe.delete_doc(PAYROLL_INPUT_DOCTYPE, name, ignore_permissions=True, force=True)
+	frappe.delete_doc(VARIABLE_BATCH_DOCTYPE, batch.name, ignore_permissions=True, force=True)
+	frappe.db.commit()
+
+	return {
+		"deleted_batch": batch.name,
+		"payroll_month": batch.payroll_month,
+		"deleted_variable_records": len(variable_names),
+		"deleted_payroll_input_records": len(input_names),
+		"settlement_records_deleted": 0,
+		"message": _("同月份薪资输入表已清空，请重新生成；结算表不会自动删除。"),
+	}
+
+
+@frappe.whitelist()
+def update_payroll_variable_record(
+	name: str,
+	employee: str = "",
+	employee_code: str = "",
+	employee_name: str = "",
+	department: str = "",
+	variable_type: str = "",
+	amount: float = 0,
+	source_sheet: str = "",
+	remarks: str = "",
+):
+	if not name or not frappe.db.exists(VARIABLE_RECORD_DOCTYPE, name):
+		frappe.throw(_("薪资变量记录不存在"))
+
+	resolved_employee = employee if employee and frappe.db.exists("Employee", employee) else None
+	resolved_employee = resolved_employee or _employee_lookup(employee_code, employee_name)
+	if not resolved_employee:
+		frappe.throw(_("请先选择或填写可匹配到员工档案的员工。"))
+
+	employee_context = _employee_context(resolved_employee)
+	doc = frappe.get_doc(VARIABLE_RECORD_DOCTYPE, name)
+	doc.employee = resolved_employee
+	doc.employee_code = employee_code or resolved_employee
+	doc.employee_name = employee_name or employee_context.get("employee_name")
+	doc.department = _department_lookup(department) or employee_context.get("department")
+	if variable_type:
+		doc.variable_type = variable_type
+	doc.amount = flt(amount)
+	doc.source_sheet = source_sheet or doc.source_sheet
+	doc.remarks = remarks
+	doc.save(ignore_permissions=True)
+
+	input_names = frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters={"payroll_month": doc.payroll_month}, pluck="name")
+	for input_name in input_names:
+		frappe.delete_doc(PAYROLL_INPUT_DOCTYPE, input_name, ignore_permissions=True, force=True)
+	frappe.db.commit()
+	result = frappe.get_value(VARIABLE_RECORD_DOCTYPE, doc.name, ["name", "employee", "employee_code", "employee_name", "department", "variable_type", "amount", "source_sheet", "remarks"], as_dict=True)
+	result["deleted_payroll_input_records"] = len(input_names)
+	result["message"] = _("薪资变量明细已保存；同月份薪资输入表已清空，请重新生成；结算表不会自动删除。")
+	return result
+
+
 def _variable_totals(payroll_month):
 	totals = defaultdict(lambda: defaultdict(float))
 	identity = {}
@@ -1992,8 +2090,10 @@ def generate_payroll_input_records(payroll_month: str):
 
 
 @frappe.whitelist()
-def list_payroll_variable_records(payroll_month: str = "", page_length: int = 50):
+def list_payroll_variable_records(payroll_month: str = "", import_batch: str = "", page_length: int = 50):
 	filters = {"payroll_month": payroll_month} if payroll_month else {}
+	if import_batch:
+		filters["import_batch"] = import_batch
 	return frappe.get_all(VARIABLE_RECORD_DOCTYPE, filters=filters, fields=["*"], order_by="modified desc", limit_page_length=int(page_length or 50))
 
 

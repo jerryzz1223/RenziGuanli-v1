@@ -271,6 +271,9 @@ apply_dingtalk_default_settings
 save_dingtalk_connection_settings
 get_employee_gateway_config
 get_employee_self_snapshot
+sync_departments_from_dingtalk
+sync_users_from_dingtalk
+sync_attendance_from_dingtalk
 preview_sync_payload
 服务器部署</pre>
 			</div>

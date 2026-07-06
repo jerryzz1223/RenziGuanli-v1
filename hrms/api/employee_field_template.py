@@ -2377,7 +2377,15 @@ def get_employee_detail(employee: str):
 		},
 		"sections": _get_employee_detail_sections(doc),
 		"related_records": _get_employee_related_records(doc),
+		"permissions": {
+			"can_edit_employee_detail": _can_edit_employee_detail(),
+		},
 	}
+
+
+def _can_edit_employee_detail():
+	user = frappe.session.user
+	return user == "Administrator" or "System Manager" in frappe.get_roles(user)
 
 
 @frappe.whitelist()

@@ -44,6 +44,10 @@ for (const route of [
 	mustInclude(pageJs + workbenchPy + shellJs, route, `Payroll route is missing: ${route}`);
 }
 
+for (const marker of ["on_page_show", "refresh_from_route", "bind_route_events", "hrms:route-change", "tab_from_route_detail", "resolve_tab"]) {
+	mustInclude(pageJs, marker, `Payroll page must refresh when sidebar route changes without manual reload: ${marker}`);
+}
+
 for (const method of [
 	"list_employee_salary_profiles",
 	"list_monthly_payroll_overview",

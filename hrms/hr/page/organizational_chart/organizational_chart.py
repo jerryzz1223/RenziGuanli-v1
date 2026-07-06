@@ -1,4 +1,5 @@
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -279,6 +280,7 @@ def get_hybrid_node_detail(
 		if department and frappe.db.exists("Department", department):
 			department_doc = frappe.get_cached_doc("Department", department)
 		employees = _get_node_employees(department=department, company=company, search=search)
+		people = _get_template_people_for_department(department_doc, company)
 		staffing = _get_department_staffing(company).get(department, {})
 		current_headcount = len(employees) or staffing.get("current_headcount", 0)
 		return {
@@ -294,6 +296,7 @@ def get_hybrid_node_detail(
 				"employee_count": current_headcount,
 			},
 			"employees": employees[:100],
+			"people": people,
 			"actions": {
 				"can_add_department": frappe.has_permission("Department", "create"),
 				"can_edit_department": bool(department) and frappe.has_permission("Department", "write", department),
@@ -331,6 +334,18 @@ def get_hybrid_node_detail(
 		"employees": [],
 		"actions": {},
 	}
+
+
+def _get_template_people_for_department(department_doc, company=None):
+	source_cell = getattr(department_doc, "hrms_org_source_cell", None)
+	if not source_cell:
+		return []
+	seed = _load_yongxin_q2_org_template()
+	node = _find_template_node(seed.get("chart_tree"), f"department:{source_cell}")
+	if not node:
+		return []
+	department = frappe._dict(department_doc.as_dict() if hasattr(department_doc, "as_dict") else department_doc)
+	return _build_template_people(node, _get_employee_lookup(_get_active_employees(company)), department)
 
 
 @frappe.whitelist()
@@ -434,8 +449,14 @@ def _get_yongxin_template_tree(company=None):
 	for employee in employees:
 		if employee.get("department"):
 			employees_by_department[employee.get("department")].append(employee)
+	employee_lookup = _get_employee_lookup(employees)
 
-	root = _build_template_tree_node(seed.get("chart_tree"), departments_by_source, employees_by_department)
+	root = _build_template_tree_node(
+		seed.get("chart_tree"),
+		departments_by_source,
+		employees_by_department,
+		employee_lookup,
+	)
 	summary = {
 		"planned_headcount": root.get("planned_headcount", 0),
 		"current_headcount": root.get("current_headcount", 0),
@@ -453,12 +474,25 @@ def _get_yongxin_template_tree(company=None):
 	}
 
 
-def _build_template_tree_node(node, departments_by_source, employees_by_department):
+def _build_template_tree_node(
+	node,
+	departments_by_source,
+	employees_by_department,
+	employee_lookup,
+	parent_department=None,
+):
 	node = frappe._dict(node or {})
 	source_cell = node.get("source_cell")
 	department = departments_by_source.get(source_cell)
+	effective_department = department or parent_department
 	children = [
-		_build_template_tree_node(child, departments_by_source, employees_by_department)
+		_build_template_tree_node(
+			child,
+			departments_by_source,
+			employees_by_department,
+			employee_lookup,
+			effective_department,
+		)
 		for child in node.get("children") or []
 	]
 	result = {
@@ -473,6 +507,7 @@ def _build_template_tree_node(node, departments_by_source, employees_by_departme
 		"proxy_names": "、".join(node.get("proxy_names") or []),
 		"lines": node.get("lines") or [],
 		"employee_names": node.get("employee_names") or [],
+		"people": _build_template_people(node, employee_lookup, effective_department),
 		"source_cell": source_cell,
 		"planned_headcount": node.get("planned_headcount") or 0,
 		"current_headcount": node.get("current_headcount") or 0,
@@ -505,6 +540,98 @@ def _build_template_tree_node(node, departments_by_source, employees_by_departme
 	return result
 
 
+def _get_employee_lookup(employees):
+	lookup = {}
+	for employee in employees or []:
+		row = _employee_row(employee)
+		for key in {row.get("employee_name"), _normalize_person_lookup(row.get("employee_name"))}:
+			if key and key not in lookup:
+				lookup[key] = row
+	return lookup
+
+
+def _build_template_people(node, employee_lookup, department=None):
+	people = []
+	seen = set()
+	for role, names in [
+		(node.get("role") or _("负责人"), node.get("manager_names") or []),
+		(_("代理人"), node.get("proxy_names") or []),
+		(_("员工"), node.get("employee_names") or []),
+	]:
+		for name in names:
+			person = _build_person_token(
+				name=name,
+				role=role,
+				employee_lookup=employee_lookup,
+				department=department,
+				expected_designation=role,
+			)
+			if not person:
+				continue
+			key = (person.get("lookup_name"), person.get("role"))
+			if key in seen:
+				continue
+			seen.add(key)
+			people.append(person)
+	return people
+
+
+def _build_person_token(name, role, employee_lookup, department=None, expected_designation=None):
+	display_name = cstr(name).strip()
+	lookup_name = _normalize_person_lookup(display_name)
+	if not lookup_name or lookup_name in {"(代)", "(兼)", "（代）", "（兼）"}:
+		return None
+	matched = employee_lookup.get(display_name) or employee_lookup.get(lookup_name)
+	department_name = department.get("name") if department else ""
+	department_label = department.get("department_name") if department else ""
+	if matched:
+		return {
+			"name": display_name,
+			"lookup_name": lookup_name,
+			"role": role or "",
+			"employee": matched.get("name"),
+			"employee_name": matched.get("employee_name") or display_name,
+			"employee_code": matched.get("employee_code"),
+			"department": matched.get("department") or department_name,
+			"department_label": department_label,
+			"designation": matched.get("designation") or expected_designation or role or "",
+			"grade": matched.get("grade"),
+			"reports_to": matched.get("reports_to"),
+			"branch": matched.get("branch"),
+			"cell_number": matched.get("cell_number"),
+			"image": matched.get("image"),
+			"matched_employee": True,
+			"match_status": _("已匹配员工档案"),
+		}
+	return {
+		"name": display_name,
+		"lookup_name": lookup_name,
+		"role": role or "",
+		"employee": "",
+		"employee_name": display_name,
+		"employee_code": "",
+		"department": department_name,
+		"department_label": department_label,
+		"designation": expected_designation or role or "",
+		"grade": "",
+		"reports_to": "",
+		"branch": "",
+		"cell_number": "",
+		"image": "",
+		"matched_employee": False,
+		"match_status": _("待匹配员工档案"),
+	}
+
+
+def _normalize_person_lookup(value):
+	value = cstr(value).strip()
+	if not value:
+		return ""
+	value = value.replace("（", "(").replace("）", ")")
+	value = re.sub(r"\s*\([^)]*\)\s*$", "", value).strip()
+	return value
+
+
 def _template_manager_label(node):
 	role = node.get("role") or ""
 	manager = "、".join(node.get("manager_names") or [])
@@ -531,8 +658,16 @@ def _get_template_node_detail(node_id, node_type, company=None, search=None):
 	node = _find_template_node(seed.get("chart_tree"), node_id, node_type)
 	if not node:
 		return None
+	departments_by_source = {
+		department.get("hrms_org_source_cell"): department
+		for department in _get_departments(company)
+		if department.get("hrms_org_source_cell")
+	}
+	department = departments_by_source.get(node.get("source_cell"))
+	employee_lookup = _get_employee_lookup(_get_active_employees(company))
 	employee_names = _template_employee_names(node)
-	employees = _get_employees_by_names(employee_names, company=company, search=search)
+	employees = _get_employees_by_names(employee_names, company=company, search=search, employee_lookup=employee_lookup)
+	people = _build_template_people(node, employee_lookup, department)
 	return {
 		"node_type": node.get("node_type"),
 		"node_id": node_id,
@@ -553,6 +688,7 @@ def _get_template_node_detail(node_id, node_type, company=None, search=None):
 			"employee_count": len(employee_names),
 		},
 		"employees": employees,
+		"people": people,
 		"template_lines": node.get("lines") or node.get("employee_names") or [],
 		"actions": {"can_add_department": frappe.has_permission("Department", "create")},
 	}
@@ -583,7 +719,7 @@ def _template_employee_names(node):
 	return names
 
 
-def _get_employees_by_names(names, company=None, search=None):
+def _get_employees_by_names(names, company=None, search=None, employee_lookup=None):
 	clean_names = [name for name in names if name and not name.startswith("TBA")]
 	if search:
 		clean_names = [name for name in clean_names if search in name]
@@ -609,12 +745,12 @@ def _get_employees_by_names(names, company=None, search=None):
 		],
 	)
 	rows = frappe.get_all("Employee", fields=fields, filters=filters, limit_page_length=500)
-	by_name = {row.employee_name: row for row in rows}
+	by_name = employee_lookup or _get_employee_lookup(rows)
 	return [
-		_employee_row(by_name[name])
-		if name in by_name
+		dict(by_name[name] if name in by_name else by_name.get(_normalize_person_lookup(name)), matched_employee=True, match_status=_("已匹配员工档案"))
+		if name in by_name or _normalize_person_lookup(name) in by_name
 		else {
-			"name": name,
+			"name": "",
 			"employee_name": name,
 			"employee_code": "",
 			"department": "",
@@ -624,6 +760,8 @@ def _get_employees_by_names(names, company=None, search=None):
 			"branch": "",
 			"cell_number": "",
 			"image": "",
+			"matched_employee": False,
+			"match_status": _("待匹配员工档案"),
 		}
 		for name in clean_names
 	]
@@ -1125,4 +1263,6 @@ def _employee_row(employee):
 		"branch": employee.get("branch"),
 		"cell_number": employee.get("cell_number"),
 		"image": employee.get("image"),
+		"matched_employee": True,
+		"match_status": _("已匹配员工档案"),
 	}
