@@ -15,7 +15,9 @@ if [[ "$BRANCH" == "--help" || "$BRANCH" == "-h" ]]; then
   exit 0
 fi
 
-REPO_DIR="$BENCH_DIR/apps/$APP_NAME"
+TARGET_DIR="$BENCH_DIR/apps/$APP_NAME"
+TMP_DIR="$(mktemp -d "/tmp/${REPO}-deploy-XXXXXX")"
+trap 'rm -rf "$TMP_DIR"' EXIT
 
 if [ ! -d "$BENCH_DIR" ]; then
   echo "Bench 目录不存在: $BENCH_DIR" >&2
@@ -35,34 +37,35 @@ if ! command -v bench >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "$BENCH_DIR/apps"
-
 echo "[$(date '+%F %T')] 开始部署 $OWNER/$REPO@$BRANCH"
-echo "[仓库目录: $REPO_DIR]"
 
-if [ -d "$REPO_DIR/.git" ]; then
-  echo "检测到已存在仓库，执行更新"
-  git -C "$REPO_DIR" fetch --all --prune
-  git -C "$REPO_DIR" checkout "$BRANCH"
-  if git -C "$REPO_DIR" rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
-    git -C "$REPO_DIR" reset --hard "origin/$BRANCH"
-  fi
-  git -C "$REPO_DIR" pull --ff-only "origin" "$BRANCH"
-elif [ -d "$REPO_DIR" ] && [ -n "$(ls -A "$REPO_DIR")" ]; then
-  echo "错误: 目标目录 '$REPO_DIR' 已存在且不是 git 仓库，无法直接 clone。"
-  echo "请先备份或清空目录后重试："
-  echo "  mv \"$REPO_DIR\" \"$REPO_DIR.bak.$(date +%Y%m%d%H%M%S)\""
-  echo "  mkdir -p \"$REPO_DIR\""
-  exit 1
-else
-  echo "首次部署，克隆仓库到 $REPO_DIR"
-  if ! GIT_TERMINAL_PROMPT=1 git clone --depth 1 --branch "$BRANCH" "git@github.com:${OWNER}/${REPO}.git" "$REPO_DIR"; then
-    echo "SSH 克隆失败，尝试 HTTPS..."
-    git clone --depth 1 --branch "$BRANCH" "https://github.com/${OWNER}/${REPO}.git" "$REPO_DIR"
-  fi
+echo "[$(date '+%F %T')] 克隆仓库到临时目录 $TMP_DIR"
+if ! GIT_TERMINAL_PROMPT=1 git clone --depth 1 --branch "$BRANCH" "git@github.com:${OWNER}/${REPO}.git" "$TMP_DIR/repo"; then
+  echo "SSH 克隆失败，尝试 HTTPS..."
+  git clone --depth 1 --branch "$BRANCH" "https://github.com/${OWNER}/${REPO}.git" "$TMP_DIR/repo"
 fi
 
-cd "$BENCH_DIR/apps/$APP_NAME"
+if [ -d "$TMP_DIR/repo/$APP_NAME" ]; then
+  SRC_DIR="$TMP_DIR/repo/$APP_NAME"
+elif [ -d "$TMP_DIR/repo/hrms" ]; then
+  APP_NAME="hrms"
+  TARGET_DIR="$BENCH_DIR/apps/$APP_NAME"
+  SRC_DIR="$TMP_DIR/repo/hrms"
+elif [ -f "$TMP_DIR/repo/hooks.py" ]; then
+  SRC_DIR="$TMP_DIR/repo"
+else
+  echo "仓库结构异常：未找到应用目录。"
+  echo "请确认仓库根目录或 hrms 目录是否存在"
+  exit 1
+fi
+
+if [ -d "$TARGET_DIR" ]; then
+  cp -a "$TARGET_DIR" "$BENCH_DIR/apps/.bak-$(date +%Y%m%d%H%M%S)-$APP_NAME"
+  rm -rf "$TARGET_DIR"
+fi
+cp -a "$SRC_DIR" "$TARGET_DIR"
+
+cd "$BENCH_DIR"
 
 if [ -n "$SITE_NAME" ]; then
   echo "开始迁移站点: $SITE_NAME"
@@ -74,4 +77,4 @@ fi
 bench build --app "$APP_NAME"
 bench restart
 
-echo "部署完成: $OWNER/$REPO@$BRANCH -> $REPO_DIR"
+echo "部署完成: $OWNER/$REPO@$BRANCH -> $TARGET_DIR"
