@@ -1,0 +1,173 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-06 00:00:00.000000",
+ "description": "薪资档位",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "salary_structure_version",
+  "job_nature",
+  "job_grade",
+  "post_category",
+  "base_salary",
+  "function_allowance",
+  "certificate_allowance",
+  "multi_skill_allowance",
+  "full_salary",
+  "grade_difference",
+  "grade_difference_ratio",
+  "education_allowance",
+  "full_attendance_bonus_standard",
+  "rental_subsidy_standard",
+  "large_night_shift_allowance",
+  "small_night_shift_allowance",
+  "raw_row_json"
+ ],
+ "fields": [
+  {
+   "fieldname": "salary_structure_version",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "薪资架构版本",
+   "options": "HRMS Salary Structure Version",
+   "reqd": 1
+  },
+  {
+   "fieldname": "job_nature",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "岗性"
+  },
+  {
+   "fieldname": "job_grade",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "岗级",
+   "reqd": 1
+  },
+  {
+   "fieldname": "post_category",
+   "fieldtype": "Small Text",
+   "label": "岗位类别"
+  },
+  {
+   "default": "0",
+   "fieldname": "base_salary",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "底薪"
+  },
+  {
+   "default": "0",
+   "fieldname": "function_allowance",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "职能津贴"
+  },
+  {
+   "default": "0",
+   "fieldname": "certificate_allowance",
+   "fieldtype": "Currency",
+   "label": "证书津贴"
+  },
+  {
+   "default": "0",
+   "fieldname": "multi_skill_allowance",
+   "fieldtype": "Currency",
+   "label": "多能工津贴"
+  },
+  {
+   "default": "0",
+   "fieldname": "full_salary",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "薪资小计"
+  },
+  {
+   "default": "0",
+   "fieldname": "grade_difference",
+   "fieldtype": "Currency",
+   "label": "级差"
+  },
+  {
+   "default": "0",
+   "fieldname": "grade_difference_ratio",
+   "fieldtype": "Percent",
+   "label": "级差比"
+  },
+  {
+   "default": "0",
+   "fieldname": "education_allowance",
+   "fieldtype": "Currency",
+   "label": "学历补贴标准"
+  },
+  {
+   "default": "0",
+   "fieldname": "full_attendance_bonus_standard",
+   "fieldtype": "Currency",
+   "label": "全勤奖标准"
+  },
+  {
+   "default": "0",
+   "fieldname": "rental_subsidy_standard",
+   "fieldtype": "Currency",
+   "label": "租房补贴标准"
+  },
+  {
+   "default": "45",
+   "fieldname": "large_night_shift_allowance",
+   "fieldtype": "Currency",
+   "label": "大夜班津贴标准"
+  },
+  {
+   "default": "24",
+   "fieldname": "small_night_shift_allowance",
+   "fieldtype": "Currency",
+   "label": "小夜班津贴标准"
+  },
+  {
+   "fieldname": "raw_row_json",
+   "fieldtype": "Code",
+   "label": "原始行 JSON",
+   "options": "JSON"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Salary Grade",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "job_grade"
+}

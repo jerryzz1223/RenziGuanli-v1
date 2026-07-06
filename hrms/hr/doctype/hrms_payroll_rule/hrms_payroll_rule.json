@@ -1,0 +1,173 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-06 00:00:00.000000",
+ "description": "薪资规则",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "rule_code",
+  "rule_name",
+  "rule_category",
+  "rule_scope",
+  "status",
+  "editable",
+  "effective_from",
+  "effective_to",
+  "formula_expression",
+  "parameters_json",
+  "rule_text",
+  "source_file",
+  "source_sheet",
+  "source_cell",
+  "missing_rule_note",
+  "last_reviewed_by",
+  "last_reviewed_on"
+ ],
+ "fields": [
+  {
+   "fieldname": "rule_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "规则编码",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "rule_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "规则名称",
+   "reqd": 1
+  },
+  {
+   "fieldname": "rule_category",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "规则分类",
+   "options": "薪资架构\n考勤\n福利补贴\n宿舍\n社保公积金\n薪资结算\n税费扣款\n奖金福利\n其他"
+  },
+  {
+   "fieldname": "rule_scope",
+   "fieldtype": "Data",
+   "label": "适用范围"
+  },
+  {
+   "default": "已启用",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "状态",
+   "options": "草稿\n已启用\n已停用"
+  },
+  {
+   "default": "1",
+   "fieldname": "editable",
+   "fieldtype": "Check",
+   "label": "允许有权限人员修改"
+  },
+  {
+   "fieldname": "effective_from",
+   "fieldtype": "Date",
+   "label": "生效开始"
+  },
+  {
+   "fieldname": "effective_to",
+   "fieldtype": "Date",
+   "label": "生效结束"
+  },
+  {
+   "fieldname": "formula_expression",
+   "fieldtype": "Code",
+   "label": "公式/规则",
+   "options": "Text"
+  },
+  {
+   "fieldname": "parameters_json",
+   "fieldtype": "Code",
+   "label": "参数 JSON",
+   "options": "JSON"
+  },
+  {
+   "fieldname": "rule_text",
+   "fieldtype": "Small Text",
+   "label": "规则说明"
+  },
+  {
+   "fieldname": "source_file",
+   "fieldtype": "Data",
+   "label": "来源资料"
+  },
+  {
+   "fieldname": "source_sheet",
+   "fieldtype": "Data",
+   "label": "来源工作表"
+  },
+  {
+   "fieldname": "source_cell",
+   "fieldtype": "Data",
+   "label": "来源单元格/行"
+  },
+  {
+   "fieldname": "missing_rule_note",
+   "fieldtype": "Small Text",
+   "label": "缺失规则说明"
+  },
+  {
+   "fieldname": "last_reviewed_by",
+   "fieldtype": "Data",
+   "label": "最后复核人"
+  },
+  {
+   "fieldname": "last_reviewed_on",
+   "fieldtype": "Datetime",
+   "label": "最后复核时间"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Payroll Rule",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR User",
+   "share": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "rule_name"
+}

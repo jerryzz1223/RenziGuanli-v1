@@ -1,0 +1,177 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-05 00:00:00.000000",
+ "description": "考勤异常处理",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "import_batch",
+  "day_check",
+  "attendance_date",
+  "employee",
+  "employee_code",
+  "employee_name",
+  "department",
+  "exception_type",
+  "expected_shift",
+  "actual_in_time",
+  "actual_out_time",
+  "handling_method",
+  "deduct_absence_hours",
+  "full_attendance_deduction",
+  "red_apple_penalty",
+  "confirmation_status",
+  "confirmed_by",
+  "confirmed_on",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "import_batch",
+   "fieldtype": "Link",
+   "label": "导入批次",
+   "options": "HRMS Attendance Import Batch"
+  },
+  {
+   "fieldname": "day_check",
+   "fieldtype": "Link",
+   "label": "每日考勤核对",
+   "options": "HRMS Attendance Day Check"
+  },
+  {
+   "fieldname": "attendance_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "出勤日期"
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "员工",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "employee_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "工号"
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "姓名"
+  },
+  {
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "label": "单位",
+   "options": "Department"
+  },
+  {
+   "fieldname": "exception_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "异常类型",
+   "options": "忘打卡\n迟到\n早退\n旷工\n未申请加班"
+  },
+  {
+   "fieldname": "expected_shift",
+   "fieldtype": "Data",
+   "label": "应上班时间"
+  },
+  {
+   "fieldname": "actual_in_time",
+   "fieldtype": "Data",
+   "label": "实际上班时间"
+  },
+  {
+   "fieldname": "actual_out_time",
+   "fieldtype": "Data",
+   "label": "实际下班时间"
+  },
+  {
+   "fieldname": "handling_method",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "处理方式"
+  },
+  {
+   "default": "0",
+   "fieldname": "deduct_absence_hours",
+   "fieldtype": "Float",
+   "label": "扣缺勤工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "full_attendance_deduction",
+   "fieldtype": "Currency",
+   "label": "全勤扣款"
+  },
+  {
+   "default": "0",
+   "fieldname": "red_apple_penalty",
+   "fieldtype": "Float",
+   "label": "红苹果"
+  },
+  {
+   "default": "待确认",
+   "fieldname": "confirmation_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "确认状态",
+   "options": "待确认\n已确认\n已驳回"
+  },
+  {
+   "fieldname": "confirmed_by",
+   "fieldtype": "Data",
+   "label": "签字确认人"
+  },
+  {
+   "fieldname": "confirmed_on",
+   "fieldtype": "Datetime",
+   "label": "确认时间"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "备注"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-05 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Attendance Exception",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "attendance_date",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name"
+}

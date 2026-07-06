@@ -1,0 +1,229 @@
+.hrms-attendance-import-center {
+	margin: 0 auto;
+	max-width: 1380px;
+	padding: 16px 0 32px;
+}
+
+.hrms-attendance-import-head,
+.hrms-attendance-section,
+.hrms-attendance-toolbar {
+	background: #fff;
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 6px;
+	margin-bottom: 12px;
+}
+
+.hrms-attendance-import-head {
+	align-items: center;
+	display: flex;
+	gap: 16px;
+	justify-content: space-between;
+	padding: 16px;
+}
+
+.hrms-attendance-import-head h2,
+.hrms-attendance-list-head h3 {
+	font-size: 18px;
+	line-height: 1.4;
+	margin: 0;
+}
+
+.hrms-attendance-import-head p {
+	color: var(--text-muted, #6b7280);
+	margin: 6px 0 0;
+	max-width: 760px;
+}
+
+.hrms-attendance-import-controls,
+.hrms-attendance-toolbar,
+.hrms-attendance-toolbar > div,
+.hrms-attendance-list-head {
+	align-items: center;
+	display: flex;
+	gap: 8px;
+}
+
+.hrms-attendance-import-controls {
+	flex-shrink: 0;
+}
+
+.hrms-attendance-toolbar,
+.hrms-attendance-list-head {
+	justify-content: space-between;
+	padding: 12px 14px;
+}
+
+.hrms-attendance-toolbar > div {
+	flex-wrap: wrap;
+}
+
+.hrms-attendance-kpi-grid {
+	display: grid;
+	gap: 12px;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	margin-bottom: 12px;
+}
+
+.hrms-attendance-kpi {
+	background: #fff;
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 6px;
+	cursor: pointer;
+	display: grid;
+	gap: 4px;
+	min-height: 84px;
+	padding: 14px;
+	text-align: left;
+}
+
+.hrms-attendance-kpi:hover,
+.hrms-attendance-quick:hover {
+	border-color: var(--primary, #2490ef);
+}
+
+.hrms-attendance-kpi strong {
+	color: var(--primary, #00875a);
+	font-size: 18px;
+}
+
+.hrms-attendance-kpi span,
+.hrms-attendance-kpi small,
+.hrms-attendance-quick span {
+	color: var(--text-muted, #6b7280);
+}
+
+.hrms-attendance-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.hrms-attendance-tabs .active {
+	background: var(--primary, #2490ef);
+	border-color: var(--primary, #2490ef);
+	color: #fff;
+}
+
+.hrms-attendance-main {
+	min-width: 0;
+}
+
+.hrms-attendance-section {
+	overflow: hidden;
+}
+
+.hrms-attendance-import-panel {
+	padding: 16px;
+}
+
+.hrms-attendance-upload-box {
+	align-items: center;
+	border: 1px dashed #cbd5e1;
+	border-radius: 6px;
+	cursor: pointer;
+	display: grid;
+	gap: 8px;
+	justify-items: center;
+	margin-bottom: 16px;
+	min-height: 180px;
+	padding: 20px;
+}
+
+.hrms-attendance-upload-box span,
+.hrms-attendance-section > p {
+	color: var(--text-muted, #6b7280);
+}
+
+.hrms-attendance-section > p,
+.hrms-attendance-empty,
+.hrms-attendance-integration ol,
+.hrms-attendance-integration .alert {
+	margin: 16px;
+}
+
+.hrms-attendance-quick-grid {
+	display: grid;
+	gap: 12px;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	padding: 16px;
+}
+
+.hrms-attendance-quick {
+	background: #fff;
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 6px;
+	display: grid;
+	gap: 6px;
+	padding: 14px;
+	text-align: left;
+}
+
+.hrms-attendance-report-tabs {
+	display: flex;
+	gap: 16px;
+}
+
+.hrms-attendance-report-tabs span:first-child {
+	color: var(--primary, #00875a);
+	font-weight: 600;
+}
+
+.hrms-attendance-report-group {
+	padding: 4px 16px 16px;
+}
+
+.hrms-attendance-report-group h4 {
+	border-left: 3px solid var(--primary, #00875a);
+	font-size: 14px;
+	margin: 12px 0;
+	padding-left: 8px;
+}
+
+.hrms-attendance-table-wrap {
+	overflow-x: auto;
+}
+
+.hrms-attendance-table {
+	background: #fff;
+	font-size: 12px;
+	margin-bottom: 0;
+}
+
+.hrms-attendance-table th,
+.hrms-attendance-table td {
+	vertical-align: middle;
+	white-space: nowrap;
+}
+
+.hrms-attendance-empty {
+	background: var(--bg-light-gray, #f8f9fa);
+	border-radius: 6px;
+	color: var(--text-muted, #6b7280);
+	padding: 24px;
+	text-align: center;
+}
+
+.hrms-attendance-integration li {
+	margin-bottom: 8px;
+}
+
+@media (max-width: 1100px) {
+	.hrms-attendance-kpi-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+@media (max-width: 700px) {
+	.hrms-attendance-import-head,
+	.hrms-attendance-list-head,
+	.hrms-attendance-toolbar {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.hrms-attendance-kpi-grid,
+	.hrms-attendance-quick-grid {
+		grid-template-columns: 1fr;
+	}
+}

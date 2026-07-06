@@ -1,0 +1,163 @@
+{
+ "actions": [],
+ "creation": "2026-07-06 00:00:00.000000",
+ "description": "钉钉集成设置",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "sync_mode",
+  "app_id",
+  "corp_id",
+  "agent_id",
+  "client_id",
+  "client_secret",
+  "access_token",
+  "token_expires_at",
+  "local_gateway_enabled",
+  "local_gateway_url",
+  "public_gateway_enabled",
+  "public_gateway_base_url",
+  "employee_gateway_scopes",
+  "server_deployment_note",
+  "last_department_sync_at",
+  "last_user_sync_at",
+  "last_attendance_sync_at",
+  "last_approval_sync_at"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "启用钉钉集成"
+  },
+  {
+   "default": "连接平台+本地网关",
+   "fieldname": "sync_mode",
+   "fieldtype": "Select",
+   "label": "同步模式",
+   "options": "连接平台+本地网关\n内网服务器主动拉取API\n公网小网关"
+  },
+  {
+   "fieldname": "app_id",
+   "fieldtype": "Data",
+   "label": "App ID"
+  },
+  {
+   "fieldname": "corp_id",
+   "fieldtype": "Data",
+   "label": "CorpId"
+  },
+  {
+   "fieldname": "agent_id",
+   "fieldtype": "Data",
+   "label": "AgentId"
+  },
+  {
+   "fieldname": "client_id",
+   "fieldtype": "Data",
+   "label": "Client ID / AppKey"
+  },
+  {
+   "fieldname": "client_secret",
+   "fieldtype": "Password",
+   "label": "Client Secret / AppSecret"
+  },
+  {
+   "fieldname": "access_token",
+   "fieldtype": "Password",
+   "label": "Access Token"
+  },
+  {
+   "fieldname": "token_expires_at",
+   "fieldtype": "Datetime",
+   "label": "Token 过期时间"
+  },
+  {
+   "default": "1",
+   "fieldname": "local_gateway_enabled",
+   "fieldtype": "Check",
+   "label": "启用本地网关"
+  },
+  {
+   "fieldname": "local_gateway_url",
+   "fieldtype": "Data",
+   "label": "本地网关地址"
+  },
+  {
+   "default": "1",
+   "fieldname": "public_gateway_enabled",
+   "fieldtype": "Check",
+   "label": "启用员工端公网小网关"
+  },
+  {
+   "fieldname": "public_gateway_base_url",
+   "fieldtype": "Data",
+   "label": "公网小网关地址"
+  },
+  {
+   "default": "profile\nattendance",
+   "fieldname": "employee_gateway_scopes",
+   "fieldtype": "Small Text",
+   "label": "员工端开放范围"
+  },
+  {
+   "default": "当前方案：管理后台仍在公司人资系统；钉钉只作为员工入口和数据源。公网小网关只暴露员工本人查询接口，不暴露 Desk 后台、薪资管理、规则配置和批量数据。",
+   "fieldname": "server_deployment_note",
+   "fieldtype": "Small Text",
+   "label": "服务器部署说明"
+  },
+  {
+   "fieldname": "last_department_sync_at",
+   "fieldtype": "Datetime",
+   "label": "最近部门同步时间"
+  },
+  {
+   "fieldname": "last_user_sync_at",
+   "fieldtype": "Datetime",
+   "label": "最近员工同步时间"
+  },
+  {
+   "fieldname": "last_attendance_sync_at",
+   "fieldtype": "Datetime",
+   "label": "最近考勤同步时间"
+  },
+  {
+   "fieldname": "last_approval_sync_at",
+   "fieldtype": "Datetime",
+   "label": "最近审批同步时间"
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-07-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS DingTalk Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -7,14 +7,14 @@ app_license = "GNU General Public License (v3)"
 required_apps = ["frappe/erpnext"]
 source_link = "http://github.com/frappe/hrms"
 app_logo_url = "/assets/hrms/images/frappe-hr-logo.svg"
-app_home = "/desk/hr-setup"
+app_home = "/desk/hrms-workbench"
 
 add_to_apps_screen = [
 	{
 		"name": "hrms",
 		"logo": "/assets/hrms/images/frappe-hr-logo.svg",
 		"title": "人资管理系统",
-		"route": "/desk/hr-setup",
+		"route": "/desk/hrms-workbench",
 		"has_permission": "hrms.hr.utils.check_app_permission",
 	}
 ]
@@ -26,12 +26,12 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260629c",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260629c",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260706e",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260706e",
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260629c",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260706e",
 ]
 
 # website
@@ -61,7 +61,10 @@ doctype_js = {
 	"Delivery Trip": "public/js/erpnext/delivery_trip.js",
 	"Bank Transaction": "public/js/erpnext/bank_transaction.js",
 }
-# doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
+doctype_list_js = {
+	"Department": "public/js/erpnext/department_list.js",
+	"Employee": "public/js/erpnext/employee_list.js",
+}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
 

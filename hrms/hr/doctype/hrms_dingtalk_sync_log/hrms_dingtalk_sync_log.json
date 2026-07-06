@@ -1,0 +1,116 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-06 00:00:00.000000",
+ "description": "钉钉同步日志",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "sync_type",
+  "sync_direction",
+  "status",
+  "started_at",
+  "finished_at",
+  "records_received",
+  "records_created",
+  "records_updated",
+  "records_failed",
+  "error_message"
+ ],
+ "fields": [
+  {
+   "fieldname": "sync_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "同步类型",
+   "options": "部门同步\n员工同步\n考勤同步\n审批同步\n状态同步"
+  },
+  {
+   "default": "钉钉到人资系统",
+   "fieldname": "sync_direction",
+   "fieldtype": "Select",
+   "label": "同步方向",
+   "options": "钉钉到人资系统\n人资系统到钉钉"
+  },
+  {
+   "default": "运行中",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "状态",
+   "options": "运行中\n已完成\n部分失败\n失败"
+  },
+  {
+   "fieldname": "started_at",
+   "fieldtype": "Datetime",
+   "label": "开始时间"
+  },
+  {
+   "fieldname": "finished_at",
+   "fieldtype": "Datetime",
+   "label": "结束时间"
+  },
+  {
+   "default": "0",
+   "fieldname": "records_received",
+   "fieldtype": "Int",
+   "label": "接收记录数"
+  },
+  {
+   "default": "0",
+   "fieldname": "records_created",
+   "fieldtype": "Int",
+   "label": "新建记录数"
+  },
+  {
+   "default": "0",
+   "fieldname": "records_updated",
+   "fieldtype": "Int",
+   "label": "更新记录数"
+  },
+  {
+   "default": "0",
+   "fieldname": "records_failed",
+   "fieldtype": "Int",
+   "label": "失败记录数"
+  },
+  {
+   "fieldname": "error_message",
+   "fieldtype": "Small Text",
+   "label": "错误信息"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS DingTalk Sync Log",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "sync_type"
+}

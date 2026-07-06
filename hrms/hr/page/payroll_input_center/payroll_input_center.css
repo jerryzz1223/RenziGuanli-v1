@@ -1,0 +1,88 @@
+.hrms-payroll-input-center {
+	margin: 0 auto;
+	max-width: 1180px;
+	padding: 18px 0;
+}
+
+.hrms-payroll-input-head,
+.hrms-payroll-input-panel,
+.hrms-payroll-input-list-head {
+	background: #fff;
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 6px;
+	margin-bottom: 12px;
+	padding: 16px;
+}
+
+.hrms-payroll-input-head,
+.hrms-payroll-input-list-head {
+	align-items: center;
+	display: flex;
+	justify-content: space-between;
+}
+
+.hrms-payroll-input-head h2,
+.hrms-payroll-input-list-head h3 {
+	font-size: 18px;
+	margin: 0 0 6px;
+}
+
+.hrms-payroll-input-head p {
+	color: var(--text-muted, #6b7280);
+	margin: 0;
+}
+
+.hrms-payroll-input-controls,
+.hrms-payroll-input-tabs {
+	align-items: center;
+	display: flex;
+	gap: 8px;
+}
+
+.hrms-payroll-input-tabs {
+	margin-bottom: 12px;
+	flex-wrap: wrap;
+}
+
+.hrms-payroll-input-tabs .active {
+	background: var(--primary, #2490ef);
+	color: var(--fg-color, white);
+}
+
+.hrms-payroll-upload-box {
+	align-items: center;
+	border: 1px dashed #cbd5e1;
+	border-radius: 6px;
+	cursor: pointer;
+	display: grid;
+	gap: 8px;
+	justify-items: center;
+	margin-bottom: 16px;
+	min-height: 180px;
+	padding: 20px;
+}
+
+.hrms-payroll-input-table {
+	background: #fff;
+	font-size: 12px;
+}
+
+.hrms-payroll-metric-grid {
+	display: grid;
+	gap: 10px;
+	grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+	margin: 12px 0;
+}
+
+.hrms-payroll-metric {
+	background: #fff;
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 6px;
+	padding: 12px;
+}
+
+.hrms-payroll-metric strong {
+	display: block;
+	font-size: 20px;
+	margin-top: 4px;
+}

@@ -3,6 +3,23 @@
 *.egg-info
 *.swp
 tags
+
+# Local Frappe bench/site state. Keep app code in git; keep each
+# environment's database and runtime config on that environment only.
+sites/
+logs/
+env/
+.env
+.env.*
+site_config.json
+common_site_config.json
+*.sql
+*.sql.gz
+*.db
+*.sqlite
+*.sqlite3
+*.backup
+
 hrms/public/dist
 hrms/public/node_modules
 hrms/docs/current

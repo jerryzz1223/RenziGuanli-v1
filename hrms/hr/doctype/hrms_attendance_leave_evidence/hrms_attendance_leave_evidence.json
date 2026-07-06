@@ -1,0 +1,148 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-06 00:00:00.000000",
+ "description": "考勤请假证据",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "import_batch",
+  "employee",
+  "employee_code",
+  "employee_name",
+  "department",
+  "leave_type",
+  "leave_start",
+  "leave_end",
+  "leave_hours",
+  "leave_reason",
+  "approval_no",
+  "approval_result",
+  "approval_status",
+  "is_valid_approval",
+  "raw_row_json"
+ ],
+ "fields": [
+  {
+   "fieldname": "import_batch",
+   "fieldtype": "Link",
+   "label": "导入批次",
+   "options": "HRMS Attendance Import Batch"
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "员工",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "employee_code",
+   "fieldtype": "Data",
+   "label": "工号"
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "姓名"
+  },
+  {
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "部门",
+   "options": "Department"
+  },
+  {
+   "fieldname": "leave_type",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "请假类型"
+  },
+  {
+   "fieldname": "leave_start",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "开始时间"
+  },
+  {
+   "fieldname": "leave_end",
+   "fieldtype": "Datetime",
+   "label": "结束时间"
+  },
+  {
+   "default": "0",
+   "fieldname": "leave_hours",
+   "fieldtype": "Float",
+   "label": "请假时长"
+  },
+  {
+   "fieldname": "leave_reason",
+   "fieldtype": "Small Text",
+   "label": "请假事由"
+  },
+  {
+   "fieldname": "approval_no",
+   "fieldtype": "Data",
+   "label": "审批编号"
+  },
+  {
+   "fieldname": "approval_result",
+   "fieldtype": "Data",
+   "label": "审批结果"
+  },
+  {
+   "fieldname": "approval_status",
+   "fieldtype": "Data",
+   "label": "审批状态"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_valid_approval",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "有效审批"
+  },
+  {
+   "fieldname": "raw_row_json",
+   "fieldtype": "Code",
+   "label": "原始行 JSON",
+   "options": "JSON"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Attendance Leave Evidence",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "leave_start",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name"
+}

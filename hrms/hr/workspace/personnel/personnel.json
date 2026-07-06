@@ -17,7 +17,7 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "员工管理",
-   "link_count": 5,
+   "link_count": 2,
    "onboard": 0,
    "type": "Card Break"
   },
@@ -36,40 +36,9 @@
    "is_query_report": 0,
    "label": "员工档案库",
    "link_count": 0,
-   "link_to": "Employee",
-   "link_type": "DocType",
+   "link_to": "employee-archive",
+   "link_type": "Page",
    "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "员工组",
-   "link_count": 0,
-   "link_to": "Employee Group",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "员工等级",
-   "link_count": 0,
-   "link_to": "Employee Grade",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 1,
-   "label": "员工信息",
-   "link_count": 0,
-   "link_to": "Employee Information",
-   "link_type": "Report",
-   "onboard": 0,
-   "report_ref_doctype": "Employee",
    "type": "Link"
   },
   {
@@ -125,8 +94,8 @@
    "is_query_report": 0,
    "label": "任职记录",
    "link_count": 0,
-   "link_to": "Employee Property History",
-   "link_type": "DocType",
+   "link_to": "employee-property-history",
+   "link_type": "Page",
    "onboard": 0,
    "type": "Link"
   },
@@ -135,7 +104,7 @@
    "is_query_report": 0,
    "label": "培训经历",
    "link_count": 0,
-   "link_to": "Employee Training",
+   "link_to": "Employee Skill Map",
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"

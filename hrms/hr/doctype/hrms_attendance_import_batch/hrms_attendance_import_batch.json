@@ -1,0 +1,110 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-05 00:00:00.000000",
+ "description": "考勤导入批次",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "attendance_month",
+  "source_file",
+  "status",
+  "daily_sheet_rows",
+  "leave_sheet_rows",
+  "apple_sheet_rows",
+  "imported_by",
+  "imported_on",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "attendance_month",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "考勤月份",
+   "reqd": 1
+  },
+  {
+   "fieldname": "source_file",
+   "fieldtype": "Attach",
+   "in_list_view": 1,
+   "label": "来源文件"
+  },
+  {
+   "default": "已导入",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "状态",
+   "options": "预览\n已导入\n已生成异常\n已生成月度终稿"
+  },
+  {
+   "default": "0",
+   "fieldname": "daily_sheet_rows",
+   "fieldtype": "Int",
+   "label": "1.1每日统计行数"
+  },
+  {
+   "default": "0",
+   "fieldname": "leave_sheet_rows",
+   "fieldtype": "Int",
+   "label": "1.2请假单行数"
+  },
+  {
+   "default": "0",
+   "fieldname": "apple_sheet_rows",
+   "fieldtype": "Int",
+   "label": "1.3苹果树行数"
+  },
+  {
+   "fieldname": "imported_by",
+   "fieldtype": "Data",
+   "label": "导入人"
+  },
+  {
+   "fieldname": "imported_on",
+   "fieldtype": "Datetime",
+   "label": "导入时间"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "备注"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-05 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Attendance Import Batch",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "attendance_month"
+}

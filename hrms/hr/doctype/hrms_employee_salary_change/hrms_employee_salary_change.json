@@ -1,0 +1,216 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-06 00:00:00.000000",
+ "description": "员工薪资异动",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "employee",
+  "employee_code",
+  "employee_name",
+  "department",
+  "designation",
+  "education_level_text",
+  "date_of_joining",
+  "effective_date",
+  "change_reason",
+  "salary_grade",
+  "base_salary",
+  "function_allowance",
+  "certificate_allowance",
+  "multi_skill_allowance",
+  "full_salary",
+  "housing_fund_enabled",
+  "social_insurance_enabled",
+  "company_cost_total",
+  "prepared_by",
+  "reviewed_by",
+  "approved_by",
+  "status",
+  "source_file",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "员工",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "employee_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "工号"
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "姓名"
+  },
+  {
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "部门",
+   "options": "Department"
+  },
+  {
+   "fieldname": "designation",
+   "fieldtype": "Link",
+   "label": "岗位",
+   "options": "Designation"
+  },
+  {
+   "fieldname": "education_level_text",
+   "fieldtype": "Data",
+   "label": "学历"
+  },
+  {
+   "fieldname": "date_of_joining",
+   "fieldtype": "Date",
+   "label": "入职日期"
+  },
+  {
+   "fieldname": "effective_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "生效日期",
+   "reqd": 1
+  },
+  {
+   "fieldname": "change_reason",
+   "fieldtype": "Data",
+   "label": "异动原因"
+  },
+  {
+   "fieldname": "salary_grade",
+   "fieldtype": "Link",
+   "label": "薪资档位",
+   "options": "HRMS Salary Grade"
+  },
+  {
+   "default": "0",
+   "fieldname": "base_salary",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "底薪"
+  },
+  {
+   "default": "0",
+   "fieldname": "function_allowance",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "职能津贴"
+  },
+  {
+   "default": "0",
+   "fieldname": "certificate_allowance",
+   "fieldtype": "Currency",
+   "label": "证书津贴"
+  },
+  {
+   "default": "0",
+   "fieldname": "multi_skill_allowance",
+   "fieldtype": "Currency",
+   "label": "多能工津贴"
+  },
+  {
+   "default": "0",
+   "fieldname": "full_salary",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "薪资小计"
+  },
+  {
+   "default": "0",
+   "fieldname": "housing_fund_enabled",
+   "fieldtype": "Check",
+   "label": "缴纳公积金"
+  },
+  {
+   "default": "0",
+   "fieldname": "social_insurance_enabled",
+   "fieldtype": "Check",
+   "label": "缴纳社保"
+  },
+  {
+   "default": "0",
+   "fieldname": "company_cost_total",
+   "fieldtype": "Currency",
+   "label": "公司实际负担总计"
+  },
+  {
+   "fieldname": "prepared_by",
+   "fieldtype": "Data",
+   "label": "编制"
+  },
+  {
+   "fieldname": "reviewed_by",
+   "fieldtype": "Data",
+   "label": "审核"
+  },
+  {
+   "fieldname": "approved_by",
+   "fieldtype": "Data",
+   "label": "核准"
+  },
+  {
+   "default": "草稿",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "状态",
+   "options": "草稿\n待审核\n已批准\n已作废"
+  },
+  {
+   "fieldname": "source_file",
+   "fieldtype": "Attach",
+   "label": "来源文件"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "备注"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Employee Salary Change",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name"
+}

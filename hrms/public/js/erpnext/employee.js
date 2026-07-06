@@ -3,6 +3,9 @@
 
 frappe.ui.form.on("Employee", {
 	refresh: function (frm) {
+		if (redirect_existing_employee_form_to_detail(frm)) return;
+		remember_employee_list_return(frm);
+		setup_employee_form_defaults(frm);
 		apply_employee_field_template(frm);
 		setup_personnel_employee_detail(frm);
 
@@ -47,7 +50,84 @@ frappe.ui.form.on("Employee", {
 			if (r && r.message) frm.set_value("date_of_retirement", r.message);
 		});
 	},
+
+	before_save(frm) {
+		prepare_employee_save_defaults(frm);
+	},
+
+	after_save(frm) {
+		return_to_employee_roster_after_insert(frm);
+	},
 });
+
+function redirect_existing_employee_form_to_detail(frm) {
+	if (frm.is_new()) return false;
+	if (frm.__hrms_return_to_employee_roster) return false;
+	const route = frappe.get_route();
+	if (route[0] !== "Form" || route[1] !== "Employee" || route[2] !== frm.doc.name) return false;
+	if (frappe.route_options && frappe.route_options.hrms_allow_employee_form) return false;
+	if (frm.__hrms_employee_detail_redirecting) return true;
+	frm.__hrms_employee_detail_redirecting = true;
+	frappe
+		.call("hrms.api.employee_field_template.ensure_personnel_pages")
+		.then(() => {
+			frappe.set_route("employee-detail", frm.doc.name);
+		})
+		.catch(() => {
+			frm.__hrms_employee_detail_redirecting = false;
+			frappe.msgprint(__("员工档案详情页还未初始化，请先执行 bench migrate 或刷新后重试。"));
+		});
+	return true;
+}
+
+function remember_employee_list_return(frm) {
+	if (!frm.is_new()) return;
+	frm.__hrms_return_to_employee_roster = true;
+}
+
+function prepare_employee_save_defaults(frm) {
+	if (
+		frm.doc.create_user_automatically &&
+		!frm.doc.company_email &&
+		!frm.doc.personal_email &&
+		!frm.doc.prefered_contact_email
+	) {
+		frm.set_value("create_user_automatically", 0);
+	}
+
+	if (frm.doc.create_user_permission && !frm.doc.user_id) {
+		frm.set_value("create_user_permission", 0);
+	}
+}
+
+function setup_employee_form_defaults(frm) {
+	if (!frm.is_new()) return;
+
+	if (frm.doc.create_user_automatically !== 0) {
+		frm.set_value("create_user_automatically", 0);
+	}
+	if (frm.doc.create_user_permission !== 0) {
+		frm.set_value("create_user_permission", 0);
+	}
+}
+
+function return_to_employee_roster_after_insert(frm) {
+	if (!frm.__hrms_return_to_employee_roster) return;
+	frm.__hrms_return_to_employee_roster = false;
+	setTimeout(() => {
+		frappe.set_route("List", "Employee");
+	}, 350);
+}
+
+const EMPLOYEE_FORM_CATEGORY_SECTIONS = [
+	{ category: "个人信息", label: "基础信息" },
+	{ category: "在职信息", label: "在职信息" },
+	{ category: "联系信息", label: "联系信息" },
+	{ category: "合同保险", label: "合同信息" },
+	{ category: "工资社保", label: "工资社保" },
+	{ category: "个税申报", label: "个税信息" },
+	{ category: "附件", label: "附件" },
+];
 
 function apply_employee_field_template(frm) {
 	frappe
@@ -56,25 +136,91 @@ function apply_employee_field_template(frm) {
 			const template = r.message;
 			if (!template || !template.enabled || !Array.isArray(template.fields)) return;
 
-			const required_fields = new Set(
-				(frm.meta.fields || []).filter((field) => field.reqd).map((field) => field.fieldname),
-			);
-			const always_visible_fields = new Set([
-				"employee_name",
-				"company",
-				"gender",
-				"date_of_birth",
-				"date_of_joining",
-				"status",
+			const non_configurable_fieldtypes = new Set([
+				"Section Break",
+				"Column Break",
+				"Tab Break",
+				"HTML",
+				"Button",
+				"Fold",
+				"Table",
+				"Table MultiSelect",
 			]);
+			const configurable_template_fields = template.fields.filter((field) => field && field.fieldname);
+			const managed_fieldnames = new Set(configurable_template_fields.map((field) => field.fieldname));
+			const template_by_fieldname = Object.fromEntries(
+				configurable_template_fields.map((field) => [field.fieldname, field]),
+			);
 
-			template.fields.forEach((field) => {
+			(frm.meta.fields || []).forEach((field) => {
 				if (!field.fieldname || !frm.fields_dict[field.fieldname]) return;
-				if (required_fields.has(field.fieldname) || always_visible_fields.has(field.fieldname)) return;
+				if (non_configurable_fieldtypes.has(field.fieldtype)) return;
 
-				frm.toggle_display(field.fieldname, Boolean(field.enabled));
+				const configured_field = template_by_fieldname[field.fieldname];
+				apply_configured_field_label(frm, field, configured_field);
+				apply_configured_field_required(frm, field, configured_field);
+
+				if (!managed_fieldnames.has(field.fieldname)) {
+					frm.toggle_display(field.fieldname, false);
+					return;
+				}
+
+				const visible = Boolean(configured_field.enabled && configured_field.form_visible !== 0);
+				frm.toggle_display(field.fieldname, visible);
+				if (!visible) {
+					frm.set_df_property(field.fieldname, "reqd", false);
+				}
 			});
+
+			setTimeout(() => group_employee_fields_by_template(frm, template), 100);
 		});
+}
+
+function apply_configured_field_label(frm, field, configured_field) {
+	if (!configured_field || !configured_field.field_label) return;
+	frm.set_df_property(field.fieldname, "label", configured_field.field_label);
+}
+
+function apply_configured_field_required(frm, field, configured_field) {
+	if (!configured_field || !frm.fields_dict[field.fieldname]) return;
+	frm.set_df_property(field.fieldname, "reqd", Boolean(configured_field.required));
+}
+
+function group_employee_fields_by_template(frm, template) {
+	const fields = (template.fields || []).filter(
+		(field) => field.enabled && field.form_visible !== 0 && frm.fields_dict[field.fieldname],
+	);
+	if (!fields.length) return;
+
+	const body = $(frm.wrapper).find(".form-layout, .form-page").first();
+	if (!body.length) return;
+
+	$(frm.wrapper).find(".hrms-employee-form-template-sections").remove();
+	const container = $(`<div class="hrms-employee-form-template-sections"></div>`);
+	body.prepend(container);
+
+	const category_by_fieldname = Object.fromEntries(fields.map((field) => [field.fieldname, field.category]));
+	const sections = {};
+	EMPLOYEE_FORM_CATEGORY_SECTIONS.forEach((section) => {
+		sections[section.category] = $(`
+			<div class="section-head hrms-employee-form-section" data-employee-section="${section.category}">
+				${__(section.label)}
+			</div>
+			<div class="row form-section visible-section hrms-employee-form-section-body"></div>
+		`);
+		container.append(sections[section.category]);
+	});
+
+	fields.forEach((field) => {
+		const control = frm.fields_dict[field.fieldname];
+		const wrapper = $(control.wrapper).closest(".frappe-control");
+		const category = category_by_fieldname[field.fieldname] || "个人信息";
+		const section = sections[category] || sections["个人信息"];
+		const section_body = section.filter(".hrms-employee-form-section-body");
+		if (wrapper.length && section_body.length) {
+			section_body.append(wrapper);
+		}
+	});
 }
 
 function setup_personnel_employee_detail(frm) {

@@ -1,0 +1,416 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-06 00:00:00.000000",
+ "description": "薪资结算记录",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "payroll_month",
+  "employee",
+  "employee_code",
+  "employee_name",
+  "department",
+  "base_salary",
+  "function_allowance",
+  "certificate_skill_allowance",
+  "salary_subtotal",
+  "standard_hours",
+  "basic_attendance_hours",
+  "missing_hours",
+  "raw_weekend_overtime_hours",
+  "adjusted_absence_hours",
+  "absence_deduction_amount",
+  "weekday_overtime_hours",
+  "weekend_overtime_hours",
+  "holiday_overtime_hours",
+  "full_salary_hourly_rate",
+  "base_salary_hourly_rate",
+  "weekday_overtime_pay",
+  "weekend_overtime_pay",
+  "holiday_overtime_pay",
+  "overtime_pay_total",
+  "large_night_shift_count",
+  "small_night_shift_count",
+  "night_shift_allowance",
+  "attendance_wage",
+  "proposal_improvement_bonus",
+  "apple_reward_amount",
+  "subsidy_bonus_total",
+  "production_bonus",
+  "bonus_total",
+  "absenteeism_hours",
+  "absenteeism_deduction",
+  "late_full_attendance_deduction",
+  "punishment_total",
+  "gross_pay",
+  "social_security_personal",
+  "housing_fund_personal",
+  "paid_proposal_birthday_welfare",
+  "taxable_salary",
+  "continuing_service_bonus",
+  "income_tax",
+  "year_end_bonus_tax",
+  "utilities_deduction",
+  "net_pay",
+  "social_security_company",
+  "housing_fund_company",
+  "company_cost_total",
+  "export_tax_adjusted_net_pay",
+  "calculation_status"
+ ],
+ "fields": [
+  {
+   "fieldname": "payroll_month",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "薪资月份",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "员工",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "employee_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "工号"
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "姓名"
+  },
+  {
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "部门",
+   "options": "Department"
+  },
+  {
+   "default": "0",
+   "fieldname": "base_salary",
+   "fieldtype": "Currency",
+   "label": "底薪"
+  },
+  {
+   "default": "0",
+   "fieldname": "function_allowance",
+   "fieldtype": "Currency",
+   "label": "职能津贴"
+  },
+  {
+   "default": "0",
+   "fieldname": "certificate_skill_allowance",
+   "fieldtype": "Currency",
+   "label": "证书及多能工津贴"
+  },
+  {
+   "default": "0",
+   "fieldname": "salary_subtotal",
+   "fieldtype": "Currency",
+   "label": "薪资小计"
+  },
+  {
+   "default": "0",
+   "fieldname": "standard_hours",
+   "fieldtype": "Float",
+   "label": "标准工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "basic_attendance_hours",
+   "fieldtype": "Float",
+   "label": "基本出勤工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "missing_hours",
+   "fieldtype": "Float",
+   "label": "缺勤工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "raw_weekend_overtime_hours",
+   "fieldtype": "Float",
+   "label": "调整前周末加班"
+  },
+  {
+   "default": "0",
+   "fieldname": "adjusted_absence_hours",
+   "fieldtype": "Float",
+   "label": "调整后缺勤工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "absence_deduction_amount",
+   "fieldtype": "Currency",
+   "label": "缺勤扣除金额"
+  },
+  {
+   "default": "0",
+   "fieldname": "weekday_overtime_hours",
+   "fieldtype": "Float",
+   "label": "平日加班时数"
+  },
+  {
+   "default": "0",
+   "fieldname": "weekend_overtime_hours",
+   "fieldtype": "Float",
+   "label": "周末加班时数"
+  },
+  {
+   "default": "0",
+   "fieldname": "holiday_overtime_hours",
+   "fieldtype": "Float",
+   "label": "节假日加班时数"
+  },
+  {
+   "default": "0",
+   "fieldname": "full_salary_hourly_rate",
+   "fieldtype": "Currency",
+   "label": "全薪小时基数"
+  },
+  {
+   "default": "0",
+   "fieldname": "base_salary_hourly_rate",
+   "fieldtype": "Currency",
+   "label": "底薪小时基数"
+  },
+  {
+   "default": "0",
+   "fieldname": "weekday_overtime_pay",
+   "fieldtype": "Currency",
+   "label": "平日加班费"
+  },
+  {
+   "default": "0",
+   "fieldname": "weekend_overtime_pay",
+   "fieldtype": "Currency",
+   "label": "周末加班费"
+  },
+  {
+   "default": "0",
+   "fieldname": "holiday_overtime_pay",
+   "fieldtype": "Currency",
+   "label": "节假日加班费"
+  },
+  {
+   "default": "0",
+   "fieldname": "overtime_pay_total",
+   "fieldtype": "Currency",
+   "label": "加班费小计"
+  },
+  {
+   "default": "0",
+   "fieldname": "large_night_shift_count",
+   "fieldtype": "Float",
+   "label": "大夜班次数"
+  },
+  {
+   "default": "0",
+   "fieldname": "small_night_shift_count",
+   "fieldtype": "Float",
+   "label": "小夜班次数"
+  },
+  {
+   "default": "0",
+   "fieldname": "night_shift_allowance",
+   "fieldtype": "Currency",
+   "label": "夜班津贴"
+  },
+  {
+   "default": "0",
+   "fieldname": "attendance_wage",
+   "fieldtype": "Currency",
+   "label": "出勤工资"
+  },
+  {
+   "default": "0",
+   "fieldname": "proposal_improvement_bonus",
+   "fieldtype": "Currency",
+   "label": "提案改善奖"
+  },
+  {
+   "default": "0",
+   "fieldname": "apple_reward_amount",
+   "fieldtype": "Currency",
+   "label": "红绿苹果"
+  },
+  {
+   "default": "0",
+   "fieldname": "subsidy_bonus_total",
+   "fieldtype": "Currency",
+   "label": "全勤奖住房学历补贴"
+  },
+  {
+   "default": "0",
+   "fieldname": "production_bonus",
+   "fieldtype": "Currency",
+   "label": "生产奖"
+  },
+  {
+   "default": "0",
+   "fieldname": "bonus_total",
+   "fieldtype": "Currency",
+   "label": "奖金小计"
+  },
+  {
+   "default": "0",
+   "fieldname": "absenteeism_hours",
+   "fieldtype": "Float",
+   "label": "旷工工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "absenteeism_deduction",
+   "fieldtype": "Currency",
+   "label": "旷工扣款"
+  },
+  {
+   "default": "0",
+   "fieldname": "late_full_attendance_deduction",
+   "fieldtype": "Currency",
+   "label": "迟到金额+全勤奖扣款"
+  },
+  {
+   "default": "0",
+   "fieldname": "punishment_total",
+   "fieldtype": "Currency",
+   "label": "惩处小计"
+  },
+  {
+   "default": "0",
+   "fieldname": "gross_pay",
+   "fieldtype": "Currency",
+   "label": "应付工资"
+  },
+  {
+   "default": "0",
+   "fieldname": "social_security_personal",
+   "fieldtype": "Currency",
+   "label": "保险基金员工负担额"
+  },
+  {
+   "default": "0",
+   "fieldname": "housing_fund_personal",
+   "fieldtype": "Currency",
+   "label": "住房公积金"
+  },
+  {
+   "default": "0",
+   "fieldname": "paid_proposal_birthday_welfare",
+   "fieldtype": "Currency",
+   "label": "提案改善奖及生日福利金已发"
+  },
+  {
+   "default": "0",
+   "fieldname": "taxable_salary",
+   "fieldtype": "Currency",
+   "label": "计税工资"
+  },
+  {
+   "default": "0",
+   "fieldname": "continuing_service_bonus",
+   "fieldtype": "Currency",
+   "label": "继续服务奖"
+  },
+  {
+   "default": "0",
+   "fieldname": "income_tax",
+   "fieldtype": "Currency",
+   "label": "所得税代扣款"
+  },
+  {
+   "default": "0",
+   "fieldname": "year_end_bonus_tax",
+   "fieldtype": "Currency",
+   "label": "年终奖所得税"
+  },
+  {
+   "default": "0",
+   "fieldname": "utilities_deduction",
+   "fieldtype": "Currency",
+   "label": "水电费及扣款"
+  },
+  {
+   "default": "0",
+   "fieldname": "net_pay",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "实发工资"
+  },
+  {
+   "default": "0",
+   "fieldname": "social_security_company",
+   "fieldtype": "Currency",
+   "label": "保险基金公司负担额"
+  },
+  {
+   "default": "0",
+   "fieldname": "housing_fund_company",
+   "fieldtype": "Currency",
+   "label": "住房公积金公司负担"
+  },
+  {
+   "default": "0",
+   "fieldname": "company_cost_total",
+   "fieldtype": "Currency",
+   "label": "公司实际负担总计"
+  },
+  {
+   "default": "0",
+   "fieldname": "export_tax_adjusted_net_pay",
+   "fieldtype": "Currency",
+   "label": "导出校验工资"
+  },
+  {
+   "default": "待生成",
+   "fieldname": "calculation_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "结算状态",
+   "options": "待生成\n已生成\n已确认\n已生成工资单"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Payroll Settlement Record",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name"
+}

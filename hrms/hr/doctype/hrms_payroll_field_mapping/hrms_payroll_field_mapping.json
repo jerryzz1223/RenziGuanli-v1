@@ -1,0 +1,152 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-06 00:00:00.000000",
+ "description": "薪资字段映射",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "mapping_code",
+  "display_order",
+  "excel_column",
+  "excel_label",
+  "system_doctype",
+  "system_field",
+  "source_module",
+  "source_detail",
+  "formula_expression",
+  "rule_code",
+  "required_for_settlement",
+  "status",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "mapping_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "映射编码",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "display_order",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "显示顺序"
+  },
+  {
+   "fieldname": "excel_column",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Excel列",
+   "reqd": 1
+  },
+  {
+   "fieldname": "excel_label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Excel字段名",
+   "reqd": 1
+  },
+  {
+   "fieldname": "system_doctype",
+   "fieldtype": "Data",
+   "label": "系统 DocType"
+  },
+  {
+   "fieldname": "system_field",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "系统字段"
+  },
+  {
+   "fieldname": "source_module",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "来源模块",
+   "options": "员工档案\n薪资主数据\n考勤终稿\n福利扣款\n薪资变量\n薪资结算\n公式计算\n导出辅助"
+  },
+  {
+   "fieldname": "source_detail",
+   "fieldtype": "Small Text",
+   "label": "来源说明"
+  },
+  {
+   "fieldname": "formula_expression",
+   "fieldtype": "Code",
+   "label": "公式表达式",
+   "options": "Text"
+  },
+  {
+   "fieldname": "rule_code",
+   "fieldtype": "Data",
+   "label": "对应规则"
+  },
+  {
+   "default": "1",
+   "fieldname": "required_for_settlement",
+   "fieldtype": "Check",
+   "label": "薪资结算必需"
+  },
+  {
+   "default": "已启用",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "状态",
+   "options": "草稿\n已启用\n已停用"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "备注"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Payroll Field Mapping",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR User",
+   "share": 1
+  }
+ ],
+ "sort_field": "excel_column",
+ "sort_order": "ASC",
+ "states": [],
+ "title_field": "excel_label"
+}

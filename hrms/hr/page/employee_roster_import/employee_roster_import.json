@@ -1,0 +1,19 @@
+{
+ "creation": "2026-07-01 00:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "upload",
+ "idx": 0,
+ "modified": "2026-07-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "employee-roster-import",
+ "owner": "Administrator",
+ "page_name": "employee-roster-import",
+ "roles": [],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "智能花名册导入"
+}

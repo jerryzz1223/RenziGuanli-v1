@@ -20,14 +20,16 @@ const workbenchSidebar = JSON.parse(fs.readFileSync(workbenchSidebarPath, "utf8"
 const personnel = JSON.parse(fs.readFileSync(personnelPath, "utf8"));
 const personnelSidebar = JSON.parse(fs.readFileSync(personnelSidebarPath, "utf8"));
 
-for (const marker of ['app_home = "/desk/hr-setup"', '"route": "/desk/hr-setup"']) {
+for (const marker of ['app_home = "/desk/hrms-workbench"', '"route": "/desk/hrms-workbench"']) {
 	if (!hooksSource.includes(marker)) {
-		throw new Error(`HRMS app entry must point to the workbench workspace: ${marker}`);
+		throw new Error(`HRMS app entry must point to the unified workbench page: ${marker}`);
 	}
 }
 
-if (!redirectSource.includes("/desk/hr-setup") || redirectSource.includes("/desk/hrms-workbench")) {
-	throw new Error("Desktop redirect must point to /desk/hr-setup and not the old custom page.");
+for (const forbiddenRoute of ["/desk/hrms-workbench/people", "/desk/hrms-workbench/attendance", "/desk/hrms-workbench/payroll"]) {
+	if (topNavSource.includes(forbiddenRoute)) {
+		throw new Error(`Top navigation must not route modules into nested workbench pages: ${forbiddenRoute}`);
+	}
 }
 
 for (const marker of ["/assets/hrms/js/hrms_top_nav.js", "/assets/hrms/css/hrms_top_nav.css"]) {
@@ -36,9 +38,69 @@ for (const marker of ["/assets/hrms/js/hrms_top_nav.js", "/assets/hrms/css/hrms_
 	}
 }
 
-for (const marker of ["工作台", "人事", "/desk/hr-setup", "/desk/personnel"]) {
+for (const marker of ["工作台", "人事", "/desk/hrms-workbench", "/desk/personnel", "/desk/department", "/desk/attendance-import-center", "/desk/payroll-input-center"]) {
 	if (!topNavSource.includes(marker)) {
 		throw new Error(`Top navigation is missing marker: ${marker}`);
+	}
+}
+
+for (const marker of [
+	"HRMS_SIDEBAR_MODULES",
+	"active_sidebar_module",
+	"render_hrms_sidebar_items",
+	"apply_hrms_sidebar_shell",
+	"apply_hrms_shell_rules",
+	"bind_hrms_shell_route_events",
+	"schedule_hrms_ui_rules",
+	"schedule_hrms_localization",
+	"should_ignore_hrms_shell_mutation",
+	".hrms-unified-sidebar, #hrms-top-module-nav",
+	"hrms_expected_route_slug",
+	"announce_hrms_route_change",
+	"WORKSPACE_ROUTE_SLUGS",
+	"route[0] === \"Workspaces\"",
+	"hrms_shell_ui_timer",
+	"schedule_hrms_ui_rules(120)",
+	"hrms:route-change",
+	"frappe.router.on(\"change\"",
+	"HRMS_ENSURED_PAGE_SLUGS",
+	'label: "组织"',
+	'label: "考勤假期"',
+	'label: "薪酬"',
+	'keys: ["department", "organizational-chart", "staffing-plan"]',
+	'"attendance-import-center"',
+	'"payroll-input-center"',
+]) {
+	if (!redirectSource.includes(marker)) {
+		throw new Error(`Global shell sidebar must switch by top module, missing marker: ${marker}`);
+	}
+}
+
+for (const forbidden of [
+	'{ label: "公司", route: "/desk/company", slug: "company" }',
+	'{ label: "分支机构", route: "/desk/branch", slug: "branch" }',
+	'{ label: "岗位", route: "/desk/designation", slug: "designation" }',
+	'{ label: "职级", route: "/desk/employee-grade", slug: "employee-grade" }',
+	'keys: ["company", "branch", "department", "designation", "employee-grade", "organizational-chart", "staffing-plan"]',
+]) {
+	if (redirectSource.includes(forbidden) || topNavSource.includes(forbidden)) {
+		throw new Error(`Organization module must be customized to Yongxin-only organization management: ${forbidden}`);
+	}
+}
+
+const ensuredPagesMatch = redirectSource.match(/HRMS_ENSURED_PAGE_SLUGS\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
+if (!ensuredPagesMatch || !ensuredPagesMatch[1].includes('"attendance-import-center"')) {
+	throw new Error("Attendance import center must be ensured before sidebar navigation.");
+}
+
+if (redirectSource.includes("apply_personnel_sidebar_shell()")) {
+	throw new Error("Global shell must not keep applying the fixed personnel sidebar.");
+}
+
+const workbenchJs = fs.readFileSync(path.join(root, "hrms", "hr", "page", "hrms_workbench", "hrms_workbench.js"), "utf8");
+for (const forbiddenMarker of ["hrms-workbench-topnav", "data-module=", "set_module(module_key)", "frappe.set_route(\"hrms-workbench\", module_key)"]) {
+	if (workbenchJs.includes(forbiddenMarker)) {
+		throw new Error(`Workbench page must not render nested module navigation: ${forbiddenMarker}`);
 	}
 }
 
@@ -85,7 +147,7 @@ for (const label of ["员工管理", "员工关系"]) {
 
 for (const [label, linkTo, linkType] of [
 	["员工花名册", "Employee", "DocType"],
-	["员工档案库", "Employee", "DocType"],
+	["员工档案库", "employee-archive", "Page"],
 	["入职管理", "Employee Onboarding", "DocType"],
 	["转正管理", "Employee Promotion", "DocType"],
 	["离职管理", "Employee Separation", "DocType"],

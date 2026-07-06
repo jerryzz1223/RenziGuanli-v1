@@ -1,0 +1,147 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-06 00:00:00.000000",
+ "description": "考勤自定义规则",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "rule_code",
+  "rule_name",
+  "rule_group",
+  "rule_type",
+  "priority",
+  "source_section",
+  "source_module",
+  "source_document",
+  "logic_section",
+  "trigger_condition",
+  "formula",
+  "action_result",
+  "effective_from",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "default": "1",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "启用"
+  },
+  {
+   "fieldname": "rule_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "规则编码",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "rule_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "规则名称",
+   "reqd": 1
+  },
+  {
+   "fieldname": "rule_group",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "规则分组",
+   "options": "考勤\n苹果树\n7S\nKPI\n钉钉\n薪资前置\n其他"
+  },
+  {
+   "fieldname": "rule_type",
+   "fieldtype": "Data",
+   "label": "规则类型"
+  },
+  {
+   "default": "0",
+   "fieldname": "priority",
+   "fieldtype": "Int",
+   "label": "优先级"
+  },
+  {
+   "fieldname": "source_section",
+   "fieldtype": "Section Break",
+   "label": "来源"
+  },
+  {
+   "fieldname": "source_module",
+   "fieldtype": "Data",
+   "label": "来源模块"
+  },
+  {
+   "fieldname": "source_document",
+   "fieldtype": "Small Text",
+   "label": "来源文件/表单"
+  },
+  {
+   "fieldname": "logic_section",
+   "fieldtype": "Section Break",
+   "label": "规则逻辑"
+  },
+  {
+   "fieldname": "trigger_condition",
+   "fieldtype": "Small Text",
+   "label": "触发条件"
+  },
+  {
+   "fieldname": "formula",
+   "fieldtype": "Code",
+   "label": "计算公式/表达式"
+  },
+  {
+   "fieldname": "action_result",
+   "fieldtype": "Small Text",
+   "label": "处理结果"
+  },
+  {
+   "fieldname": "effective_from",
+   "fieldtype": "Date",
+   "label": "生效日期"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "备注"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Attendance Custom Rule",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "priority",
+ "sort_order": "ASC",
+ "states": [],
+ "title_field": "rule_name"
+}

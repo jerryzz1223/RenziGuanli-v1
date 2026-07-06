@@ -1,0 +1,108 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-06 00:00:00.000000",
+ "description": "钉钉用户与员工档案映射",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "dingtalk_userid",
+  "employee",
+  "employee_code",
+  "employee_name",
+  "mobile",
+  "department_id",
+  "department_name",
+  "sync_status",
+  "last_synced_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "dingtalk_userid",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "钉钉 UserId",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "员工",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "employee_code",
+   "fieldtype": "Data",
+   "label": "工号"
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "姓名"
+  },
+  {
+   "fieldname": "mobile",
+   "fieldtype": "Data",
+   "label": "手机号"
+  },
+  {
+   "fieldname": "department_id",
+   "fieldtype": "Data",
+   "label": "钉钉部门ID"
+  },
+  {
+   "fieldname": "department_name",
+   "fieldtype": "Data",
+   "label": "部门名称"
+  },
+  {
+   "default": "待匹配",
+   "fieldname": "sync_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "同步状态",
+   "options": "待匹配\n已同步\n冲突\n忽略"
+  },
+  {
+   "fieldname": "last_synced_at",
+   "fieldtype": "Datetime",
+   "label": "最近同步时间"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS DingTalk User Map",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name"
+}

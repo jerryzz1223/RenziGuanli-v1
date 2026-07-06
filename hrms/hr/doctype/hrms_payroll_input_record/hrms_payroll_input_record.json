@@ -1,0 +1,246 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-05 00:00:00.000000",
+ "description": "薪资输入记录",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "payroll_month",
+  "employee",
+  "employee_code",
+  "employee_name",
+  "department",
+  "date_of_joining",
+  "standard_hours",
+  "actual_attendance_hours",
+  "adjusted_working_hours",
+  "overtime_1_5_hours",
+  "overtime_2_hours",
+  "overtime_3_hours",
+  "leave_hours",
+  "absent_hours",
+  "large_night_shift_count",
+  "small_night_shift_count",
+  "apple_reward_amount",
+  "full_attendance_bonus",
+  "housing_subsidy",
+  "education_subsidy",
+  "dormitory_deduction",
+  "social_security_personal",
+  "housing_fund_personal",
+  "other_bonus",
+  "other_deduction",
+  "preliminary_earning_total",
+  "preliminary_deduction_total",
+  "settlement_status"
+ ],
+ "fields": [
+  {
+   "fieldname": "payroll_month",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "薪资月份",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "员工",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "employee_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "工号"
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "姓名"
+  },
+  {
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "部门",
+   "options": "Department"
+  },
+  {
+   "fieldname": "date_of_joining",
+   "fieldtype": "Date",
+   "label": "入职时间"
+  },
+  {
+   "default": "0",
+   "fieldname": "standard_hours",
+   "fieldtype": "Float",
+   "label": "标准工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "actual_attendance_hours",
+   "fieldtype": "Float",
+   "label": "实际出勤"
+  },
+  {
+   "default": "0",
+   "fieldname": "adjusted_working_hours",
+   "fieldtype": "Float",
+   "label": "调整后工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "overtime_1_5_hours",
+   "fieldtype": "Float",
+   "label": "1.5倍加班"
+  },
+  {
+   "default": "0",
+   "fieldname": "overtime_2_hours",
+   "fieldtype": "Float",
+   "label": "2倍加班"
+  },
+  {
+   "default": "0",
+   "fieldname": "overtime_3_hours",
+   "fieldtype": "Float",
+   "label": "3倍加班"
+  },
+  {
+   "default": "0",
+   "fieldname": "leave_hours",
+   "fieldtype": "Float",
+   "label": "请假"
+  },
+  {
+   "default": "0",
+   "fieldname": "absent_hours",
+   "fieldtype": "Float",
+   "label": "旷工"
+  },
+  {
+   "default": "0",
+   "fieldname": "large_night_shift_count",
+   "fieldtype": "Float",
+   "label": "大夜班"
+  },
+  {
+   "default": "0",
+   "fieldname": "small_night_shift_count",
+   "fieldtype": "Float",
+   "label": "小夜班"
+  },
+  {
+   "default": "0",
+   "fieldname": "apple_reward_amount",
+   "fieldtype": "Currency",
+   "label": "红绿苹果"
+  },
+  {
+   "default": "0",
+   "fieldname": "full_attendance_bonus",
+   "fieldtype": "Currency",
+   "label": "全勤奖"
+  },
+  {
+   "default": "0",
+   "fieldname": "housing_subsidy",
+   "fieldtype": "Currency",
+   "label": "住房补贴"
+  },
+  {
+   "default": "0",
+   "fieldname": "education_subsidy",
+   "fieldtype": "Currency",
+   "label": "学历补贴"
+  },
+  {
+   "default": "0",
+   "fieldname": "dormitory_deduction",
+   "fieldtype": "Currency",
+   "label": "宿舍扣款"
+  },
+  {
+   "default": "0",
+   "fieldname": "social_security_personal",
+   "fieldtype": "Currency",
+   "label": "社保个人"
+  },
+  {
+   "default": "0",
+   "fieldname": "housing_fund_personal",
+   "fieldtype": "Currency",
+   "label": "公积金个人"
+  },
+  {
+   "default": "0",
+   "fieldname": "other_bonus",
+   "fieldtype": "Currency",
+   "label": "其他奖金"
+  },
+  {
+   "default": "0",
+   "fieldname": "other_deduction",
+   "fieldtype": "Currency",
+   "label": "其他扣款"
+  },
+  {
+   "default": "0",
+   "fieldname": "preliminary_earning_total",
+   "fieldtype": "Currency",
+   "label": "应发前置合计"
+  },
+  {
+   "default": "0",
+   "fieldname": "preliminary_deduction_total",
+   "fieldtype": "Currency",
+   "label": "应扣前置合计"
+  },
+  {
+   "default": "待结算",
+   "fieldname": "settlement_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "薪资结算状态",
+   "options": "待结算\n已确认\n已生成工资表"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-05 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Payroll Input Record",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name"
+}

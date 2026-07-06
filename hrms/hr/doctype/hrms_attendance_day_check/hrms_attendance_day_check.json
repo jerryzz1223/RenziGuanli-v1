@@ -1,0 +1,339 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-05 00:00:00.000000",
+ "description": "每日考勤核对",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "import_batch",
+  "attendance_date",
+  "employee",
+  "employee_code",
+  "employee_name",
+  "attendance_group",
+  "department",
+  "position",
+  "user_id",
+  "date_type",
+  "shift_name",
+  "scheduled_in_time",
+  "scheduled_out_time",
+  "actual_in_time",
+  "actual_out_time",
+  "missing_in",
+  "missing_out",
+  "attendance_result",
+  "attendance_duration_hours",
+  "absent_hours",
+  "standard_hours",
+  "actual_attendance_hours",
+  "workday_overtime_hours",
+  "restday_overtime_hours",
+  "holiday_overtime_hours",
+  "large_night_shift_count",
+  "small_night_shift_count",
+  "leave_summary",
+  "leave_hours",
+  "personal_leave_hours",
+  "sick_leave_hours",
+  "annual_leave_hours",
+  "work_injury_leave_hours",
+  "rest_leave_hours",
+  "bereavement_leave_hours",
+  "marriage_leave_hours",
+  "valid_leave_hours",
+  "invalid_leave_hours",
+  "valid_leave_summary",
+  "overtime_without_approval",
+  "late_count",
+  "early_count",
+  "raw_row_json"
+ ],
+ "fields": [
+  {
+   "fieldname": "import_batch",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "导入批次",
+   "options": "HRMS Attendance Import Batch"
+  },
+  {
+   "fieldname": "attendance_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "考勤日期",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "员工",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "employee_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "工号"
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "姓名"
+  },
+  {
+   "fieldname": "attendance_group",
+   "fieldtype": "Data",
+   "label": "考勤组"
+  },
+  {
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "部门",
+   "options": "Department"
+  },
+  {
+   "fieldname": "position",
+   "fieldtype": "Data",
+   "label": "岗位"
+  },
+  {
+   "fieldname": "user_id",
+   "fieldtype": "Data",
+   "label": "UserId"
+  },
+  {
+   "fieldname": "date_type",
+   "fieldtype": "Data",
+   "label": "日期类型"
+  },
+  {
+   "fieldname": "shift_name",
+   "fieldtype": "Data",
+   "label": "班次"
+  },
+  {
+   "fieldname": "scheduled_in_time",
+   "fieldtype": "Data",
+   "label": "上班时间"
+  },
+  {
+   "fieldname": "scheduled_out_time",
+   "fieldtype": "Data",
+   "label": "下班时间"
+  },
+  {
+   "fieldname": "actual_in_time",
+   "fieldtype": "Data",
+   "label": "实际上班时间"
+  },
+  {
+   "fieldname": "actual_out_time",
+   "fieldtype": "Data",
+   "label": "实际下班时间"
+  },
+  {
+   "default": "0",
+   "fieldname": "missing_in",
+   "fieldtype": "Check",
+   "label": "上班缺卡"
+  },
+  {
+   "default": "0",
+   "fieldname": "missing_out",
+   "fieldtype": "Check",
+   "label": "下班缺卡"
+  },
+  {
+   "fieldname": "attendance_result",
+   "fieldtype": "Data",
+   "label": "出勤结果"
+  },
+  {
+   "default": "0",
+   "fieldname": "attendance_duration_hours",
+   "fieldtype": "Float",
+   "label": "出勤时长"
+  },
+  {
+   "default": "0",
+   "fieldname": "absent_hours",
+   "fieldtype": "Float",
+   "label": "旷工"
+  },
+  {
+   "default": "0",
+   "fieldname": "standard_hours",
+   "fieldtype": "Float",
+   "label": "标准工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "actual_attendance_hours",
+   "fieldtype": "Float",
+   "label": "实际出勤"
+  },
+  {
+   "default": "0",
+   "fieldname": "workday_overtime_hours",
+   "fieldtype": "Float",
+   "label": "工作日加班"
+  },
+  {
+   "default": "0",
+   "fieldname": "restday_overtime_hours",
+   "fieldtype": "Float",
+   "label": "休息日加班"
+  },
+  {
+   "default": "0",
+   "fieldname": "holiday_overtime_hours",
+   "fieldtype": "Float",
+   "label": "节假日加班"
+  },
+  {
+   "default": "0",
+   "fieldname": "large_night_shift_count",
+   "fieldtype": "Float",
+   "label": "大夜班"
+  },
+  {
+   "default": "0",
+   "fieldname": "small_night_shift_count",
+   "fieldtype": "Float",
+   "label": "小夜班"
+  },
+  {
+   "fieldname": "leave_summary",
+   "fieldtype": "Small Text",
+   "label": "请假"
+  },
+  {
+   "default": "0",
+   "fieldname": "leave_hours",
+   "fieldtype": "Float",
+   "label": "请假小时"
+  },
+  {
+   "default": "0",
+   "fieldname": "personal_leave_hours",
+   "fieldtype": "Float",
+   "label": "事假"
+  },
+  {
+   "default": "0",
+   "fieldname": "sick_leave_hours",
+   "fieldtype": "Float",
+   "label": "病假"
+  },
+  {
+   "default": "0",
+   "fieldname": "annual_leave_hours",
+   "fieldtype": "Float",
+   "label": "特休"
+  },
+  {
+   "default": "0",
+   "fieldname": "work_injury_leave_hours",
+   "fieldtype": "Float",
+   "label": "工伤"
+  },
+  {
+   "default": "0",
+   "fieldname": "rest_leave_hours",
+   "fieldtype": "Float",
+   "label": "排休"
+  },
+  {
+   "default": "0",
+   "fieldname": "bereavement_leave_hours",
+   "fieldtype": "Float",
+   "label": "丧假"
+  },
+  {
+   "default": "0",
+   "fieldname": "marriage_leave_hours",
+   "fieldtype": "Float",
+   "label": "婚假"
+  },
+  {
+   "default": "0",
+   "fieldname": "valid_leave_hours",
+   "fieldtype": "Float",
+   "label": "有效请假小时"
+  },
+  {
+   "default": "0",
+   "fieldname": "invalid_leave_hours",
+   "fieldtype": "Float",
+   "label": "无效请假小时"
+  },
+  {
+   "fieldname": "valid_leave_summary",
+   "fieldtype": "Small Text",
+   "label": "有效请假说明"
+  },
+  {
+   "default": "0",
+   "fieldname": "overtime_without_approval",
+   "fieldtype": "Check",
+   "label": "未申请加班"
+  },
+  {
+   "default": "0",
+   "fieldname": "late_count",
+   "fieldtype": "Int",
+   "label": "迟到"
+  },
+  {
+   "default": "0",
+   "fieldname": "early_count",
+   "fieldtype": "Int",
+   "label": "早退"
+  },
+  {
+   "fieldname": "raw_row_json",
+   "fieldtype": "Code",
+   "label": "原始行 JSON",
+   "options": "JSON"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-05 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Attendance Day Check",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "attendance_date",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name"
+}

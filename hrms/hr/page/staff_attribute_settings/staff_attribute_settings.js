@@ -16,8 +16,11 @@ frappe.pages["staff-attribute-settings"].on_page_load = function (wrapper) {
 		在职信息: "记录员工入职后的工号、合同公司、部门、岗位、工作性质、员工状态与入职日期。",
 		个人信息: "维护姓名、性别、出生日期、证件号码等员工基础身份信息。",
 		联系信息: "维护手机号、邮箱、地址与紧急联系人。",
+		教育信息: "维护学历类别、学习形式、学历、毕业院校和专业等花名册字段。",
+		合同保险: "维护合同签订、合同编号、合同期限、社保、医保和公积金字段。",
 		工资社保: "维护薪酬、社保、公积金和个税相关字段。",
 		个税申报: "维护个税申报需要的员工补充信息。",
+		附件: "维护员工证件、照片、合同扫描件等附件字段。",
 	};
 
 	const related_templates = {
@@ -39,6 +42,14 @@ frappe.pages["staff-attribute-settings"].on_page_load = function (wrapper) {
 
 	page.set_primary_action(__("添加属性字段"), () => open_field_dialog(), "add");
 	$(page.body).addClass("hrms-staff-attribute-page");
+	$(page.body).prepend(
+		`<div class="alert alert-info">${__("员工属性设置已迁移到设置中心，请在“设置中心 / 员工属性设置”中统一维护。")}</div>`,
+	);
+	setTimeout(() => {
+		frappe
+			.call("hrms.api.employee_field_template.ensure_personnel_pages")
+			.always(() => frappe.set_route("hr-settings-center"));
+	}, 50);
 
 	function load_template() {
 		state.loading = true;
@@ -113,6 +124,12 @@ frappe.pages["staff-attribute-settings"].on_page_load = function (wrapper) {
 					label: __("启用搜索"),
 					description: __("启用后，该字段后续可作为员工高级搜索条件。"),
 				},
+				{
+					fieldname: "required",
+					fieldtype: "Check",
+					label: __("是否必填"),
+					description: __("启用后，新建员工表单和花名册导入模板都会显示红色必填标记。"),
+				},
 			],
 			primary_action_label: __("保存"),
 			primary_action(values) {
@@ -149,11 +166,21 @@ frappe.pages["staff-attribute-settings"].on_page_load = function (wrapper) {
 			title: __("编辑属性字段"),
 			fields: [
 				{
+					fieldname: "category",
+					fieldtype: "Select",
+					label: __("所属分类"),
+					options: get_categories()
+						.map((item) => item.label)
+						.join("\n"),
+					default: field.category,
+					reqd: 1,
+				},
+				{
 					fieldname: "field_label",
 					fieldtype: "Data",
 					label: __("字段名称"),
 					default: field.field_label,
-					read_only: 1,
+					reqd: 1,
 				},
 				{
 					fieldname: "description",
@@ -167,6 +194,12 @@ frappe.pages["staff-attribute-settings"].on_page_load = function (wrapper) {
 					label: __("启用搜索"),
 					default: field.search_enabled,
 				},
+				{
+					fieldname: "required",
+					fieldtype: "Check",
+					label: __("是否必填"),
+					default: field.required,
+				},
 			],
 			primary_action_label: __("保存"),
 			primary_action(values) {
@@ -175,7 +208,10 @@ frappe.pages["staff-attribute-settings"].on_page_load = function (wrapper) {
 						items: [
 							{
 								fieldname: field.fieldname,
+								category: values.category,
+								field_label: values.field_label,
 								description: values.description,
+								required: values.required,
 								search_enabled: values.search_enabled,
 							},
 						],
@@ -196,6 +232,25 @@ frappe.pages["staff-attribute-settings"].on_page_load = function (wrapper) {
 				enabled,
 			})
 			.then(() => load_template());
+	}
+
+	function download_employee_import_template() {
+		const url = frappe.urllib.get_full_url(
+			"/api/method/hrms.api.employee_field_template.download_employee_import_template",
+		);
+		window.open(url);
+	}
+
+	function open_employee_web_form() {
+		frappe.new_doc("Employee");
+	}
+
+	function open_roster_import() {
+		frappe.set_route("employee-roster-import");
+	}
+
+	function open_roster_export() {
+		frappe.set_route("employee-roster-export");
 	}
 
 	function render_tabs() {
@@ -253,7 +308,7 @@ frappe.pages["staff-attribute-settings"].on_page_load = function (wrapper) {
 							<tr class="${field.enabled === 0 ? "text-muted" : ""}">
 								<td>${frappe.utils.escape_html(field.field_label || "")}</td>
 								<td>${frappe.utils.escape_html(field.description || "")}</td>
-								<td>${render_source(field)}${field.search_enabled ? ` <span class="indicator-pill blue">${__("已启用搜索")}</span>` : ""}</td>
+								<td>${render_source(field)}${field.required ? ` <span class="indicator-pill orange">${__("必填")}</span>` : ""}${field.search_enabled ? ` <span class="indicator-pill blue">${__("已启用搜索")}</span>` : ""}</td>
 								<td>
 									${
 										readonly
@@ -314,12 +369,19 @@ frappe.pages["staff-attribute-settings"].on_page_load = function (wrapper) {
 		const content = `
 			<div class="hrms-staff-attribute-guide">
 				<div class="hrms-staff-attribute-guide__title">${__("使用指南")}</div>
-				<div>1. ${__("员工属性字段分为“在职信息”、“个人信息”、“联系信息”、“工资社保”和“个税申报”。")}</div>
-				<div>2. ${__("系统字段不可删除；自定义字段会创建为真实 Employee 字段，并映射到新建员工表单。")}</div>
+				<div>1. ${__("员工属性字段分为“在职信息”、“个人信息”、“联系信息”、“工资社保”、“个税申报”和“附件”。")}</div>
+				<div>2. ${__("这里的字段会同时控制网页新建员工表单和 Excel 初始导入模板。")}</div>
+				<div>3. ${__("系统必填字段会保留显示；其他字段可以按业务需要隐藏、改名或启用搜索。")}</div>
 			</div>
 			<div class="hrms-staff-attribute-toolbar">
 				${render_tabs()}
-				<button class="btn btn-primary btn-sm" data-add-category="${state.category}">${__("添加属性字段")}</button>
+				<div class="hrms-staff-attribute-actions">
+					<button class="btn btn-default btn-sm" data-download-template>${__("下载 Excel 模板")}</button>
+					<button class="btn btn-default btn-sm" data-open-roster-import>${__("智能导入")}</button>
+					<button class="btn btn-default btn-sm" data-open-roster-export>${__("自定义导出")}</button>
+					<button class="btn btn-default btn-sm" data-open-employee-form>${__("网页填写员工")}</button>
+					<button class="btn btn-primary btn-sm" data-add-category="${state.category}">${__("添加属性字段")}</button>
+				</div>
 			</div>
 			${
 				state.loading
@@ -352,6 +414,10 @@ frappe.pages["staff-attribute-settings"].on_page_load = function (wrapper) {
 			.on("click", function () {
 				open_field_dialog($(this).data("add-category"));
 			});
+		$(page.body).find("[data-download-template]").on("click", download_employee_import_template);
+		$(page.body).find("[data-open-roster-import]").on("click", open_roster_import);
+		$(page.body).find("[data-open-roster-export]").on("click", open_roster_export);
+		$(page.body).find("[data-open-employee-form]").on("click", open_employee_web_form);
 		$(page.body)
 			.find(".hrms-edit-field")
 			.on("click", function () {

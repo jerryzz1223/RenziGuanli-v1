@@ -13,7 +13,17 @@
   "description",
   "source",
   "enabled",
+  "required",
   "search_enabled",
+  "import_enabled",
+  "export_enabled",
+  "form_visible",
+  "detail_visible",
+  "roster_visible",
+  "aliases",
+  "detail_block",
+  "detail_block_order",
+  "record_type",
   "options",
   "insert_after"
  ],
@@ -23,7 +33,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "所属分类",
-   "options": "在职信息\n个人信息\n联系信息\n工资社保\n个税申报",
+   "options": "在职信息\n个人信息\n联系信息\n教育信息\n合同保险\n工资社保\n个税申报\n附件",
    "reqd": 1
   },
   {
@@ -45,7 +55,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "字段类型",
-   "options": "Data\nDate\nSelect\nSmall Text\nCheck\nLink",
+   "options": "Attach\nAttach Image\nCheck\nCurrency\nData\nDate\nDatetime\nFloat\nInt\nLink\nLong Text\nPercent\nRead Only\nSelect\nSmall Text\nText\nText Editor\nTime",
    "reqd": 1
   },
   {
@@ -70,9 +80,69 @@
   },
   {
    "default": "0",
+   "fieldname": "required",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "是否必填"
+  },
+  {
+   "default": "0",
    "fieldname": "search_enabled",
    "fieldtype": "Check",
    "label": "启用搜索"
+  },
+  {
+   "default": "1",
+   "fieldname": "import_enabled",
+   "fieldtype": "Check",
+   "label": "允许导入"
+  },
+  {
+   "default": "1",
+   "fieldname": "export_enabled",
+   "fieldtype": "Check",
+   "label": "允许导出"
+  },
+  {
+   "default": "1",
+   "fieldname": "form_visible",
+   "fieldtype": "Check",
+   "label": "表单显示"
+  },
+  {
+   "default": "1",
+   "fieldname": "detail_visible",
+   "fieldtype": "Check",
+   "label": "详情显示"
+  },
+  {
+   "default": "0",
+   "fieldname": "roster_visible",
+   "fieldtype": "Check",
+   "label": "花名册显示"
+  },
+  {
+   "fieldname": "aliases",
+   "fieldtype": "Small Text",
+   "label": "字段别名"
+  },
+  {
+   "fieldname": "detail_block",
+   "fieldtype": "Select",
+   "label": "详情资料块",
+   "options": "\n任职记录\n教育经历\n工作经历\n语言能力\n工作技能\n奖惩记录\n考察期信息\n退休信息\n档案信息\n合同记录\n社保公积金记录\n材料附件\n背景调查"
+  },
+  {
+   "default": "0",
+   "fieldname": "detail_block_order",
+   "fieldtype": "Int",
+   "label": "资料块排序"
+  },
+  {
+   "fieldname": "record_type",
+   "fieldtype": "Select",
+   "label": "记录类型",
+   "options": "\n单字段\n单行资料块\n多行记录"
   },
   {
    "fieldname": "options",

@@ -11,6 +11,9 @@ const personnelPath = path.join(root, "hrms", "hr", "workspace", "personnel", "p
 const personnelSidebarPath = path.join(root, "hrms", "workspace_sidebar", "personnel.json");
 const pageJsonPath = path.join(root, "hrms", "hr", "page", "staff_attribute_settings", "staff_attribute_settings.json");
 const pageJsPath = path.join(root, "hrms", "hr", "page", "staff_attribute_settings", "staff_attribute_settings.js");
+const settingsCenterJsonPath = path.join(root, "hrms", "hr", "page", "hr_settings_center", "hr_settings_center.json");
+const settingsCenterJsPath = path.join(root, "hrms", "hr", "page", "hr_settings_center", "hr_settings_center.js");
+const topNavJsPath = path.join(root, "hrms", "public", "js", "hrms_top_nav.js");
 
 const redirect = fs.readFileSync(redirectPath, "utf8");
 const topNavCss = fs.readFileSync(topNavCssPath, "utf8");
@@ -19,6 +22,7 @@ const hrSetup = JSON.parse(fs.readFileSync(hrSetupPath, "utf8"));
 const hrSetupSidebar = JSON.parse(fs.readFileSync(hrSetupSidebarPath, "utf8"));
 const personnel = JSON.parse(fs.readFileSync(personnelPath, "utf8"));
 const personnelSidebar = JSON.parse(fs.readFileSync(personnelSidebarPath, "utf8"));
+const topNavJs = fs.readFileSync(topNavJsPath, "utf8");
 
 function mustInclude(source, marker, message) {
 	if (!source.includes(marker)) {
@@ -30,12 +34,23 @@ for (const marker of [
 	"fix_desk_home_links",
 	"hide_frappe_breadcrumbs",
 	"enable_sidebar_section_collapse",
+	"HRMS_SIDEBAR_MODULES",
+	"active_sidebar_module",
+	"apply_hrms_sidebar_shell",
+	"apply_hrms_shell_rules",
+	"render_hrms_sidebar_items",
+	"schedule_hrms_localization",
+	"should_ignore_hrms_shell_mutation",
+	"hrms_expected_route_slug",
+	"WORKSPACE_ROUTE_SLUGS",
+	"route[0] === \"Workspaces\"",
+	"hrms:route-change",
 	"toggle_sidebar_section",
 	".sidebar-item-container.section-item",
 	".sidebar-child-item.nested-container",
 	"hrms-hide-breadcrumbs",
 	"hrms-sidebar-child-hidden",
-	"/desk/hr-setup",
+	"/desk/hrms-workbench",
 ]) {
 	mustInclude(redirect, marker, `Global shell script must implement: ${marker}`);
 }
@@ -53,8 +68,87 @@ for (const marker of [
 	"班次类型",
 	"Organizational Chart",
 	"组织架构",
+	"Create User Automatically",
+	"自动创建用户",
+	"Creates a User account for this employee using the Preferred, Company, or Personal email.",
+	"使用首选邮箱、公司邮箱或个人邮箱为该员工自动创建用户账号。",
+	"Grade",
+	"员工等级",
+	"Preferred Contact Email",
+	"首选联系邮箱",
+	"Holiday List",
+	"假期列表",
+	"Default Shift",
+	"默认班次",
+	"Marital Status",
+	"婚姻状况",
+	"Blood Group",
+	"血型",
+	"Health Details",
+	"健康信息",
+	"Health Insurance Provider",
+	"医保供应商",
+	"Health Insurance No",
+	"医保编号",
+	"Payroll Cost Center",
+	"薪资成本中心",
+	"Employee Advance Account",
+	"员工预支账户",
+	"Auto User Creation Error",
+	"自动创建用户错误",
+	"Company or Personal Email is mandatory when 'Create User Automatically' is enabled",
+	"启用“自动创建用户”时必须填写公司邮箱或个人邮箱",
+	"Salary Structure",
+	"薪资结构",
+	"Salary Structure Assignment",
+	"薪资结构分配",
+	"Salary Slip",
+	"工资单",
+	"Salary Withholding",
+	"薪资暂扣",
+	"Earnings & Deductions",
+	"收入与扣款",
+	"Earnings",
+	"收入项",
+	"Deductions",
+	"扣款项",
+	"Employer Contributions",
+	"雇主缴纳项",
+	"Flexible Benefits",
+	"弹性福利",
+	"Condition and Formula Help",
+	"条件与公式帮助",
+	"Bimonthly",
+	"半月",
+	"Suspended",
+	"停职",
 ]) {
 	mustInclude(redirect, marker, `Dynamic Chinese localization is missing: ${marker}`);
+}
+
+for (const marker of [
+	"员工花名册",
+	"员工档案库",
+	"入职管理",
+	"转正管理",
+	"离职管理",
+	"离职面谈",
+	"ERPNext设置",
+	"授权控制",
+]) {
+	mustInclude(redirect, marker, `Unified personnel sidebar behavior is missing: ${marker}`);
+}
+
+for (const removedLabel of ["员工组", "员工等级", "员工信息"]) {
+	if (redirect.includes(`label: "${removedLabel}"`)) {
+		throw new Error(`Unified personnel sidebar must not show ${removedLabel}.`);
+	}
+	if (personnel.links.some((item) => item.label === removedLabel)) {
+		throw new Error(`Personnel workspace must not show ${removedLabel}.`);
+	}
+	if (personnelSidebar.items.some((item) => item.label === removedLabel)) {
+		throw new Error(`Personnel sidebar must not show ${removedLabel}.`);
+	}
 }
 
 for (const marker of [
@@ -63,6 +157,11 @@ for (const marker of [
 	".page-breadcrumbs",
 	".hrms-sidebar-child-hidden",
 	".hrms-sidebar-section-toggle",
+	".hrms-unified-sidebar",
+	".hrms-unified-sidebar-section",
+	".hrms-unified-sidebar-link",
+	"body.hrms-module-shell",
+	".control-label.reqd::after",
 ]) {
 	mustInclude(topNavCss, marker, `Global shell CSS is missing: ${marker}`);
 }
@@ -70,12 +169,59 @@ for (const marker of [
 if (!fs.existsSync(pageJsonPath) || !fs.existsSync(pageJsPath)) {
 	throw new Error("员工属性设置 must be a real Frappe Page with JSON and JS assets.");
 }
+if (!fs.existsSync(settingsCenterJsonPath) || !fs.existsSync(settingsCenterJsPath)) {
+	throw new Error("设置中心 must be a real Frappe Page with JSON and JS assets.");
+}
 
 const pageJson = JSON.parse(fs.readFileSync(pageJsonPath, "utf8"));
 const pageJs = fs.readFileSync(pageJsPath, "utf8");
+const settingsCenterJson = JSON.parse(fs.readFileSync(settingsCenterJsonPath, "utf8"));
+const settingsCenterJs = fs.readFileSync(settingsCenterJsPath, "utf8");
 
 if (pageJson.name !== "staff-attribute-settings" || pageJson.title !== "员工属性设置") {
 	throw new Error("员工属性设置 Page route/title is incorrect.");
+}
+if (settingsCenterJson.name !== "hr-settings-center" || settingsCenterJson.title !== "设置中心") {
+	throw new Error("设置中心 Page route/title is incorrect.");
+}
+
+for (const marker of [
+	"设置中心",
+	"/desk/hr-settings-center",
+	"hr-settings-center",
+]) {
+	mustInclude(topNavJs, marker, `Top account menu must expose 设置中心: ${marker}`);
+}
+
+for (const marker of [
+	"frappe.pages[\"hr-settings-center\"]",
+	"字段管理中心",
+	"员工属性设置",
+	"字段别名配置",
+	"导入映射设置",
+	"详情资料块设置",
+	"导出模板设置",
+	"基础资料设置",
+	"多行记录类型",
+	"hrms.api.employee_field_template.get_hr_settings_center",
+	"hrms.api.employee_field_template.save_employee_field_center",
+	"aliases",
+	"import_enabled",
+	"export_enabled",
+	"form_visible",
+	"detail_visible",
+	"detail_block",
+	"record_type",
+]) {
+	mustInclude(settingsCenterJs, marker, `设置中心 Page is missing behavior marker: ${marker}`);
+}
+
+for (const marker of [
+	"frappe.set_route(\"hr-settings-center\")",
+	"ensure_personnel_pages",
+	"员工属性设置已迁移到设置中心",
+]) {
+	mustInclude(pageJs, marker, `旧员工属性设置入口 must route to 设置中心: ${marker}`);
 }
 
 for (const marker of [
@@ -107,34 +253,22 @@ for (const marker of [
 }
 
 for (const marker of [
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260630f",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260630f",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260630f",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260706e",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260706e",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260706e",
 ]) {
 	mustInclude(hooks, marker, `Asset version must be bumped for browser cache: ${marker}`);
 }
 
-function hasStaffAttributeLink(items) {
-	return items.some(
-		(item) =>
-			item.type === "Link" &&
-			item.label === "员工属性设置" &&
-			item.link_type === "Page" &&
-			item.link_to === "staff-attribute-settings",
-	);
-}
-
-if (!hasStaffAttributeLink(hrSetup.links)) {
-	throw new Error("工作台 workspace must link to 员工属性设置 Page.");
-}
-if (!hasStaffAttributeLink(personnel.links)) {
-	throw new Error("人事 workspace must link to 员工属性设置 Page.");
-}
-if (!hasStaffAttributeLink(hrSetupSidebar.items)) {
-	throw new Error("工作台 sidebar must link to 员工属性设置 Page.");
-}
-if (!hasStaffAttributeLink(personnelSidebar.items)) {
-	throw new Error("人事 sidebar must link to 员工属性设置 Page.");
+for (const [label, items] of [
+	["工作台 workspace", hrSetup.links],
+	["人事 workspace", personnel.links],
+	["工作台 sidebar", hrSetupSidebar.items],
+	["人事 sidebar", personnelSidebar.items],
+]) {
+	if (items.some((item) => item.label === "员工属性设置" && item.link_to === "staff-attribute-settings")) {
+		throw new Error(`${label} must not expose 员工属性设置 directly; use 设置中心 instead.`);
+	}
 }
 
 console.log("Global shell and staff attribute template are wired to real Frappe routes.");

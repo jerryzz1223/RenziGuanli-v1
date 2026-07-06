@@ -1,0 +1,92 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-04 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "report_name",
+  "group_name",
+  "disabled",
+  "description",
+  "selected_fields",
+  "selected_tables"
+ ],
+ "fields": [
+  {
+   "fieldname": "report_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "报表名称",
+   "reqd": 1
+  },
+  {
+   "default": "人事档案",
+   "fieldname": "group_name",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "报表分组",
+   "options": "人事档案\n人事统计\n行政报表",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "禁用"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "报表描述"
+  },
+  {
+   "fieldname": "selected_fields",
+   "fieldtype": "Code",
+   "label": "导出字段 JSON",
+   "options": "JSON"
+  },
+  {
+   "fieldname": "selected_tables",
+   "fieldtype": "Code",
+   "label": "工作表 JSON",
+   "options": "JSON"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-04 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Employee Report",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

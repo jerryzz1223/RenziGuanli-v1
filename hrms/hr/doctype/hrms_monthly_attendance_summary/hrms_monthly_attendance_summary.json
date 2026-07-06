@@ -1,0 +1,323 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-05 00:00:00.000000",
+ "description": "月度考勤终稿",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "attendance_month",
+  "employee",
+  "employee_code",
+  "employee_name",
+  "department",
+  "date_of_joining",
+  "standard_hours",
+  "actual_attendance_hours",
+  "overtime_1_5_hours",
+  "overtime_2_hours",
+  "overtime_3_hours",
+  "leave_hours",
+  "personal_leave_hours",
+  "sick_leave_hours",
+  "annual_leave_hours",
+  "work_injury_leave_hours",
+  "rest_leave_hours",
+  "absent_hours",
+  "large_night_shift_count",
+  "small_night_shift_count",
+  "actual_clock_attendance_hours",
+  "paid_leave_makeup_hours",
+  "leave_deductible_hours",
+  "workday_rest_leave_hours",
+  "adjusted_1_5_absence_hours",
+  "adjusted_2_absence_hours",
+  "adjusted_absence_hours",
+  "adjusted_working_hours",
+  "overtime_1_5_settlement_hours",
+  "overtime_2_settlement_hours",
+  "overtime_3_settlement_hours",
+  "night_shift_allowance",
+  "full_attendance_deduction",
+  "absence_deduction_hours",
+  "green_apples",
+  "red_apples",
+  "apple_reward_amount",
+  "red_apple_penalty",
+  "status"
+ ],
+ "fields": [
+  {
+   "fieldname": "attendance_month",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "考勤月份",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "员工",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "employee_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "工号"
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "姓名"
+  },
+  {
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "部门",
+   "options": "Department"
+  },
+  {
+   "fieldname": "date_of_joining",
+   "fieldtype": "Date",
+   "label": "入职时间"
+  },
+  {
+   "default": "0",
+   "fieldname": "standard_hours",
+   "fieldtype": "Float",
+   "label": "标准工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "actual_attendance_hours",
+   "fieldtype": "Float",
+   "label": "实际出勤"
+  },
+  {
+   "default": "0",
+   "fieldname": "overtime_1_5_hours",
+   "fieldtype": "Float",
+   "label": "1.5倍加班"
+  },
+  {
+   "default": "0",
+   "fieldname": "overtime_2_hours",
+   "fieldtype": "Float",
+   "label": "2倍加班"
+  },
+  {
+   "default": "0",
+   "fieldname": "overtime_3_hours",
+   "fieldtype": "Float",
+   "label": "3倍加班"
+  },
+  {
+   "default": "0",
+   "fieldname": "leave_hours",
+   "fieldtype": "Float",
+   "label": "请假"
+  },
+  {
+   "default": "0",
+   "fieldname": "personal_leave_hours",
+   "fieldtype": "Float",
+   "label": "事假"
+  },
+  {
+   "default": "0",
+   "fieldname": "sick_leave_hours",
+   "fieldtype": "Float",
+   "label": "病假"
+  },
+  {
+   "default": "0",
+   "fieldname": "annual_leave_hours",
+   "fieldtype": "Float",
+   "label": "特休"
+  },
+  {
+   "default": "0",
+   "fieldname": "work_injury_leave_hours",
+   "fieldtype": "Float",
+   "label": "工伤"
+  },
+  {
+   "default": "0",
+   "fieldname": "rest_leave_hours",
+   "fieldtype": "Float",
+   "label": "排休"
+  },
+  {
+   "default": "0",
+   "fieldname": "absent_hours",
+   "fieldtype": "Float",
+   "label": "旷工"
+  },
+  {
+   "default": "0",
+   "fieldname": "large_night_shift_count",
+   "fieldtype": "Float",
+   "label": "大夜班"
+  },
+  {
+   "default": "0",
+   "fieldname": "small_night_shift_count",
+   "fieldtype": "Float",
+   "label": "小夜班"
+  },
+  {
+   "default": "0",
+   "fieldname": "actual_clock_attendance_hours",
+   "fieldtype": "Float",
+   "label": "实际打卡出勤"
+  },
+  {
+   "default": "0",
+   "fieldname": "paid_leave_makeup_hours",
+   "fieldtype": "Float",
+   "label": "应补1倍工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "leave_deductible_hours",
+   "fieldtype": "Float",
+   "label": "应扣2倍工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "workday_rest_leave_hours",
+   "fieldtype": "Float",
+   "label": "工作日排休应扣1.5倍工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "adjusted_1_5_absence_hours",
+   "fieldtype": "Float",
+   "label": "调整后1.5倍缺勤工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "adjusted_2_absence_hours",
+   "fieldtype": "Float",
+   "label": "调整后2倍缺勤工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "adjusted_absence_hours",
+   "fieldtype": "Float",
+   "label": "调整后缺勤工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "adjusted_working_hours",
+   "fieldtype": "Float",
+   "label": "调整后工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "overtime_1_5_settlement_hours",
+   "fieldtype": "Float",
+   "label": "1.5倍结算工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "overtime_2_settlement_hours",
+   "fieldtype": "Float",
+   "label": "2倍结算工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "overtime_3_settlement_hours",
+   "fieldtype": "Float",
+   "label": "3倍结算工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "night_shift_allowance",
+   "fieldtype": "Currency",
+   "label": "夜班津贴"
+  },
+  {
+   "default": "0",
+   "fieldname": "full_attendance_deduction",
+   "fieldtype": "Currency",
+   "label": "全勤扣款"
+  },
+  {
+   "default": "0",
+   "fieldname": "absence_deduction_hours",
+   "fieldtype": "Float",
+   "label": "旷工扣款工时"
+  },
+  {
+   "default": "0",
+   "fieldname": "green_apples",
+   "fieldtype": "Float",
+   "label": "绿苹果"
+  },
+  {
+   "default": "0",
+   "fieldname": "red_apples",
+   "fieldtype": "Float",
+   "label": "红苹果"
+  },
+  {
+   "default": "0",
+   "fieldname": "apple_reward_amount",
+   "fieldtype": "Currency",
+   "label": "苹果树金额"
+  },
+  {
+   "default": "0",
+   "fieldname": "red_apple_penalty",
+   "fieldtype": "Currency",
+   "label": "红苹果扣款"
+  },
+  {
+   "default": "草稿",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "状态",
+   "options": "草稿\n已确认\n已导入薪资"
+  }
+ ],
+ "links": [],
+ "modified": "2026-07-05 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Monthly Attendance Summary",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name"
+}
