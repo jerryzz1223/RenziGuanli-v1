@@ -23,6 +23,8 @@ class PayrollInputCenter {
 		this.salary_structure_file_url = "";
 		this.data_closure_file_url = "";
 		this.payroll_month = frappe.datetime.str_to_obj(frappe.datetime.get_today()).toISOString().slice(0, 7);
+		this.company = this.get_context_company();
+		this.attendance_lock_version = "";
 		this.can_edit_payroll_rules = false;
 		this.show_all_settlement_details = false;
 		this.tabs = [
@@ -46,9 +48,48 @@ class PayrollInputCenter {
 
 	show() {
 		this.page.set_primary_action(__("上传薪资变量"), () => this.open_uploader());
+		window.hrmsFormImport?.addPageActions(this.page, "salary_structure_change", "薪资构成", "导入薪资构成");
+		window.hrmsFormImport?.addPageActions(this.page, "reward_punishment", "奖惩提报", "导入奖惩提报");
+		window.hrmsFormImport?.addPageActions(this.page, "housing_allowance", "住房补贴", "导入住房补贴");
+		window.hrmsFormImport?.addPageActions(this.page, "dormitory_fee", "宿舍费", "导入宿舍费");
+		window.hrmsFormImport?.addPageActions(this.page, "social_insurance", "社保名单", "导入社保名单");
 		this.bind_route_events();
+		this.bind_company_context();
 		this.render();
 		this.load_active_tab();
+		this.refresh_company_context_when_ready();
+	}
+
+	get_context_company() {
+		return (
+			window.hrmsCompanyContext?.getCurrentCompany?.() ||
+			(frappe.defaults && frappe.defaults.get_user_default && frappe.defaults.get_user_default("Company")) ||
+			""
+		);
+	}
+
+	bind_company_context() {
+		if (this.company_context_bound) return;
+		this.company_context_bound = true;
+		this.handle_company_context_change = (event) => {
+			const company = event?.detail?.company || this.get_context_company();
+			if (!company || company === this.company) return;
+			this.company = company;
+			this.render();
+			this.load_active_tab();
+		};
+		window.addEventListener("hrms:company-context-changed", this.handle_company_context_change);
+	}
+
+	refresh_company_context_when_ready() {
+		const ready = window.hrmsCompanyContext?.ready?.();
+		if (!ready || typeof ready.then !== "function") return;
+		ready.then((company) => {
+			if (!company || company === this.company) return;
+			this.company = company;
+			this.render();
+			this.load_active_tab();
+		});
 	}
 
 	bind_route_events() {
@@ -96,7 +137,9 @@ class PayrollInputCenter {
 						<p>${frappe.utils.escape_html(__("统一维护薪资主数据、变量导入、福利扣款、薪资输入表和薪资结算表；旧薪资输入中心入口继续保留。"))}</p>
 					</div>
 					<div class="hrms-payroll-input-controls">
+						<input class="form-control" data-company data-company-context readonly aria-readonly="true" title="${frappe.utils.escape_html(__("请在顶部公司切换器中切换公司"))}" placeholder="${frappe.utils.escape_html(__("公司"))}" value="${frappe.utils.escape_html(this.company || "")}">
 						<input class="form-control" type="month" data-month value="${frappe.utils.escape_html(this.payroll_month)}">
+						<input class="form-control" data-lock-version placeholder="${frappe.utils.escape_html(__("考勤锁定版本"))}" value="${frappe.utils.escape_html(this.attendance_lock_version || "")}">
 						<button class="btn btn-default" data-upload>${frappe.utils.escape_html(__("上传 Excel"))}</button>
 					</div>
 				</div>
@@ -119,6 +162,10 @@ class PayrollInputCenter {
 			this.payroll_month = event.target.value;
 			this.load_active_tab();
 		});
+		this.wrapper.querySelector("[data-lock-version]").addEventListener("change", (event) => {
+			this.attendance_lock_version = event.target.value;
+			this.load_active_tab();
+		});
 		this.wrapper.querySelectorAll("[data-tab]").forEach((button) => {
 			button.addEventListener("click", () => {
 				this.active_tab = button.dataset.tab;
@@ -131,6 +178,17 @@ class PayrollInputCenter {
 
 	body() {
 		return this.wrapper.querySelector("[data-payroll-body]");
+	}
+
+	scope_args(extra = {}) {
+		return Object.assign(
+			{
+				company: this.company,
+				payroll_month: this.payroll_month,
+				attendance_lock_version: this.attendance_lock_version,
+			},
+			extra,
+		);
 	}
 
 	load_active_tab() {
@@ -242,7 +300,7 @@ class PayrollInputCenter {
 		});
 		frappe.call({
 			method: "hrms.api.payroll_input.list_employee_salary_profiles",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			callback: (response) => {
 				const result = response.message || {};
 				const counts = result.counts || {};
@@ -294,7 +352,7 @@ class PayrollInputCenter {
 		this.body().querySelector("[data-refresh-dependencies]").addEventListener("click", () => this.load_monthly_payroll());
 		frappe.call({
 			method: "hrms.api.payroll_input.list_monthly_payroll_overview",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			callback: (response) => {
 				const target = this.wrapper.querySelector("[data-monthly-payroll-cards]");
 				if (target) target.innerHTML = this.render_metric_cards(response.message?.cards || []);
@@ -302,7 +360,7 @@ class PayrollInputCenter {
 		});
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_dependency_status",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			callback: (response) => {
 				const target = this.wrapper.querySelector("[data-payroll-dependencies]");
 				if (!target) return;
@@ -335,7 +393,7 @@ class PayrollInputCenter {
 		});
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_disbursement_records",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			callback: (response) => {
 				const target = this.wrapper.querySelector("[data-disbursement-table]");
 				if (!target) return;
@@ -454,7 +512,7 @@ class PayrollInputCenter {
 	import_payroll_data_closure_workbook() {
 		frappe.call({
 			method: "hrms.api.payroll_input.import_payroll_data_closure_workbook",
-			args: { file_url: this.data_closure_file_url, payroll_month: this.payroll_month },
+			args: this.scope_args({ file_url: this.data_closure_file_url }),
 			freeze: true,
 			freeze_message: __("正在导入闭环数据..."),
 			callback: (response) => {
@@ -764,7 +822,7 @@ class PayrollInputCenter {
 	load_employee_salary_changes() {
 		frappe.call({
 			method: "hrms.api.payroll_input.list_employee_salary_changes",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			callback: (response) => {
 				const target = this.wrapper.querySelector("[data-salary-changes]");
 				if (!target) return;
@@ -826,7 +884,7 @@ class PayrollInputCenter {
 	add_welfare_source() {
 		frappe.prompt(
 			[
-				{ fieldname: "source_type", fieldtype: "Select", label: __("来源类型"), reqd: 1, options: "学历补贴\n租房补贴\n宿舍住宿费\n宿舍水电费\n社保个人\n社保公司\n公积金个人\n公积金公司\n提案改善奖\n继续服务奖\n所得税\n年终奖所得税\n水电费及扣款\n已发福利\n生产奖\n高温补贴\n手机话费补贴\n油费补贴\n其他奖金\n其他扣款" },
+				{ fieldname: "source_type", fieldtype: "Select", label: __("来源类型"), reqd: 1, options: "薪资构成\n奖惩提报\n证书多能工津贴\n全勤奖\n学历补贴\n租房补贴\n宿舍住宿费\n宿舍水电费\n社保个人\n社保公司\n公积金个人\n公积金公司\n提案改善奖\n继续服务奖\n苹果树\n离职薪资结算\n所得税\n年终奖所得税\n水电费及扣款\n已发福利\n生产奖\n高温补贴\n手机话费补贴\n油费补贴\n其他奖金\n其他扣款" },
 				{ fieldname: "employee_code", fieldtype: "Data", label: __("工号") },
 				{ fieldname: "employee_name", fieldtype: "Data", label: __("姓名"), reqd: 1 },
 				{ fieldname: "department", fieldtype: "Link", label: __("部门"), options: "Department" },
@@ -839,7 +897,7 @@ class PayrollInputCenter {
 				frappe
 					.call({
 						method: "hrms.api.payroll_input.upsert_payroll_welfare_source_record",
-						args: { ...values, payroll_month: this.payroll_month },
+						args: this.scope_args(values),
 						freeze: true,
 						freeze_message: __("正在保存福利扣款来源..."),
 					})
@@ -855,7 +913,7 @@ class PayrollInputCenter {
 	load_welfare_source_records() {
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_welfare_source_records",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			callback: (response) => {
 				const target = this.wrapper.querySelector("[data-welfare-source-table]");
 				if (!target) return;
@@ -878,7 +936,7 @@ class PayrollInputCenter {
 	sync_welfare_sources_to_payroll_variables() {
 		frappe.call({
 			method: "hrms.api.payroll_input.sync_welfare_sources_to_payroll_variables",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			freeze: true,
 			freeze_message: __("正在同步福利扣款来源..."),
 			callback: (response) => {
@@ -954,7 +1012,7 @@ class PayrollInputCenter {
 		frappe
 			.call({
 				method: "hrms.api.payroll_input.import_payroll_variable_workbook",
-				args: { file_url: this.file_url, payroll_month: this.payroll_month },
+				args: this.scope_args({ file_url: this.file_url }),
 				freeze: true,
 				freeze_message: __("正在导入薪资变量..."),
 			})
@@ -968,7 +1026,7 @@ class PayrollInputCenter {
 	load_import_batches() {
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_variable_import_batches",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			callback: (response) => {
 				const target = this.wrapper.querySelector("[data-import-batch-table]");
 				if (!target) return;
@@ -1025,7 +1083,7 @@ class PayrollInputCenter {
 			() => {
 				frappe.call({
 					method: "hrms.api.payroll_input.delete_payroll_variable_import_batch",
-					args: { batch_name },
+					args: this.scope_args({ batch_name }),
 					freeze: true,
 					freeze_message: __("正在删除导入批次..."),
 					callback: (response) => {
@@ -1045,7 +1103,7 @@ class PayrollInputCenter {
 	load_variables() {
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_variable_records",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			callback: (response) => {
 				const target = this.wrapper.querySelector("[data-variable-table]");
 				if (!target) return;
@@ -1105,7 +1163,7 @@ class PayrollInputCenter {
 				{ fieldname: "employee_code", fieldtype: "Data", label: __("工号"), default: row.employee_code },
 				{ fieldname: "employee_name", fieldtype: "Data", label: __("姓名"), default: row.employee_name },
 				{ fieldname: "department", fieldtype: "Link", options: "Department", label: __("部门"), default: row.department },
-				{ fieldname: "variable_type", fieldtype: "Select", label: __("变量类型"), options: "全勤奖\n住房补贴\n学历补贴\n宿舍扣款\n社保个人\n公积金个人\n其他奖金\n其他扣款\n底薪\n职能津贴\n证书及多能工津贴\n薪资小计\n生产奖\n提案改善奖\n继续服务奖\n所得税\n年终奖所得税\n水电费及扣款\n社保公司\n公积金公司\n已发福利\n夜班津贴\n迟到金额+全勤奖扣款", default: row.variable_type },
+				{ fieldname: "variable_type", fieldtype: "Select", label: __("变量类型"), options: "全勤奖\n住房补贴\n学历补贴\n宿舍扣款\n社保个人\n公积金个人\n其他奖金\n其他扣款\n底薪\n职能津贴\n职务津贴\n证书津贴\n多能工津贴\n证书及多能工津贴\n全薪\n薪资小计\n生产奖\n提案改善奖\n继续服务奖\n苹果树\n所得税\n年终奖所得税\n水电费及扣款\n社保公司\n公积金公司\n已发福利\n夜班津贴\n迟到金额+全勤奖扣款\n离职薪资结算", default: row.variable_type },
 				{ fieldname: "amount", fieldtype: "Currency", label: __("金额"), default: row.amount },
 				{ fieldname: "source_sheet", fieldtype: "Data", label: __("来源工作表"), default: row.source_sheet },
 				{ fieldname: "remarks", fieldtype: "Small Text", label: __("备注"), default: row.remarks },
@@ -1148,7 +1206,7 @@ class PayrollInputCenter {
 		this.body().querySelector("[data-generate]").addEventListener("click", () => this.generate_payroll_input_records());
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_input_records",
-			args: { payroll_month: this.payroll_month, page_length: 500 },
+			args: this.scope_args({ page_length: 500 }),
 			callback: (response) => {
 				this.render_payroll_input_rows(response.message || []);
 			},
@@ -1158,7 +1216,7 @@ class PayrollInputCenter {
 	generate_payroll_input_records() {
 		frappe.call({
 			method: "hrms.api.payroll_input.generate_payroll_input_records",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			freeze: true,
 			freeze_message: __("正在生成薪资输入表..."),
 			callback: () => this.load_inputs(),
@@ -1238,7 +1296,7 @@ class PayrollInputCenter {
 		this.load_settlement_dependencies();
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_settlement_records",
-			args: { payroll_month: this.payroll_month, page_length: 500 },
+			args: this.scope_args({ page_length: 500 }),
 			callback: (response) => {
 				this.render_payroll_settlement_rows(response.message || []);
 			},
@@ -1248,7 +1306,7 @@ class PayrollInputCenter {
 	load_settlement_dependencies() {
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_dependency_status",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			callback: (response) => {
 				const target = this.wrapper.querySelector("[data-settlement-dependencies]");
 				if (!target) return;
@@ -1377,7 +1435,7 @@ class PayrollInputCenter {
 	generate_payroll_settlement_records() {
 		frappe.call({
 			method: "hrms.api.payroll_input.generate_payroll_settlement_records",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			freeze: true,
 			freeze_message: __("正在生成薪资结算表..."),
 			callback: () => this.load_active_tab(),
@@ -1403,7 +1461,7 @@ class PayrollInputCenter {
 		});
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_report_summary",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			callback: (response) => {
 				const target = this.wrapper.querySelector("[data-payroll-report-table]");
 				if (!target) return;
@@ -1445,7 +1503,7 @@ class PayrollInputCenter {
 		});
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_analysis",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			callback: (response) => {
 				const result = response.message || {};
 				const cardTarget = this.wrapper.querySelector("[data-payroll-analysis-cards]");
@@ -1504,7 +1562,7 @@ class PayrollInputCenter {
 		});
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_disbursement_records",
-			args: { payroll_month: this.payroll_month },
+			args: this.scope_args(),
 			callback: (response) => {
 				const target = this.wrapper.querySelector("[data-slip-table]");
 				if (!target) return;

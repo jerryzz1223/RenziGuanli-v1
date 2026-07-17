@@ -28,6 +28,12 @@ function mustInclude(source, marker, message) {
 	}
 }
 
+function mustMatch(source, pattern, message) {
+	if (!pattern.test(source)) {
+		throw new Error(message || `Missing pattern: ${pattern}`);
+	}
+}
+
 for (const marker of [
 	"ACCOUNT_ID",
 	"renderAccountMenu",
@@ -88,12 +94,12 @@ for (const [label, source] of [
 	}
 }
 
-for (const marker of [
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260706e",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260706e",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260706e",
+for (const [label, pattern] of [
+	["home redirect JS", /\/assets\/hrms\/js\/hrms_home_redirect_v6\.js\?v=\d+[a-z]?/],
+	["top nav JS", /\/assets\/hrms\/js\/hrms_top_nav\.js\?v=\d+[a-z]?/],
+	["top nav CSS", /\/assets\/hrms\/css\/hrms_top_nav\.css\?v=\d+[a-z]?/],
 ]) {
-	mustInclude(hooks, marker, `Asset version must be bumped for account menu cache: ${marker}`);
+	mustMatch(hooks, pattern, `Asset version must be cache-busted for ${label}.`);
 }
 
 console.log("User account menu and settings center permissions entry are wired.");

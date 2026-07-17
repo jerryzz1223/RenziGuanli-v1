@@ -33,11 +33,11 @@
    "label": "启用钉钉集成"
   },
   {
-   "default": "连接平台+本地网关",
+   "default": "Excel导入（默认）",
    "fieldname": "sync_mode",
    "fieldtype": "Select",
    "label": "同步模式",
-   "options": "连接平台+本地网关\n内网服务器主动拉取API\n公网小网关"
+   "options": "Excel导入（默认）\n连接平台+本地网关\n内网服务器主动拉取API\n公网小网关"
   },
   {
    "fieldname": "app_id",
@@ -75,7 +75,7 @@
    "label": "Token 过期时间"
   },
   {
-   "default": "1",
+   "default": "0",
    "fieldname": "local_gateway_enabled",
    "fieldtype": "Check",
    "label": "启用本地网关"
@@ -86,7 +86,7 @@
    "label": "本地网关地址"
   },
   {
-   "default": "1",
+   "default": "0",
    "fieldname": "public_gateway_enabled",
    "fieldtype": "Check",
    "label": "启用员工端公网小网关"

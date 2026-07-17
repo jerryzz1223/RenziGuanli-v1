@@ -1,0 +1,99 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-07-13 00:00:00.000000",
+ "description": "考勤月度锁定与解锁的不可变审计记录。",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "month_lock",
+  "company",
+  "attendance_month",
+  "action",
+  "lock_version",
+  "reason",
+  "operator",
+  "occurred_on",
+  "source_checksum"
+ ],
+ "fields": [
+  {
+   "fieldname": "month_lock",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "月度锁定",
+   "options": "HRMS Attendance Month Lock",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "attendance_month",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "考勤月份",
+   "reqd": 1
+  },
+  {
+   "fieldname": "action",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "动作",
+   "options": "锁定\n解锁\n创建更正版本",
+   "reqd": 1
+  },
+  {
+   "fieldname": "lock_version",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "锁定版本",
+   "reqd": 1
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Small Text",
+   "label": "原因"
+  },
+  {
+   "fieldname": "operator",
+   "fieldtype": "Link",
+   "label": "操作人",
+   "options": "User"
+  },
+  {
+   "fieldname": "occurred_on",
+   "fieldtype": "Datetime",
+   "label": "发生时间"
+  },
+  {
+   "fieldname": "source_checksum",
+   "fieldtype": "Data",
+   "label": "来源校验码"
+  }
+ ],
+ "module": "HR",
+ "name": "HRMS Attendance Lock Audit",
+ "permissions": [
+  {
+   "create": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager"
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "attendance_month"
+}

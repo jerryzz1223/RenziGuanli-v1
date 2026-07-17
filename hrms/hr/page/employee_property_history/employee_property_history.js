@@ -151,6 +151,7 @@ class EmployeePropertyHistoryPage {
 		this.wrapper.addEventListener("click", (event) => {
 			const button = event.target.closest("[data-open-source]");
 			if (!button) return;
+			if (!button.dataset.sourceDoctype || !button.dataset.sourceName) return;
 			frappe.set_route("Form", button.dataset.sourceDoctype, button.dataset.sourceName);
 		});
 	}
@@ -226,12 +227,14 @@ class EmployeePropertyHistoryPage {
 							${" / " + frappe.utils.escape_html(effectiveDate)}
 						</div>
 					</div>
-					<button class="btn btn-default btn-xs" type="button"
-						data-open-source="1"
-						data-source-doctype="${frappe.utils.escape_html(row.source_doctype || "")}"
-						data-source-name="${frappe.utils.escape_html(row.source_name || "")}">
-						${frappe.utils.escape_html(__("查看来源单据"))}
-					</button>
+					${row.source_doctype && row.source_name
+						? `<button class="btn btn-default btn-xs" type="button"
+							data-open-source="1"
+							data-source-doctype="${frappe.utils.escape_html(row.source_doctype)}"
+							data-source-name="${frappe.utils.escape_html(row.source_name)}">
+							${frappe.utils.escape_html(__("查看来源单据"))}
+						</button>`
+						: `<span class="text-muted small">${frappe.utils.escape_html(__("来源单据缺失"))}</span>`}
 				</div>
 				<div class="hrms-property-history-changes">${changes}</div>
 			</div>
@@ -250,6 +253,12 @@ class EmployeePropertyHistoryPage {
 
 	render_pagination() {
 		const status = this.wrapper.querySelector("[data-page-status]");
+		if (!this.total) {
+			status.textContent = __("暂无记录");
+			this.wrapper.querySelector('[data-action="prev"]').disabled = true;
+			this.wrapper.querySelector('[data-action="next"]').disabled = true;
+			return;
+		}
 		const currentStart = this.total ? this.limit_start + 1 : 0;
 		const currentEnd = Math.min(this.limit_start + this.limit_page_length, this.total);
 		status.textContent = __("第 {0}-{1} 条 / 共 {2} 条", [currentStart, currentEnd, this.total]);

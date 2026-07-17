@@ -52,6 +52,7 @@ for (const marker of [
 	"download_employee_import_template",
 	"MULTI_RECORD_EXPORT_TABLE_MAP",
 	"_make_employee_export_workbook",
+	"_format_employee_export_value",
 	"_safe_sheet_title",
 	"员工花名册",
 	"说明",
@@ -59,6 +60,8 @@ for (const marker of [
 	"MULTI_RECORD_EXPORT_CATEGORIES",
 	"COMPANY_ROSTER_CUSTOM_FIELDS",
 	"COMPANY_ROSTER_FIELD_ORDER",
+	"EMPLOYEE_MINIMUM_IMPORT_REQUIRED_COLUMNS",
+	"_is_employee_import_required_field",
 	"custom_employee_code",
 	"custom_contract_no",
 	"_match_uploaded_headers",
@@ -101,6 +104,55 @@ for (const marker of [
 	"GENDER_VALUE_ALIASES",
 ]) {
 	mustInclude(api, marker, `Employee roster API missing marker: ${marker}`);
+}
+
+for (const marker of [
+	'if fieldname == "department":',
+	"department_names = _get_department_display_names",
+	"department_name = _strip_department_company_suffix(value)",
+	'headers = ["工号", "员工姓名"]',
+	"employee_code.get(row.parent, row.parent)",
+]) {
+	mustInclude(api, marker, `导出必须使用业务部门名和工号，不能泄露内部 Employee/Department 名称：${marker}`);
+}
+
+for (const marker of [
+	'"first_name": "姓名"',
+	'"custom_employee_code": "工号"',
+	'"department": "部门"',
+	'"designation": "岗位"',
+	'"date_of_joining": "入职日期"',
+	'"cell_number": "手机号码"',
+]) {
+	mustInclude(api, marker, `首版最小导入字段集缺少: ${marker}`);
+}
+
+if (api.includes("if field.get(\"required\") and fieldname in meta_fields and _is_blank_value(values.get(fieldname))")) {
+	throw new Error("导入行校验不能直接复用字段中心 required，否则会导致整表失败。");
+}
+
+if (api.includes("if _is_blank_value(raw_value) and field.get(\"required\")")) {
+	throw new Error("导入值解析不能把字段中心所有必填项当作逐行必填项，否则空白的可选档案字段会导致整行失败。");
+}
+
+mustInclude(
+	api,
+	"if _is_employee_import_required_field(fieldname, field) and fieldname in meta_fields and _is_blank_value(values.get(fieldname))",
+	"导入行校验必须只校验首版最小导入字段。",
+);
+
+mustInclude(api, '"employee_code": ("custom_employee_code", "employee_number")', "工号必须保持为跨模块稳定匹配键。");
+
+for (const marker of [
+	'"出生年月": "date_of_birth"',
+	'"直/间接": "custom_direct_indirect"',
+	'"紧急联系人": "person_to_be_contacted"',
+	'"院校": "custom_graduation_school"',
+	"_derive_identity_card_values",
+	'"试用期": "Probation"',
+	'"返聘": "Retainer"',
+]) {
+	mustInclude(api, marker, `花名册基线字段映射或身份证推导缺失: ${marker}`);
 }
 
 for (const marker of [

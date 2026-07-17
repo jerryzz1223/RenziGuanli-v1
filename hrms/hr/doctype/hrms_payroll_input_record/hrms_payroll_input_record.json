@@ -7,6 +7,8 @@
  "engine": "InnoDB",
  "field_order": [
   "payroll_month",
+  "company",
+  "attendance_lock_version",
   "employee",
   "employee_code",
   "employee_name",
@@ -33,7 +35,9 @@
   "other_deduction",
   "preliminary_earning_total",
   "preliminary_deduction_total",
-  "settlement_status"
+  "settlement_status",
+  "source_trace_json",
+  "source_hash"
  ],
  "fields": [
   {
@@ -41,6 +45,21 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "薪资月份",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "attendance_lock_version",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "考勤锁定版本",
    "reqd": 1
   },
   {
@@ -206,6 +225,16 @@
    "in_list_view": 1,
    "label": "薪资结算状态",
    "options": "待结算\n已确认\n已生成工资表"
+  },
+  {
+   "fieldname": "source_trace_json",
+   "fieldtype": "Small Text",
+   "label": "来源追溯JSON"
+  },
+  {
+   "fieldname": "source_hash",
+   "fieldtype": "Data",
+   "label": "来源哈希"
   }
  ],
  "links": [],

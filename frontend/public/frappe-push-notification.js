@@ -227,7 +227,7 @@ class FrappePushNotification {
 		}
 		try {
 			await this.unregisterTokenHandler(this.token)
-		} catch {
+		} catch (e) {
 			console.error("Failed to unsubscribe from push notification")
 			console.error(e)
 		}

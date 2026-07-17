@@ -37,8 +37,10 @@ def get_dingtalk_default_settings():
 		"agent_id": _config_value("dingtalk_agent_id", DINGTALK_DEFAULT_AGENT_ID),
 		"client_id": _config_value("dingtalk_client_id", DINGTALK_DEFAULT_CLIENT_ID),
 		"client_secret": _config_value("dingtalk_client_secret"),
-		"sync_mode": "公网小网关",
-		"public_gateway_enabled": 1,
+		# Phase one treats DingTalk exports as source files. API and the employee
+		# gateway remain optional until the server-side integration is approved.
+		"sync_mode": "Excel导入（默认）",
+		"public_gateway_enabled": 0,
 	}
 
 
@@ -140,7 +142,7 @@ def get_dingtalk_connection_status():
 
 
 @frappe.whitelist()
-def save_dingtalk_connection_settings(settings_json=None, **kwargs):
+def save_dingtalk_connection_settings(settings_json: str | dict | None = None, **kwargs):
 	"""Save connection metadata; secrets stay in the server-side DocType password fields."""
 	payload = _json_loads(settings_json) if settings_json else kwargs
 	doc = _settings_doc()
@@ -283,11 +285,11 @@ def apply_dingtalk_default_settings():
 	defaults = get_dingtalk_default_settings()
 	doc = _settings_doc()
 	for fieldname in ("app_id", "corp_id", "agent_id", "client_id", "sync_mode", "public_gateway_enabled"):
-		if defaults.get(fieldname):
+		if fieldname in defaults:
 			doc.set(fieldname, defaults[fieldname])
 	if defaults.get("client_secret"):
 		doc.set_password("client_secret", defaults["client_secret"])
-	doc.enabled = 1
+	doc.enabled = 0
 	doc.local_gateway_enabled = 0
 	doc.employee_gateway_scopes = doc.get("employee_gateway_scopes") or "profile\nattendance"
 	doc.server_deployment_note = (
@@ -299,7 +301,7 @@ def apply_dingtalk_default_settings():
 
 
 @frappe.whitelist()
-def fetch_dingtalk_departments(parent_dept_id="1"):
+def fetch_dingtalk_departments(parent_dept_id: str = "1"):
 	"""Fetch one level of DingTalk departments.
 
 	官方接口只返回当前部门的下一级部门，因此全量同步会从根部门逐层拉取。
@@ -308,7 +310,7 @@ def fetch_dingtalk_departments(parent_dept_id="1"):
 
 
 @frappe.whitelist()
-def sync_departments_from_dingtalk(root_dept_id="1", max_depth=20):
+def sync_departments_from_dingtalk(root_dept_id: str = "1", max_depth: int = 20):
 	log = _new_sync_log("部门同步")
 	queue = [(str(root_dept_id or "1"), 0)]
 	seen = set()
@@ -343,7 +345,7 @@ def sync_departments_from_dingtalk(root_dept_id="1", max_depth=20):
 
 
 @frappe.whitelist()
-def fetch_dingtalk_department_users(dept_id, cursor=0, size=100):
+def fetch_dingtalk_department_users(dept_id: str, cursor: int = 0, size: int = 100):
 	path = DINGTALK_DEPARTMENT_USERS_PATH.format(dept_id=str(dept_id))
 	return _dingtalk_api_request("GET", path, params={"cursor": cursor or 0, "size": min(int(size or 100), 100)})
 
@@ -366,7 +368,7 @@ def _department_ids_for_user_sync(department_ids_json=None):
 
 
 @frappe.whitelist()
-def sync_users_from_dingtalk(department_ids_json=None, size=100):
+def sync_users_from_dingtalk(department_ids_json: str | list | None = None, size: int = 100):
 	log = _new_sync_log("员工同步")
 	department_ids = _department_ids_for_user_sync(department_ids_json)
 	received = 0
@@ -400,7 +402,7 @@ def sync_users_from_dingtalk(department_ids_json=None, size=100):
 
 
 @frappe.whitelist()
-def fetch_dingtalk_attendance_update_data(userid, work_date):
+def fetch_dingtalk_attendance_update_data(userid: str, work_date: str):
 	work_date = f"{getdate(work_date)} 00:00:00"
 	return _dingtalk_api_request(
 		"POST",
@@ -425,7 +427,7 @@ def _userids_for_attendance_sync(userids_json=None, limit=0):
 
 
 @frappe.whitelist()
-def sync_attendance_from_dingtalk(work_date, userids_json=None, limit=0):
+def sync_attendance_from_dingtalk(work_date: str, userids_json: str | list | None = None, limit: int = 0):
 	log = _new_sync_log("考勤同步")
 	userids = _userids_for_attendance_sync(userids_json, limit=limit)
 	received = 0
@@ -447,7 +449,7 @@ def sync_attendance_from_dingtalk(work_date, userids_json=None, limit=0):
 
 
 @frappe.whitelist()
-def fetch_dingtalk_process_instance_ids(start_time, end_time, process_code=None, cursor=0, size=20):
+def fetch_dingtalk_process_instance_ids(start_time: int | str, end_time: int | str, process_code: str | None = None, cursor: int = 0, size: int = 20):
 	payload = {
 		"start_time": int(start_time),
 		"end_time": int(end_time),
@@ -460,7 +462,7 @@ def fetch_dingtalk_process_instance_ids(start_time, end_time, process_code=None,
 
 
 @frappe.whitelist()
-def fetch_dingtalk_process_instance_detail(process_instance_id):
+def fetch_dingtalk_process_instance_detail(process_instance_id: str):
 	return _dingtalk_api_request(
 		"POST",
 		DINGTALK_PROCESS_INSTANCE_DETAIL_PATH,
@@ -470,7 +472,7 @@ def fetch_dingtalk_process_instance_detail(process_instance_id):
 
 
 @frappe.whitelist()
-def sync_approval_instance_details_from_payload(instance_ids_json):
+def sync_approval_instance_details_from_payload(instance_ids_json: str | list):
 	"""Store approval details for a known list of instance IDs.
 
 	OA审批列表接口在部分版本下有历史范围/版本限制，先支持用实例ID列表验证详情读取。
@@ -599,7 +601,7 @@ def _finish_sync_log(doc, status, received=0, created=0, updated=0, failed=0, er
 
 
 @frappe.whitelist()
-def preview_sync_payload(source_type, payload_json):
+def preview_sync_payload(source_type: str, payload_json: str | dict | list):
 	items = _items_from_payload(payload_json)
 	if source_type == "department":
 		return [normalize_dingtalk_department(item) for item in items[:20]]
@@ -609,7 +611,7 @@ def preview_sync_payload(source_type, payload_json):
 
 
 @frappe.whitelist()
-def sync_departments_from_payload(payload_json, sync_batch=None):
+def sync_departments_from_payload(payload_json: str | dict | list, sync_batch: str | None = None):
 	log = _new_sync_log("部门同步")
 	items = _items_from_payload(payload_json)
 	failed = 0
@@ -625,7 +627,7 @@ def sync_departments_from_payload(payload_json, sync_batch=None):
 
 
 @frappe.whitelist()
-def sync_users_from_payload(payload_json, sync_batch=None):
+def sync_users_from_payload(payload_json: str | dict | list, sync_batch: str | None = None):
 	log = _new_sync_log("员工同步")
 	items = _items_from_payload(payload_json)
 	failed = 0

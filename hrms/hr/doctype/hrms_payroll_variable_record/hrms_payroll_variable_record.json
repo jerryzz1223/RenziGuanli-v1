@@ -8,6 +8,8 @@
  "field_order": [
   "import_batch",
   "payroll_month",
+  "company",
+  "attendance_lock_version",
   "employee",
   "employee_code",
   "employee_name",
@@ -30,6 +32,21 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "薪资月份",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "attendance_lock_version",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "考勤锁定版本",
    "reqd": 1
   },
   {
@@ -62,7 +79,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "变量类型",
-   "options": "全勤奖\n住房补贴\n学历补贴\n宿舍扣款\n社保个人\n公积金个人\n其他奖金\n其他扣款\n底薪\n职能津贴\n证书及多能工津贴\n薪资小计\n生产奖\n提案改善奖\n继续服务奖\n所得税\n年终奖所得税\n水电费及扣款\n社保公司\n公积金公司\n已发福利\n夜班津贴\n迟到金额+全勤奖扣款"
+   "options": "全勤奖\n住房补贴\n学历补贴\n宿舍扣款\n社保个人\n公积金个人\n其他奖金\n其他扣款\n底薪\n职能津贴\n证书及多能工津贴\n薪资小计\n生产奖\n提案改善奖\n继续服务奖\n所得税\n年终奖所得税\n水电费及扣款\n社保公司\n公积金公司\n已发福利\n夜班津贴\n迟到金额+全勤奖扣款\n职务津贴\n证书津贴\n多能工津贴\n全薪\n苹果树\n离职薪资结算"
   },
   {
    "default": "0",
@@ -86,6 +103,16 @@
    "fieldtype": "Code",
    "label": "原始行 JSON",
    "options": "JSON"
+  },
+  {
+   "fieldname": "source_trace_json",
+   "fieldtype": "Small Text",
+   "label": "来源追溯 JSON"
+  },
+  {
+   "fieldname": "source_hash",
+   "fieldtype": "Data",
+   "label": "来源哈希"
   }
  ],
  "links": [],

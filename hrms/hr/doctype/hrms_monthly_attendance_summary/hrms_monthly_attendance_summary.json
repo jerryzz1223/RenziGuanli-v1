@@ -7,6 +7,13 @@
  "engine": "InnoDB",
  "field_order": [
   "attendance_month",
+  "company",
+  "attendance_lock_version",
+  "lock_status",
+  "locked_by",
+  "locked_on",
+  "source_batch_ids",
+  "source_checksum",
   "employee",
   "employee_code",
   "employee_name",
@@ -53,6 +60,51 @@
    "in_list_view": 1,
    "label": "考勤月份",
    "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "attendance_lock_version",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "考勤锁定版本",
+   "reqd": 1
+  },
+  {
+   "default": "草稿",
+   "fieldname": "lock_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "锁定状态",
+   "options": "草稿\n已锁定\n已作废",
+   "reqd": 1
+  },
+  {
+   "fieldname": "locked_by",
+   "fieldtype": "Link",
+   "label": "锁定人",
+   "options": "User"
+  },
+  {
+   "fieldname": "locked_on",
+   "fieldtype": "Datetime",
+   "label": "锁定时间"
+  },
+  {
+   "fieldname": "source_batch_ids",
+   "fieldtype": "Small Text",
+   "label": "来源批次"
+  },
+  {
+   "fieldname": "source_checksum",
+   "fieldtype": "Data",
+   "label": "来源校验码"
   },
   {
    "fieldname": "employee",

@@ -6,8 +6,11 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "company",
   "attendance_month",
   "source_file",
+  "source_type",
+  "source_checksum",
   "status",
   "daily_sheet_rows",
   "leave_sheet_rows",
@@ -17,6 +20,14 @@
   "notes"
  ],
  "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
+  },
   {
    "fieldname": "attendance_month",
    "fieldtype": "Data",
@@ -29,6 +40,16 @@
    "fieldtype": "Attach",
    "in_list_view": 1,
    "label": "来源文件"
+  },
+  {
+   "fieldname": "source_type",
+   "fieldtype": "Data",
+   "label": "来源类型"
+  },
+  {
+   "fieldname": "source_checksum",
+   "fieldtype": "Data",
+   "label": "来源校验码"
   },
   {
    "default": "已导入",

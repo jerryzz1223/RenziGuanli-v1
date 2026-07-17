@@ -1,0 +1,24 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["company", "template_key", "route_name", "enabled", "steps", "remarks"],
+ "fields": [
+  {"fieldname": "company", "fieldtype": "Link", "in_list_view": 1, "label": "公司", "options": "Company"},
+  {"fieldname": "template_key", "fieldtype": "Data", "in_list_view": 1, "label": "表单模板标识", "reqd": 1},
+  {"fieldname": "route_name", "fieldtype": "Data", "in_list_view": 1, "label": "审批路线名称", "reqd": 1},
+  {"default": "1", "fieldname": "enabled", "fieldtype": "Check", "in_list_view": 1, "label": "启用"},
+  {"fieldname": "steps", "fieldtype": "Table", "label": "审批步骤", "options": "HRMS Form Approval Matrix Step", "reqd": 1},
+  {"fieldname": "remarks", "fieldtype": "Small Text", "label": "说明"}
+ ],
+ "module": "HR",
+ "name": "HRMS Form Approval Matrix",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "write": 1, "role": "System Manager"},
+  {"create": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "write": 1, "role": "HR Manager"}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "title_field": "route_name"
+}

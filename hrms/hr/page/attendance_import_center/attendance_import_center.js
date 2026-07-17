@@ -21,6 +21,7 @@ class AttendanceImportCenter {
 		this.wrapper = page.main[0];
 		this.file_url = "";
 		this.batch = "";
+		this.company = this.get_context_company();
 		this.attendance_month = frappe.datetime.str_to_obj(frappe.datetime.get_today()).toISOString().slice(0, 7);
 		this.workflow_views = [
 			{ key: "import", label: "考勤导入中心" },
@@ -83,8 +84,42 @@ class AttendanceImportCenter {
 	show() {
 		this.page.set_primary_action(__("上传考勤文件"), () => this.open_uploader());
 		this.bind_route_events();
+		this.bind_company_context();
 		this.render();
 		this.load_active_view();
+		this.refresh_company_context_when_ready();
+	}
+
+	get_context_company() {
+		return (
+			window.hrmsCompanyContext?.getCurrentCompany?.() ||
+			(frappe.defaults && frappe.defaults.get_user_default && frappe.defaults.get_user_default("Company")) ||
+			""
+		);
+	}
+
+	bind_company_context() {
+		if (this.company_context_bound) return;
+		this.company_context_bound = true;
+		this.handle_company_context_change = (event) => {
+			const company = event?.detail?.company || this.get_context_company();
+			if (!company || company === this.company) return;
+			this.company = company;
+			this.render();
+			this.load_active_view();
+		};
+		window.addEventListener("hrms:company-context-changed", this.handle_company_context_change);
+	}
+
+	refresh_company_context_when_ready() {
+		const ready = window.hrmsCompanyContext?.ready?.();
+		if (!ready || typeof ready.then !== "function") return;
+		ready.then((company) => {
+			if (!company || company === this.company) return;
+			this.company = company;
+			this.render();
+			this.load_active_view();
+		});
 	}
 
 	bind_route_events() {
@@ -133,7 +168,6 @@ class AttendanceImportCenter {
 				${this.render_header()}
 				${this.render_kpi_grid()}
 				${this.render_toolbar()}
-				${this.render_workflow_tabs()}
 				<section class="hrms-attendance-main" data-attendance-body></section>
 			</div>
 		`;
@@ -148,6 +182,7 @@ class AttendanceImportCenter {
 					<p>${this.escape(__("按 2号人事 的考勤统计、明细记录、考勤报表、考勤管理逻辑组织；以公司考勤、苹果树、7S、KPI资料作为规则来源。"))}</p>
 				</div>
 				<div class="hrms-attendance-import-controls">
+					<input class="form-control" type="text" data-company data-company-context readonly aria-readonly="true" title="${this.escape(__("请在顶部公司切换器中切换公司"))}" value="${this.escape(this.company)}" placeholder="${this.escape(__("公司"))}">
 					<input class="form-control" type="month" data-month value="${this.escape(this.attendance_month)}">
 					<button class="btn btn-primary" data-upload>${this.escape(__("上传考勤文件"))}</button>
 				</div>
@@ -265,6 +300,12 @@ class AttendanceImportCenter {
 		return this.wrapper.querySelector("[data-attendance-body]");
 	}
 
+	ensure_company() {
+		if (this.company) return true;
+		frappe.msgprint(__("请先选择公司。"));
+		return false;
+	}
+
 	load_active_view() {
 		if (this.active_view === "import") return this.render_import();
 		if (this.active_view === "daily") return this.load_daily_checks();
@@ -326,7 +367,7 @@ class AttendanceImportCenter {
 				<div class="hrms-attendance-import-panel">
 					<div class="hrms-attendance-upload-box" data-upload-zone>
 						<strong>${this.escape(__("上传钉钉/考勤 Excel"))}</strong>
-						<span>${this.escape(__("必须包含 1.1每日统计、1.2请假单、1.3苹果树。后续钉钉打卡机对接后可替换文件导入。"))}</span>
+						<span>${this.escape(__("支持旧版 1.1每日统计、1.2请假单、1.3苹果树模板；也支持包含每日统计、打卡时间、原始记录、月度汇总的钉钉导出，以及“每日统计（钉钉导出）/每日统计（修改后）”双来源工作簿。上传后先只读预览。"))}</span>
 						<button class="btn btn-primary btn-sm">${this.escape(__("选择文件"))}</button>
 					</div>
 					<div data-preview>
@@ -341,18 +382,29 @@ class AttendanceImportCenter {
 	}
 
 	render_preview_result(result) {
+		const dailySources = Object.values(result.daily_sources || {});
+		const hasDailySources = dailySources.length > 0;
+		const mappings = hasDailySources
+			? dailySources.flatMap((source) =>
+					Object.entries(source.field_mapping || {}).map(([from, to]) => ({ source_kind: source.source_kind, from, to })),
+				)
+			: Object.entries(result.field_mapping || {}).map(([from, to]) => ({ source_kind: "", from, to }));
+		const sheets = hasDailySources ? dailySources : result.sheets || [];
+		const warnings = result.quality_warnings || [];
 		return `
 			<div class="hrms-attendance-preview">
 				<h3>${this.escape(__("预览结果"))}</h3>
+				<div class="mb-3"><strong>${this.escape(__("来源类型"))}：</strong>${this.escape(result.source_type || "legacy_workbook")}</div>
 				<table class="table table-bordered">
-					<thead><tr><th>${this.escape(__("工作表"))}</th><th>${this.escape(__("状态"))}</th><th>${this.escape(__("行数"))}</th></tr></thead>
+					<thead><tr>${hasDailySources ? `<th>${this.escape(__("数据来源"))}</th>` : ""}<th>${this.escape(__("工作表"))}</th><th>${this.escape(__("状态"))}</th><th>${this.escape(__("行数"))}</th></tr></thead>
 					<tbody>
-						${(result.sheets || [])
+						${sheets
 							.map(
 								(sheet) => `
 									<tr>
+										${hasDailySources ? `<td>${this.escape(__(sheet.source_kind === "dingtalk_raw" ? "钉钉原始导出" : "人工调整"))}</td>` : ""}
 										<td>${this.escape(sheet.sheet_name)}</td>
-										<td>${sheet.found ? this.escape(__("已找到")) : this.escape(__("缺失"))}</td>
+										<td>${sheet.found === false ? this.escape(__("缺失")) : this.escape(__("已找到"))}</td>
 										<td>${this.escape(sheet.row_count || 0)}</td>
 									</tr>
 								`,
@@ -360,7 +412,25 @@ class AttendanceImportCenter {
 							.join("")}
 					</tbody>
 				</table>
-				${(result.missing_sheets || []).length ? `<div class="alert alert-warning">${this.escape(__("缺少工作表：{0}", [result.missing_sheets.join("、")]))}</div>` : `<button class="btn btn-primary" data-import>${this.escape(__("确认导入"))}</button>`}
+				${
+					mappings.length
+						? `<h4>${this.escape(__("字段映射"))}</h4><table class="table table-sm"><thead><tr>${hasDailySources ? `<th>${this.escape(__("数据来源"))}</th>` : ""}<th>${this.escape(__("来源字段"))}</th><th>${this.escape(__("预览字段"))}</th></tr></thead><tbody>${mappings
+								.map((mapping) => `<tr>${hasDailySources ? `<td>${this.escape(__(mapping.source_kind === "dingtalk_raw" ? "钉钉原始导出" : "人工调整"))}</td>` : ""}<td>${this.escape(mapping.from)}</td><td>${this.escape(mapping.to)}</td></tr>`)
+								.join("")}</tbody></table>`
+						: ""
+				}
+				${
+					warnings.length
+						? `<h4>${this.escape(__("数据质量告警"))}</h4><ul>${warnings
+								.map((warning) => `<li>${this.escape(warning.label)}：${this.escape(warning.count || 0)}</li>`)
+								.join("")}</ul>`
+						: ""
+				}
+				${
+					(result.missing_sheets || []).length
+						? `<div class="alert alert-warning">${this.escape(__("缺少工作表：{0}", [result.missing_sheets.join("、")]))}</div>`
+						: `<button class="btn btn-primary" data-import>${this.escape(__("确认导入每日统计"))}</button>`
+				}
 			</div>
 		`;
 	}
@@ -377,17 +447,22 @@ class AttendanceImportCenter {
 	}
 
 	import_attendance_workbook() {
+		if (!this.ensure_company()) return;
 		frappe
 			.call({
 				method: "hrms.api.attendance_import.import_attendance_workbook",
-				args: { file_url: this.file_url, attendance_month: this.attendance_month },
+				args: { file_url: this.file_url, attendance_month: this.attendance_month, company: this.company },
 				freeze: true,
 				freeze_message: __("正在导入考勤数据..."),
 			})
 			.then((response) => {
 				const result = response.message || {};
 				this.batch = result.batch || "";
-				frappe.show_alert({ message: __("考勤导入完成"), indicator: "green" });
+				const rejected = Number(result.rejected_company_or_employee_rows || 0);
+				frappe.show_alert({
+					message: rejected ? __("已导入 {0} 条日核对，{1} 条因员工或公司未匹配未写入。", [result.inserted_day_checks || 0, rejected]) : __("考勤导入完成"),
+					indicator: rejected ? "orange" : "green",
+				});
 				this.set_view("daily");
 			});
 	}
@@ -395,15 +470,17 @@ class AttendanceImportCenter {
 	load_daily_checks() {
 		this.body().innerHTML = this.render_action_bar("每日考勤核对", [{ label: "生成考勤异常", action: "generate-exceptions", primary: true }]);
 		this.bind_action_bar();
+		if (!this.ensure_company()) return;
 		frappe.call({
 			method: "hrms.api.attendance_import.list_attendance_day_checks",
-			args: { batch: this.batch },
+			args: { company: this.company, batch: this.batch, attendance_month: this.attendance_month, effective_only: 1 },
 			callback: (response) =>
-				this.render_table("每日考勤核对", ["姓名", "工号", "部门", "日期", "出勤结果", "班次", "上班时间", "下班时间", "标准工时", "实际出勤", "有效请假", "无效请假", "工作日加班", "休息日加班", "节假日加班", "大夜班", "小夜班", "旷工", "迟到", "早退", "上班缺卡", "下班缺卡", "未申请加班"], response.message || [], (row) => [
+				this.render_table("每日考勤核对", ["姓名", "工号", "部门", "日期", "来源", "出勤结果", "班次", "上班时间", "下班时间", "标准工时", "实际出勤", "有效请假", "无效请假", "工作日加班", "休息日加班", "节假日加班", "大夜班", "小夜班", "旷工", "迟到", "早退", "上班缺卡", "下班缺卡", "未申请加班"], response.message || [], (row) => [
 					row.employee_name,
 					row.employee_code,
 					row.department,
 					row.attendance_date,
+					row.source_kind,
 					row.attendance_result,
 					row.shift_name,
 					row.actual_in_time,
@@ -450,11 +527,16 @@ class AttendanceImportCenter {
 	}
 
 	load_monthly() {
-		this.body().innerHTML = this.render_action_bar("月度考勤终稿", [{ label: "生成月度考勤终稿", action: "generate-monthly", primary: true }]);
+		this.body().innerHTML = this.render_action_bar("月度考勤终稿", [
+			{ label: "生成月度考勤终稿", action: "generate-monthly", primary: true },
+			{ label: "锁定本月考勤", action: "lock-month" },
+			{ label: "解锁本月考勤", action: "unlock-month" },
+		]);
 		this.bind_action_bar();
+		if (!this.ensure_company()) return;
 		frappe.call({
 			method: "hrms.api.attendance_import.list_monthly_attendance_summary",
-			args: { attendance_month: this.attendance_month },
+			args: { company: this.company, attendance_month: this.attendance_month },
 			callback: (response) =>
 				this.render_table("月度考勤终稿", ["姓名", "工号", "部门", "标准工时", "实际出勤", "实际打卡出勤", "应补1倍工时", "应扣2倍工时", "调整后缺勤工时", "1.5倍加班", "2倍加班", "3倍加班", "1.5倍结算", "2倍结算", "3倍结算", "夜班津贴", "全勤扣款", "旷工扣款工时", "调整后工时", "绿苹果", "红苹果", "苹果树金额"], response.message || [], (row) => [
 					row.employee_name,
@@ -701,6 +783,8 @@ class AttendanceImportCenter {
 			button.addEventListener("click", () => {
 				if (button.dataset.action === "generate-exceptions") this.generate_attendance_exceptions();
 				if (button.dataset.action === "generate-monthly") this.generate_monthly_attendance_summary();
+				if (button.dataset.action === "lock-month") this.lock_attendance_month();
+				if (button.dataset.action === "unlock-month") this.unlock_attendance_month();
 				if (button.dataset.action === "seed-rules") this.seed_attendance_custom_rules();
 				if (button.dataset.action === "new-rule") this.open_rule_dialog();
 			});
@@ -725,13 +809,42 @@ class AttendanceImportCenter {
 	}
 
 	generate_monthly_attendance_summary() {
+		if (!this.ensure_company()) return;
 		frappe.call({
 			method: "hrms.api.attendance_import.generate_monthly_attendance_summary",
-			args: { attendance_month: this.attendance_month },
+			args: { company: this.company, attendance_month: this.attendance_month },
 			freeze: true,
 			freeze_message: __("正在生成月度考勤终稿..."),
 			callback: () => this.load_monthly(),
 		});
+	}
+
+	lock_attendance_month() {
+		if (!this.ensure_company()) return;
+		frappe.call({
+			method: "hrms.api.attendance_import.lock_attendance_month",
+			args: { company: this.company, attendance_month: this.attendance_month },
+			freeze: true,
+			freeze_message: __("正在锁定本月考勤..."),
+			callback: () => this.load_monthly(),
+		});
+	}
+
+	unlock_attendance_month() {
+		if (!this.ensure_company()) return;
+		frappe.prompt(
+			[{ fieldname: "reason", fieldtype: "Small Text", label: __("解锁原因"), reqd: 1 }],
+			(values) =>
+				frappe.call({
+					method: "hrms.api.attendance_import.unlock_attendance_month",
+					args: { company: this.company, attendance_month: this.attendance_month, reason: values.reason },
+					freeze: true,
+					freeze_message: __("正在解锁本月考勤..."),
+					callback: () => this.load_monthly(),
+				}),
+			__("解锁本月考勤"),
+			__("确认"),
+		);
 	}
 
 	render_table(title, columns, rows, mapRow) {

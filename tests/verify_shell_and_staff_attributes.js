@@ -30,6 +30,12 @@ function mustInclude(source, marker, message) {
 	}
 }
 
+function mustMatch(source, pattern, message) {
+	if (!pattern.test(source)) {
+		throw new Error(message || `Missing pattern: ${pattern}`);
+	}
+}
+
 for (const marker of [
 	"fix_desk_home_links",
 	"hide_frappe_breadcrumbs",
@@ -252,12 +258,12 @@ for (const marker of [
 	mustInclude(pageJs, marker, `员工属性设置 Page is missing template behavior marker: ${marker}`);
 }
 
-for (const marker of [
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260706e",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260706e",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260706e",
+for (const [label, pattern] of [
+	["home redirect JS", /\/assets\/hrms\/js\/hrms_home_redirect_v6\.js\?v=\d+[a-z]?/],
+	["top nav JS", /\/assets\/hrms\/js\/hrms_top_nav\.js\?v=\d+[a-z]?/],
+	["top nav CSS", /\/assets\/hrms\/css\/hrms_top_nav\.css\?v=\d+[a-z]?/],
 ]) {
-	mustInclude(hooks, marker, `Asset version must be bumped for browser cache: ${marker}`);
+	mustMatch(hooks, pattern, `Asset version must be cache-busted for ${label}.`);
 }
 
 for (const [label, items] of [

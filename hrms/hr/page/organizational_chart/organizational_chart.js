@@ -15,7 +15,7 @@ class HybridOrganizationChart {
 	constructor(page) {
 		this.page = page;
 		this.wrapper = page.main[0];
-		this.company = YONGXIN_COMPANY;
+		this.company = window.hrmsCompanyContext?.getCurrentCompany?.() || YONGXIN_COMPANY;
 		this.tree = null;
 		this.selected_node = null;
 		this.zoom = 1;
@@ -27,6 +27,7 @@ class HybridOrganizationChart {
 		this.page.set_title(__("组织架构图"));
 		this.setup_actions();
 		this.render_shell();
+		this.bind_company_context();
 		this.load_field_map();
 		this.load_tree();
 	}
@@ -37,6 +38,7 @@ class HybridOrganizationChart {
 		this.page.add_inner_button(__("收起全部"), () => this.collapse_all());
 		this.page.add_inner_button(__("导入架构模板"), () => this.import_yongxin_template());
 		this.page.add_inner_button(__("导出"), () => this.export_chart());
+		window.hrmsFormImport?.addPageActions(this.page, "org_structure", "表单导入");
 		this.page.set_primary_action(__("新增部门"), () => this.add_department());
 	}
 
@@ -49,6 +51,10 @@ class HybridOrganizationChart {
 				</aside>
 				<section class="hrms-org-main">
 					<div class="hrms-org-toolbar">
+						<div class="hrms-org-company-selector">
+							<label>${__("选择公司")}</label>
+							<div data-company-field data-action="change-company"></div>
+						</div>
 						<div class="hrms-org-search">
 							<input class="form-control" data-search placeholder="${__("搜索部门、员工、岗位")}" />
 						</div>
@@ -69,6 +75,7 @@ class HybridOrganizationChart {
 			</div>
 		`;
 
+		this.setup_company_field();
 		this.bind_events();
 	}
 
@@ -90,6 +97,49 @@ class HybridOrganizationChart {
 					.join("")}
 			</nav>
 		`;
+	}
+
+	setup_company_field() {
+		const control = frappe.ui.form.make_control({
+			parent: this.wrapper.querySelector("[data-company-field]"),
+			df: {
+				fieldname: "company",
+				fieldtype: "Link",
+				label: __("选择公司"),
+				options: "Company",
+				default: this.company,
+			},
+			render_input: true,
+		});
+		control.set_value(this.company);
+		control.$input.on("change", () => this.set_company(control.get_value()));
+		this.company_field = control;
+	}
+
+	set_company(company, { publish = true } = {}) {
+		const next_company = (company || "").trim();
+		if (!next_company) return;
+		if (publish && window.hrmsCompanyContext?.setCurrentCompany) {
+			const shared_company = window.hrmsCompanyContext.setCurrentCompany(next_company);
+			if (shared_company !== next_company) {
+				this.company_field?.set_value(shared_company || this.company);
+				return;
+			}
+		}
+		if (next_company === this.company) return;
+		this.company = next_company;
+		this.company_field?.set_value(next_company);
+		this.load_tree();
+	}
+
+	bind_company_context() {
+		window.addEventListener("hrms:company-context-changed", (event) => {
+			const detail = event.detail || {};
+			this.set_company(detail.company, { publish: false });
+		});
+		window.hrmsCompanyContext?.ready?.().then((company) => {
+			this.set_company(company, { publish: false });
+		});
 	}
 
 	bind_events() {
@@ -124,6 +174,7 @@ class HybridOrganizationChart {
 		if (action === "zoom-in") this.set_zoom(this.zoom + 0.1);
 		if (action === "zoom-out") this.set_zoom(this.zoom - 0.1);
 		if (action === "refresh") this.load_tree();
+		if (action === "change-company") this.set_company(this.company_field?.get_value());
 		if (action === "toggle-node") this.toggle_node(element?.dataset.toggleNode);
 		if (action === "add-department") this.add_department();
 		if (action === "edit-department") this.edit_department();
@@ -472,7 +523,7 @@ class HybridOrganizationChart {
 	}
 
 	add_department() {
-		frappe.route_options = { company: YONGXIN_COMPANY };
+		frappe.route_options = this.company && this.company !== "All Companies" ? { company: this.company } : {};
 		const parent_department = this.get_selected_department();
 		if (parent_department) {
 			frappe.route_options.parent_department = parent_department;
@@ -516,7 +567,7 @@ class HybridOrganizationChart {
 	}
 
 	get_department_edit_fields(doc) {
-		const company = doc.company || this.company || YONGXIN_COMPANY;
+		const company = doc.company || (this.company !== "All Companies" ? this.company : "");
 		return [
 			{ fieldname: "department_name", fieldtype: "Data", label: __("部门名称"), reqd: 1, default: doc.department_name },
 			{ fieldname: "company", fieldtype: "Link", options: "Company", default: company, hidden: 1 },
@@ -527,6 +578,9 @@ class HybridOrganizationChart {
 				label: __("上级部门"),
 				default: doc.parent_department,
 				get_query() {
+					if (!company) {
+						return {};
+					}
 					return { filters: { name: ["!=", doc.name], company } };
 				},
 			},

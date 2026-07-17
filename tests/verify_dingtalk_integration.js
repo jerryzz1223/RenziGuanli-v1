@@ -63,6 +63,8 @@ for (const marker of [
 	"public_gateway_enabled",
 	"公网小网关",
 	"部署到服务器",
+	'"sync_mode": "Excel导入（默认）"',
+	'"public_gateway_enabled": 0',
 ]) {
 	mustInclude(api, marker, `DingTalk integration API is missing marker: ${marker}`);
 }
@@ -86,6 +88,12 @@ for (const marker of [
 const settings = readJson("hrms/hr/doctype/hrms_dingtalk_settings/hrms_dingtalk_settings.json");
 if (settings.name !== "HRMS DingTalk Settings" || settings.issingle !== 1) {
 	throw new Error("HRMS DingTalk Settings must be a Single DocType.");
+}
+if (settings.fields.find((field) => field.fieldname === "local_gateway_enabled").default !== "0") {
+	throw new Error("Local gateway must be disabled by default for the read-only local phase.");
+}
+if (settings.fields.find((field) => field.fieldname === "public_gateway_enabled").default !== "0") {
+	throw new Error("Public employee gateway must be disabled by default before server deployment.");
 }
 for (const fieldname of [
 	"enabled",

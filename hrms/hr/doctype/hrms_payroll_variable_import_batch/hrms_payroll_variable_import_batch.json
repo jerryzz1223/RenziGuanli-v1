@@ -7,6 +7,8 @@
  "engine": "InnoDB",
  "field_order": [
   "payroll_month",
+  "company",
+  "attendance_lock_version",
   "source_file",
   "status",
   "variable_rows",
@@ -20,6 +22,21 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "薪资月份",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "attendance_lock_version",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "考勤锁定版本",
    "reqd": 1
   },
   {

@@ -69,6 +69,10 @@ for (const marker of [
 	"公积金个人",
 	"应发前置合计",
 	"应扣前置合计",
+	"window.hrmsCompanyContext?.getCurrentCompany?.()",
+	"hrms:company-context-changed",
+	"data-company-context",
+	"readonly",
 ]) {
 	mustInclude(pageJs, marker, `Payroll input center page is missing marker: ${marker}`);
 }

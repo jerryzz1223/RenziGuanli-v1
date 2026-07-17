@@ -7,6 +7,7 @@
  "engine": "InnoDB",
  "field_order": [
   "employee",
+  "employee_code_display",
   "employee_name",
   "transfer_date",
   "column_break_3",
@@ -28,6 +29,13 @@
    "label": "Employee",
    "options": "Employee",
    "reqd": 1
+  },
+  {
+   "fetch_from": "employee.custom_employee_code",
+   "fieldname": "employee_code_display",
+   "fieldtype": "Data",
+   "label": "员工工号",
+   "read_only": 1
   },
   {
    "fetch_from": "employee.employee_name",
