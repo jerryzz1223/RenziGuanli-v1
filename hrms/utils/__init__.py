@@ -6,28 +6,30 @@ import frappe
 from frappe.utils import add_days, date_diff
 
 country_info = {}
+DEFAULT_COUNTRY_FIELDS = ("countryCode", "country", "regionName", "city")
 
 
 @frappe.whitelist(allow_guest=True)
 def get_country(fields: list | None = None) -> dict:
 	global country_info
 	ip = frappe.local.request_ip
+	requested_fields = tuple(fields or DEFAULT_COUNTRY_FIELDS)
+	cache_key = (ip, requested_fields)
 
-	if ip not in country_info:
-		fields = ["countryCode", "country", "regionName", "city"]
+	if cache_key not in country_info:
 		res = requests.get(
 			"https://pro.ip-api.com/json/{ip}?key={key}&fields={fields}".format(
-				ip=ip, key=frappe.conf.get("ip-api-key"), fields=",".join(fields)
+				ip=ip, key=frappe.conf.get("ip-api-key"), fields=",".join(requested_fields)
 			)
 		)
 
 		try:
-			country_info[ip] = res.json()
+			country_info[cache_key] = res.json()
 
 		except Exception:
-			country_info[ip] = {}
+			country_info[cache_key] = {}
 
-	return country_info[ip]
+	return country_info[cache_key]
 
 
 def get_date_range(start_date: str, end_date: str) -> list[str]:

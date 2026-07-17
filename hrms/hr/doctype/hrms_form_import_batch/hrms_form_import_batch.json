@@ -1,0 +1,39 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-14 00:00:00.000000",
+ "description": "人资表单导入批次：保留模板、来源文件、字段匹配和处理状态。",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["company", "module_name", "template_key", "template_name", "source_file", "status", "total_rows", "valid_rows", "failed_rows", "mapping_json", "error_summary", "imported_by", "imported_on", "notes"],
+ "fields": [
+  {"fieldname": "company", "fieldtype": "Link", "in_list_view": 1, "label": "公司", "options": "Company", "reqd": 1},
+  {"fieldname": "module_name", "fieldtype": "Data", "in_list_view": 1, "label": "业务模块", "reqd": 1},
+  {"fieldname": "template_key", "fieldtype": "Data", "in_list_view": 1, "label": "模板标识", "reqd": 1},
+  {"fieldname": "template_name", "fieldtype": "Data", "in_list_view": 1, "label": "模板名称", "reqd": 1},
+  {"fieldname": "source_file", "fieldtype": "Attach", "in_list_view": 1, "label": "来源文件", "reqd": 1},
+  {"default": "已导入待处理", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "状态", "options": "预览通过\n已导入待处理\n审核中\n部分失败\n已处理\n已作废"},
+  {"default": "0", "fieldname": "total_rows", "fieldtype": "Int", "label": "读取行数"},
+  {"default": "0", "fieldname": "valid_rows", "fieldtype": "Int", "label": "有效行数"},
+  {"default": "0", "fieldname": "failed_rows", "fieldtype": "Int", "label": "失败行数"},
+  {"fieldname": "mapping_json", "fieldtype": "Code", "label": "字段映射", "options": "JSON"},
+  {"fieldname": "error_summary", "fieldtype": "Small Text", "label": "错误摘要"},
+  {"fieldname": "imported_by", "fieldtype": "Link", "label": "导入人", "options": "User"},
+  {"fieldname": "imported_on", "fieldtype": "Datetime", "label": "导入时间"},
+  {"fieldname": "notes", "fieldtype": "Small Text", "label": "备注"}
+ ],
+ "links": [],
+ "modified": "2026-07-14 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Form Import Batch",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+  {"create": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "HR Manager", "share": 1, "write": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "template_name"
+}

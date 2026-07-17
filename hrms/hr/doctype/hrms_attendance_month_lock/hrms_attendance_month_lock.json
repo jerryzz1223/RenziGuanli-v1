@@ -1,0 +1,115 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-07-13 00:00:00.000000",
+ "description": "按公司锁定考勤月份，保护已确认的月度终稿。",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "attendance_month",
+  "status",
+  "active_version",
+  "source_batch_ids",
+  "source_checksum",
+  "locked_by",
+  "locked_on",
+  "reopened_by",
+  "reopened_on",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "attendance_month",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "考勤月份",
+   "reqd": 1
+  },
+  {
+   "default": "草稿",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "状态",
+   "options": "草稿\n已锁定\n已重开",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "active_version",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "当前版本",
+   "reqd": 1
+  },
+  {
+   "fieldname": "source_batch_ids",
+   "fieldtype": "Small Text",
+   "label": "来源批次"
+  },
+  {
+   "fieldname": "source_checksum",
+   "fieldtype": "Data",
+   "label": "来源校验码"
+  },
+  {
+   "fieldname": "locked_by",
+   "fieldtype": "Link",
+   "label": "锁定人",
+   "options": "User"
+  },
+  {
+   "fieldname": "locked_on",
+   "fieldtype": "Datetime",
+   "label": "锁定时间"
+  },
+  {
+   "fieldname": "reopened_by",
+   "fieldtype": "Link",
+   "label": "解锁人",
+   "options": "User"
+  },
+  {
+   "fieldname": "reopened_on",
+   "fieldtype": "Datetime",
+   "label": "解锁时间"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "备注"
+  }
+ ],
+ "module": "HR",
+ "name": "HRMS Attendance Month Lock",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "report": 1,
+   "write": 1,
+   "role": "System Manager"
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "report": 1,
+   "write": 1,
+   "role": "HR Manager"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "attendance_month"
+}

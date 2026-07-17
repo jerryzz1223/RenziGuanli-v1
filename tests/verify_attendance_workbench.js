@@ -40,6 +40,7 @@ const attendancePageJsonPath = mustExist("hrms/hr/page/attendance_import_center/
 const attendancePageJsPath = mustExist("hrms/hr/page/attendance_import_center/attendance_import_center.js");
 const attendancePageJson = JSON.parse(fs.readFileSync(attendancePageJsonPath, "utf8"));
 const attendancePageJs = fs.readFileSync(attendancePageJsPath, "utf8");
+const homeRedirectJs = read("hrms/public/js/hrms_home_redirect_v6.js");
 
 if (attendancePageJson.name !== "attendance-import-center" || attendancePageJson.title !== "考勤导入中心") {
 	throw new Error("Attendance import center page route/title is incorrect.");
@@ -83,6 +84,21 @@ for (const marker of [
 	"7S",
 	"KPI",
 	"data-action=\"add-report\"",
+	"来源类型",
+	"字段映射",
+	"数据质量告警",
+	"确认导入每日统计",
+	"data-company",
+	"data-company-context",
+	"get_context_company",
+	"bind_company_context",
+	"refresh_company_context_when_ready",
+	"hrms:company-context-changed",
+	"company: this.company",
+	"锁定本月考勤",
+	"解锁本月考勤",
+	"daily_sources",
+	"source_kind",
 ]) {
 	mustInclude(attendancePageJs, marker, `Attendance import center is missing marker: ${marker}`);
 }
@@ -91,8 +107,24 @@ if (attendancePageJs.includes("render_view_sidebar") || attendancePageJs.include
 	throw new Error("Attendance workbench must use the unified left sidebar, not render a nested sidebar.");
 }
 
+if (attendancePageJs.includes("${this.render_workflow_tabs()}")) {
+	throw new Error("Attendance workbench must use the unified left sidebar, not render duplicate workflow tabs.");
+}
+
+if (attendancePageJs.includes("dingtalk_export_v1 当前仅支持预览")) {
+	throw new Error("DingTalk four-sheet exports must offer a controlled daily-statistics import after preview.");
+}
+
+if (!homeRedirectJs.includes('label: "考勤导入中心", route: "/desk/attendance-import-center/import"')) {
+	throw new Error("The global attendance sidebar must provide an import-center route.");
+}
+
 if (attendancePageJs.includes("data-upload>${frappe.utils.escape_html(__(\"添加报表\"))}")) {
 	throw new Error("添加报表 must open the report view, not reuse the upload action.");
+}
+
+if (attendancePageJs.includes('this.wrapper.querySelector("[data-company]").addEventListener("change"')) {
+	throw new Error("Attendance company must be controlled by the global company selector, not a local editable field.");
 }
 
 const apiPath = mustExist("hrms/api/attendance_import.py");
@@ -138,8 +170,40 @@ for (const marker of [
 	"HRMS Attendance Exception",
 	"HRMS Apple Reward Record",
 	"HRMS Monthly Attendance Summary",
+	"DINGTALK_EXPORT_V1_SHEETS",
+	"dingtalk_export_v1",
+	"_flatten_dingtalk_daily_headers",
+	"_preview_dingtalk_export_v1",
+	"请假/事假(小时)",
+	"COMPANY_ATTENDANCE_WORKBOOK_SOURCES",
+	"company_attendance_workbook_v1",
+	"_preview_company_attendance_workbook",
+	"HRMS Attendance Month Lock",
+	"HRMS Attendance Lock Audit",
+	"lock_attendance_month",
+	"unlock_attendance_month",
+	"_attendance_scope_filters",
+	"TEST_ATTENDANCE_DEMO_COMPANY",
+	"TEST_ATTENDANCE_DEMO_MONTH",
+	"seed_test_attendance_demo",
+	"get_test_attendance_demo_status",
+	"_assert_month_ready_for_lock",
 ]) {
 	mustInclude(api, marker, `Attendance import API is missing marker: ${marker}`);
+}
+
+for (const [folder, markers] of [
+	["hrms_attendance_import_batch", ["company", "source_type", "source_checksum"]],
+	["hrms_attendance_day_check", ["company", "source_kind", "source_sheet", "source_row_number", "correction_version", "public_leave_hours", "maternity_leave_hours", "reunion_leave_hours"]],
+	["hrms_attendance_month_lock", ["HRMS Attendance Month Lock", "company", "attendance_month", "active_version", "status"]],
+	["hrms_attendance_lock_audit", ["HRMS Attendance Lock Audit", "company", "attendance_month", "action", "reason", "lock_version"]],
+]) {
+	const jsonPath = mustExist(`hrms/hr/doctype/${folder}/${folder}.json`);
+	const pyPath = mustExist(`hrms/hr/doctype/${folder}/${folder}.py`);
+	const json = fs.readFileSync(jsonPath, "utf8");
+	const py = fs.readFileSync(pyPath, "utf8");
+	for (const marker of markers) mustInclude(json, marker, `${folder} is missing ${marker}.`);
+	mustInclude(py, "Document", `${folder} controller must extend Document.`);
 }
 
 for (const [folder, titleMarkers] of [

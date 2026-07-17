@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from calendar import monthrange
@@ -10,7 +11,23 @@ from frappe import _
 from frappe.utils import flt, getdate, now_datetime
 
 
-PAYROLL_VARIABLE_SHEETS = ["全勤奖", "住房补贴", "学历补贴", "社保名单", "每月员工住宿费用明细表", "人员住宿登记表"]
+PAYROLL_VARIABLE_SHEETS = [
+	"奖惩提报单（提交财务）",
+	"证书、多能工津贴名单",
+	"全勤奖",
+	"住房补贴",
+	"住房补贴终稿",
+	"学历补贴",
+	"宿舍费",
+	"社保名单",
+	"继续服务奖",
+	"提案改善表",
+	"苹果树",
+	"苹果树（修改后）",
+	"离职人员薪资结算",
+	"每月员工住宿费用明细表",
+	"人员住宿登记表",
+]
 VARIABLE_BATCH_DOCTYPE = "HRMS Payroll Variable Import Batch"
 VARIABLE_RECORD_DOCTYPE = "HRMS Payroll Variable Record"
 PAYROLL_INPUT_DOCTYPE = "HRMS Payroll Input Record"
@@ -103,10 +120,19 @@ PAYROLL_IMPORT_TEMPLATES = [
 ]
 
 SHEET_VARIABLE_TYPES = {
+	"奖惩提报单（提交财务）": "其他奖金",
+	"证书、多能工津贴名单": "证书及多能工津贴",
 	"全勤奖": "全勤奖",
 	"住房补贴": "住房补贴",
+	"住房补贴终稿": "住房补贴",
 	"学历补贴": "学历补贴",
+	"宿舍费": "宿舍扣款",
 	"社保名单": "社保个人",
+	"继续服务奖": "继续服务奖",
+	"提案改善表": "提案改善奖",
+	"苹果树": "苹果树",
+	"苹果树（修改后）": "苹果树",
+	"离职人员薪资结算": "其他扣款",
 	"每月员工住宿费用明细表": "宿舍扣款",
 	"人员住宿登记表": "宿舍扣款",
 }
@@ -122,7 +148,11 @@ VARIABLE_FIELD_MAP = {
 	"其他扣款": "other_deduction",
 	"底薪": "base_salary",
 	"职能津贴": "function_allowance",
+	"职务津贴": "function_allowance",
+	"证书津贴": "certificate_skill_allowance",
+	"多能工津贴": "certificate_skill_allowance",
 	"证书及多能工津贴": "certificate_skill_allowance",
+	"全薪": "salary_subtotal",
 	"薪资小计": "salary_subtotal",
 	"生产奖": "production_bonus",
 	"提案改善奖": "proposal_improvement_bonus",
@@ -135,9 +165,13 @@ VARIABLE_FIELD_MAP = {
 	"已发福利": "paid_proposal_birthday_welfare",
 	"夜班津贴": "night_shift_allowance",
 	"迟到金额+全勤奖扣款": "late_full_attendance_deduction",
+	"苹果树": "apple_reward_amount",
+	"奖惩提报": "other_bonus",
+	"离职薪资结算": "other_deduction",
 }
 
 WELFARE_SOURCE_VARIABLE_TYPE_MAP = {
+	"薪资构成": "薪资小计",
 	"学历补贴": "学历补贴",
 	"租房补贴": "住房补贴",
 	"宿舍住宿费": "宿舍扣款",
@@ -153,6 +187,10 @@ WELFARE_SOURCE_VARIABLE_TYPE_MAP = {
 	"水电费及扣款": "水电费及扣款",
 	"已发福利": "已发福利",
 	"生产奖": "生产奖",
+	"奖惩提报": "其他奖金",
+	"证书多能工津贴": "证书及多能工津贴",
+	"苹果树": "其他奖金",
+	"离职薪资结算": "其他扣款",
 	"高温补贴": "其他奖金",
 	"手机话费补贴": "其他奖金",
 	"油费补贴": "其他奖金",
@@ -161,6 +199,41 @@ WELFARE_SOURCE_VARIABLE_TYPE_MAP = {
 }
 
 WELFARE_SOURCE_RULES = [
+	{
+		"source_type": "薪资构成",
+		"title": "薪资构成异动来源",
+		"direction": "参考",
+		"variable_type": "薪资小计",
+		"rule": "异动前后岗位、职级、底薪、职能/职务津贴、证书津贴、多能工津贴、全薪只作为薪资主数据来源；结算以同公司已批准且生效的员工薪资异动为准。",
+	},
+	{
+		"source_type": "证书多能工津贴",
+		"title": "证书多能工津贴确认",
+		"direction": "应发",
+		"variable_type": "证书及多能工津贴",
+		"rule": "证书津贴、多能工津贴需保留来源单据与确认状态；进入薪资主数据或同版本变量后参与试算。",
+	},
+	{
+		"source_type": "奖惩提报",
+		"title": "奖惩提报",
+		"direction": "应发/应扣",
+		"variable_type": "其他奖金",
+		"rule": "奖惩提报按已确认金额导入；奖励映射其他奖金，扣款可在来源记录中选择其他扣款。",
+	},
+	{
+		"source_type": "苹果树",
+		"title": "绩效与苹果树变量",
+		"direction": "应发",
+		"variable_type": "苹果树",
+		"rule": "只读取绩效与试用报表线程输出的已确认苹果树变量，必须与薪资公司、月份、考勤锁定版本一致。",
+	},
+	{
+		"source_type": "离职薪资结算",
+		"title": "离职薪资结算",
+		"direction": "应发/应扣",
+		"variable_type": "其他扣款",
+		"rule": "离职薪资结算只能读取同公司、同月、同锁定版本的考勤终稿和变量，不能跨公司；补发或扣款需作为来源记录确认。",
+	},
 	{
 		"source_type": "学历补贴",
 		"title": "学历补贴资格与月报",
@@ -687,6 +760,18 @@ def _amount_for_type(row, variable_type):
 		return flt(_first(row, "学历补贴", "金额"))
 	if variable_type == "宿舍扣款":
 		return flt(_first(row, "当月扣款", "扣款", "金额"))
+	if variable_type == "证书及多能工津贴":
+		return flt(_first(row, "证书及多能工津贴", "证书津贴", "多能工津贴", "金额"))
+	if variable_type == "继续服务奖":
+		return flt(_first(row, "继续服务奖", "金额"))
+	if variable_type == "提案改善奖":
+		return flt(_first(row, "提案改善奖", "金额"))
+	if variable_type == "苹果树":
+		return flt(_first(row, "苹果树", "绿苹果", "红苹果", "金额"))
+	if variable_type == "其他奖金":
+		return flt(_first(row, "金额（元）", "金额", "奖惩金额"))
+	if variable_type == "其他扣款":
+		return flt(_first(row, "扣款", "金额", "水电费及扣款"))
 	if variable_type == "社保个人":
 		pension = flt(_first(row, "企业养老8%", "个人养老", "养老个人"))
 		unemployment = flt(_first(row, "失业保险约0.5%", "个人失业", "失业个人"))
@@ -744,8 +829,10 @@ def _ensure_department(department):
 
 
 def _matching_sheet(workbook, expected_name):
+	expected = (expected_name or "").strip()
 	for sheet_name in workbook.sheetnames:
-		if sheet_name.strip() == expected_name:
+		actual = sheet_name.strip()
+		if actual == expected or (expected and expected in actual):
 			return workbook[sheet_name]
 	return None
 
@@ -941,6 +1028,57 @@ def _month_end(payroll_month):
 	return f"{year:04d}-{month:02d}-{monthrange(year, month)[1]:02d}"
 
 
+def _require_company(company):
+	company = (company or "").strip()
+	if not company:
+		frappe.throw(_("薪资试算必须传入公司，不允许按月份全局读取或删除。"))
+	if not frappe.db.exists("Company", company):
+		frappe.throw(_("公司 {0} 不存在").format(company))
+	return company
+
+
+def _require_payroll_scope(company, payroll_month, attendance_lock_version=""):
+	company = _require_company(company)
+	payroll_month = (payroll_month or "").strip()
+	if not re.match(r"^\d{4}-\d{2}$", payroll_month):
+		frappe.throw(_("薪资月份必须为 YYYY-MM"))
+	attendance_lock_version = (attendance_lock_version or "").strip()
+	if not attendance_lock_version:
+		frappe.throw(_("薪资试算必须传入考勤锁定版本。"))
+	return company, payroll_month, attendance_lock_version
+
+
+def _payroll_scope_filters(company, payroll_month, attendance_lock_version=""):
+	filters = {"company": _require_company(company), "payroll_month": payroll_month}
+	if attendance_lock_version:
+		filters["attendance_lock_version"] = attendance_lock_version
+	return filters
+
+
+def _attendance_scope_filters(company, attendance_month, attendance_lock_version):
+	return {
+		"company": _require_company(company),
+		"attendance_month": attendance_month,
+		"attendance_lock_version": attendance_lock_version,
+		"lock_status": "已锁定",
+	}
+
+
+def _employee_identity_key(row):
+	return getattr(row, "employee", None) or getattr(row, "employee_code", None) or getattr(row, "employee_name", None)
+
+
+def _assert_row_company(row, company, source_label):
+	row_company = getattr(row, "company", None)
+	if row_company and row_company != company:
+		frappe.throw(_("{0} 存在跨公司数据：{1} 不属于 {2}").format(source_label, row_company, company))
+
+
+def _source_trace_hash(trace):
+	payload = json.dumps(trace, ensure_ascii=False, sort_keys=True, default=str)
+	return payload, hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _salary_structure_sheet(workbook):
 	return _matching_sheet(workbook, "薪资架构")
 
@@ -1102,7 +1240,7 @@ def list_salary_grades(structure_version: str = "", page_length: int = 50):
 def _employee_context(employee):
 	if not employee:
 		return {}
-	row = frappe.db.get_value("Employee", employee, ["employee_name", "department", "designation", "date_of_joining"], as_dict=True)
+	row = frappe.db.get_value("Employee", employee, ["employee_name", "department", "designation", "date_of_joining", "company"], as_dict=True)
 	return row or {}
 
 
@@ -1120,8 +1258,11 @@ def _grade_context(salary_grade):
 @frappe.whitelist()
 def create_employee_salary_change(**kwargs):
 	data = dict(kwargs)
+	company = _require_company(data.get("company"))
 	employee = data.get("employee")
 	employee_context = _employee_context(employee)
+	if employee_context.get("company") and employee_context.get("company") != company:
+		frappe.throw(_("员工 {0} 不属于公司 {1}").format(employee, company))
 	grade_context = _grade_context(data.get("salary_grade"))
 	base_salary = flt(data.get("base_salary")) or flt(grade_context.get("base_salary"))
 	function_allowance = flt(data.get("function_allowance")) or flt(grade_context.get("function_allowance"))
@@ -1135,6 +1276,7 @@ def create_employee_salary_change(**kwargs):
 	doc = frappe.get_doc(
 		{
 			"doctype": EMPLOYEE_SALARY_CHANGE_DOCTYPE,
+			"company": company,
 			"employee": employee,
 			"employee_code": data.get("employee_code") or employee,
 			"employee_name": data.get("employee_name") or employee_context.get("employee_name"),
@@ -1167,8 +1309,9 @@ def create_employee_salary_change(**kwargs):
 
 
 @frappe.whitelist()
-def list_employee_salary_changes(employee: str = "", payroll_month: str = "", page_length: int = 50):
-	filters = {}
+def list_employee_salary_changes(company: str, employee: str = "", payroll_month: str = "", page_length: int = 50):
+	company = _require_company(company)
+	filters = {"company": company}
 	if employee:
 		filters["employee"] = employee
 	month_end = _month_end(payroll_month)
@@ -1184,8 +1327,9 @@ def list_employee_salary_changes(employee: str = "", payroll_month: str = "", pa
 
 
 @frappe.whitelist()
-def get_active_salary_change_for_employee(employee=None, employee_code: str = "", payroll_month: str = ""):
-	filters = {"status": "已批准"}
+def get_active_salary_change_for_employee(employee: str | None = None, employee_code: str = "", payroll_month: str = "", company: str = ""):
+	company = _require_company(company)
+	filters = {"status": "已批准", "company": company}
 	if employee:
 		filters["employee"] = employee
 	elif employee_code:
@@ -1213,13 +1357,15 @@ def _welfare_rule(source_type):
 def _source_category(source_type):
 	if source_type in ("学历补贴", "租房补贴", "高温补贴", "手机话费补贴", "油费补贴"):
 		return "补贴"
+	if source_type in ("薪资构成", "证书多能工津贴"):
+		return "薪资主数据"
 	if source_type in ("宿舍住宿费", "宿舍水电费"):
 		return "宿舍"
 	if source_type in ("社保个人", "社保公司", "公积金个人", "公积金公司"):
 		return "社保公积金"
-	if source_type in ("提案改善奖", "继续服务奖", "已发福利", "生产奖", "其他奖金"):
+	if source_type in ("提案改善奖", "继续服务奖", "已发福利", "生产奖", "其他奖金", "奖惩提报", "苹果树"):
 		return "奖金福利"
-	if source_type in ("所得税", "年终奖所得税", "水电费及扣款", "其他扣款"):
+	if source_type in ("所得税", "年终奖所得税", "水电费及扣款", "其他扣款", "离职薪资结算"):
 		return "个税扣款"
 	return "其他"
 
@@ -1232,23 +1378,40 @@ def list_payroll_welfare_source_rules():
 @frappe.whitelist()
 def upsert_payroll_welfare_source_record(**kwargs):
 	data = dict(kwargs)
-	payroll_month = data.get("payroll_month")
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(
+		data.get("company"),
+		data.get("payroll_month"),
+		data.get("attendance_lock_version"),
+	)
 	source_type = data.get("source_type")
-	if not payroll_month:
-		frappe.throw(_("请填写薪资月份"))
 	if not source_type:
 		frappe.throw(_("请选择来源类型"))
 	employee_code = data.get("employee_code")
 	employee_name = data.get("employee_name")
 	employee = data.get("employee") or _employee_lookup(employee_code, employee_name)
 	employee_context = _employee_context(employee)
+	if employee_context.get("company") and employee_context.get("company") != company:
+		frappe.throw(_("福利扣款来源员工 {0} 不属于公司 {1}").format(employee_code or employee_name or employee, company))
 	rule = _welfare_rule(source_type)
 	variable_type = data.get("variable_type") or WELFARE_SOURCE_VARIABLE_TYPE_MAP.get(source_type)
 	direction = data.get("direction") or rule.get("direction")
 	department = _department_lookup(data.get("department") or employee_context.get("department")) or data.get("department") or employee_context.get("department")
+	trace_payload, trace_hash = _source_trace_hash(
+		{
+			"company": company,
+			"payroll_month": payroll_month,
+			"attendance_lock_version": attendance_lock_version,
+			"source_type": source_type,
+			"source_reference": data.get("source_reference"),
+			"source_file": data.get("source_file"),
+			"employee": employee or employee_code or employee_name,
+		}
+	)
 	values = {
 		"doctype": WELFARE_SOURCE_DOCTYPE,
+		"company": company,
 		"payroll_month": payroll_month,
+		"attendance_lock_version": attendance_lock_version,
 		"source_category": data.get("source_category") or _source_category(source_type),
 		"source_type": source_type,
 		"variable_type": variable_type,
@@ -1265,6 +1428,8 @@ def upsert_payroll_welfare_source_record(**kwargs):
 		"rule_snapshot": data.get("rule_snapshot") or rule.get("rule"),
 		"remarks": data.get("remarks"),
 		"raw_row_json": json.dumps(data, ensure_ascii=False, default=str),
+		"source_trace_json": trace_payload,
+		"source_hash": trace_hash,
 	}
 	if values["confirmation_status"] == "已确认":
 		values["confirmed_by"] = frappe.session.user
@@ -1282,10 +1447,13 @@ def upsert_payroll_welfare_source_record(**kwargs):
 
 
 @frappe.whitelist()
-def list_payroll_welfare_source_records(payroll_month: str = "", source_type: str = "", page_length: int = 100):
-	filters = {}
+def list_payroll_welfare_source_records(company: str, payroll_month: str = "", source_type: str = "", attendance_lock_version: str = "", page_length: int = 100):
+	company = _require_company(company)
+	filters = {"company": company}
 	if payroll_month:
 		filters["payroll_month"] = payroll_month
+	if attendance_lock_version:
+		filters["attendance_lock_version"] = attendance_lock_version
 	if source_type:
 		filters["source_type"] = source_type
 	return frappe.get_all(
@@ -1298,12 +1466,12 @@ def list_payroll_welfare_source_records(payroll_month: str = "", source_type: st
 
 
 @frappe.whitelist()
-def sync_welfare_sources_to_payroll_variables(payroll_month: str):
-	if not payroll_month:
-		frappe.throw(_("请填写薪资月份"))
+def sync_welfare_sources_to_payroll_variables(company: str, payroll_month: str, attendance_lock_version: str):
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	filters = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
 	for name in frappe.get_all(
 		VARIABLE_RECORD_DOCTYPE,
-		filters={"payroll_month": payroll_month, "source_sheet": WELFARE_SOURCE_SYNC_SHEET},
+		filters={**filters, "source_sheet": WELFARE_SOURCE_SYNC_SHEET},
 		pluck="name",
 	):
 		frappe.delete_doc(VARIABLE_RECORD_DOCTYPE, name, ignore_permissions=True, force=True)
@@ -1311,18 +1479,31 @@ def sync_welfare_sources_to_payroll_variables(payroll_month: str):
 	created = []
 	source_rows = frappe.get_all(
 		WELFARE_SOURCE_DOCTYPE,
-		filters={"payroll_month": payroll_month, "confirmation_status": "已确认", "eligibility_status": "符合"},
+		filters={**filters, "confirmation_status": "已确认", "eligibility_status": "符合"},
 		fields=["*"],
 		order_by="modified asc",
 	)
 	for row in source_rows:
+		_assert_row_company(row, company, _("福利扣款来源"))
 		variable_type = row.variable_type or WELFARE_SOURCE_VARIABLE_TYPE_MAP.get(row.source_type)
 		if not variable_type:
 			continue
+		trace_payload, trace_hash = _source_trace_hash(
+			{
+				"company": company,
+				"payroll_month": payroll_month,
+				"attendance_lock_version": attendance_lock_version,
+				"welfare_source_record": row.name,
+				"source_type": row.source_type,
+				"employee": row.employee or row.employee_code or row.employee_name,
+			}
+		)
 		doc = frappe.get_doc(
 			{
 				"doctype": VARIABLE_RECORD_DOCTYPE,
+				"company": company,
 				"payroll_month": payroll_month,
+				"attendance_lock_version": attendance_lock_version,
 				"employee": row.employee,
 				"employee_code": row.employee_code,
 				"employee_name": row.employee_name,
@@ -1332,6 +1513,8 @@ def sync_welfare_sources_to_payroll_variables(payroll_month: str):
 				"source_sheet": WELFARE_SOURCE_SYNC_SHEET,
 				"remarks": f"{row.source_type}：{row.source_reference or row.name}",
 				"raw_row_json": json.dumps(row, ensure_ascii=False, default=str),
+				"source_trace_json": trace_payload,
+				"source_hash": trace_hash,
 			}
 		)
 		doc.insert(ignore_permissions=True)
@@ -1441,13 +1624,16 @@ def preview_payroll_data_closure_workbook(file_url: str):
 	return {"sheets": sheets}
 
 
-def _upsert_employee_salary_change_from_row(row, payroll_month=""):
+def _upsert_employee_salary_change_from_row(row, payroll_month="", company=""):
+	company = _require_company(company)
 	employee_code = _first(row, "工号", "员工编号", "employee_code")
 	employee_name = _first(row, "姓名", "employee_name")
 	if not employee_code and not employee_name:
 		return None
 	employee = _employee_lookup(employee_code, employee_name)
 	employee_context = _employee_context(employee)
+	if employee_context.get("company") and employee_context.get("company") != company:
+		frappe.throw(_("员工薪资异动导入存在跨公司员工：{0}").format(employee_code or employee_name or employee))
 	effective_date = _date_or_none(_first(row, "生效日期")) or (f"{payroll_month}-01" if payroll_month else None)
 	if not effective_date:
 		frappe.throw(_("员工薪资异动导入缺少生效日期"))
@@ -1458,6 +1644,7 @@ def _upsert_employee_salary_change_from_row(row, payroll_month=""):
 	multi_skill_allowance = flt(_first(row, "多能工津贴"))
 	full_salary = flt(_first(row, "薪资小计")) or base_salary + function_allowance + certificate_allowance + multi_skill_allowance
 	values = {
+		"company": company,
 		"employee": employee,
 		"employee_code": employee_code or employee,
 		"employee_name": employee_name or employee_context.get("employee_name"),
@@ -1478,7 +1665,11 @@ def _upsert_employee_salary_change_from_row(row, payroll_month=""):
 		"source_file": "Excel导入",
 		"remarks": _first(row, "备注"),
 	}
-	name = frappe.db.get_value(EMPLOYEE_SALARY_CHANGE_DOCTYPE, {"employee_code": values["employee_code"], "effective_date": values["effective_date"]}, "name")
+	name = frappe.db.get_value(
+		EMPLOYEE_SALARY_CHANGE_DOCTYPE,
+		{"company": company, "employee_code": values["employee_code"], "effective_date": values["effective_date"]},
+		"name",
+	)
 	if name:
 		doc = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, name)
 		doc.update(values)
@@ -1489,12 +1680,13 @@ def _upsert_employee_salary_change_from_row(row, payroll_month=""):
 	return doc.name
 
 
-def _upsert_welfare_source_from_row(row, payroll_month=""):
+def _upsert_welfare_source_from_row(row, payroll_month="", company="", attendance_lock_version=""):
 	month = _first(row, "薪资月份") or payroll_month
-	if not month:
-		frappe.throw(_("福利扣款来源导入缺少薪资月份"))
+	company, month, attendance_lock_version = _require_payroll_scope(company, month, attendance_lock_version)
 	return upsert_payroll_welfare_source_record(
+		company=company,
 		payroll_month=month,
+		attendance_lock_version=attendance_lock_version,
 		source_type=_first(row, "来源类型"),
 		employee_code=_first(row, "工号", "员工编号"),
 		employee_name=_first(row, "姓名"),
@@ -1507,18 +1699,21 @@ def _upsert_welfare_source_from_row(row, payroll_month=""):
 	)
 
 
-def _upsert_attendance_summary_from_row(row, payroll_month=""):
+def _upsert_attendance_summary_from_row(row, payroll_month="", company="", attendance_lock_version=""):
 	attendance_month = _first(row, "考勤月份", "薪资月份") or payroll_month
+	company, attendance_month, attendance_lock_version = _require_payroll_scope(company, attendance_month, attendance_lock_version)
 	employee_code = _first(row, "工号", "员工编号")
 	employee_name = _first(row, "姓名")
-	if not attendance_month:
-		frappe.throw(_("月度考勤终稿导入缺少考勤月份"))
 	if not employee_code and not employee_name:
 		return None
 	employee = _employee_lookup(employee_code, employee_name)
 	employee_context = _employee_context(employee)
+	if employee_context.get("company") and employee_context.get("company") != company:
+		frappe.throw(_("月度考勤终稿导入存在跨公司员工：{0}").format(employee_code or employee_name or employee))
 	values = {
+		"company": company,
 		"attendance_month": attendance_month,
+		"attendance_lock_version": attendance_lock_version,
 		"employee": employee,
 		"employee_code": employee_code or employee,
 		"employee_name": employee_name or employee_context.get("employee_name"),
@@ -1537,8 +1732,15 @@ def _upsert_attendance_summary_from_row(row, payroll_month=""):
 		"apple_reward_amount": flt(_first(row, "红绿苹果金额", "苹果树金额")),
 		"full_attendance_deduction": flt(_first(row, "全勤扣款")),
 		"status": _first(row, "状态") or "已确认",
+		"lock_status": _first(row, "锁定状态") or "已锁定",
+		"locked_by": frappe.session.user,
+		"locked_on": now_datetime(),
 	}
-	name = frappe.db.get_value(MONTHLY_ATTENDANCE_DOCTYPE, {"attendance_month": attendance_month, "employee_code": values["employee_code"]}, "name")
+	name = frappe.db.get_value(
+		MONTHLY_ATTENDANCE_DOCTYPE,
+		{"company": company, "attendance_month": attendance_month, "attendance_lock_version": attendance_lock_version, "employee_code": values["employee_code"]},
+		"name",
+	)
 	if name:
 		doc = frappe.get_doc(MONTHLY_ATTENDANCE_DOCTYPE, name)
 		doc.update(values)
@@ -1625,8 +1827,11 @@ def _parse_settlement_sheet_rows(sheet):
 	return rows
 
 
-def _upsert_by_employee_month(doctype, month_field, payroll_month, employee_code, values):
-	filters = {month_field: payroll_month}
+def _upsert_by_employee_month(doctype, month_field, payroll_month, employee_code, values, company="", attendance_lock_version=""):
+	company = _require_company(company or values.get("company"))
+	filters = {"company": company, month_field: payroll_month}
+	if attendance_lock_version:
+		filters["attendance_lock_version"] = attendance_lock_version
 	if employee_code:
 		filters["employee_code"] = employee_code
 	if values.get("employee_name"):
@@ -1642,11 +1847,13 @@ def _upsert_by_employee_month(doctype, month_field, payroll_month, employee_code
 	return doc.name
 
 
-def _insert_settlement_welfare_source(payroll_month, settlement_row, source_type, amount, reference):
+def _insert_settlement_welfare_source(company, payroll_month, attendance_lock_version, settlement_row, source_type, amount, reference):
 	if not flt(amount):
 		return None
 	return upsert_payroll_welfare_source_record(
+		company=company,
 		payroll_month=payroll_month,
+		attendance_lock_version=attendance_lock_version,
 		source_type=source_type,
 		employee_code=settlement_row.get("employee_code"),
 		employee_name=settlement_row.get("employee_name"),
@@ -1659,11 +1866,15 @@ def _insert_settlement_welfare_source(payroll_month, settlement_row, source_type
 	)
 
 
-def _upsert_sources_from_settlement_row(payroll_month, row):
+def _upsert_sources_from_settlement_row(company, payroll_month, attendance_lock_version, row):
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
 	employee = _employee_lookup(row.get("employee_code"), row.get("employee_name"))
 	employee_context = _employee_context(employee)
+	if employee_context.get("company") and employee_context.get("company") != company:
+		frappe.throw(_("完整薪资结算表导入存在跨公司员工：{0}").format(row.get("employee_code") or row.get("employee_name") or employee))
 	full_salary = row.get("salary_subtotal") or row.get("base_salary") + row.get("function_allowance") + row.get("certificate_skill_allowance")
 	salary_values = {
+		"company": company,
 		"employee": employee,
 		"employee_code": row.get("employee_code"),
 		"employee_name": row.get("employee_name") or employee_context.get("employee_name"),
@@ -1680,10 +1891,12 @@ def _upsert_sources_from_settlement_row(payroll_month, row):
 		"status": "已批准",
 		"source_file": PAYROLL_SETTLEMENT_IMPORT_SOURCE,
 	}
-	_upsert_by_employee_month(EMPLOYEE_SALARY_CHANGE_DOCTYPE, "effective_date", f"{payroll_month}-01", row.get("employee_code"), salary_values)
+	_upsert_by_employee_month(EMPLOYEE_SALARY_CHANGE_DOCTYPE, "effective_date", f"{payroll_month}-01", row.get("employee_code"), salary_values, company)
 
 	attendance_values = {
+		"company": company,
 		"attendance_month": payroll_month,
+		"attendance_lock_version": attendance_lock_version,
 		"employee": employee,
 		"employee_code": row.get("employee_code"),
 		"employee_name": row.get("employee_name") or employee_context.get("employee_name"),
@@ -1701,11 +1914,16 @@ def _upsert_sources_from_settlement_row(payroll_month, row):
 		"apple_reward_amount": row.get("apple_reward_amount"),
 		"full_attendance_deduction": row.get("late_full_attendance_deduction"),
 		"status": "已确认",
+		"lock_status": "已锁定",
+		"locked_by": frappe.session.user,
+		"locked_on": now_datetime(),
 	}
-	_upsert_by_employee_month(MONTHLY_ATTENDANCE_DOCTYPE, "attendance_month", payroll_month, row.get("employee_code"), attendance_values)
+	_upsert_by_employee_month(MONTHLY_ATTENDANCE_DOCTYPE, "attendance_month", payroll_month, row.get("employee_code"), attendance_values, company, attendance_lock_version)
 
 	input_values = {
+		"company": company,
 		"payroll_month": payroll_month,
+		"attendance_lock_version": attendance_lock_version,
 		"employee": employee,
 		"employee_code": row.get("employee_code"),
 		"employee_name": row.get("employee_name") or employee_context.get("employee_name"),
@@ -1730,7 +1948,7 @@ def _upsert_sources_from_settlement_row(payroll_month, row):
 		"preliminary_deduction_total": row.get("social_security_personal") + row.get("housing_fund_personal") + row.get("utilities_deduction"),
 		"settlement_status": "已生成工资表",
 	}
-	_upsert_by_employee_month(PAYROLL_INPUT_DOCTYPE, "payroll_month", payroll_month, row.get("employee_code"), input_values)
+	_upsert_by_employee_month(PAYROLL_INPUT_DOCTYPE, "payroll_month", payroll_month, row.get("employee_code"), input_values, company, attendance_lock_version)
 
 	for source_type, fieldname, reference in (
 		("提案改善奖", "proposal_improvement_bonus", "完整薪资结算表导入: 提案改善奖"),
@@ -1746,7 +1964,7 @@ def _upsert_sources_from_settlement_row(payroll_month, row):
 		("社保公司", "social_security_company", "完整薪资结算表导入: 保险基金公司负担额"),
 		("公积金公司", "housing_fund_company", "完整薪资结算表导入: 住房公积金公司负担"),
 	):
-		_insert_settlement_welfare_source(payroll_month, row, source_type, row.get(fieldname), reference)
+		_insert_settlement_welfare_source(company, payroll_month, attendance_lock_version, row, source_type, row.get(fieldname), reference)
 
 
 @frappe.whitelist()
@@ -1770,44 +1988,14 @@ def preview_payroll_settlement_workbook(file_url: str):
 
 
 @frappe.whitelist()
-def import_payroll_settlement_workbook(file_url: str, payroll_month: str = ""):
-	if not payroll_month:
-		payroll_month = datetime.today().strftime("%Y-%m")
-	workbook = _load_workbook(file_url)
-	sheet = _payroll_settlement_sheet(workbook)
-	if not sheet:
-		frappe.throw(_("未找到薪资结算表"))
-	rows = _parse_settlement_sheet_rows(sheet)
-
-	for name in frappe.get_all(WELFARE_SOURCE_DOCTYPE, filters={"payroll_month": payroll_month, "source_file": PAYROLL_SETTLEMENT_IMPORT_SOURCE}, pluck="name"):
-		frappe.delete_doc(WELFARE_SOURCE_DOCTYPE, name, ignore_permissions=True, force=True)
-
-	records = []
-	for row in rows:
-		employee = _employee_lookup(row.get("employee_code"), row.get("employee_name"))
-		department = _ensure_department(row.get("department"))
-		values = {
-			"payroll_month": payroll_month,
-			"employee": employee,
-			"employee_code": row.get("employee_code"),
-			"employee_name": row.get("employee_name"),
-			"department": department,
-			**{field: row.get(field) for field in row if field not in ("employee_code", "employee_name", "department")},
-			"full_salary_hourly_rate": _rate(row.get("salary_subtotal")),
-			"base_salary_hourly_rate": _rate(row.get("base_salary")),
-			"calculation_status": "已生成",
-		}
-		name = _upsert_by_employee_month(PAYROLL_SETTLEMENT_DOCTYPE, "payroll_month", payroll_month, row.get("employee_code"), values)
-		_upsert_sources_from_settlement_row(payroll_month, row)
-		records.append(name)
-	frappe.db.commit()
-	return {"settlement_rows": len(records), "records": records}
+def import_payroll_settlement_workbook(file_url: str, payroll_month: str = "", company: str = "", attendance_lock_version: str = ""):
+	_require_payroll_scope(company, payroll_month or datetime.today().strftime("%Y-%m"), attendance_lock_version)
+	frappe.throw(_("完整薪资结算表只能用于预览核对，不允许从 Excel 终稿直接覆盖薪资结算；请先导入/确认同公司同锁定版本变量，再由系统生成薪资输入表和薪资结算表。"))
 
 
 @frappe.whitelist()
-def import_payroll_data_closure_workbook(file_url: str, payroll_month: str = ""):
-	if not payroll_month:
-		payroll_month = datetime.today().strftime("%Y-%m")
+def import_payroll_data_closure_workbook(file_url: str, payroll_month: str = "", company: str = "", attendance_lock_version: str = ""):
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month or datetime.today().strftime("%Y-%m"), attendance_lock_version)
 	workbook = _load_workbook(file_url)
 	result = {"created_or_updated": defaultdict(int), "skipped_sheets": []}
 	importers = {
@@ -1823,12 +2011,15 @@ def import_payroll_data_closure_workbook(file_url: str, payroll_month: str = "")
 		rows = _template_rows_as_dicts(sheet, template)
 		importer = importers.get(template["template_key"])
 		for row in rows:
-			name = importer(row, _first(row, "薪资月份", "考勤月份") or payroll_month)
+			month = _first(row, "薪资月份", "考勤月份") or payroll_month
+			if template["template_key"] == "employee_salary_change":
+				name = importer(row, month, company)
+			else:
+				name = importer(row, month, company, attendance_lock_version)
 			if name:
 				result["created_or_updated"][template["sheet_name"]] += 1
 	if _payroll_settlement_sheet(workbook):
-		settlement_result = import_payroll_settlement_workbook(file_url, payroll_month)
-		result["created_or_updated"]["完整薪资结算表"] = settlement_result.get("settlement_rows", 0)
+		result["skipped_sheets"].append("完整薪资结算表（仅预览核对，不直接写入结算）")
 	frappe.db.commit()
 	result["created_or_updated"] = dict(result["created_or_updated"])
 	return result
@@ -1851,29 +2042,49 @@ def preview_payroll_variable_workbook(file_url: str):
 	return {"sheets": sheets, "found_sheets": [sheet["sheet_name"] for sheet in sheets if sheet["found"]]}
 
 
-def _insert_variable(batch_name, payroll_month, sheet_name, row):
+def _insert_variable(batch_name, company, payroll_month, attendance_lock_version, sheet_name, row):
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
 	variable_type = SHEET_VARIABLE_TYPES[sheet_name]
 	amount = _amount_for_type(row, variable_type)
 	if not amount:
 		return None
-	employee_code = _first(row, "工号")
-	employee_name = _first(row, "姓名")
+	employee_code = _first(row, "工号", "受奖惩人工号")
+	employee_name = _first(row, "姓名", "受奖/惩人", "受奖惩人姓名")
 	if not employee_code and not employee_name:
 		return None
+	employee = _employee_lookup(employee_code, employee_name)
+	employee_context = _employee_context(employee)
+	if employee_context.get("company") and employee_context.get("company") != company:
+		frappe.throw(_("薪资变量导入存在跨公司员工：{0}").format(employee_code or employee_name or employee))
+	trace_payload, trace_hash = _source_trace_hash(
+		{
+			"company": company,
+			"payroll_month": payroll_month,
+			"attendance_lock_version": attendance_lock_version,
+			"import_batch": batch_name,
+			"source_sheet": sheet_name,
+			"employee": employee or employee_code or employee_name,
+			"raw_row": row,
+		}
+	)
 	doc = frappe.get_doc(
 		{
 			"doctype": VARIABLE_RECORD_DOCTYPE,
 			"import_batch": batch_name,
+			"company": company,
 			"payroll_month": payroll_month,
-			"employee": _employee_lookup(employee_code, employee_name),
+			"attendance_lock_version": attendance_lock_version,
+			"employee": employee,
 			"employee_code": employee_code,
 			"employee_name": employee_name,
-			"department": _department_lookup(_first(row, "部门", "单位")),
+			"department": _department_lookup(_first(row, "部门", "单位", "受奖/惩人部门")),
 			"variable_type": variable_type,
 			"amount": amount,
 			"source_sheet": sheet_name,
 			"remarks": _first(row, "备注"),
 			"raw_row_json": json.dumps(row, ensure_ascii=False, default=str),
+			"source_trace_json": trace_payload,
+			"source_hash": trace_hash,
 		}
 	)
 	doc.insert(ignore_permissions=True)
@@ -1881,14 +2092,15 @@ def _insert_variable(batch_name, payroll_month, sheet_name, row):
 
 
 @frappe.whitelist()
-def import_payroll_variable_workbook(file_url: str, payroll_month: str = ""):
-	if not payroll_month:
-		payroll_month = datetime.today().strftime("%Y-%m")
+def import_payroll_variable_workbook(file_url: str, payroll_month: str = "", company: str = "", attendance_lock_version: str = ""):
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month or datetime.today().strftime("%Y-%m"), attendance_lock_version)
 	workbook = _load_workbook(file_url)
 	batch = frappe.get_doc(
 		{
 			"doctype": VARIABLE_BATCH_DOCTYPE,
+			"company": company,
 			"payroll_month": payroll_month,
+			"attendance_lock_version": attendance_lock_version,
 			"source_file": file_url,
 			"status": "已导入",
 			"imported_by": frappe.session.user,
@@ -1903,14 +2115,14 @@ def import_payroll_variable_workbook(file_url: str, payroll_month: str = ""):
 		if not sheet:
 			continue
 		for row in _rows_as_dicts(sheet):
-			name = _insert_variable(batch.name, payroll_month, sheet_name, row)
+			name = _insert_variable(batch.name, company, payroll_month, attendance_lock_version, sheet_name, row)
 			if name:
 				created.append(name)
 	batch.variable_rows = len(created)
 	batch.save(ignore_permissions=True)
 	settlement_result = {}
 	if _payroll_settlement_sheet(workbook):
-		settlement_result = import_payroll_settlement_workbook(file_url, payroll_month)
+		frappe.throw(_("完整薪资结算表只能作为来源映射核对，不允许在变量导入时直接覆盖薪资结算。请使用数据闭环导入并指定公司、月份和锁定版本。"))
 	frappe.db.commit()
 	return {"batch": batch.name, "variable_rows": len(created), **settlement_result}
 
@@ -1920,19 +2132,24 @@ def _source_file_label(file_url):
 
 
 @frappe.whitelist()
-def list_payroll_variable_import_batches(payroll_month: str = "", page_length: int = 20):
-	filters = {"payroll_month": payroll_month} if payroll_month else {}
+def list_payroll_variable_import_batches(company: str, payroll_month: str = "", attendance_lock_version: str = "", page_length: int = 20):
+	company = _require_company(company)
+	filters = {"company": company}
+	if payroll_month:
+		filters["payroll_month"] = payroll_month
+	if attendance_lock_version:
+		filters["attendance_lock_version"] = attendance_lock_version
 	batches = frappe.get_all(
 		VARIABLE_BATCH_DOCTYPE,
 		filters=filters,
-		fields=["name", "payroll_month", "source_file", "status", "variable_rows", "imported_by", "imported_on", "modified"],
+		fields=["name", "company", "payroll_month", "attendance_lock_version", "source_file", "status", "variable_rows", "imported_by", "imported_on", "modified"],
 		order_by="imported_on desc, modified desc",
 		limit_page_length=int(page_length or 20),
 	)
 	for batch in batches:
 		rows = frappe.get_all(
 			VARIABLE_RECORD_DOCTYPE,
-			filters={"import_batch": batch.name},
+			filters={"company": company, "payroll_month": batch.payroll_month, "attendance_lock_version": batch.attendance_lock_version, "import_batch": batch.name},
 			fields=["source_sheet"],
 			limit_page_length=1000,
 		)
@@ -1945,13 +2162,19 @@ def list_payroll_variable_import_batches(payroll_month: str = "", page_length: i
 
 
 @frappe.whitelist()
-def delete_payroll_variable_import_batch(batch_name: str):
+def delete_payroll_variable_import_batch(batch_name: str, company: str = "", attendance_lock_version: str = ""):
 	if not batch_name or not frappe.db.exists(VARIABLE_BATCH_DOCTYPE, batch_name):
 		frappe.throw(_("导入批次不存在"))
 
 	batch = frappe.get_doc(VARIABLE_BATCH_DOCTYPE, batch_name)
-	variable_names = frappe.get_all(VARIABLE_RECORD_DOCTYPE, filters={"import_batch": batch.name}, pluck="name")
-	input_names = frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters={"payroll_month": batch.payroll_month}, pluck="name")
+	company = _require_company(company or batch.company)
+	if batch.company != company:
+		frappe.throw(_("导入批次公司与当前公司不一致，已阻断删除。"))
+	if attendance_lock_version and batch.attendance_lock_version != attendance_lock_version:
+		frappe.throw(_("导入批次锁定版本与当前锁定版本不一致，已阻断删除。"))
+	scope_filters = _payroll_scope_filters(company, batch.payroll_month, batch.attendance_lock_version)
+	variable_names = frappe.get_all(VARIABLE_RECORD_DOCTYPE, filters={**scope_filters, "import_batch": batch.name}, pluck="name")
+	input_names = frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters=scope_filters, pluck="name")
 
 	for name in variable_names:
 		frappe.delete_doc(VARIABLE_RECORD_DOCTYPE, name, ignore_permissions=True, force=True)
@@ -1992,6 +2215,9 @@ def update_payroll_variable_record(
 
 	employee_context = _employee_context(resolved_employee)
 	doc = frappe.get_doc(VARIABLE_RECORD_DOCTYPE, name)
+	company = _require_company(doc.company)
+	if employee_context.get("company") and employee_context.get("company") != company:
+		frappe.throw(_("薪资变量员工 {0} 不属于公司 {1}").format(employee_code or employee_name or resolved_employee, company))
 	doc.employee = resolved_employee
 	doc.employee_code = employee_code or resolved_employee
 	doc.employee_name = employee_name or employee_context.get("employee_name")
@@ -2003,7 +2229,11 @@ def update_payroll_variable_record(
 	doc.remarks = remarks
 	doc.save(ignore_permissions=True)
 
-	input_names = frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters={"payroll_month": doc.payroll_month}, pluck="name")
+	input_names = frappe.get_all(
+		PAYROLL_INPUT_DOCTYPE,
+		filters=_payroll_scope_filters(company, doc.payroll_month, doc.attendance_lock_version),
+		pluck="name",
+	)
 	for input_name in input_names:
 		frappe.delete_doc(PAYROLL_INPUT_DOCTYPE, input_name, ignore_permissions=True, force=True)
 	frappe.db.commit()
@@ -2013,11 +2243,16 @@ def update_payroll_variable_record(
 	return result
 
 
-def _variable_totals(payroll_month):
+def _variable_totals(company, payroll_month, attendance_lock_version=""):
+	company = _require_company(company)
+	filters = {"company": company, "payroll_month": payroll_month}
+	if attendance_lock_version:
+		filters["attendance_lock_version"] = attendance_lock_version
 	totals = defaultdict(lambda: defaultdict(float))
 	identity = {}
-	for row in frappe.get_all(VARIABLE_RECORD_DOCTYPE, filters={"payroll_month": payroll_month}, fields=["*"]):
-		key = row.employee or row.employee_code or row.employee_name
+	for row in frappe.get_all(VARIABLE_RECORD_DOCTYPE, filters=filters, fields=["*"]):
+		_assert_row_company(row, company, _("薪资变量"))
+		key = _employee_identity_key(row)
 		if not key:
 			continue
 		identity.setdefault(key, row)
@@ -2026,33 +2261,58 @@ def _variable_totals(payroll_month):
 
 
 @frappe.whitelist()
-def generate_payroll_input_records(payroll_month: str):
-	for name in frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters={"payroll_month": payroll_month}, pluck="name"):
+def generate_payroll_input_records(company: str, payroll_month: str, attendance_lock_version: str):
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	input_filters = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
+	for name in frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters=input_filters, pluck="name"):
 		frappe.delete_doc(PAYROLL_INPUT_DOCTYPE, name, ignore_permissions=True, force=True)
 
-	variables, variable_identity = _variable_totals(payroll_month)
-	summary_rows = frappe.get_all(MONTHLY_ATTENDANCE_DOCTYPE, filters={"attendance_month": payroll_month}, fields=["*"])
-	keys = set(variables.keys())
-	keys.update(row.employee or row.employee_code or row.employee_name for row in summary_rows)
-	attendance_by_key = {row.employee or row.employee_code or row.employee_name: row for row in summary_rows}
+	variables, variable_identity = _variable_totals(company, payroll_month, attendance_lock_version)
+	summary_rows = frappe.get_all(MONTHLY_ATTENDANCE_DOCTYPE, filters=_attendance_scope_filters(company, payroll_month, attendance_lock_version), fields=["*"])
+	if not summary_rows:
+		frappe.throw(_("未找到公司 {0}、月份 {1}、锁定版本 {2} 的已锁定月度考勤终稿。").format(company, payroll_month, attendance_lock_version))
+
+	attendance_by_key = {}
+	for row in summary_rows:
+		_assert_row_company(row, company, _("月度考勤终稿"))
+		key = _employee_identity_key(row)
+		if not key:
+			frappe.throw(_("月度考勤终稿存在无法识别员工的记录。"))
+		if key in attendance_by_key:
+			frappe.throw(_("月度考勤终稿存在重复员工：{0}").format(key))
+		attendance_by_key[key] = row
+
+	extra_variable_keys = sorted(set(variable_identity) - set(attendance_by_key))
+	if extra_variable_keys:
+		frappe.throw(_("薪资变量存在未匹配已锁定考勤终稿的员工：{0}").format(", ".join(extra_variable_keys[:10])))
 
 	created = []
-	for key in sorted(k for k in keys if k):
+	for key in sorted(k for k in attendance_by_key if k):
 		attendance = attendance_by_key.get(key)
-		source = attendance or variable_identity.get(key)
+		source = attendance
 		values = defaultdict(float, variables.get(key, {}))
+		apple_reward_amount = flt(getattr(attendance, "apple_reward_amount", 0)) + values["苹果树"]
 		earnings = (
-			flt(getattr(attendance, "apple_reward_amount", 0))
+			apple_reward_amount
 			+ values["全勤奖"]
 			+ values["住房补贴"]
 			+ values["学历补贴"]
 			+ values["其他奖金"]
 		)
 		deductions = values["宿舍扣款"] + values["社保个人"] + values["公积金个人"] + values["其他扣款"]
+		trace, source_hash = _source_trace_hash({
+			"company": company,
+			"payroll_month": payroll_month,
+			"attendance_lock_version": attendance_lock_version,
+			"attendance_summary": getattr(attendance, "name", ""),
+			"variable_record": getattr(variable_identity.get(key), "name", ""),
+		})
 		doc = frappe.get_doc(
 			{
 				"doctype": PAYROLL_INPUT_DOCTYPE,
+				"company": company,
 				"payroll_month": payroll_month,
+				"attendance_lock_version": attendance_lock_version,
 				"employee": getattr(source, "employee", None),
 				"employee_code": getattr(source, "employee_code", ""),
 				"employee_name": getattr(source, "employee_name", ""),
@@ -2068,7 +2328,7 @@ def generate_payroll_input_records(payroll_month: str):
 				"absent_hours": flt(getattr(attendance, "absent_hours", 0)),
 				"large_night_shift_count": flt(getattr(attendance, "large_night_shift_count", 0)),
 				"small_night_shift_count": flt(getattr(attendance, "small_night_shift_count", 0)),
-				"apple_reward_amount": flt(getattr(attendance, "apple_reward_amount", 0)),
+				"apple_reward_amount": apple_reward_amount,
 				"full_attendance_bonus": values["全勤奖"],
 				"housing_subsidy": values["住房补贴"],
 				"education_subsidy": values["学历补贴"],
@@ -2080,6 +2340,8 @@ def generate_payroll_input_records(payroll_month: str):
 				"preliminary_earning_total": earnings,
 				"preliminary_deduction_total": deductions,
 				"settlement_status": "待结算",
+				"source_trace_json": trace,
+				"source_hash": source_hash,
 			}
 		)
 		doc.insert(ignore_permissions=True)
@@ -2090,16 +2352,26 @@ def generate_payroll_input_records(payroll_month: str):
 
 
 @frappe.whitelist()
-def list_payroll_variable_records(payroll_month: str = "", import_batch: str = "", page_length: int = 50):
-	filters = {"payroll_month": payroll_month} if payroll_month else {}
+def list_payroll_variable_records(company: str, payroll_month: str = "", import_batch: str = "", attendance_lock_version: str = "", page_length: int = 50):
+	company = _require_company(company)
+	filters = {"company": company}
+	if payroll_month:
+		filters["payroll_month"] = payroll_month
+	if attendance_lock_version:
+		filters["attendance_lock_version"] = attendance_lock_version
 	if import_batch:
 		filters["import_batch"] = import_batch
 	return frappe.get_all(VARIABLE_RECORD_DOCTYPE, filters=filters, fields=["*"], order_by="modified desc", limit_page_length=int(page_length or 50))
 
 
 @frappe.whitelist()
-def list_payroll_input_records(payroll_month: str = "", page_length: int = 50):
-	filters = {"payroll_month": payroll_month} if payroll_month else {}
+def list_payroll_input_records(company: str, payroll_month: str = "", attendance_lock_version: str = "", page_length: int = 50):
+	company = _require_company(company)
+	filters = {"company": company}
+	if payroll_month:
+		filters["payroll_month"] = payroll_month
+	if attendance_lock_version:
+		filters["attendance_lock_version"] = attendance_lock_version
 	return frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters=filters, fields=["*"], order_by="modified desc", limit_page_length=int(page_length or 50))
 
 
@@ -2123,33 +2395,51 @@ def _company_social_security(personal_amount):
 
 
 @frappe.whitelist()
-def generate_payroll_settlement_records(payroll_month: str):
-	for name in frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters={"payroll_month": payroll_month}, pluck="name"):
+def generate_payroll_settlement_records(company: str, payroll_month: str, attendance_lock_version: str):
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	settlement_filters = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
+	locked = frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters={**settlement_filters, "calculation_status": ["in", ["已确认", "已生成工资单"]]}, pluck="name")
+	if locked:
+		frappe.throw(_("公司 {0} 月份 {1} 锁定版本 {2} 已存在锁定薪资结算，不允许覆盖。").format(company, payroll_month, attendance_lock_version))
+	for name in frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters=settlement_filters, pluck="name"):
 		frappe.delete_doc(PAYROLL_SETTLEMENT_DOCTYPE, name, ignore_permissions=True, force=True)
 
-	variables, variable_identity = _variable_totals(payroll_month)
-	input_rows = frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters={"payroll_month": payroll_month}, fields=["*"])
-	keys = set(variables.keys())
-	keys.update(row.employee or row.employee_code or row.employee_name for row in input_rows)
-	input_by_key = {row.employee or row.employee_code or row.employee_name: row for row in input_rows}
+	variables, variable_identity = _variable_totals(company, payroll_month, attendance_lock_version)
+	input_rows = frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters=_payroll_scope_filters(company, payroll_month, attendance_lock_version), fields=["*"])
+	if not input_rows:
+		frappe.throw(_("未找到公司 {0}、月份 {1}、锁定版本 {2} 的薪资输入表。").format(company, payroll_month, attendance_lock_version))
+	input_by_key = {}
+	for row in input_rows:
+		_assert_row_company(row, company, _("薪资输入表"))
+		key = _employee_identity_key(row)
+		if not key:
+			frappe.throw(_("薪资输入表存在无法识别员工的记录。"))
+		if key in input_by_key:
+			frappe.throw(_("薪资输入表存在重复员工：{0}").format(key))
+		input_by_key[key] = row
+
+	extra_variable_keys = sorted(set(variable_identity) - set(input_by_key))
+	if extra_variable_keys:
+		frappe.throw(_("薪资变量存在未匹配薪资输入表的员工：{0}").format(", ".join(extra_variable_keys[:10])))
 
 	created = []
-	for key in sorted(k for k in keys if k):
+	for key in sorted(k for k in input_by_key if k):
 		input_row = input_by_key.get(key)
-		source = input_row or variable_identity.get(key)
+		source = input_row
 		values = defaultdict(float, variables.get(key, {}))
 		salary_change = get_active_salary_change_for_employee(
 			employee=getattr(source, "employee", None),
 			employee_code=getattr(source, "employee_code", ""),
 			payroll_month=payroll_month,
+			company=company,
 		) or {}
 
 		base_salary = values["底薪"] or flt(salary_change.get("base_salary"))
-		function_allowance = values["职能津贴"] or flt(salary_change.get("function_allowance"))
-		certificate_skill_allowance = values["证书及多能工津贴"] or flt(salary_change.get("certificate_allowance")) + flt(
+		function_allowance = values["职能津贴"] or values["职务津贴"] or flt(salary_change.get("function_allowance"))
+		certificate_skill_allowance = values["证书及多能工津贴"] or values["证书津贴"] + values["多能工津贴"] or flt(salary_change.get("certificate_allowance")) + flt(
 			salary_change.get("multi_skill_allowance")
 		)
-		salary_subtotal = values["薪资小计"] or flt(salary_change.get("full_salary")) or base_salary + function_allowance + certificate_skill_allowance
+		salary_subtotal = values["薪资小计"] or values["全薪"] or flt(salary_change.get("full_salary")) or base_salary + function_allowance + certificate_skill_allowance
 		full_salary_hourly_rate = _rate(salary_subtotal)
 		base_salary_hourly_rate = _rate(base_salary)
 
@@ -2203,11 +2493,21 @@ def generate_payroll_settlement_records(payroll_month: str):
 		housing_fund_company = values["公积金公司"] or housing_fund_personal
 		company_cost_total = gross_pay + social_security_company + housing_fund_company + continuing_service_bonus + paid_proposal_birthday_welfare
 		export_tax_adjusted_net_pay = taxable_salary + continuing_service_bonus - utilities_deduction - income_tax - paid_proposal_birthday_welfare - year_end_bonus_tax
+		trace, source_hash = _source_trace_hash({
+			"company": company,
+			"payroll_month": payroll_month,
+			"attendance_lock_version": attendance_lock_version,
+			"payroll_input_record": getattr(input_row, "name", ""),
+			"variable_record": getattr(variable_identity.get(key), "name", ""),
+			"salary_change": salary_change.get("name") if salary_change else "",
+		})
 
 		doc = frappe.get_doc(
 			{
 				"doctype": PAYROLL_SETTLEMENT_DOCTYPE,
+				"company": company,
 				"payroll_month": payroll_month,
+				"attendance_lock_version": attendance_lock_version,
 				"employee": getattr(source, "employee", None),
 				"employee_code": getattr(source, "employee_code", ""),
 				"employee_name": getattr(source, "employee_name", ""),
@@ -2259,6 +2559,8 @@ def generate_payroll_settlement_records(payroll_month: str):
 				"company_cost_total": company_cost_total,
 				"export_tax_adjusted_net_pay": export_tax_adjusted_net_pay,
 				"calculation_status": "已生成",
+				"source_trace_json": trace,
+				"source_hash": source_hash,
 			}
 		)
 		doc.insert(ignore_permissions=True)
@@ -2269,13 +2571,19 @@ def generate_payroll_settlement_records(payroll_month: str):
 
 
 @frappe.whitelist()
-def list_payroll_settlement_records(payroll_month: str = "", page_length: int = 50):
-	filters = {"payroll_month": payroll_month} if payroll_month else {}
+def list_payroll_settlement_records(company: str, payroll_month: str = "", attendance_lock_version: str = "", page_length: int = 50):
+	company = _require_company(company)
+	filters = {"company": company}
+	if payroll_month:
+		filters["payroll_month"] = payroll_month
+	if attendance_lock_version:
+		filters["attendance_lock_version"] = attendance_lock_version
 	return frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters=filters, fields=["*"], order_by="modified desc", limit_page_length=int(page_length or 50))
 
 
-def _latest_salary_change_map(payroll_month=""):
-	filters = {}
+def _latest_salary_change_map(payroll_month="", company=""):
+	company = _require_company(company)
+	filters = {"company": company}
 	month_end = _month_end(payroll_month)
 	if month_end:
 		filters["effective_date"] = ["<=", month_end]
@@ -2294,8 +2602,13 @@ def _latest_salary_change_map(payroll_month=""):
 	return by_key
 
 
-def _settlement_map(payroll_month=""):
-	filters = {"payroll_month": payroll_month} if payroll_month else {}
+def _settlement_map(payroll_month="", company="", attendance_lock_version=""):
+	company = _require_company(company)
+	filters = {"company": company}
+	if payroll_month:
+		filters["payroll_month"] = payroll_month
+	if attendance_lock_version:
+		filters["attendance_lock_version"] = attendance_lock_version
 	rows = frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters=filters, fields=["*"], limit_page_length=100000)
 	by_key = {}
 	for row in rows:
@@ -2331,7 +2644,8 @@ def _employment_stage(row, month_end=""):
 
 
 @frappe.whitelist()
-def list_employee_salary_profiles(payroll_month: str = "", page_length: int = 100):
+def list_employee_salary_profiles(company: str, payroll_month: str = "", attendance_lock_version: str = "", page_length: int = 100):
+	company = _require_company(company)
 	employee_fields = _safe_fields(
 		"Employee",
 		[
@@ -2347,11 +2661,13 @@ def list_employee_salary_profiles(payroll_month: str = "", page_length: int = 10
 			"final_confirmation_date",
 			"confirmation_date",
 			"relieving_date",
+			"company",
 		],
 	)
-	employees = _safe_get_all("Employee", fields=employee_fields, order_by="employee_name asc", limit_page_length=100000)
-	salary_changes = _latest_salary_change_map(payroll_month)
-	settlements = _settlement_map(payroll_month)
+	employee_filters = {"company": company} if _doctype_has_field("Employee", "company") else {}
+	employees = _safe_get_all("Employee", filters=employee_filters, fields=employee_fields, order_by="employee_name asc", limit_page_length=100000)
+	salary_changes = _latest_salary_change_map(payroll_month, company)
+	settlements = _settlement_map(payroll_month, company, attendance_lock_version)
 	month_end = _month_end(payroll_month)
 	rows = []
 	counts = {"active": 0, "regular": 0, "probation": 0, "pending_exit": 0}
@@ -2402,14 +2718,35 @@ def list_employee_salary_profiles(payroll_month: str = "", page_length: int = 10
 
 
 @frappe.whitelist()
-def list_monthly_payroll_overview(payroll_month: str = ""):
-	employee_count = _safe_count("Employee", {"status": "Active"}) if _doctype_has_field("Employee", "status") else _safe_count("Employee")
-	attendance_count = _safe_count(MONTHLY_ATTENDANCE_DOCTYPE, {"attendance_month": payroll_month}) if payroll_month else _safe_count(MONTHLY_ATTENDANCE_DOCTYPE)
-	input_count = _safe_count(PAYROLL_INPUT_DOCTYPE, {"payroll_month": payroll_month}) if payroll_month else _safe_count(PAYROLL_INPUT_DOCTYPE)
-	settlement_count = _safe_count(PAYROLL_SETTLEMENT_DOCTYPE, {"payroll_month": payroll_month}) if payroll_month else _safe_count(PAYROLL_SETTLEMENT_DOCTYPE)
-	variable_count = _safe_count(VARIABLE_RECORD_DOCTYPE, {"payroll_month": payroll_month}) if payroll_month else _safe_count(VARIABLE_RECORD_DOCTYPE)
-	welfare_count = _safe_count(WELFARE_SOURCE_DOCTYPE, {"payroll_month": payroll_month}) if payroll_month else _safe_count(WELFARE_SOURCE_DOCTYPE)
-	settlements = frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters={"payroll_month": payroll_month}, fields=["gross_pay", "net_pay", "company_cost_total"]) if payroll_month else []
+def list_monthly_payroll_overview(company: str, payroll_month: str = "", attendance_lock_version: str = ""):
+	company = _require_company(company)
+	employee_filters = {"company": company} if _doctype_has_field("Employee", "company") else {}
+	if _doctype_has_field("Employee", "status"):
+		employee_filters["status"] = "Active"
+	employee_count = _safe_count("Employee", employee_filters)
+	attendance_filters = {"company": company}
+	input_filters = {"company": company}
+	settlement_filters = {"company": company}
+	variable_filters = {"company": company}
+	welfare_filters = {"company": company}
+	if payroll_month:
+		attendance_filters["attendance_month"] = payroll_month
+		input_filters["payroll_month"] = payroll_month
+		settlement_filters["payroll_month"] = payroll_month
+		variable_filters["payroll_month"] = payroll_month
+		welfare_filters["payroll_month"] = payroll_month
+	if attendance_lock_version:
+		attendance_filters["attendance_lock_version"] = attendance_lock_version
+		input_filters["attendance_lock_version"] = attendance_lock_version
+		settlement_filters["attendance_lock_version"] = attendance_lock_version
+		variable_filters["attendance_lock_version"] = attendance_lock_version
+		welfare_filters["attendance_lock_version"] = attendance_lock_version
+	attendance_count = _safe_count(MONTHLY_ATTENDANCE_DOCTYPE, attendance_filters)
+	input_count = _safe_count(PAYROLL_INPUT_DOCTYPE, input_filters)
+	settlement_count = _safe_count(PAYROLL_SETTLEMENT_DOCTYPE, settlement_filters)
+	variable_count = _safe_count(VARIABLE_RECORD_DOCTYPE, variable_filters)
+	welfare_count = _safe_count(WELFARE_SOURCE_DOCTYPE, welfare_filters)
+	settlements = frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters=settlement_filters, fields=["gross_pay", "net_pay", "company_cost_total"]) if payroll_month else []
 	gross_total = sum(flt(row.gross_pay) for row in settlements)
 	net_total = sum(flt(row.net_pay) for row in settlements)
 	company_cost_total = sum(flt(row.company_cost_total) for row in settlements)
@@ -2430,8 +2767,13 @@ def list_monthly_payroll_overview(payroll_month: str = ""):
 
 
 @frappe.whitelist()
-def list_payroll_disbursement_records(payroll_month: str = "", page_length: int = 100):
-	filters = {"payroll_month": payroll_month} if payroll_month else {}
+def list_payroll_disbursement_records(company: str, payroll_month: str = "", attendance_lock_version: str = "", page_length: int = 100):
+	company = _require_company(company)
+	filters = {"company": company}
+	if payroll_month:
+		filters["payroll_month"] = payroll_month
+	if attendance_lock_version:
+		filters["attendance_lock_version"] = attendance_lock_version
 	rows = frappe.get_all(
 		PAYROLL_SETTLEMENT_DOCTYPE,
 		filters=filters,
@@ -2446,8 +2788,13 @@ def list_payroll_disbursement_records(payroll_month: str = "", page_length: int 
 
 
 @frappe.whitelist()
-def list_payroll_report_summary(payroll_month: str = ""):
-	filters = {"payroll_month": payroll_month} if payroll_month else {}
+def list_payroll_report_summary(company: str, payroll_month: str = "", attendance_lock_version: str = ""):
+	company = _require_company(company)
+	filters = {"company": company}
+	if payroll_month:
+		filters["payroll_month"] = payroll_month
+	if attendance_lock_version:
+		filters["attendance_lock_version"] = attendance_lock_version
 	rows = frappe.get_all(
 		PAYROLL_SETTLEMENT_DOCTYPE,
 		filters=filters,
@@ -2490,8 +2837,8 @@ def list_payroll_report_summary(payroll_month: str = ""):
 
 
 @frappe.whitelist()
-def list_payroll_analysis(payroll_month: str = ""):
-	report_rows = list_payroll_report_summary(payroll_month)
+def list_payroll_analysis(company: str, payroll_month: str = "", attendance_lock_version: str = ""):
+	report_rows = list_payroll_report_summary(company, payroll_month, attendance_lock_version)
 	totals = defaultdict(float)
 	for row in report_rows:
 		for key, value in row.items():
@@ -2510,13 +2857,28 @@ def list_payroll_analysis(payroll_month: str = ""):
 
 
 @frappe.whitelist()
-def list_payroll_dependency_status(payroll_month: str = ""):
+def list_payroll_dependency_status(company: str, payroll_month: str = "", attendance_lock_version: str = ""):
+	company = _require_company(company)
+	attendance_filters = {"company": company}
+	input_filters = {"company": company}
+	settlement_filters = {"company": company}
+	welfare_filters = {"company": company}
+	if payroll_month:
+		attendance_filters["attendance_month"] = payroll_month
+		input_filters["payroll_month"] = payroll_month
+		settlement_filters["payroll_month"] = payroll_month
+		welfare_filters["payroll_month"] = payroll_month
+	if attendance_lock_version:
+		attendance_filters["attendance_lock_version"] = attendance_lock_version
+		input_filters["attendance_lock_version"] = attendance_lock_version
+		settlement_filters["attendance_lock_version"] = attendance_lock_version
+		welfare_filters["attendance_lock_version"] = attendance_lock_version
 	return [
-		{"source": "员工花名册", "doctype": "Employee", "count": _safe_count("Employee"), "status": "已联动"},
-		{"source": "薪资主数据/薪资异动", "doctype": EMPLOYEE_SALARY_CHANGE_DOCTYPE, "count": _safe_count(EMPLOYEE_SALARY_CHANGE_DOCTYPE), "status": "已联动"},
-		{"source": "月度考勤终稿", "doctype": MONTHLY_ATTENDANCE_DOCTYPE, "count": _safe_count(MONTHLY_ATTENDANCE_DOCTYPE, {"attendance_month": payroll_month}) if payroll_month else _safe_count(MONTHLY_ATTENDANCE_DOCTYPE), "status": "已联动"},
-		{"source": "福利扣款来源", "doctype": WELFARE_SOURCE_DOCTYPE, "count": _safe_count(WELFARE_SOURCE_DOCTYPE, {"payroll_month": payroll_month}) if payroll_month else _safe_count(WELFARE_SOURCE_DOCTYPE), "status": "已联动"},
-		{"source": "薪资输入表", "doctype": PAYROLL_INPUT_DOCTYPE, "count": _safe_count(PAYROLL_INPUT_DOCTYPE, {"payroll_month": payroll_month}) if payroll_month else _safe_count(PAYROLL_INPUT_DOCTYPE), "status": "已联动"},
-		{"source": "薪资结算表", "doctype": PAYROLL_SETTLEMENT_DOCTYPE, "count": _safe_count(PAYROLL_SETTLEMENT_DOCTYPE, {"payroll_month": payroll_month}) if payroll_month else _safe_count(PAYROLL_SETTLEMENT_DOCTYPE), "status": "已联动"},
+		{"source": "员工花名册", "doctype": "Employee", "count": _safe_count("Employee", {"company": company} if _doctype_has_field("Employee", "company") else {}), "status": "已联动"},
+		{"source": "薪资主数据/薪资异动", "doctype": EMPLOYEE_SALARY_CHANGE_DOCTYPE, "count": _safe_count(EMPLOYEE_SALARY_CHANGE_DOCTYPE, {"company": company}), "status": "已联动"},
+		{"source": "月度考勤终稿", "doctype": MONTHLY_ATTENDANCE_DOCTYPE, "count": _safe_count(MONTHLY_ATTENDANCE_DOCTYPE, attendance_filters), "status": "仅已锁定可入薪资"},
+		{"source": "福利扣款来源", "doctype": WELFARE_SOURCE_DOCTYPE, "count": _safe_count(WELFARE_SOURCE_DOCTYPE, welfare_filters), "status": "已联动"},
+		{"source": "薪资输入表", "doctype": PAYROLL_INPUT_DOCTYPE, "count": _safe_count(PAYROLL_INPUT_DOCTYPE, input_filters), "status": "公司隔离"},
+		{"source": "薪资结算表", "doctype": PAYROLL_SETTLEMENT_DOCTYPE, "count": _safe_count(PAYROLL_SETTLEMENT_DOCTYPE, settlement_filters), "status": "公司隔离"},
 		{"source": "薪资规则/字段映射", "doctype": PAYROLL_RULE_DOCTYPE, "count": _safe_count(PAYROLL_RULE_DOCTYPE), "status": "已联动"},
 	]

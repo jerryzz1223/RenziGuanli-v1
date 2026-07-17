@@ -6,7 +6,12 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "import_batch",
+   "import_batch",
+  "company",
+  "source_kind",
+  "source_sheet",
+  "source_row_number",
+  "correction_version",
   "attendance_date",
   "employee",
   "employee_code",
@@ -42,6 +47,9 @@
   "rest_leave_hours",
   "bereavement_leave_hours",
   "marriage_leave_hours",
+  "public_leave_hours",
+  "maternity_leave_hours",
+  "reunion_leave_hours",
   "valid_leave_hours",
   "invalid_leave_hours",
   "valid_leave_summary",
@@ -57,6 +65,38 @@
    "in_list_view": 1,
    "label": "导入批次",
    "options": "HRMS Attendance Import Batch"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "source_kind",
+   "fieldtype": "Select",
+   "label": "来源类型",
+   "options": "旧模板\n钉钉原始导出\n人工调整",
+   "reqd": 1
+  },
+  {
+   "fieldname": "source_sheet",
+   "fieldtype": "Data",
+   "label": "来源工作表"
+  },
+  {
+   "fieldname": "source_row_number",
+   "fieldtype": "Int",
+   "label": "来源行号"
+  },
+  {
+   "default": "1",
+   "fieldname": "correction_version",
+   "fieldtype": "Int",
+   "label": "更正版本",
+   "reqd": 1
   },
   {
    "fieldname": "attendance_date",
@@ -258,6 +298,24 @@
    "fieldname": "marriage_leave_hours",
    "fieldtype": "Float",
    "label": "婚假"
+  },
+  {
+   "default": "0",
+   "fieldname": "public_leave_hours",
+   "fieldtype": "Float",
+   "label": "公假"
+  },
+  {
+   "default": "0",
+   "fieldname": "maternity_leave_hours",
+   "fieldtype": "Float",
+   "label": "产假"
+  },
+  {
+   "default": "0",
+   "fieldname": "reunion_leave_hours",
+   "fieldtype": "Float",
+   "label": "团圆假"
   },
   {
    "default": "0",

@@ -216,6 +216,38 @@ body:has(#hrms-top-module-nav) > .main-section {
 	position: relative;
 }
 
+.hrms-top-company-context {
+	align-items: center;
+	display: inline-flex;
+	flex: none;
+	gap: 6px;
+	margin-left: 8px;
+	white-space: nowrap;
+}
+
+.hrms-top-company-context__label {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+}
+
+.hrms-top-company-context__selector {
+	background: var(--control-bg, #f3f4f6);
+	border: 0;
+	border-radius: 6px;
+	color: var(--text-color, #1f2937);
+	cursor: pointer;
+	font: inherit;
+	font-size: 13px;
+	height: 32px;
+	max-width: 150px;
+	padding: 0 24px 0 8px;
+}
+
+.hrms-top-company-context__selector:focus {
+	box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+	outline: 0;
+}
+
 .hrms-account-menu__trigger,
 .hrms-account-menu__item {
 	border: 0;
@@ -864,6 +896,12 @@ body.hrms-module-shell .body-sidebar-container {
 	min-width: 220px;
 }
 
+.hrms-employee-archive-view .hrms-archive-department,
+.hrms-employee-archive-view .hrms-archive-sort {
+	flex: 0 1 180px;
+	max-width: 220px;
+}
+
 .hrms-archive-status {
 	max-width: 160px;
 }
@@ -960,6 +998,10 @@ body.hrms-module-shell .body-sidebar-container {
 body.hrms-employee-roster-view .filter-button,
 body.hrms-employee-roster-view .filter-x-button,
 body.hrms-employee-roster-view .filter-popover {
+	display: none !important;
+}
+
+body.hrms-employee-roster-view .hrms-roster-page-length-hidden {
 	display: none !important;
 }
 

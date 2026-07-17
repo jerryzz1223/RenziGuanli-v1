@@ -32,6 +32,7 @@ PERSONNEL_PAGE_DEFINITIONS = [
 	{"name": "employee-property-history", "title": "任职记录", "icon": "timeline"},
 	{"name": "attendance-import-center", "title": "考勤导入中心", "icon": "upload"},
 	{"name": "payroll-input-center", "title": "薪资输入中心", "icon": "database"},
+	{"name": "form-data-intake", "title": "人资表单导入中心", "icon": "upload"},
 ]
 LEGACY_PERSONNEL_PAGE_SLUGS = {
 	"employee-property-history": "employee-property-hi",
@@ -471,12 +472,18 @@ COMPANY_ROSTER_FIELD_ORDER = [
 
 HEADER_FIELD_ALIASES = {
 	"员工编号": "custom_employee_code",
+	"出生日期": "date_of_birth",
+	"出生年月": "date_of_birth",
 	"现居住地": "current_address",
 	"现住址": "current_address",
 	"联系电话": "cell_number",
 	"身份证号码": "passport_number",
 	"证件号码": "passport_number",
 	"证件类型": "custom_id_type",
+	"直/间接": "custom_direct_indirect",
+	"紧急联系人": "person_to_be_contacted",
+	"紧急联系电话": "emergency_phone_number",
+	"院校": "custom_graduation_school",
 	"现职务": "designation",
 	"职位": "designation",
 	"职务": "designation",
@@ -504,6 +511,19 @@ EMPLOYEE_ROSTER_REQUIRED_COLUMNS = {
 	"custom_id_type": "证件类型",
 	"passport_number": "证件号码",
 	"cell_number": "手机号码",
+}
+
+EMPLOYEE_MINIMUM_IMPORT_REQUIRED_COLUMNS = {
+	"first_name": "姓名",
+	"custom_employee_code": "工号",
+	"department": "部门",
+	"designation": "岗位",
+	"date_of_joining": "入职日期",
+	"cell_number": "手机号码",
+}
+
+EMPLOYEE_IMPORT_REQUIRED_ALTERNATIVES = {
+	"first_name": ("first_name", "employee_name"),
 }
 
 FIELD_GOVERNANCE_DEFAULTS = {
@@ -1207,7 +1227,7 @@ def _property_history_matches_search(row, search):
 
 
 @frappe.whitelist()
-def get_employee_property_history(employee=None, department=None, company=None, search=None, limit_start=0, limit_page_length=50):
+def get_employee_property_history(employee: str | None = None, department: str | None = None, company: str | None = None, search: str | None = None, limit_start: int = 0, limit_page_length: int = 50):
 	limit_start = max(frappe.utils.cint(limit_start), 0)
 	limit_page_length = frappe.utils.cint(limit_page_length) or 50
 	limit_page_length = max(min(limit_page_length, 200), 1)
@@ -1272,9 +1292,10 @@ def _get_employee_import_fields(doc):
 	for row in doc.template_items:
 		if row.fieldname not in meta_fields:
 			continue
-		if not row.get("enabled"):
+		is_minimum_import_field = _is_employee_import_required_field(row.fieldname, row)
+		if not row.get("enabled") and not is_minimum_import_field:
 			continue
-		if not _field_flag_enabled(row, "import_enabled", 1):
+		if not _field_flag_enabled(row, "import_enabled", 1) and not is_minimum_import_field:
 			continue
 
 		meta_field = meta_fields[row.fieldname]
@@ -1285,7 +1306,7 @@ def _get_employee_import_fields(doc):
 				"fieldtype": row.fieldtype or meta_field.fieldtype,
 				"description": row.description or meta_field.description or "",
 				"category": row.category,
-				"required": 1 if row.get("required") else 0,
+				"required": 1 if is_minimum_import_field else 0,
 				"options": row.options or meta_field.options or "",
 				"enabled": _template_row_int(row, "enabled"),
 				"aliases": "\n".join(_field_aliases_for_row(row)),
@@ -1385,6 +1406,15 @@ def _field_lookup(fields):
 		if field:
 			lookup[_normalise_header(header)] = field
 	return lookup
+
+
+def _is_employee_import_required_field(fieldname, field=None):
+	return fieldname in EMPLOYEE_MINIMUM_IMPORT_REQUIRED_COLUMNS
+
+
+def _employee_import_required_field_satisfied(fieldname, matched_fieldnames):
+	accepted_fieldnames = EMPLOYEE_IMPORT_REQUIRED_ALTERNATIVES.get(fieldname, (fieldname,))
+	return any(accepted_fieldname in matched_fieldnames for accepted_fieldname in accepted_fieldnames)
 
 
 def _column_name_to_index(cell_reference):
@@ -1534,8 +1564,8 @@ def _match_uploaded_headers(headers, fields):
 	missing_required = [
 		{"field_label": field["field_label"], "fieldname": field["fieldname"]}
 		for field in fields
-		if field["required"]
-		and field["fieldname"] not in matched_fieldnames
+		if _is_employee_import_required_field(field["fieldname"], field)
+		and not _employee_import_required_field_satisfied(field["fieldname"], matched_fieldnames)
 		and field["fieldname"] not in IMPORT_EXAMPLE_VALUES
 	]
 	return matches, missing_required
@@ -1686,8 +1716,8 @@ def _apply_manual_header_mappings(context, manual_mappings=None):
 	context["missing_required"] = [
 		{"field_label": field["field_label"], "fieldname": field["fieldname"]}
 		for field in context["fields"]
-		if field["required"]
-		and field["fieldname"] not in matched_fieldnames
+		if _is_employee_import_required_field(field["fieldname"], field)
+		and not _employee_import_required_field_satisfied(field["fieldname"], matched_fieldnames)
 		and field["fieldname"] not in IMPORT_EXAMPLE_VALUES
 	]
 	return context
@@ -1973,6 +2003,47 @@ def _get_roster_fetch_fields(columns):
 	return [fieldname for fieldname in fetch_fields if fieldname == "name" or fieldname in meta_fields]
 
 
+def _strip_department_company_suffix(value):
+	text = str(value or "").strip()
+	return re.sub(r"\s+-\s+[^-]+$", "", text).strip()
+
+
+def _get_department_display_names(department_values):
+	department_values = sorted({value for value in department_values if value})
+	if not department_values:
+		return {}
+	return {
+		department.name: department.department_name
+		for department in frappe.get_all(
+			"Department",
+			filters={"name": ["in", department_values]},
+			fields=["name", "department_name"],
+			limit_page_length=0,
+		)
+		if department.department_name
+	}
+
+
+def _department_display_name(value, department_names=None):
+	if not value:
+		return ""
+	if department_names is None:
+		department_names = _get_department_display_names([value])
+	if value in department_names and department_names[value]:
+		return department_names[value]
+	return _strip_department_company_suffix(value)
+
+
+def _hydrate_employee_roster_display_values(rows):
+	department_values = sorted({row.get("department") for row in rows if row.get("department")})
+	department_names = _get_department_display_names(department_values)
+
+	for row in rows:
+		row["department_display"] = _department_display_name(row.get("department"), department_names)
+		row["employee_code_display"] = row.get("custom_employee_code") or row.get("employee_number") or row.get("name")
+	return rows
+
+
 @frappe.whitelist()
 def get_employee_roster(
 	filters: str = "{}",
@@ -2003,6 +2074,7 @@ def get_employee_roster(
 		limit_start=start,
 		limit_page_length=page_length,
 	)
+	rows = _hydrate_employee_roster_display_values(rows)
 	total = len(
 		frappe.get_all(
 			EMPLOYEE_DOCTYPE,
@@ -2066,7 +2138,13 @@ def quick_update_employee_roster(employee: str, values: str = "{}"):
 	return {"name": doc.name}
 
 
-def _get_employee_detail_sections(doc):
+def _display_employee_field_value(fieldname, value):
+	if fieldname == "department":
+		return _department_display_name(value)
+	return value
+
+
+def _get_employee_detail_sections(doc, department_display=""):
 	template = _get_template_doc()
 	fields = [
 		_serialize_item(row)
@@ -2080,7 +2158,10 @@ def _get_employee_detail_sections(doc):
 		for field in fields:
 			if field["category"] != category or field["fieldname"] not in doc_values:
 				continue
-			category_fields.append({**field, "value": doc.get(field["fieldname"])})
+			value = doc.get(field["fieldname"])
+			if field["fieldname"] == "department" and department_display:
+				value = department_display
+			category_fields.append({**field, "value": value})
 		if category_fields:
 			sections.append({"label": category, "fields": category_fields})
 	return sections
@@ -2092,7 +2173,7 @@ def _get_employee_child_items(doc, child_fieldname, field_map, limit=5):
 		items.append(
 			{
 				"fields": [
-					{"label": label, "value": row.get(fieldname)}
+					{"label": label, "value": _display_employee_field_value(fieldname, row.get(fieldname))}
 					for label, fieldname in field_map
 					if row.get(fieldname) not in (None, "")
 				]
@@ -2103,7 +2184,7 @@ def _get_employee_child_items(doc, child_fieldname, field_map, limit=5):
 
 def _get_employee_flat_related_item(doc, field_map):
 	fields = [
-		{"label": label, "value": doc.get(fieldname)}
+		{"label": label, "value": _display_employee_field_value(fieldname, doc.get(fieldname))}
 		for label, fieldname in field_map
 		if doc.get(fieldname) not in (None, "")
 	]
@@ -2123,7 +2204,7 @@ def _get_employee_doctype_items(doctype, filters, field_map, order_by="modified 
 			"name": row.name,
 			"doctype": doctype,
 			"fields": [
-				{"label": label, "value": row.get(fieldname)}
+				{"label": label, "value": _display_employee_field_value(fieldname, row.get(fieldname))}
 				for label, fieldname in field_map
 				if row.get(fieldname) not in (None, "")
 			],
@@ -2360,12 +2441,14 @@ def _get_employee_related_records(doc):
 def get_employee_detail(employee: str):
 	doc = frappe.get_doc(EMPLOYEE_DOCTYPE, employee)
 	doc.check_permission("read")
+	department_display = _department_display_name(doc.get("department"))
 	return {
 		"header": {
 			"name": doc.name,
 			"employee_name": doc.get("employee_name"),
 			"custom_employee_code": doc.get("custom_employee_code") or doc.get("employee_number"),
 			"department": doc.get("department"),
+			"department_display": department_display,
 			"designation": doc.get("designation"),
 			"employment_type": doc.get("employment_type"),
 			"date_of_joining": doc.get("date_of_joining"),
@@ -2375,7 +2458,7 @@ def get_employee_detail(employee: str):
 			"status": doc.get("status"),
 			"image": doc.get("image"),
 		},
-		"sections": _get_employee_detail_sections(doc),
+		"sections": _get_employee_detail_sections(doc, department_display),
 		"related_records": _get_employee_related_records(doc),
 		"permissions": {
 			"can_edit_employee_detail": _can_edit_employee_detail(),
@@ -2510,7 +2593,19 @@ def _reverse_option_label(value, fieldname):
 	field_options = {
 		"gender": {"男": "Male", "女": "Female", "其他": "Other"},
 		"status": {"激活": "Active", "在职": "Active", "正式": "Active", "非激活": "Inactive", "停职": "Suspended", "离职": "Left", "已离职": "Left"},
-		"employment_type": {"全职": "Full-time", "正式": "Full-time", "在职": "Full-time", "兼职": "Part-time", "实习": "Intern", "实习生": "Intern", "外包": "Contract", "退休返聘": "Retainer"},
+		"employment_type": {
+			"全职": "Full-time",
+			"正式": "Full-time",
+			"在职": "Full-time",
+			"兼职": "Part-time",
+			"实习": "Intern",
+			"实习生": "Intern",
+			"外包": "Contract",
+			"试用": "Probation",
+			"试用期": "Probation",
+			"返聘": "Retainer",
+			"退休返聘": "Retainer",
+		},
 		"salary_mode": {"银行": "Bank", "现金": "Cash", "支票": "Cheque"},
 		"custom_marital_status_text": {
 			"未": "未",
@@ -2556,6 +2651,55 @@ def _normalise_gender_value(value):
 		return None
 	text = str(value).strip()
 	return GENDER_VALUE_ALIASES.get(text, GENDER_VALUE_ALIASES.get(text.lower(), text))
+
+
+def _derive_identity_card_values(identity_card_number, today=None):
+	"""Derive only non-sensitive structured values from a mainland China ID number."""
+	identity_card_number = re.sub(r"\s+", "", str(identity_card_number or "")).upper()
+	if not re.fullmatch(r"\d{17}[0-9X]", identity_card_number):
+		return {}
+
+	try:
+		birth_date = datetime.strptime(identity_card_number[6:14], "%Y%m%d").date()
+	except ValueError:
+		return {}
+
+	today = today or frappe.utils.getdate()
+	if birth_date > today:
+		return {}
+
+	age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+	return {
+		"date_of_birth": birth_date.isoformat(),
+		"gender": "Male" if int(identity_card_number[16]) % 2 else "Female",
+		"custom_age": age,
+	}
+
+
+def _apply_identity_card_derivatives(values, warnings, row_index=None):
+	derived_values = _derive_identity_card_values(values.get("passport_number"))
+	if not derived_values:
+		return
+
+	if not values.get("custom_id_type"):
+		values["custom_id_type"] = "身份证"
+
+	derived_labels = {"date_of_birth": "出生年月", "gender": "性别", "custom_age": "年龄"}
+	for fieldname, derived_value in derived_values.items():
+		current_value = values.get(fieldname)
+		if current_value in (None, ""):
+			values[fieldname] = derived_value
+			warnings.append(
+				_("第 {0} 行：已根据身份证号码补充{1}，未覆盖人工填写值。").format(
+					row_index or "", derived_labels[fieldname]
+				)
+			)
+		elif str(current_value) != str(derived_value):
+			warnings.append(
+				_("第 {0} 行：身份证推导的{1}与人工填写值不一致，已保留人工填写值。").format(
+					row_index or "", derived_labels[fieldname]
+				)
+			)
 
 
 def _normalise_import_value(fieldname, value, field):
@@ -2605,11 +2749,11 @@ def _find_or_create_department(value, company, base_records):
 	value = _clean_import_value(value)
 	if not value:
 		return None
-	department_name = str(value).strip()
+	department_name = _strip_department_company_suffix(value)
 	existing = (
-		frappe.db.exists("Department", department_name)
-		or frappe.db.get_value("Department", {"department_name": department_name, "company": company}, "name")
+		frappe.db.get_value("Department", {"department_name": department_name, "company": company}, "name")
 		or frappe.db.get_value("Department", {"department_name": department_name}, "name")
+		or frappe.db.exists("Department", str(value).strip())
 	)
 	if existing:
 		return existing
@@ -2765,7 +2909,7 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 			continue
 		raw_value = row[column_index]
 		value = _normalise_import_value(fieldname, raw_value, field)
-		if _is_blank_value(raw_value) and field.get("required"):
+		if _is_blank_value(raw_value) and _is_employee_import_required_field(fieldname, field):
 			errors.append(_field_error(row_index, field, _("必填字段为空")))
 		elif not _is_blank_value(raw_value) and value is None:
 			if _is_excel_error_or_formula(raw_value):
@@ -2781,6 +2925,7 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 		values["employee_name"] = values["first_name"]
 	if values.get("employee_name") and not values.get("first_name"):
 		values["first_name"] = values["employee_name"]
+	_apply_identity_card_derivatives(values, warnings, row_index)
 	if not values.get("naming_series"):
 		values["naming_series"] = "HR-EMP-"
 	if not values.get("status"):
@@ -2802,10 +2947,10 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 def _validate_employee_import_row(values, fields_by_name, meta_fields, row_index):
 	errors = []
 	for fieldname, field in fields_by_name.items():
-		if field.get("required") and fieldname in meta_fields and _is_blank_value(values.get(fieldname)):
+		if _is_employee_import_required_field(fieldname, field) and fieldname in meta_fields and _is_blank_value(values.get(fieldname)):
 			errors.append(_field_error(row_index, field, _("必填字段为空")))
 
-	if not values.get("first_name"):
+	if not values.get("first_name") and "first_name" not in fields_by_name:
 		name_field = fields_by_name.get("first_name") or fields_by_name.get("employee_name") or {
 			"fieldname": "first_name",
 			"field_label": _("姓名"),
@@ -3103,6 +3248,12 @@ def _get_child_export_fields(child_doctype):
 	]
 
 
+def _format_employee_export_value(fieldname, value, department_names):
+	if fieldname == "department":
+		return _department_display_name(value, department_names)
+	return value
+
+
 def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tables, filters=None):
 	from openpyxl import Workbook
 
@@ -3114,17 +3265,25 @@ def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tab
 
 	main_headers = [allowed_fields[fieldname]["field_label"] for fieldname in selected_fields]
 	main_rows = [main_headers]
-	for employee in frappe.get_all(EMPLOYEE_DOCTYPE, filters=filters, fields=selected_fields, order_by="modified desc"):
-		main_rows.append([employee.get(fieldname) for fieldname in selected_fields])
+	employees = frappe.get_all(EMPLOYEE_DOCTYPE, filters=filters, fields=selected_fields, order_by="modified desc")
+	department_names = _get_department_display_names([employee.get("department") for employee in employees])
+	for employee in employees:
+		main_rows.append(
+			[_format_employee_export_value(fieldname, employee.get(fieldname), department_names) for fieldname in selected_fields]
+		)
 	_write_sheet_rows(main_sheet, main_rows)
 
 	employee_rows = frappe.get_all(
 		EMPLOYEE_DOCTYPE,
 		filters=filters,
-		fields=["name", "employee_name"],
+		fields=["name", "employee_name", "custom_employee_code", "employee_number"],
 		order_by="modified desc",
 	)
 	employee_label = {row.name: row.employee_name for row in employee_rows}
+	employee_code = {
+		row.name: row.custom_employee_code or row.employee_number or row.name
+		for row in employee_rows
+	}
 	employee_names = list(employee_label)
 
 	for table_label in selected_tables:
@@ -3147,7 +3306,7 @@ def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tab
 			continue
 
 		child_fields = _get_child_export_fields(child_doctype)
-		headers = ["员工编号", "员工姓名"] + [field.label for field in child_fields]
+		headers = ["工号", "员工姓名"] + [field.label for field in child_fields]
 		rows = [headers]
 		if employee_names:
 			for row in frappe.get_all(
@@ -3161,7 +3320,7 @@ def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tab
 				order_by="parent asc, idx asc",
 			):
 				rows.append(
-					[row.parent, employee_label.get(row.parent)]
+					[employee_code.get(row.parent, row.parent), employee_label.get(row.parent)]
 					+ [row.get(field.fieldname) for field in child_fields]
 				)
 		_write_sheet_rows(sheet, rows)

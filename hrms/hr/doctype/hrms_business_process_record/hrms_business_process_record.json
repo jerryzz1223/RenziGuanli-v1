@@ -1,0 +1,34 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["company", "record_type", "source_import_row", "source_import_batch", "module_name", "employee", "department", "title", "effective_date", "status", "owner_user", "follow_up_due_date", "summary", "normalized_data_json", "approval_history_json", "remarks"],
+ "fields": [
+  {"fieldname": "company", "fieldtype": "Link", "in_list_view": 1, "label": "公司", "options": "Company", "reqd": 1},
+  {"fieldname": "record_type", "fieldtype": "Select", "in_list_view": 1, "label": "业务类型", "options": "组织变更\n合同续签意愿\n员工证书档案\n部门考勤核对\n提案改善\n系统反馈", "reqd": 1},
+  {"fieldname": "source_import_row", "fieldtype": "Link", "in_list_view": 1, "label": "来源导入行", "options": "HRMS Form Import Row", "reqd": 1},
+  {"fieldname": "source_import_batch", "fieldtype": "Link", "label": "来源导入批次", "options": "HRMS Form Import Batch"},
+  {"fieldname": "module_name", "fieldtype": "Data", "in_list_view": 1, "label": "所属模块"},
+  {"fieldname": "employee", "fieldtype": "Link", "in_list_view": 1, "label": "员工", "options": "Employee"},
+  {"fieldname": "department", "fieldtype": "Link", "in_list_view": 1, "label": "部门", "options": "Department"},
+  {"fieldname": "title", "fieldtype": "Data", "in_list_view": 1, "label": "标题", "reqd": 1},
+  {"fieldname": "effective_date", "fieldtype": "Date", "in_list_view": 1, "label": "业务日期"},
+  {"default": "草稿", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "状态", "options": "草稿\n待跟进\n已生效\n已关闭\n已驳回", "reqd": 1},
+  {"fieldname": "owner_user", "fieldtype": "Link", "label": "跟进人", "options": "User"},
+  {"fieldname": "follow_up_due_date", "fieldtype": "Date", "label": "跟进截止日期"},
+  {"fieldname": "summary", "fieldtype": "Small Text", "label": "业务摘要"},
+  {"fieldname": "normalized_data_json", "fieldtype": "Code", "label": "规范字段数据", "options": "JSON"},
+  {"fieldname": "approval_history_json", "fieldtype": "Code", "label": "审批轨迹", "options": "JSON"},
+  {"fieldname": "remarks", "fieldtype": "Small Text", "label": "备注"}
+ ],
+ "module": "HR",
+ "name": "HRMS Business Process Record",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "write": 1, "role": "System Manager"},
+  {"create": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "write": 1, "role": "HR Manager"}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "title_field": "title"
+}

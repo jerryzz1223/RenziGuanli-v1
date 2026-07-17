@@ -1,5 +1,6 @@
 (function () {
 	const EMPLOYEE_DOCTYPE = "Employee";
+	const ROSTER_ALL_EMPLOYEES_PAGE_LENGTH = 500;
 	const roster_phase_one_markers = {
 		legacy_search_label: "姓名/手机号",
 		department_label: "部门筛选",
@@ -10,7 +11,7 @@
 		selected_status_card: true,
 		department_filter: true,
 		sort_options: ["入职日期", "更新时间", "姓名", "工号"],
-		page_length: 20,
+		page_length: ROSTER_ALL_EMPLOYEES_PAGE_LENGTH,
 		dynamic_columns: true,
 		quick_update_employee_roster: true,
 		get_employee_roster: true,
@@ -40,8 +41,15 @@
 		{ fieldname: "passport_number", label: "证件号码" },
 		{ fieldname: "cell_number", label: "手机号码" },
 	];
+	const roster_fieldnames = new Set(roster_list_columns.map((column) => column.fieldname));
+
+	// ListView snapshots its visible columns during construction. Apply the roster
+	// configuration before it is instantiated, rather than waiting for onload.
+	apply_roster_meta_columns();
 
 	frappe.listview_settings[EMPLOYEE_DOCTYPE] = {
+		hide_name_column: true,
+		page_length: ROSTER_ALL_EMPLOYEES_PAGE_LENGTH,
 		add_fields: [
 			"employee_name",
 			"custom_employee_code",
@@ -71,6 +79,14 @@
 				frappe.set_route("employee-detail", doc.name);
 			},
 		},
+		formatters: {
+			name(value, df, doc) {
+				return format_roster_employee_code_display(value, doc);
+			},
+			department(value, df, doc) {
+				return format_roster_department_display(value, doc);
+			},
+		},
 		onload(listview) {
 			setup_roster_page(listview);
 		},
@@ -82,26 +98,48 @@
 
 	function setup_roster_page(listview) {
 		if (!listview || !listview.page) return;
+		if (configure_roster_page_length(listview)) return;
 
 		mark_employee_roster_view();
 		configure_roster_list_columns(listview);
 		listview.page.set_title(__("员工花名册"));
 		set_search_placeholder();
 		hide_native_filter_controls();
+		hide_roster_page_length_controls();
 		setup_roster_actions(listview);
 		setup_roster_summary(listview);
 		sync_active_roster_card(listview);
 		setTimeout(function () {
 			hide_native_filter_controls();
+			hide_roster_page_length_controls();
 			sync_active_roster_card(listview);
+			normalise_roster_list_cells(listview);
 		}, 300);
+		normalise_roster_list_cells(listview);
+	}
+
+	function configure_roster_page_length(listview) {
+		if (listview.page_length === ROSTER_ALL_EMPLOYEES_PAGE_LENGTH) return false;
+
+		listview.page_length = ROSTER_ALL_EMPLOYEES_PAGE_LENGTH;
+		listview.start = 0;
+		listview.refresh();
+		return true;
 	}
 
 	function configure_roster_list_columns(listview) {
-		const meta = frappe.get_meta(EMPLOYEE_DOCTYPE);
-		if (!meta || !Array.isArray(meta.fields)) return;
+		const meta = apply_roster_meta_columns();
+		if (!meta) return;
 
-		const roster_fieldnames = new Set(roster_list_columns.map((column) => column.fieldname));
+		if (listview.meta && Array.isArray(listview.meta.fields)) {
+			listview.meta.fields = meta.fields;
+		}
+	}
+
+	function apply_roster_meta_columns() {
+		const meta = frappe.get_meta(EMPLOYEE_DOCTYPE);
+		if (!meta || !Array.isArray(meta.fields)) return null;
+
 		meta.fields.forEach((field) => {
 			if (!field.fieldname) return;
 			field.in_list_view = roster_fieldnames.has(field.fieldname) ? 1 : 0;
@@ -114,9 +152,7 @@
 			field.label = __(column.label);
 		});
 
-		if (listview.meta && Array.isArray(listview.meta.fields)) {
-			listview.meta.fields = meta.fields;
-		}
+		return meta;
 	}
 
 	function setup_roster_actions(listview) {
@@ -127,8 +163,8 @@
 			frappe.new_doc(EMPLOYEE_DOCTYPE);
 		});
 
-		listview.page.add_inner_button(__("导入"), function () {
-			frappe.set_route("employee-roster-import");
+		listview.page.add_inner_button(__("表单导入"), function () {
+			window.hrmsFormImport?.open("employee_roster") || frappe.set_route("employee-roster-import");
 		});
 
 		listview.page.add_inner_button(__("导出"), function () {
@@ -311,6 +347,67 @@
 	function hide_native_filter_controls() {
 		document.querySelectorAll(".filter-button, .filter-x-button, .filter-popover").forEach((element) => {
 			element.style.display = "none";
+		});
+	}
+
+	function hide_roster_page_length_controls() {
+		document.querySelectorAll(".list-paging-area").forEach((paging_area) => {
+			paging_area.querySelectorAll("button, a, .btn, .dropdown-toggle").forEach((control) => {
+				if (["20", "100", "500", "2500"].includes((control.textContent || "").trim())) {
+					control.classList.add("hrms-roster-page-length-hidden");
+				}
+			});
+		});
+	}
+
+	function format_roster_department_display(value) {
+		const display_value = String(value || "").replace(/\s+-\s+[^-]+$/, "").trim();
+		return frappe.utils.escape_html(display_value);
+	}
+
+	function format_roster_employee_code_display(value, doc) {
+		doc = doc || {};
+		const display_value = doc.custom_employee_code || doc.employee_number || value || "";
+		return frappe.utils.escape_html(display_value);
+	}
+
+	function normalise_roster_list_cells(listview) {
+		const wrapper = get_list_wrapper(listview);
+		if (!wrapper) return;
+
+		const header_cells = Array.from(
+			wrapper.querySelectorAll(".list-row-head .list-row-col, .list-header .list-row-col, .list-header-subject"),
+		);
+		const department_indexes = new Set();
+		const employee_code_indexes = new Set();
+		header_cells.forEach((cell, index) => {
+			const text = (cell.textContent || "").trim();
+			if (text === __("编号") || text === "编号" || text === "ID") {
+				cell.textContent = __("工号");
+				employee_code_indexes.add(index);
+			}
+			if (text === __("工号") || text === "工号") {
+				employee_code_indexes.add(index);
+			}
+			if (text === __("部门") || text === "部门") {
+				department_indexes.add(index);
+			}
+		});
+
+		Array.from(wrapper.querySelectorAll(".list-row")).forEach((row, row_index) => {
+			const cells = Array.from(row.querySelectorAll(".list-row-col"));
+			cells.forEach((cell, column_index) => {
+				const text = (cell.textContent || "").trim();
+				if (employee_code_indexes.has(column_index) && /^HR-EMP-\d+$/i.test(text)) {
+					const doc = listview?.data?.[row_index];
+					if (doc) {
+						cell.textContent = doc.custom_employee_code || doc.employee_number || text;
+					}
+				}
+				if (department_indexes.has(column_index) && /\s+-\s+[^-]+$/.test(text)) {
+					cell.textContent = text.replace(/\s+-\s+[^-]+$/, "").trim();
+				}
+			});
 		});
 	}
 

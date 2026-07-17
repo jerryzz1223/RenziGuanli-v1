@@ -1,6 +1,10 @@
 (function () {
 	const NAV_ID = "hrms-top-module-nav";
 	const ACCOUNT_ID = "hrms-account-menu";
+	const COMPANY_CONTEXT_ID = "hrms-top-company-context";
+	const COMPANY_CONTEXT_EVENT = "hrms:company-context-changed";
+	const COMPANY_CONTEXT_STORAGE_PREFIX = "hrms_company_context";
+	const PREFERRED_COMPANY = "永新";
 
 	const modules = [
 		{ label: "工作台", route: "/desk/hrms-workbench", keys: ["hrms-workbench"] },
@@ -92,6 +96,11 @@
 	let accountInfo = null;
 	let accountInfoLoading = false;
 	let accountEventsBound = false;
+	let companyContextPromise = null;
+	const companyContext = {
+		companies: [],
+		current: "",
+	};
 
 	const WORKSPACE_ROUTE_SLUGS = {
 		"工作台": "hrms-workbench",
@@ -111,6 +120,88 @@
 	function normalizeSlug(value) {
 		return String(value || "").toLowerCase().replace(/\s+/g, "-");
 	}
+
+	function companyContextStorageKey() {
+		const user = window.frappe?.session?.user || "anonymous";
+		return `${COMPANY_CONTEXT_STORAGE_PREFIX}:${user}`;
+	}
+
+	function readStoredCompany() {
+		try {
+			return window.localStorage?.getItem(companyContextStorageKey()) || "";
+		} catch (error) {
+			return "";
+		}
+	}
+
+	function storeCompany(company) {
+		try {
+			window.localStorage?.setItem(companyContextStorageKey(), company);
+		} catch (error) {
+			// Private browsing or a restricted browser must not block the HRMS UI.
+		}
+	}
+
+	function userDefaultCompany() {
+		return (
+			window.frappe?.defaults?.get_user_default?.("company") ||
+			window.frappe?.boot?.user?.defaults?.company ||
+			window.frappe?.boot?.sysdefaults?.company ||
+			""
+		);
+	}
+
+	function resolveInitialCompany(companies) {
+		const available = new Set(companies);
+		const stored = readStoredCompany();
+		if (stored && available.has(stored)) return stored;
+		if (available.has(PREFERRED_COMPANY)) return PREFERRED_COMPANY;
+		const userDefault = userDefaultCompany();
+		if (userDefault && available.has(userDefault)) return userDefault;
+		return companies[0] || "";
+	}
+
+	function loadCompanyContext() {
+		if (companyContextPromise) return companyContextPromise;
+		const getCompanies = window.frappe?.db?.get_list
+			? frappe.db.get_list("Company", { fields: ["name"], order_by: "name asc", limit_page_length: 500 })
+			: Promise.resolve([]);
+		companyContextPromise = Promise.resolve(getCompanies)
+			.then((rows) => {
+				companyContext.companies = (rows || []).map((row) => row.name).filter(Boolean);
+				companyContext.current = resolveInitialCompany(companyContext.companies);
+				return companyContext.current;
+			})
+			.catch(() => {
+				companyContext.companies = [];
+				companyContext.current = userDefaultCompany();
+				return companyContext.current;
+			});
+		return companyContextPromise;
+	}
+
+	function getCurrentCompany() {
+		return companyContext.current || userDefaultCompany();
+	}
+
+	function setCurrentCompany(company) {
+		const nextCompany = String(company || "").trim();
+		if (!nextCompany || (companyContext.companies.length && !companyContext.companies.includes(nextCompany))) {
+			return getCurrentCompany();
+		}
+		if (nextCompany === companyContext.current) return nextCompany;
+		companyContext.current = nextCompany;
+		storeCompany(nextCompany);
+		window.dispatchEvent(new CustomEvent(COMPANY_CONTEXT_EVENT, { detail: { company: nextCompany } }));
+		return nextCompany;
+	}
+
+	window.hrmsCompanyContext = {
+		ready: loadCompanyContext,
+		getCurrentCompany,
+		setCurrentCompany,
+		getCompanies: () => [...companyContext.companies],
+	};
 
 	function escapeHtml(value) {
 		return String(value == null ? "" : value)
@@ -152,7 +243,7 @@
 			window.dispatchEvent(new CustomEvent("hrms:route-change", { detail: { route } }));
 			const routeParts = route.replace(/^\/desk\/?/, "").split("/").filter(Boolean);
 			const deskRoute = routeParts.join("/");
-			if (["hr-settings-center", "employee-detail", "employee-archive", "employee-roster-import", "employee-roster-export", "personnel-reports", "employee-property-history", "attendance-import-center", "payroll-input-center"].includes(deskRoute)) {
+			if (["hr-settings-center", "employee-detail", "employee-archive", "employee-roster-import", "employee-roster-export", "personnel-reports", "employee-property-history", "attendance-import-center", "payroll-input-center", "form-data-intake"].includes(deskRoute)) {
 				frappe
 					.call("hrms.api.employee_field_template.ensure_personnel_pages")
 					.always(() => frappe.set_route(...routeParts));
@@ -361,6 +452,34 @@
 		return wrapper;
 	}
 
+	function renderCompanyContext() {
+		const wrapper = document.createElement("label");
+		wrapper.id = COMPANY_CONTEXT_ID;
+		wrapper.className = "hrms-top-company-context";
+		wrapper.title = __("当前公司");
+
+		const caption = document.createElement("span");
+		caption.className = "hrms-top-company-context__label";
+		caption.textContent = __("公司");
+		wrapper.appendChild(caption);
+
+		const selector = document.createElement("select");
+		selector.className = "hrms-top-company-context__selector";
+		selector.setAttribute("aria-label", __("当前公司"));
+		const companies = companyContext.companies;
+		const current = getCurrentCompany();
+		if (!companies.length) {
+			selector.add(new Option(current || __("加载公司中…"), current || ""));
+			selector.disabled = true;
+		} else {
+			companies.forEach((company) => selector.add(new Option(company, company, false, company === current)));
+			selector.value = current;
+			selector.addEventListener("change", () => setCurrentCompany(selector.value));
+		}
+		wrapper.appendChild(selector);
+		return wrapper;
+	}
+
 	function mountPoint() {
 		return document.querySelector(".page-container") || document.querySelector(".layout-main") || document.body;
 	}
@@ -399,6 +518,7 @@
 		});
 		moduleList.appendChild(renderMore(!active && routeSlug() !== "hrms-workbench"));
 		nav.appendChild(moduleList);
+		nav.appendChild(renderCompanyContext());
 		nav.appendChild(renderAccountMenu());
 	}
 
@@ -414,6 +534,7 @@
 
 	window.addEventListener("hashchange", scheduleRender);
 	window.addEventListener("popstate", scheduleRender);
+	window.addEventListener(COMPANY_CONTEXT_EVENT, scheduleRender);
 
 	if (window.frappe && frappe.router && frappe.router.on) {
 		frappe.router.on("change", scheduleRender);
@@ -424,4 +545,6 @@
 			scheduleRender();
 		}
 	}).observe(document.documentElement, { childList: true, subtree: true });
+
+	loadCompanyContext().then(scheduleRender);
 })();

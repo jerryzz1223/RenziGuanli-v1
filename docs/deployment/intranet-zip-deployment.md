@@ -30,6 +30,14 @@ bash scripts/make_intranet_release.sh
 
 脚本会基于当前 Git 提交生成 `dist/hrms-intranet-<commit>.zip`。它只打包 Git 已提交内容，不包含 `.git`、本地数据库、`node_modules` 或未提交的临时文件。
 
+为避免“本地改了代码，但 zip 里其实还是旧提交”的误判，脚本在工作区存在未提交改动时会直接退出。先 `git status` 确认工作区干净，再重新执行打包。
+
+如果你明确知道自己只想导出当前 `HEAD` 提交，而忽略本地未提交修改，可以手动覆盖这个保护：
+
+```sh
+HRMS_ALLOW_DIRTY=1 bash scripts/make_intranet_release.sh
+```
+
 如果你直接从 GitHub 下载 ZIP，也可以；本质上也是下载已提交代码。区别是本脚本会给文件名带上提交号，方便追踪服务器部署的是哪一版。
 
 ## 内网服务器部署位置

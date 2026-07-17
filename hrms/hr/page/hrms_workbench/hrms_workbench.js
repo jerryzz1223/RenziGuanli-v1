@@ -82,7 +82,7 @@ class HRMSWorkbench {
 			button.addEventListener("click", () => {
 				const route = JSON.parse(button.dataset.route || "[]");
 				if (!route.length) return;
-				if (route[0] === "attendance-import-center") {
+			if (["attendance-import-center", "form-data-intake"].includes(route[0])) {
 					frappe
 						.call("hrms.api.employee_field_template.ensure_personnel_pages")
 						.always(() => frappe.set_route(...route));

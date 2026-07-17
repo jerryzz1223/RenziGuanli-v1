@@ -7,6 +7,8 @@
  "engine": "InnoDB",
  "field_order": [
   "payroll_month",
+  "company",
+  "attendance_lock_version",
   "source_category",
   "source_type",
   "variable_type",
@@ -35,18 +37,33 @@
    "reqd": 1
   },
   {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "attendance_lock_version",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "考勤锁定版本",
+   "reqd": 1
+  },
+  {
    "fieldname": "source_category",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "来源分类",
-   "options": "补贴\n宿舍\n社保公积金\n奖金福利\n个税扣款\n其他"
+   "options": "薪资主数据\n补贴\n宿舍\n社保公积金\n奖金福利\n个税扣款\n其他"
   },
   {
    "fieldname": "source_type",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "来源类型",
-   "options": "学历补贴\n租房补贴\n宿舍住宿费\n宿舍水电费\n社保个人\n社保公司\n公积金个人\n公积金公司\n提案改善奖\n继续服务奖\n所得税\n年终奖所得税\n水电费及扣款\n已发福利\n生产奖\n高温补贴\n手机话费补贴\n油费补贴\n其他奖金\n其他扣款",
+   "options": "薪资构成\n证书多能工津贴\n奖惩提报\n苹果树\n离职薪资结算\n学历补贴\n租房补贴\n宿舍住宿费\n宿舍水电费\n社保个人\n社保公司\n公积金个人\n公积金公司\n提案改善奖\n继续服务奖\n所得税\n年终奖所得税\n水电费及扣款\n已发福利\n生产奖\n高温补贴\n手机话费补贴\n油费补贴\n其他奖金\n其他扣款",
    "reqd": 1
   },
   {
@@ -54,14 +71,14 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "结算变量类型",
-   "options": "全勤奖\n住房补贴\n学历补贴\n宿舍扣款\n社保个人\n公积金个人\n其他奖金\n其他扣款\n生产奖\n提案改善奖\n继续服务奖\n所得税\n年终奖所得税\n水电费及扣款\n社保公司\n公积金公司\n已发福利"
+   "options": "全勤奖\n住房补贴\n学历补贴\n宿舍扣款\n社保个人\n公积金个人\n其他奖金\n其他扣款\n生产奖\n提案改善奖\n继续服务奖\n所得税\n年终奖所得税\n水电费及扣款\n社保公司\n公积金公司\n已发福利\n底薪\n职能津贴\n职务津贴\n证书津贴\n多能工津贴\n证书及多能工津贴\n全薪\n薪资小计\n苹果树\n夜班津贴\n迟到金额+全勤奖扣款\n离职薪资结算"
   },
   {
    "fieldname": "direction",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "方向",
-   "options": "应发\n应扣\n公司承担\n信息"
+   "options": "应发\n应扣\n公司承担\n信息\n参考"
   },
   {
    "fieldname": "employee",
@@ -145,6 +162,16 @@
    "fieldtype": "Code",
    "label": "原始行 JSON",
    "options": "JSON"
+  },
+  {
+   "fieldname": "source_trace_json",
+   "fieldtype": "Small Text",
+   "label": "来源追溯 JSON"
+  },
+  {
+   "fieldname": "source_hash",
+   "fieldtype": "Data",
+   "label": "来源哈希"
   }
  ],
  "index_web_pages_for_search": 1,

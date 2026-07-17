@@ -2,18 +2,18 @@
 
 set -euo pipefail
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: $(basename "$0") <owner> <repo> <branch> [bench_dir=/home/jerry/Renzi] [site_name] [app_name=hrms]"
+  echo "Example: $(basename "$0") jerryzz1223 RenziGuanli-v1 main /home/jerry/Renzi hrms.local hrms"
+  exit 0
+fi
+
 OWNER="${1:?缺少仓库 owner，例如 jerryzz1223}"
 REPO="${2:?缺少仓库名，例如 RenziGuanli-v1}"
 BRANCH="${3:-main}"
 BENCH_DIR="${4:-/home/jerry/Renzi}"
 SITE_NAME="${5:-}"
 APP_NAME="${6:-hrms}"
-
-if [[ "$BRANCH" == "--help" || "$BRANCH" == "-h" ]]; then
-  echo "Usage: $(basename "$0") <owner> <repo> <branch> [bench_dir=/home/jerry/Renzi] [site_name] [app_name=hrms]"
-  echo "Example: $(basename "$0") jerryzz1223 RenziGuanli-v1 main /home/jerry/Renzi hrms.local hrms"
-  exit 0
-fi
 
 TARGET_DIR="$BENCH_DIR/apps/$APP_NAME"
 TMP_DIR="$(mktemp -d "/tmp/${REPO}-deploy-XXXXXX")"

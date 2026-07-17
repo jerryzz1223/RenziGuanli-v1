@@ -1,0 +1,20 @@
+{
+ "content": null,
+ "creation": "2026-07-14 00:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "upload",
+ "idx": 0,
+ "modified": "2026-07-14 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "form-data-intake",
+ "owner": "Administrator",
+ "page_name": "form-data-intake",
+ "roles": [],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "人资表单导入中心"
+}

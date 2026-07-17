@@ -7,6 +7,7 @@
  "engine": "InnoDB",
  "field_order": [
   "employee",
+  "company",
   "employee_code",
   "employee_name",
   "department",
@@ -37,6 +38,14 @@
    "fieldtype": "Link",
    "label": "员工",
    "options": "Employee"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
   },
   {
    "fieldname": "employee_code",

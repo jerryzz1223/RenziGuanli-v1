@@ -26,12 +26,13 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260706e",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260706e",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260715a",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260713a",
+	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260715e",
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260706e",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260713a",
 ]
 
 # website
@@ -60,10 +61,24 @@ doctype_js = {
 	"Journal Entry": "public/js/erpnext/journal_entry.js",
 	"Delivery Trip": "public/js/erpnext/delivery_trip.js",
 	"Bank Transaction": "public/js/erpnext/bank_transaction.js",
+	"HRMS Form Import Row": "public/js/hrms_form_import_review.js",
 }
 doctype_list_js = {
 	"Department": "public/js/erpnext/department_list.js",
 	"Employee": "public/js/erpnext/employee_list.js",
+	"Employee Transfer": "public/js/form_import_list_actions.js",
+	"Employee Promotion": "public/js/form_import_list_actions.js",
+	"Employee Separation": "public/js/form_import_list_actions.js",
+	"Job Applicant": "public/js/form_import_list_actions.js",
+	"Training Event": "public/js/form_import_list_actions.js",
+	"Appraisal": "public/js/form_import_list_actions.js",
+	"Employee Skill Map": "public/js/form_import_list_actions.js",
+	"Employee Grievance": "public/js/form_import_list_actions.js",
+	"HRMS Attendance Day Check": "public/js/form_import_list_actions.js",
+	"HRMS Attendance Exception": "public/js/form_import_list_actions.js",
+	"HRMS Apple Reward Record": "public/js/form_import_list_actions.js",
+	"HRMS Monthly Attendance Summary": "public/js/form_import_list_actions.js",
+	"HRMS Form Import Row": "public/js/hrms_form_import_review_list.js",
 }
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
@@ -106,7 +121,7 @@ jinja = {
 
 # before_install = "hrms.install.before_install"
 after_install = "hrms.install.after_install"
-after_migrate = "hrms.setup.update_select_perm_after_install"
+after_migrate = "hrms.setup.after_migrate"
 
 setup_wizard_complete = "hrms.subscription_utils.update_erpnext_access"
 

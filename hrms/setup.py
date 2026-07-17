@@ -825,6 +825,21 @@ def update_select_perm_after_install():
 	frappe.flags.update_select_perm_after_migrate = False
 
 
+def after_migrate():
+	"""Complete HRMS post-migration setup that the Desk depends on.
+
+	Personnel custom Pages are entered from both the custom navigation and the
+	Frappe workspace sidebar.  The latter must work on a fresh deployment, before
+	a user has visited a custom-navigation link, so register these Pages as part
+	of migration rather than relying on browser-side lazy creation.
+	"""
+	update_select_perm_after_install()
+
+	from hrms.api.employee_field_template import ensure_personnel_pages
+
+	ensure_personnel_pages()
+
+
 def delete_custom_fields(custom_fields: dict):
 	"""
 	:param custom_fields: a dict like `{'Salary Slip': [{fieldname: 'loans', ...}]}`

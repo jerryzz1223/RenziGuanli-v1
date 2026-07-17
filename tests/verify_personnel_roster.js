@@ -11,6 +11,8 @@ const employeeListPath = path.join(root, "hrms", "public", "js", "erpnext", "emp
 const employeeApiPath = path.join(root, "hrms", "api", "employee_field_template.py");
 const employeeArchiveJsonPath = path.join(root, "hrms", "hr", "page", "employee_archive", "employee_archive.json");
 const employeeArchiveJsPath = path.join(root, "hrms", "hr", "page", "employee_archive", "employee_archive.js");
+const employeeTransferPath = path.join(root, "hrms", "hr", "doctype", "employee_transfer", "employee_transfer.js");
+const employeeTransferJsonPath = path.join(root, "hrms", "hr", "doctype", "employee_transfer", "employee_transfer.json");
 const employeeDetailJsonPath = path.join(root, "hrms", "hr", "page", "employee_detail", "employee_detail.json");
 const employeeDetailJsPath = path.join(root, "hrms", "hr", "page", "employee_detail", "employee_detail.js");
 const personnelPath = path.join(root, "hrms", "hr", "workspace", "personnel", "personnel.json");
@@ -67,6 +69,9 @@ for (const marker of [
 	"dynamic_columns",
 	"frappe.get_all(EMPLOYEE_DOCTYPE",
 	"_build_employee_roster_filters",
+	"_hydrate_employee_roster_display_values",
+	"_department_display_name",
+	"department_display",
 ]) {
 	mustInclude(employeeApi, marker, `Employee roster API is missing phase-one behavior: ${marker}`);
 }
@@ -111,8 +116,24 @@ for (const marker of [
 	"apply_single_roster_filter",
 	"build_roster_query",
 	"hrms-employee-roster-view",
+	"hide_name_column: true",
+	"format_roster_department_display",
+	"format_roster_employee_code_display",
+	"normalise_roster_list_cells",
+	"custom_employee_code || doc.employee_number || value",
+	"apply_roster_meta_columns",
+	"ROSTER_ALL_EMPLOYEES_PAGE_LENGTH",
+	"page_length: ROSTER_ALL_EMPLOYEES_PAGE_LENGTH",
+	"configure_roster_page_length",
+	"hide_roster_page_length_controls",
 ]) {
 	mustInclude(employeeList, marker, `Employee list view is missing roster behavior marker: ${marker}`);
+}
+
+const bootstrapMetaIndex = employeeList.indexOf("apply_roster_meta_columns();");
+const listSettingsIndex = employeeList.indexOf("frappe.listview_settings[EMPLOYEE_DOCTYPE] = {");
+if (bootstrapMetaIndex < 0 || bootstrapMetaIndex > listSettingsIndex) {
+	throw new Error("工号列必须在 Frappe ListView 初始化前写入 Employee 元数据，不能等到 onload 后再修改。");
 }
 
 if (employeeList.includes("listview.filter_area.add([[EMPLOYEE_DOCTYPE, fieldname, \"=\", filters[fieldname]]]")) {
@@ -121,6 +142,7 @@ if (employeeList.includes("listview.filter_area.add([[EMPLOYEE_DOCTYPE, fieldnam
 
 mustInclude(topNavCss, "body.hrms-employee-roster-view .filter-button", "Employee roster must hide the native filter button.");
 mustInclude(topNavCss, ".hrms-roster-card.is-active", "Employee roster must show a single active status card.");
+mustInclude(topNavCss, ".hrms-roster-page-length-hidden", "Employee roster must hide only the page-size choices, not its data.");
 
 for (const marker of [
 	"在职信息",
@@ -198,8 +220,36 @@ for (const marker of [
 	"设置花名册字段",
 	"frappe.set_route(\"employee-detail\"",
 	"当前没有真实员工档案",
+	"this.page_length = 500",
+	"hrms-employee-archive-view",
+	"render_pagination",
 ]) {
 	mustInclude(employeeArchiveJs, marker, `员工档案库 Page is missing real-data behavior marker: ${marker}`);
+}
+
+if (employeeArchiveJs.includes("hrms-archive-page hrms-employee-roster-view")) {
+	throw new Error("员工档案库必须使用独立页面样式，不能复用花名册页面类。");
+}
+
+const employeeTransfer = fs.readFileSync(employeeTransferPath, "utf8");
+const employeeTransferJson = JSON.parse(fs.readFileSync(employeeTransferJsonPath, "utf8"));
+const employeeCodeDisplayField = employeeTransferJson.fields.find((field) => field.fieldname === "employee_code_display");
+if (!employeeCodeDisplayField || employeeCodeDisplayField.fetch_from !== "employee.custom_employee_code" || !employeeCodeDisplayField.read_only) {
+	throw new Error("员工调岗必须定义只读的员工工号显示字段，并从 Employee.custom_employee_code 获取值。");
+}
+
+for (const marker of [
+	"employee_code_display",
+	"员工工号",
+	"toggle_display(\"employee\"",
+	"toggle_display(\"employee_code_display\"",
+	"更换员工",
+]) {
+	mustInclude(employeeTransfer, marker, `员工调岗必须用公司工号展示员工，缺少：${marker}`);
+}
+
+if (employeeTransfer.includes('frm.set_value("employee", employee_code_display)')) {
+	throw new Error("员工调岗不得把工号写入 Employee Link；Employee.name 只能保留作内部关联键。");
 }
 
 if (!fs.existsSync(employeeDetailJsonPath) || !fs.existsSync(employeeDetailJsPath)) {
@@ -211,6 +261,20 @@ const employeeDetailJs = fs.readFileSync(employeeDetailJsPath, "utf8");
 
 if (employeeDetailJson.name !== "employee-detail" || employeeDetailJson.title !== "员工档案详情") {
 	throw new Error("员工档案详情 Page route/title is incorrect.");
+}
+
+for (const marker of [
+	'department_display = _department_display_name(doc.get("department"))',
+	'"department_display": department_display',
+	"_get_employee_detail_sections(doc, department_display)",
+	'field["fieldname"] == "department" and department_display',
+	"def _display_employee_field_value(fieldname, value)",
+]) {
+	mustInclude(employeeApi, marker, `员工档案详情必须使用部门业务名称，而非 Department 内部名称：${marker}`);
+}
+
+for (const marker of ["get_department_display(header)", "header.department_display || header.department"]) {
+	mustInclude(employeeDetailJs, marker, `员工档案详情前端必须优先显示 department_display：${marker}`);
 }
 
 for (const marker of [

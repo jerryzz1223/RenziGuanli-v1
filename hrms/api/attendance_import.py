@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from collections import defaultdict
@@ -10,15 +11,77 @@ from frappe.utils import flt, getdate, now_datetime
 
 
 REQUIRED_ATTENDANCE_SHEETS = ["1.1每日统计", "1.2请假单", "1.3苹果树"]
+DINGTALK_EXPORT_V1_SHEETS = ["每日统计", "打卡时间", "原始记录", "月度汇总"]
+COMPANY_ATTENDANCE_WORKBOOK_SOURCES = {
+	"dingtalk_raw": {
+		"sheet_name": "每日统计（钉钉导出）",
+		"header_rows": (3, 4),
+		"data_start_row": 5,
+	},
+	"manual_adjustment": {
+		"sheet_name": "每日统计（修改后）",
+		"header_rows": (1, 2),
+		"data_start_row": 3,
+	},
+}
+DINGTALK_EXPORT_V1_SCHEMA = {
+	"source_type": "dingtalk_export_v1",
+	"daily_header_rows": (3, 4),
+	"daily_data_start_row": 5,
+	"raw_header_row": 3,
+	"raw_data_start_row": 4,
+	"monthly_header_rows": (3, 4),
+	"monthly_data_start_row": 5,
+}
+DINGTALK_DAILY_FIELD_MAPPING = {
+	"姓名": "employee_name",
+	"工号": "employee_code",
+	"UserId": "dingtalk_user_id",
+	"日期": "attendance_date",
+	"workDate": "source_work_date",
+	"日期类型": "date_type",
+	"考勤组": "attendance_group",
+	"部门": "source_department",
+	"实际部门": "actual_department",
+	"班次": "shift_name",
+	"上班时间": "actual_in_time",
+	"下班时间": "actual_out_time",
+	"上班缺卡": "missing_in",
+	"下班缺卡": "missing_out",
+	"标准工时": "standard_hours",
+	"实际出勤(小时)": "actual_attendance_hours",
+	"关联的审批单": "approval_reference",
+	"关联审批单": "approval_reference",
+	"工作日加班(小时)": "workday_overtime_hours",
+	"休息日加班(小时)": "restday_overtime_hours",
+	"节假日加班(小时)": "holiday_overtime_hours",
+	"请假/事假(小时)": "personal_leave_hours",
+	"请假/病假(小时)": "sick_leave_hours",
+	"请假/婚假(天)": "marriage_leave_days",
+	"请假/特休(小时)": "annual_leave_hours",
+	"请假/丧假(小时)": "bereavement_leave_hours",
+	"请假/工伤(小时)": "work_injury_leave_hours",
+	"请假/公假(天)": "public_leave_days",
+	"请假/产假(天)": "maternity_leave_days",
+	"请假/团圆假(天)": "reunion_leave_days",
+	"请假/排休(小时)": "rest_leave_hours",
+	"请假/旷工(小时)": "absent_hours",
+	"旷工": "absence_summary",
+}
 ATTENDANCE_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
 DAY_CHECK_DOCTYPE = "HRMS Attendance Day Check"
 LEAVE_EVIDENCE_DOCTYPE = "HRMS Attendance Leave Evidence"
 EXCEPTION_DOCTYPE = "HRMS Attendance Exception"
 APPLE_RECORD_DOCTYPE = "HRMS Apple Reward Record"
 MONTHLY_SUMMARY_DOCTYPE = "HRMS Monthly Attendance Summary"
+MONTH_LOCK_DOCTYPE = "HRMS Attendance Month Lock"
+LOCK_AUDIT_DOCTYPE = "HRMS Attendance Lock Audit"
 CUSTOM_RULE_DOCTYPE = "HRMS Attendance Custom Rule"
 APPLE_UNIT_AMOUNT = 5
 STANDARD_DAY_HOURS = 8
+TEST_ATTENDANCE_DEMO_COMPANY = "TEST-HRMS"
+TEST_ATTENDANCE_DEMO_MONTH = "2099-02"
+TEST_ATTENDANCE_DEMO_CHECKSUM = hashlib.sha256(b"TEST-HRMS attendance demo v1").hexdigest()
 LARGE_NIGHT_SHIFT_ALLOWANCE = 45
 SMALL_NIGHT_SHIFT_ALLOWANCE = 24
 
@@ -135,6 +198,10 @@ def _cell_text(value):
 
 def _normalise_header(value):
 	return re.sub(r"\s+", "", _cell_text(value).replace("\n", ""))
+
+
+def _normalise_dingtalk_header(value):
+	return _normalise_header(value).replace("（", "(").replace("）", ")").replace("／", "/")
 
 
 def _read_sheet_rows(sheet, max_rows=None):
@@ -296,6 +363,32 @@ def _month_bounds(attendance_month):
 	return start, end
 
 
+def _require_company(company):
+	company = (company or "").strip()
+	if not company:
+		frappe.throw(_("请先选择公司。"))
+	if not frappe.db.exists("Company", company):
+		frappe.throw(_("公司 {0} 不存在").format(company))
+	return company
+
+
+def _attendance_scope_filters(company, attendance_month, attendance_lock_version):
+	company = (company or "").strip()
+	attendance_month = (attendance_month or "").strip()
+	attendance_lock_version = str(attendance_lock_version or "").strip()
+	if not company or not attendance_month or not attendance_lock_version:
+		frappe.throw(_("考勤范围必须包含公司、月份和锁定版本。"))
+	return {
+		"company": company,
+		"attendance_month": attendance_month,
+		"attendance_lock_version": attendance_lock_version,
+	}
+
+
+def _source_file_checksum(file_url):
+	return hashlib.sha256(_get_file_content(file_url)).hexdigest()
+
+
 def _employee_lookup(employee_code=None, employee_name=None):
 	if employee_code:
 		for fieldname in ("custom_employee_code", "employee_number", "name"):
@@ -308,6 +401,10 @@ def _employee_lookup(employee_code=None, employee_name=None):
 	if employee_name:
 		return frappe.db.get_value("Employee", {"employee_name": employee_name}, "name")
 	return None
+
+
+def _employee_matches_company(employee, company):
+	return bool(employee and frappe.db.get_value("Employee", employee, "company") == company)
 
 
 def _department_lookup(department):
@@ -333,9 +430,208 @@ def _preview_sheet(workbook, sheet_name):
 	}
 
 
+def _is_dingtalk_export_v1(workbook):
+	return all(_sheet_by_required_name(workbook, sheet_name) for sheet_name in DINGTALK_EXPORT_V1_SHEETS)
+
+
+def _flatten_dingtalk_headers(sheet, header_rows=(3, 4)):
+	start_row, end_row = header_rows
+	rows = list(sheet.iter_rows(min_row=start_row, max_row=end_row, values_only=True))
+	if len(rows) != 2:
+		return []
+
+	parents, children = rows
+	headers = []
+	active_parent = ""
+	seen = defaultdict(int)
+	for parent, child in zip(parents, children):
+		parent_text = _normalise_dingtalk_header(parent)
+		child_text = _normalise_dingtalk_header(child)
+		if parent_text:
+			active_parent = parent_text
+		header = f"{active_parent}/{child_text}" if child_text and active_parent else (child_text or active_parent)
+		seen[header] += 1
+		headers.append(f"{header}_{seen[header]}" if header and seen[header] > 1 else header)
+	return headers
+
+
+def _flatten_dingtalk_daily_headers(sheet):
+	return _flatten_dingtalk_headers(sheet)
+
+
+def _daily_rows_from_header_rows(sheet, header_rows=(3, 4), data_start_row=5):
+	headers = _flatten_dingtalk_headers(sheet, header_rows)
+	items = []
+	for row_index, values in enumerate(sheet.iter_rows(min_row=data_start_row, values_only=True), start=data_start_row):
+		item = {
+			header: _cell_text(values[index]) if index < len(values) else ""
+			for index, header in enumerate(headers)
+			if header
+		}
+		if any(item.values()):
+			item["_source_row"] = row_index
+			items.append(item)
+	return items
+
+
+def _dingtalk_daily_rows(sheet):
+	return _daily_rows_from_header_rows(sheet)
+
+
+def _dingtalk_export_import_source_kind():
+	return "钉钉原始导出"
+
+
+def _count_nonempty_rows(sheet, start_row):
+	return sum(1 for row in sheet.iter_rows(min_row=start_row, values_only=True) if any(_cell_text(value) for value in row))
+
+
+def _dingtalk_sheet_preview(sheet_name, sheet, row_count, headers):
+	return {
+		"sheet_name": sheet_name,
+		"found": bool(sheet),
+		"row_count": row_count,
+		"headers": headers[:40],
+	}
+
+
+def _preview_dingtalk_export_v1(workbook):
+	daily_sheet = _sheet_by_required_name(workbook, "每日统计")
+	raw_sheet = _sheet_by_required_name(workbook, "原始记录")
+	monthly_sheet = _sheet_by_required_name(workbook, "月度汇总")
+	clock_sheet = _sheet_by_required_name(workbook, "打卡时间")
+	daily_rows = _dingtalk_daily_rows(daily_sheet)
+	daily_headers = _flatten_dingtalk_daily_headers(daily_sheet)
+
+	quality_counts = {
+		"missing_employee_code": 0,
+		"missing_attendance_group": 0,
+		"planned_hours_without_actual": 0,
+		"duplicate_userid_workdate": 0,
+	}
+
+	seen_user_dates = set()
+	for row in daily_rows:
+		if not row.get("工号"):
+			quality_counts["missing_employee_code"] += 1
+		if row.get("考勤组") in ("", "未加入考勤组"):
+			quality_counts["missing_attendance_group"] += 1
+		if row.get("标准工时") and not row.get("实际出勤(小时)"):
+			quality_counts["planned_hours_without_actual"] += 1
+		user_date = (row.get("UserId", ""), row.get("workDate") or row.get("日期", ""))
+		if all(user_date):
+			if user_date in seen_user_dates:
+				quality_counts["duplicate_userid_workdate"] += 1
+			else:
+				seen_user_dates.add(user_date)
+
+	raw_headers = _read_sheet_rows(raw_sheet, max_rows=DINGTALK_EXPORT_V1_SCHEMA["raw_header_row"])[-1]
+	monthly_headers = _flatten_dingtalk_daily_headers(monthly_sheet)
+	clock_headers = _flatten_dingtalk_daily_headers(clock_sheet)
+	sheets = [
+		_dingtalk_sheet_preview("每日统计", daily_sheet, len(daily_rows), daily_headers),
+		_dingtalk_sheet_preview(
+			"打卡时间",
+			clock_sheet,
+			_count_nonempty_rows(clock_sheet, DINGTALK_EXPORT_V1_SCHEMA["daily_data_start_row"]),
+			clock_headers,
+		),
+		_dingtalk_sheet_preview(
+			"原始记录",
+			raw_sheet,
+			_count_nonempty_rows(raw_sheet, DINGTALK_EXPORT_V1_SCHEMA["raw_data_start_row"]),
+			raw_headers,
+		),
+		_dingtalk_sheet_preview(
+			"月度汇总",
+			monthly_sheet,
+			_count_nonempty_rows(monthly_sheet, DINGTALK_EXPORT_V1_SCHEMA["monthly_data_start_row"]),
+			monthly_headers,
+		),
+	]
+	return {
+		"source_type": DINGTALK_EXPORT_V1_SCHEMA["source_type"],
+		"required_sheets": DINGTALK_EXPORT_V1_SHEETS,
+		"sheets": sheets,
+		"missing_sheets": [sheet["sheet_name"] for sheet in sheets if not sheet["found"]],
+		"record_counts": {
+			"daily_statistics": len(daily_rows),
+			"raw_records": sheets[2]["row_count"],
+			"monthly_people": sheets[3]["row_count"],
+		},
+		"field_mapping": {
+			header: DINGTALK_DAILY_FIELD_MAPPING.get(header, "source_only") for header in daily_headers if header
+		},
+		"quality_warnings": [
+			{"code": "missing_employee_code", "label": "缺工号", "count": quality_counts["missing_employee_code"]},
+			{"code": "missing_attendance_group", "label": "未加入考勤组", "count": quality_counts["missing_attendance_group"]},
+			{
+				"code": "planned_hours_without_actual",
+				"label": "标准工时有值但实际出勤为空",
+				"count": quality_counts["planned_hours_without_actual"],
+			},
+			{
+				"code": "duplicate_userid_workdate",
+				"label": "重复 UserId + workDate",
+				"count": quality_counts["duplicate_userid_workdate"],
+			},
+		],
+		"parsing": {
+			"daily_header_rows": list(DINGTALK_EXPORT_V1_SCHEMA["daily_header_rows"]),
+			"daily_data_start_row": DINGTALK_EXPORT_V1_SCHEMA["daily_data_start_row"],
+		},
+		"database_writes": 0,
+	}
+
+
+def _is_company_attendance_workbook(workbook):
+	return all(_sheet_by_required_name(workbook, source["sheet_name"]) for source in COMPANY_ATTENDANCE_WORKBOOK_SOURCES.values())
+
+
+def _preview_company_daily_source(workbook, source_kind, source):
+	sheet = _sheet_by_required_name(workbook, source["sheet_name"])
+	headers = _flatten_dingtalk_headers(sheet, source["header_rows"])
+	rows = _daily_rows_from_header_rows(sheet, source["header_rows"], source["data_start_row"])
+	return {
+		"source_kind": source_kind,
+		"sheet_name": source["sheet_name"],
+		"found": bool(sheet),
+		"header_rows": list(source["header_rows"]),
+		"data_start_row": source["data_start_row"],
+		"row_count": len(rows),
+		"headers": headers,
+		"field_mapping": {header: DINGTALK_DAILY_FIELD_MAPPING.get(header, "source_only") for header in headers if header},
+	}
+
+
+def _preview_company_attendance_workbook(workbook):
+	daily_sources = {
+		source_kind: _preview_company_daily_source(workbook, source_kind, source)
+		for source_kind, source in COMPANY_ATTENDANCE_WORKBOOK_SOURCES.items()
+	}
+	reference_sheet_names = ["请假单（钉钉导出）", "出勤异常", "苹果树（钉钉导出）", "苹果树（修改后）", "考勤初稿", "考勤终稿（签字版）", "考勤终稿（财务版）"]
+	reference_sheets = [
+		{
+			"sheet_name": sheet_name,
+			"found": bool(_sheet_by_required_name(workbook, sheet_name)),
+		}
+		for sheet_name in reference_sheet_names
+	]
+	return {
+		"source_type": "company_attendance_workbook_v1",
+		"daily_sources": daily_sources,
+		"reference_sheets": reference_sheets,
+		"database_writes": 0,
+	}
+
+
 @frappe.whitelist()
 def preview_attendance_workbook(file_url: str):
 	workbook = _load_workbook(file_url)
+	if _is_company_attendance_workbook(workbook):
+		return _preview_company_attendance_workbook(workbook)
+	if _is_dingtalk_export_v1(workbook):
+		return _preview_dingtalk_export_v1(workbook)
 	sheets = [_preview_sheet(workbook, sheet_name) for sheet_name in REQUIRED_ATTENDANCE_SHEETS]
 	return {
 		"required_sheets": REQUIRED_ATTENDANCE_SHEETS,
@@ -344,27 +640,33 @@ def preview_attendance_workbook(file_url: str):
 	}
 
 
-def _insert_day_check(batch_name, row):
+def _insert_day_check(batch_name, row, company, source_kind="旧模板", source_sheet="", correction_version=1):
 	employee_code = _first_value(row, "工号")
 	employee_name = _first_value(row, "姓名")
 	attendance_date = _parse_date(_first_value(row, "日期", "workDate"))
 	if not employee_name or not attendance_date:
+		return None
+	employee = _employee_lookup(employee_code, employee_name)
+	if not _employee_matches_company(employee, company):
 		return None
 	shift_name = _first_value(row, "班次")
 	actual_in_time = _first_value(row, "上班时间")
 	actual_out_time = _first_value(row, "下班时间")
 	missing_in = 1 if _first_value(row, "上班缺卡") or _float_value(row, "上班未打卡次数") else 0
 	missing_out = 1 if _first_value(row, "下班缺卡") or _float_value(row, "下班未打卡次数") else 0
-	absent_hours = _float_value(row, "旷工(小时)", "旷工")
+	absent_hours = _float_value(row, "请假/旷工(小时)", "旷工(小时)", "旷工")
 	standard_hours = _float_value(row, "标准工时")
 	actual_attendance_hours = _float_value(row, "实际出勤（小时）", "实际出勤(小时)", "实际出勤")
-	personal_leave_hours = _float_value(row, "事假(小时)")
-	sick_leave_hours = _float_value(row, "病假(小时)")
-	annual_leave_hours = _float_value(row, "特休(小时)")
-	work_injury_leave_hours = _float_value(row, "工伤(小时)")
-	rest_leave_hours = _float_value(row, "排休(小时)")
-	bereavement_leave_hours = _float_value(row, "丧假(小时)")
-	marriage_leave_hours = _float_value(row, "婚假(小时)") or _float_value(row, "婚假(天)") * STANDARD_DAY_HOURS
+	personal_leave_hours = _float_value(row, "请假/事假(小时)", "事假(小时)")
+	sick_leave_hours = _float_value(row, "请假/病假(小时)", "病假(小时)")
+	annual_leave_hours = _float_value(row, "请假/特休(小时)", "特休(小时)")
+	work_injury_leave_hours = _float_value(row, "请假/工伤(小时)", "工伤(小时)")
+	rest_leave_hours = _float_value(row, "请假/排休(小时)", "排休(小时)")
+	bereavement_leave_hours = _float_value(row, "请假/丧假(小时)", "丧假(小时)")
+	marriage_leave_hours = _float_value(row, "请假/婚假(小时)", "婚假(小时)") or _float_value(row, "请假/婚假(天)", "婚假(天)") * STANDARD_DAY_HOURS
+	public_leave_hours = _float_value(row, "请假/公假(小时)", "公假(小时)") or _float_value(row, "请假/公假(天)", "公假(天)") * STANDARD_DAY_HOURS
+	maternity_leave_hours = _float_value(row, "请假/产假(小时)", "产假(小时)") or _float_value(row, "请假/产假(天)", "产假(天)") * STANDARD_DAY_HOURS
+	reunion_leave_hours = _float_value(row, "请假/团圆假(小时)", "团圆假(小时)") or _float_value(row, "请假/团圆假(天)", "团圆假(天)") * STANDARD_DAY_HOURS
 	leave_hours = sum(
 		[
 			personal_leave_hours,
@@ -374,9 +676,12 @@ def _insert_day_check(batch_name, row):
 			rest_leave_hours,
 			bereavement_leave_hours,
 			marriage_leave_hours,
+			public_leave_hours,
+			maternity_leave_hours,
+			reunion_leave_hours,
 		]
 	)
-	approval_summary = _first_value(row, "关联审批单")
+	approval_summary = _first_value(row, "关联审批单", "关联的审批单")
 	has_overtime = flt(_first_value(row, "工作日加班（小时）", "工作日加班(小时)")) or flt(_first_value(row, "休息日加班（小时）", "休息日加班(小时)")) or flt(_first_value(row, "节假日加班（小时）", "节假日加班(小时)"))
 	overtime_without_approval = 1 if has_overtime and "加班" not in approval_summary else 0
 	attendance_result = "异常" if missing_in or missing_out or absent_hours or _int_value(row, "迟到次数") or _int_value(row, "早退次数") else "正常"
@@ -385,8 +690,13 @@ def _insert_day_check(batch_name, row):
 		{
 			"doctype": DAY_CHECK_DOCTYPE,
 			"import_batch": batch_name,
+			"company": company,
+			"source_kind": source_kind,
+			"source_sheet": source_sheet,
+			"source_row_number": row.get("_source_row", 0),
+			"correction_version": correction_version,
 			"attendance_date": attendance_date,
-			"employee": _employee_lookup(employee_code, employee_name),
+			"employee": employee,
 			"employee_code": employee_code,
 			"employee_name": employee_name,
 			"attendance_group": _first_value(row, "考勤组"),
@@ -420,6 +730,9 @@ def _insert_day_check(batch_name, row):
 			"rest_leave_hours": rest_leave_hours,
 			"bereavement_leave_hours": bereavement_leave_hours,
 			"marriage_leave_hours": marriage_leave_hours,
+			"public_leave_hours": public_leave_hours,
+			"maternity_leave_hours": maternity_leave_hours,
+			"reunion_leave_hours": reunion_leave_hours,
 			"valid_leave_hours": 0,
 			"invalid_leave_hours": 0,
 			"overtime_without_approval": overtime_without_approval,
@@ -566,34 +879,138 @@ def _insert_apple_record(batch_name, row):
 	return doc.name
 
 
-@frappe.whitelist()
-def import_attendance_workbook(file_url: str, attendance_month: str = ""):
-	workbook = _load_workbook(file_url)
-	preview = preview_attendance_workbook(file_url)
-	if preview["missing_sheets"]:
-		frappe.throw(_("缺少必要工作表：{0}").format("、".join(preview["missing_sheets"])))
-
-	if not attendance_month:
-		attendance_month = datetime.today().strftime("%Y-%m")
+def _create_attendance_batch(file_url, attendance_month, company, source_type):
+	source_checksum = _source_file_checksum(file_url)
+	existing = frappe.db.get_value(
+		ATTENDANCE_BATCH_DOCTYPE,
+		{"company": company, "source_checksum": source_checksum},
+		"name",
+	)
+	if existing:
+		return frappe.get_doc(ATTENDANCE_BATCH_DOCTYPE, existing), True
 
 	batch = frappe.get_doc(
 		{
 			"doctype": ATTENDANCE_BATCH_DOCTYPE,
+			"company": company,
 			"attendance_month": attendance_month,
 			"source_file": file_url,
+			"source_type": source_type,
+			"source_checksum": source_checksum,
 			"status": "已导入",
 			"imported_by": frappe.session.user,
 			"imported_on": now_datetime(),
 		}
 	)
 	batch.insert(ignore_permissions=True)
+	return batch, False
+
+
+def _import_company_attendance_workbook(workbook, file_url, attendance_month, company):
+	correction_version = _correction_version_for_import(company, attendance_month)
+	batch, duplicate = _create_attendance_batch(file_url, attendance_month, company, "company_attendance_workbook_v1")
+	if duplicate:
+		return {"batch": batch.name, "duplicate": 1, "daily_sheet_rows": batch.daily_sheet_rows}
+
+	row_counts = {}
+	rejected_rows = 0
+	for source_kind, source in COMPANY_ATTENDANCE_WORKBOOK_SOURCES.items():
+		rows = _daily_rows_from_header_rows(workbook[source["sheet_name"]], source["header_rows"], source["data_start_row"])
+		for row in rows:
+			if not _insert_day_check(
+				batch.name,
+				row,
+				company,
+				"钉钉原始导出" if source_kind == "dingtalk_raw" else "人工调整",
+				source["sheet_name"],
+				correction_version,
+			):
+				rejected_rows += 1
+		row_counts[source_kind] = len(rows)
+
+	batch.daily_sheet_rows = sum(row_counts.values())
+	batch.notes = json.dumps({"daily_sources": row_counts, "rejected_company_or_employee_rows": rejected_rows}, ensure_ascii=False)
+	batch.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {
+		"batch": batch.name,
+		"daily_sheet_rows": batch.daily_sheet_rows,
+		"daily_sources": row_counts,
+		"rejected_company_or_employee_rows": rejected_rows,
+	}
+
+
+def _import_dingtalk_export_v1(workbook, file_url, attendance_month, company):
+	correction_version = _correction_version_for_import(company, attendance_month)
+	batch, duplicate = _create_attendance_batch(file_url, attendance_month, company, "dingtalk_export_v1")
+	if duplicate:
+		return {"batch": batch.name, "duplicate": 1, "daily_sheet_rows": batch.daily_sheet_rows}
+
+	daily_rows = _dingtalk_daily_rows(_sheet_by_required_name(workbook, "每日统计"))
+	inserted_rows = 0
+	rejected_rows = 0
+	for row in daily_rows:
+		if _insert_day_check(
+			batch.name,
+			row,
+			company,
+			_dingtalk_export_import_source_kind(),
+			"每日统计",
+			correction_version,
+		):
+			inserted_rows += 1
+		else:
+			rejected_rows += 1
+
+	preview = _preview_dingtalk_export_v1(workbook)
+	batch.daily_sheet_rows = len(daily_rows)
+	batch.notes = json.dumps(
+		{
+			"daily_statistics_imported": inserted_rows,
+			"rejected_company_or_employee_rows": rejected_rows,
+			"source_only_record_counts": preview["record_counts"],
+		},
+		ensure_ascii=False,
+	)
+	batch.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {
+		"batch": batch.name,
+		"daily_sheet_rows": len(daily_rows),
+		"inserted_day_checks": inserted_rows,
+		"rejected_company_or_employee_rows": rejected_rows,
+		"source_only_record_counts": preview["record_counts"],
+	}
+
+
+@frappe.whitelist()
+def import_attendance_workbook(file_url: str, attendance_month: str = "", company: str = ""):
+	company = _require_company(company)
+	workbook = _load_workbook(file_url)
+	preview = preview_attendance_workbook(file_url)
+	if not attendance_month:
+		attendance_month = datetime.today().strftime("%Y-%m")
+
+	if preview.get("source_type") == "company_attendance_workbook_v1":
+		return _import_company_attendance_workbook(workbook, file_url, attendance_month, company)
+	if preview.get("source_type") == "dingtalk_export_v1":
+		return _import_dingtalk_export_v1(workbook, file_url, attendance_month, company)
+	if preview["missing_sheets"]:
+		frappe.throw(_("缺少必要工作表：{0}").format("、".join(preview["missing_sheets"])))
+
+	correction_version = _correction_version_for_import(company, attendance_month)
+	batch, duplicate = _create_attendance_batch(file_url, attendance_month, company, "legacy_workbook")
+	if duplicate:
+		return {"batch": batch.name, "duplicate": 1, "daily_sheet_rows": batch.daily_sheet_rows}
 
 	daily_rows = _rows_as_dicts(_sheet_by_required_name(workbook, "1.1每日统计"), ["姓名", "工号", "日期", "班次"])
 	leave_rows = _rows_as_dicts(_sheet_by_required_name(workbook, "1.2请假单"), ["请假类型", "开始时间", "结束时间"])
 	apple_rows = _rows_as_dicts(_sheet_by_required_name(workbook, "1.3苹果树"), ["奖/惩日期", "受奖/惩人", "绿苹果", "红苹果"])
 
+	rejected_rows = 0
 	for row in daily_rows:
-		_insert_day_check(batch.name, row)
+		if not _insert_day_check(batch.name, row, company, "旧模板", "1.1每日统计", correction_version):
+			rejected_rows += 1
 	for row in leave_rows:
 		_insert_leave_evidence(batch.name, row)
 	for row in apple_rows:
@@ -610,6 +1027,7 @@ def import_attendance_workbook(file_url: str, attendance_month: str = ""):
 		"daily_sheet_rows": len(daily_rows),
 		"leave_sheet_rows": len(leave_rows),
 		"apple_sheet_rows": len(apple_rows),
+		"rejected_company_or_employee_rows": rejected_rows,
 	}
 
 
@@ -717,14 +1135,143 @@ def generate_attendance_exceptions(batch: str):
 	return {"created": len(created), "exceptions": created}
 
 
-def _get_month_records(doctype, date_field, attendance_month):
+def _get_month_records(doctype, date_field, attendance_month, company):
 	start, end = _month_bounds(attendance_month)
 	return frappe.get_all(
 		doctype,
-		filters=[[date_field, ">=", start], [date_field, "<", end]],
+		filters=[["company", "=", company], [date_field, ">=", start], [date_field, "<", end]],
 		fields=["*"],
 		order_by=f"{date_field} asc",
 	)
+
+
+def _get_or_create_month_lock(company, attendance_month):
+	name = frappe.db.get_value(MONTH_LOCK_DOCTYPE, {"company": company, "attendance_month": attendance_month}, "name")
+	if name:
+		return frappe.get_doc(MONTH_LOCK_DOCTYPE, name)
+	lock = frappe.get_doc(
+		{
+			"doctype": MONTH_LOCK_DOCTYPE,
+			"company": company,
+			"attendance_month": attendance_month,
+			"status": "草稿",
+			"active_version": 1,
+		}
+	)
+	lock.insert(ignore_permissions=True)
+	return lock
+
+
+def _append_lock_audit(lock, action, reason=""):
+	doc = frappe.get_doc(
+		{
+			"doctype": LOCK_AUDIT_DOCTYPE,
+			"month_lock": lock.name,
+			"company": lock.company,
+			"attendance_month": lock.attendance_month,
+			"action": action,
+			"lock_version": lock.active_version,
+			"reason": reason,
+			"operator": frappe.session.user,
+			"occurred_on": now_datetime(),
+			"source_checksum": lock.source_checksum,
+		}
+	)
+	doc.insert(ignore_permissions=True)
+	return doc.name
+
+
+def _prepare_month_lock_for_generation(company, attendance_month):
+	lock = _get_or_create_month_lock(company, attendance_month)
+	if lock.status == "已锁定":
+		frappe.throw(_("该公司考勤月份已锁定，不能重新生成。"))
+	if lock.status == "已重开":
+		lock.active_version = int(lock.active_version or 1) + 1
+		lock.status = "草稿"
+		lock.save(ignore_permissions=True)
+		_append_lock_audit(lock, "创建更正版本", _("解锁后的更正版本"))
+	return lock
+
+
+def _correction_version_for_import(company, attendance_month):
+	lock = _get_or_create_month_lock(company, attendance_month)
+	if lock.status == "已锁定":
+		frappe.throw(_("该公司考勤月份已锁定，不能导入更正数据。"))
+	return int(lock.active_version or 1) + (1 if lock.status == "已重开" else 0)
+
+
+def _assert_month_ready_for_lock(company, attendance_month):
+	day_checks = _get_month_records(DAY_CHECK_DOCTYPE, "attendance_date", attendance_month, company)
+	unmatched = [row for row in day_checks if not getattr(row, "employee", "")]
+	batch_ids = sorted({_cell_text(getattr(row, "import_batch", "")) for row in day_checks if getattr(row, "import_batch", "")})
+	start, end = _month_bounds(attendance_month)
+	pending = frappe.get_all(
+		EXCEPTION_DOCTYPE,
+		filters=[
+			["import_batch", "in", batch_ids or ["__none__"]],
+			["attendance_date", ">=", start],
+			["attendance_date", "<", end],
+			["confirmation_status", "=", "待确认"],
+		],
+		fields=["name"],
+	)
+	if unmatched:
+		frappe.throw(_("存在 {0} 条未匹配员工的日考勤，不能锁定。").format(len(unmatched)))
+	if pending:
+		frappe.throw(_("存在 {0} 条待确认考勤异常，不能锁定。").format(len(pending)))
+
+
+def _daily_identity_key(row):
+	return (
+		getattr(row, "employee", "") or getattr(row, "employee_code", "") or getattr(row, "employee_name", ""),
+		_cell_text(getattr(row, "attendance_date", "")),
+	)
+
+
+def _row_correction_version(row):
+	try:
+		return int(getattr(row, "correction_version", 1) or 1)
+	except (TypeError, ValueError):
+		return 1
+
+
+def _prefer_manual_daily_rows(rows):
+	selected = {}
+	for row in rows:
+		key = _daily_identity_key(row)
+		if not key[0]:
+			continue
+		current = selected.get(key)
+		if not current or _row_correction_version(row) > _row_correction_version(current):
+			selected[key] = row
+		elif _row_correction_version(row) == _row_correction_version(current) and getattr(row, "source_kind", "") == "人工调整":
+			selected[key] = row
+	return list(selected.values())
+
+
+def _company_apple_records(attendance_month, company):
+	start, end = _month_bounds(attendance_month)
+	batches = frappe.get_all(ATTENDANCE_BATCH_DOCTYPE, filters={"company": company}, pluck="name")
+	if not batches:
+		return []
+	return frappe.get_all(
+		APPLE_RECORD_DOCTYPE,
+		filters={"import_batch": ["in", batches], "reward_date": ["between", [start, end]]},
+		fields=["*"],
+		order_by="reward_date asc",
+	)
+
+
+def _source_summary_metadata(rows):
+	batch_ids = sorted({_cell_text(getattr(row, "import_batch", "")) for row in rows if getattr(row, "import_batch", "")})
+	batch_records = frappe.get_all(
+		ATTENDANCE_BATCH_DOCTYPE,
+		filters={"name": ["in", batch_ids]},
+		fields=["name", "source_checksum"],
+	)
+	checksums = sorted({_cell_text(getattr(batch, "source_checksum", "")) for batch in batch_records if getattr(batch, "source_checksum", "")})
+	payload = json.dumps({"batches": batch_ids, "source_checksums": checksums}, ensure_ascii=False, sort_keys=True)
+	return ",".join(batch_ids), hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _calculate_monthly_values(values):
@@ -793,15 +1340,17 @@ def _calculate_monthly_values(values):
 
 
 @frappe.whitelist()
-def generate_monthly_attendance_summary(attendance_month: str):
+def generate_monthly_attendance_summary(company: str, attendance_month: str):
+	company = _require_company(company)
 	_month_bounds(attendance_month)
-	for name in frappe.get_all(MONTHLY_SUMMARY_DOCTYPE, filters={"attendance_month": attendance_month}, pluck="name"):
-		frappe.delete_doc(MONTHLY_SUMMARY_DOCTYPE, name, ignore_permissions=True, force=True)
-
+	lock = _prepare_month_lock_for_generation(company, attendance_month)
+	attendance_lock_version = str(lock.active_version)
+	daily_rows = _prefer_manual_daily_rows(_get_month_records(DAY_CHECK_DOCTYPE, "attendance_date", attendance_month, company))
+	source_batch_ids, source_checksum = _source_summary_metadata(daily_rows)
 	summaries = defaultdict(lambda: defaultdict(float))
 	identity = {}
 	person_aliases = {}
-	for row in _get_month_records(DAY_CHECK_DOCTYPE, "attendance_date", attendance_month):
+	for row in daily_rows:
 		key = _primary_person_key(row)
 		if not key:
 			continue
@@ -825,7 +1374,7 @@ def generate_monthly_attendance_summary(attendance_month: str):
 		summaries[key]["large_night_shift_count"] += flt(row.large_night_shift_count)
 		summaries[key]["small_night_shift_count"] += flt(row.small_night_shift_count)
 
-	for row in _get_month_records(APPLE_RECORD_DOCTYPE, "reward_date", attendance_month):
+	for row in _company_apple_records(attendance_month, company):
 		if not row.is_valid_approval:
 			continue
 		key = next((person_aliases[alias] for alias in _person_keys(row) if alias in person_aliases), _primary_person_key(row))
@@ -838,16 +1387,26 @@ def generate_monthly_attendance_summary(attendance_month: str):
 		summaries[key]["red_apples"] += flt(row.red_apples)
 		summaries[key]["apple_reward_amount"] += flt(row.reward_amount)
 
+	existing_summaries = frappe.get_all(
+		MONTHLY_SUMMARY_DOCTYPE,
+		filters=_attendance_scope_filters(company, attendance_month, attendance_lock_version),
+		fields=["name", "employee", "employee_code", "employee_name"],
+	)
+	existing_by_person = {_primary_person_key(row): row.name for row in existing_summaries if _primary_person_key(row)}
 	created = []
 	for key, values in summaries.items():
 		source = identity[key]
 		employee = getattr(source, "employee", None)
 		date_of_joining = frappe.db.get_value("Employee", employee, "date_of_joining") if employee else None
 		calculated = _calculate_monthly_values(values)
-		doc = frappe.get_doc(
-			{
+		summary_values = {
 				"doctype": MONTHLY_SUMMARY_DOCTYPE,
+				"company": company,
 				"attendance_month": attendance_month,
+				"attendance_lock_version": attendance_lock_version,
+				"lock_status": "草稿",
+				"source_batch_ids": source_batch_ids,
+				"source_checksum": source_checksum,
 				"employee": employee,
 				"employee_code": getattr(source, "employee_code", ""),
 				"employee_name": getattr(source, "employee_name", ""),
@@ -886,13 +1445,255 @@ def generate_monthly_attendance_summary(attendance_month: str):
 				"apple_reward_amount": values["apple_reward_amount"],
 				"red_apple_penalty": calculated["red_apple_penalty"],
 				"status": "草稿",
-			}
-		)
-		doc.insert(ignore_permissions=True)
+		}
+		existing_name = existing_by_person.get(key)
+		if existing_name:
+			doc = frappe.get_doc(MONTHLY_SUMMARY_DOCTYPE, existing_name)
+			doc.update(summary_values)
+			doc.save(ignore_permissions=True)
+		else:
+			doc = frappe.get_doc(summary_values)
+			doc.insert(ignore_permissions=True)
 		created.append(doc.name)
 
+	lock.source_batch_ids = source_batch_ids
+	lock.source_checksum = source_checksum
+	lock.save(ignore_permissions=True)
 	frappe.db.commit()
-	return {"created": len(created), "summaries": created}
+	return {"created": len(created), "summaries": created, "company": company, "attendance_lock_version": attendance_lock_version}
+
+
+@frappe.whitelist()
+def lock_attendance_month(company: str, attendance_month: str, reason: str = ""):
+	company = _require_company(company)
+	_month_bounds(attendance_month)
+	lock = _get_or_create_month_lock(company, attendance_month)
+	if lock.status == "已锁定":
+		frappe.throw(_("该公司考勤月份已经锁定。"))
+	_assert_month_ready_for_lock(company, attendance_month)
+	scope = _attendance_scope_filters(company, attendance_month, str(lock.active_version))
+	summaries = frappe.get_all(MONTHLY_SUMMARY_DOCTYPE, filters=scope, fields=["name"])
+	if not summaries:
+		frappe.throw(_("没有可锁定的月度考勤草稿。"))
+	locked_on = now_datetime()
+	lock.status = "已锁定"
+	lock.locked_by = frappe.session.user
+	lock.locked_on = locked_on
+	lock.save(ignore_permissions=True)
+	for summary in summaries:
+		frappe.db.set_value(
+			MONTHLY_SUMMARY_DOCTYPE,
+			summary.name,
+			{"lock_status": "已锁定", "locked_by": frappe.session.user, "locked_on": locked_on},
+		)
+	audit_name = _append_lock_audit(lock, "锁定", reason)
+	frappe.db.commit()
+	return {
+		"month_lock": lock.name,
+		"company": company,
+		"attendance_month": attendance_month,
+		"attendance_lock_version": str(lock.active_version),
+		"audit": audit_name,
+	}
+
+
+@frappe.whitelist()
+def unlock_attendance_month(company: str, attendance_month: str, reason: str):
+	company = _require_company(company)
+	_month_bounds(attendance_month)
+	reason = (reason or "").strip()
+	if not reason:
+		frappe.throw(_("解锁考勤月份必须填写原因。"))
+	lock = _get_or_create_month_lock(company, attendance_month)
+	if lock.status != "已锁定":
+		frappe.throw(_("只有已锁定的考勤月份可以解锁。"))
+	lock.status = "已重开"
+	lock.reopened_by = frappe.session.user
+	lock.reopened_on = now_datetime()
+	lock.save(ignore_permissions=True)
+	audit_name = _append_lock_audit(lock, "解锁", reason)
+	frappe.db.commit()
+	return {
+		"month_lock": lock.name,
+		"company": company,
+		"attendance_month": attendance_month,
+		"attendance_lock_version": str(lock.active_version),
+		"audit": audit_name,
+	}
+
+
+def _attendance_demo_employee(employee_code):
+	return frappe.db.get_value(
+		"Employee",
+		{"employee_number": employee_code, "company": TEST_ATTENDANCE_DEMO_COMPANY},
+		["name", "employee_name", "department"],
+		as_dict=True,
+	)
+
+
+def _get_or_create_attendance_demo_batch():
+	name = frappe.db.get_value(
+		ATTENDANCE_BATCH_DOCTYPE,
+		{"company": TEST_ATTENDANCE_DEMO_COMPANY, "source_checksum": TEST_ATTENDANCE_DEMO_CHECKSUM},
+		"name",
+	)
+	if name:
+		return frappe.get_doc(ATTENDANCE_BATCH_DOCTYPE, name), True
+	batch = frappe.get_doc(
+		{
+			"doctype": ATTENDANCE_BATCH_DOCTYPE,
+			"company": TEST_ATTENDANCE_DEMO_COMPANY,
+			"attendance_month": TEST_ATTENDANCE_DEMO_MONTH,
+			"source_type": "test_attendance_demo",
+			"source_checksum": TEST_ATTENDANCE_DEMO_CHECKSUM,
+			"status": "已导入",
+			"notes": "TEST-HRMS attendance demo: raw DingTalk source plus manual adjustment.",
+		}
+	)
+	batch.insert(ignore_permissions=True)
+	return batch, False
+
+
+def _seed_attendance_demo_day_check(batch, row, source_kind, source_row):
+	employee_code = row["工号"]
+	if frappe.db.exists(
+		DAY_CHECK_DOCTYPE,
+		{
+			"import_batch": batch.name,
+			"employee_code": employee_code,
+			"attendance_date": _parse_date(row["日期"]),
+			"source_kind": source_kind,
+		},
+	):
+		return False
+	return bool(
+		_insert_day_check(
+			batch.name,
+			{**row, "_source_row": source_row},
+			TEST_ATTENDANCE_DEMO_COMPANY,
+			source_kind,
+			"TEST-HRMS attendance demo",
+			1,
+		)
+	)
+
+
+@frappe.whitelist()
+def seed_test_attendance_demo(dry_run: int | str = 0):
+	"""Create an idempotent attendance-only closure in TEST-HRMS / 2099-02."""
+	dry_run = bool(int(dry_run or 0))
+	if not frappe.db.exists("Company", TEST_ATTENDANCE_DEMO_COMPANY):
+		frappe.throw(_("请先创建 TEST-HRMS 演示公司及员工种子。"))
+	people = {code: _attendance_demo_employee(code) for code in ("TEST-REG-003", "TEST-MOV-007")}
+	missing_people = [code for code, employee in people.items() if not employee]
+	if missing_people:
+		frappe.throw(_("缺少 TEST-HRMS 演示员工：{0}").format("、".join(missing_people)))
+	if dry_run:
+		return {
+			"company": TEST_ATTENDANCE_DEMO_COMPANY,
+			"attendance_month": TEST_ATTENDANCE_DEMO_MONTH,
+			"dry_run": True,
+			"would_create": ["导入批次", "钉钉原始日统计", "人工调整日统计", "考勤异常", "月度终稿", "月度锁定", "锁定审计"],
+		}
+
+	lock = _get_or_create_month_lock(TEST_ATTENDANCE_DEMO_COMPANY, TEST_ATTENDANCE_DEMO_MONTH)
+	if lock.status == "已锁定":
+		return get_test_attendance_demo_status()
+
+	batch, batch_exists = _get_or_create_attendance_demo_batch()
+	regular = people["TEST-REG-003"]
+	moved = people["TEST-MOV-007"]
+	rows = [
+		(
+			"钉钉原始导出",
+			2,
+			{
+				"姓名": regular.employee_name,
+				"工号": "TEST-REG-003",
+				"日期": f"{TEST_ATTENDANCE_DEMO_MONTH}-03",
+				"班次": "08:00-17:00",
+				"上班时间": "08:00",
+				"下班时间": "17:00",
+				"标准工时": 8,
+				"实际出勤(小时)": 8,
+				"实际部门": regular.department,
+			},
+		),
+		(
+			"人工调整",
+			3,
+			{
+				"姓名": regular.employee_name,
+				"工号": "TEST-REG-003",
+				"日期": f"{TEST_ATTENDANCE_DEMO_MONTH}-03",
+				"班次": "08:00-17:00",
+				"上班时间": "08:00",
+				"下班时间": "16:30",
+				"标准工时": 8,
+				"实际出勤(小时)": 7.5,
+				"请假/事假(小时)": 0.5,
+				"关联审批单": "DEMO-LEAVE-2099-02-03",
+				"实际部门": regular.department,
+			},
+		),
+		(
+			"钉钉原始导出",
+			4,
+			{
+				"姓名": moved.employee_name,
+				"工号": "TEST-MOV-007",
+				"日期": f"{TEST_ATTENDANCE_DEMO_MONTH}-04",
+				"班次": "08:00-17:00",
+				"上班时间": "08:00",
+				"下班时间": "",
+				"下班缺卡": "是",
+				"标准工时": 8,
+				"实际出勤(小时)": 8,
+				"实际部门": moved.department,
+			},
+		),
+	]
+	created_days = sum(1 for source_kind, source_row, row in rows if _seed_attendance_demo_day_check(batch, row, source_kind, source_row))
+	batch.daily_sheet_rows = len(rows)
+	batch.save(ignore_permissions=True)
+	exception_result = generate_attendance_exceptions(batch.name)
+	for name in exception_result["exceptions"]:
+		frappe.db.set_value(
+			EXCEPTION_DOCTYPE,
+			name,
+			{"confirmation_status": "已确认", "confirmed_by": frappe.session.user, "confirmed_on": now_datetime(), "remarks": "TEST-HRMS 演示：日核对已确认。"},
+		)
+	monthly_result = generate_monthly_attendance_summary(TEST_ATTENDANCE_DEMO_COMPANY, TEST_ATTENDANCE_DEMO_MONTH)
+	lock_result = lock_attendance_month(TEST_ATTENDANCE_DEMO_COMPANY, TEST_ATTENDANCE_DEMO_MONTH, "TEST-HRMS 演示月度确认")
+	frappe.db.commit()
+	return {
+		"company": TEST_ATTENDANCE_DEMO_COMPANY,
+		"attendance_month": TEST_ATTENDANCE_DEMO_MONTH,
+		"batch": batch.name,
+		"batch_existing": batch_exists,
+		"created_day_checks": created_days,
+		"exceptions": exception_result["created"],
+		"monthly": monthly_result,
+		"lock": lock_result,
+	}
+
+
+@frappe.whitelist()
+def get_test_attendance_demo_status():
+	"""Read-only inventory for the TEST-HRMS attendance closure."""
+	company = TEST_ATTENDANCE_DEMO_COMPANY
+	month = TEST_ATTENDANCE_DEMO_MONTH
+	batches = frappe.get_all(ATTENDANCE_BATCH_DOCTYPE, filters={"company": company, "attendance_month": month}, fields=["name", "status", "daily_sheet_rows", "source_checksum"])
+	batch_ids = [batch.name for batch in batches]
+	return {
+		"company": company,
+		"attendance_month": month,
+		"batches": batches,
+		"day_checks": frappe.get_all(DAY_CHECK_DOCTYPE, filters=[["company", "=", company], ["attendance_date", ">=", f"{month}-01"], ["attendance_date", "<", "2099-03-01"]], fields=["name", "employee_code", "attendance_date", "source_kind", "actual_attendance_hours", "leave_hours"]),
+		"exceptions": frappe.get_all(EXCEPTION_DOCTYPE, filters={"import_batch": ["in", batch_ids or ["__none__"]]}, fields=["name", "employee_code", "exception_type", "confirmation_status"]),
+		"month_lock": frappe.db.get_value(MONTH_LOCK_DOCTYPE, {"company": company, "attendance_month": month}, ["name", "status", "active_version", "source_checksum"], as_dict=True),
+		"summaries": frappe.get_all(MONTHLY_SUMMARY_DOCTYPE, filters={"company": company, "attendance_month": month}, fields=["name", "employee_code", "attendance_lock_version", "lock_status", "actual_attendance_hours", "leave_hours"]),
+	}
 
 
 def _list_records(doctype, filters=None, fields=None, page_length=50):
@@ -906,9 +1707,26 @@ def _list_records(doctype, filters=None, fields=None, page_length=50):
 
 
 @frappe.whitelist()
-def list_attendance_day_checks(batch: str = "", page_length: int = 50):
-	filters = {"import_batch": batch} if batch else {}
-	return _list_records(DAY_CHECK_DOCTYPE, filters=filters, page_length=page_length)
+def list_attendance_day_checks(
+	company: str,
+	batch: str = "",
+	attendance_month: str = "",
+	effective_only: int = 1,
+	page_length: int = 50,
+):
+	company = _require_company(company)
+	if attendance_month:
+		rows = _get_month_records(DAY_CHECK_DOCTYPE, "attendance_date", attendance_month, company)
+		if batch:
+			rows = [row for row in rows if row.import_batch == batch]
+	else:
+		filters = {"company": company}
+		if batch:
+			filters["import_batch"] = batch
+		rows = _list_records(DAY_CHECK_DOCTYPE, filters=filters, page_length=page_length)
+	if int(effective_only or 0):
+		rows = _prefer_manual_daily_rows(rows)
+	return rows[: int(page_length or 50)]
 
 
 @frappe.whitelist()
@@ -924,8 +1742,10 @@ def list_attendance_exceptions(batch: str = "", page_length: int = 50):
 
 
 @frappe.whitelist()
-def list_monthly_attendance_summary(attendance_month: str = "", page_length: int = 50):
-	filters = {"attendance_month": attendance_month} if attendance_month else {}
+def list_monthly_attendance_summary(company: str, attendance_month: str = "", page_length: int = 50):
+	filters = {"company": _require_company(company)}
+	if attendance_month:
+		filters["attendance_month"] = attendance_month
 	return _list_records(MONTHLY_SUMMARY_DOCTYPE, filters=filters, page_length=page_length)
 
 
@@ -978,7 +1798,7 @@ def list_attendance_custom_rules(rule_group: str = "", enabled_only: int = 0, pa
 
 
 @frappe.whitelist()
-def upsert_attendance_custom_rule(rule):
+def upsert_attendance_custom_rule(rule: str | dict):
 	if isinstance(rule, str):
 		rule = json.loads(rule)
 	rule = frappe._dict(rule or {})

@@ -160,7 +160,7 @@ def _payroll_status(employee):
 
 
 @frappe.whitelist(allow_guest=True)
-def get_employee_self_snapshot(auth_code):
+def get_employee_self_snapshot(auth_code: str):
 	"""Return only the current DingTalk user's own HR snapshot.
 
 	This is the public employee gateway surface. It intentionally does not accept

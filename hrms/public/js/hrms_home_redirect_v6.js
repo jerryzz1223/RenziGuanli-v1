@@ -279,6 +279,7 @@
 					type: "section",
 					label: "考勤统计",
 					children: [
+						{ label: "考勤导入中心", route: "/desk/attendance-import-center/import", slug: "attendance-import-center/import" },
 						{ label: "统计首页", route: "/desk/attendance-import-center/summary", slug: "attendance-import-center/summary" },
 						{ label: "每日考勤", route: "/desk/attendance-import-center/daily", slug: "attendance-import-center/daily" },
 						{ label: "月考勤表", route: "/desk/attendance-import-center/monthly", slug: "attendance-import-center/monthly" },

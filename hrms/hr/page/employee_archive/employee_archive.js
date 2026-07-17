@@ -19,7 +19,7 @@ class EmployeeArchivePage {
 		this.sort_by = "modified";
 		this.sort_order = "desc";
 		this.page_number = 1;
-		this.page_length = 20;
+		this.page_length = 500;
 		this.dynamic_columns = [];
 		this.rows = [];
 		this.total = 0;
@@ -51,7 +51,7 @@ class EmployeeArchivePage {
 
 	render_shell() {
 		this.wrapper.innerHTML = `
-			<div class="hrms-archive-page hrms-employee-roster-view">
+			<div class="hrms-archive-page hrms-employee-archive-view">
 				<div class="hrms-archive-summary" data-summary></div>
 				<div class="hrms-archive-toolbar">
 					<div class="hrms-archive-search">
@@ -177,13 +177,13 @@ class EmployeeArchivePage {
 
 	load_departments() {
 		frappe.db
-			.get_list("Department", { fields: ["name"], limit: 200, order_by: "name asc" })
+			.get_list("Department", { fields: ["name", "department_name"], limit: 200, order_by: "department_name asc" })
 			.then((departments) => {
 				const select = this.wrapper.querySelector(".hrms-archive-department");
 				departments.forEach((department) => {
 					const option = document.createElement("option");
 					option.value = department.name;
-					option.textContent = department.name;
+					option.textContent = department.department_name || this.format_department_display(department.name);
 					select.appendChild(option);
 				});
 			});
@@ -277,7 +277,17 @@ class EmployeeArchivePage {
 				</div>
 			`;
 		}
+		if (column.fieldname === "department") {
+			return frappe.utils.escape_html(__(employee.department_display || this.format_department_display(value)));
+		}
+		if (column.fieldname === "custom_employee_code") {
+			return frappe.utils.escape_html(__(employee.employee_code_display || value || employee.employee_number || ""));
+		}
 		return frappe.utils.escape_html(__(String(value)));
+	}
+
+	format_department_display(value) {
+		return String(value || "").replace(/\s+-\s+[^-]+$/, "").trim();
 	}
 
 	open_quick_edit(employee) {
@@ -302,6 +312,8 @@ class EmployeeArchivePage {
 
 	render_pagination() {
 		const total_pages = Math.max(Math.ceil(this.total / this.page_length), 1);
+		const pagination = this.wrapper.querySelector(".hrms-archive-pagination");
+		pagination.classList.toggle("hidden", total_pages <= 1);
 		this.wrapper.querySelector("[data-page-status]").textContent = __("分页 {0} / {1}，共 {2} 人", [
 			this.page_number,
 			total_pages,

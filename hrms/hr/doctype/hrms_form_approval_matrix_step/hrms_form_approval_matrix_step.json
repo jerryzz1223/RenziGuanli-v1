@@ -1,0 +1,15 @@
+{
+ "actions": [],
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "fields": [
+  {"fieldname": "step_no", "fieldtype": "Int", "in_list_view": 1, "label": "步骤", "reqd": 1},
+  {"fieldname": "step_label", "fieldtype": "Data", "in_list_view": 1, "label": "节点名称", "reqd": 1},
+  {"fieldname": "approver_role", "fieldtype": "Link", "in_list_view": 1, "label": "审批角色", "options": "Role", "reqd": 1},
+  {"fieldname": "remarks", "fieldtype": "Small Text", "label": "说明"}
+ ],
+ "istable": 1,
+ "module": "HR",
+ "name": "HRMS Form Approval Matrix Step"
+}

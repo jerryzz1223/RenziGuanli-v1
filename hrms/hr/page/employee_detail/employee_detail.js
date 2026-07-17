@@ -499,6 +499,7 @@ class EmployeeDetailPage {
 	}
 
 	render_header(header) {
+		const department_display = this.get_department_display(header);
 		const meta = [
 			header.employment_type,
 			header.status ? __(header.status) : "",
@@ -520,7 +521,7 @@ class EmployeeDetailPage {
 							${meta.map((item) => `<span>${frappe.utils.escape_html(item)}</span>`).join("")}
 						</div>
 						<div class="hrms-employee-detail-meta">
-							${header.department ? `<span>${__("部门")}：${frappe.utils.escape_html(header.department)}</span>` : ""}
+							${department_display ? `<span>${__("部门")}：${frappe.utils.escape_html(department_display)}</span>` : ""}
 							${header.designation ? `<span>${__("岗位")}：${frappe.utils.escape_html(header.designation)}</span>` : ""}
 						</div>
 					</div>
@@ -566,6 +567,7 @@ class EmployeeDetailPage {
 
 	render_overview() {
 		const header = this.detail?.header || {};
+		const department_display = this.get_department_display(header);
 		return `
 			<div class="hrms-employee-detail-overview">
 				<div class="hrms-employee-detail-main-stack">
@@ -574,11 +576,11 @@ class EmployeeDetailPage {
 							<h3>${__("员工概况")}</h3>
 						</div>
 						<div class="hrms-employee-detail-summary-line">
-							<span>${__("概况")}：${frappe.utils.escape_html(this.join_values([header.gender, header.age, header.department, header.designation]))}</span>
+							<span>${__("概况")}：${frappe.utils.escape_html(this.join_values([header.gender, header.age, department_display, header.designation]))}</span>
 							<span>${__("司龄")}：${frappe.utils.escape_html(header.service_years || this.calculate_service_years(header.date_of_joining))}</span>
 						</div>
 						<div class="hrms-employee-detail-kpi-grid">
-							${this.render_kpi("部门", header.department || "未设置")}
+							${this.render_kpi("部门", department_display || "未设置")}
 							${this.render_kpi("岗位", header.designation || "未设置")}
 							${this.render_kpi("入职日期", header.date_of_joining || "未设置")}
 							${this.render_kpi("状态", header.status ? __(header.status) : "未设置")}
@@ -634,16 +636,17 @@ class EmployeeDetailPage {
 
 	render_growth_timeline() {
 		const header = this.detail?.header || {};
+		const department_display = this.get_department_display(header);
 		const items = [
 			{
 				date: header.date_of_joining || __("入职"),
 				title: __("入职"),
-				description: this.join_values([header.department, header.designation]) || __("员工入职"),
+				description: this.join_values([department_display, header.designation]) || __("员工入职"),
 			},
 			{
 				date: __("至今"),
 				title: __("当前任职"),
-				description: this.join_values([header.department, header.designation, header.status ? __(header.status) : ""]),
+				description: this.join_values([department_display, header.designation, header.status ? __(header.status) : ""]),
 			},
 		];
 		return items
@@ -870,6 +873,10 @@ class EmployeeDetailPage {
 			return "";
 		}
 		return String(value);
+	}
+
+	get_department_display(header) {
+		return header.department_display || header.department || "";
 	}
 
 	join_values(values) {

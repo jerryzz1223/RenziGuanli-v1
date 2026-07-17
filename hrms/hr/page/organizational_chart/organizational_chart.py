@@ -11,7 +11,11 @@ from frappe.utils import cint, cstr
 
 HYBRID_MANAGER_KEYWORDS = ("课长", "组长", "主管", "总监", "副总", "经理", "班长", "代理")
 YONGXIN_Q2_ORG_TEMPLATE = Path(__file__).with_name("yongxin_q2_org_structure.json")
+YONGXIN_Q3_BASELINE_WORKBOOK = Path("/Users/lrj/Documents/SAD/YOngxin/人资/副本人资系统沟通表260713.xlsx")
+YONGXIN_Q3_ORG_SHEET = "26Q3组织架构图"
+YONGXIN_Q3_SNAPSHOT_VERSION = "2026Q3"
 YONGXIN_COMPANY_NAME = "永新"
+ORGANIZATION_TECHNICAL_SUFFIX_RE = re.compile(r"\s*[-－]\s*(?:\d+[A-Za-z]?|1D|11)\s*$", re.IGNORECASE)
 
 HYBRID_ROSTER_FIELD_MAP = {
 	"工号": "custom_employee_code",
@@ -56,7 +60,8 @@ DEPARTMENT_QUICK_EDIT_FIELDS = {
 
 def _normalize_yongxin_company(company: str | None = None):
 	if company and company != "All Companies":
-		return company
+		if frappe.db.exists("Company", company):
+			return company
 	if frappe.db.exists("Company", YONGXIN_COMPANY_NAME):
 		return YONGXIN_COMPANY_NAME
 	return frappe.defaults.get_user_default("Company") or frappe.db.get_value("Company", {}, "name")
@@ -125,6 +130,72 @@ def get_yongxin_q2_org_template_preview():
 		"chart_node_count": _count_seed_nodes([seed.get("chart_tree")]) if seed.get("chart_tree") else 0,
 		"position_count": len(seed.get("position_templates") or []),
 		"staffing_summary_count": len(seed.get("staffing_summary") or []),
+	}
+
+
+@frappe.whitelist()
+def preview_yongxin_q3_organization_snapshot(
+	source_path: str | None = None,
+	company: str | None = None,
+	snapshot_version: str | None = None,
+):
+	"""Read the Q3 source workbook and return a versioned organization precheck without writes."""
+
+	source = Path(source_path or YONGXIN_Q3_BASELINE_WORKBOOK)
+	if not source.exists():
+		frappe.throw(_("未找到组织基线文件：{0}").format(source))
+
+	workbook = _load_xlsx_workbook(source)
+	snapshot_version = snapshot_version or YONGXIN_Q3_SNAPSHOT_VERSION
+	company = _normalize_yongxin_company(company or YONGXIN_COMPANY_NAME) or YONGXIN_COMPANY_NAME
+	org_sheet = workbook[YONGXIN_Q3_ORG_SHEET] if YONGXIN_Q3_ORG_SHEET in workbook.sheetnames else None
+
+	return {
+		"company": company,
+		"company_context": {
+			"root_company": YONGXIN_COMPANY_NAME,
+			"isolation_doctype": "Company",
+			"default_locked": company == YONGXIN_COMPANY_NAME,
+		},
+		"snapshot_version": snapshot_version,
+		"source_document": source.name,
+		"source_path": str(source),
+		"organization_sheet": YONGXIN_Q3_ORG_SHEET,
+		"write_mode": "preview_only",
+		"raw_name_policy": {
+			"display_name_uses_business_name": True,
+			"raw_name_retained": True,
+			"technical_suffix_examples": ["-11", "1D", "- 1D"],
+			"dingtalk_path_example": "林俊松-陈文萍-品保课",
+		},
+		"sheets": [
+			{"sheet_name": sheet.title, "row_count": sheet.max_row or 0, "column_count": sheet.max_column or 0}
+			for sheet in workbook.worksheets
+		],
+		"organization_cells": _preview_q3_org_cells(org_sheet),
+		"roster_precheck": _preview_organization_sheet(
+			workbook,
+			"花名册",
+			{
+				"employee_code": ("工号", "员工编号"),
+				"employee_name": ("姓名", "员工姓名"),
+				"raw_department_name": ("部门",),
+				"raw_designation_name": ("岗位", "职位", "职务", "现职务"),
+				"grade": ("职级", "员工等级"),
+				"reports_to": ("上级主管", "直接上级", "汇报对象"),
+			},
+		),
+		"dingtalk_precheck": _preview_organization_sheet(
+			workbook,
+			"每日统计（钉钉导出）",
+			{
+				"employee_code": ("工号", "员工编号"),
+				"employee_name": ("姓名", "员工姓名"),
+				"raw_department_name": ("部门",),
+				"department_name": ("实际部门",),
+				"raw_designation_name": ("职位", "岗位", "职务", "现职务"),
+			},
+		),
 	}
 
 
@@ -400,6 +471,144 @@ def _load_yongxin_q2_org_template():
 	if not YONGXIN_Q2_ORG_TEMPLATE.exists():
 		frappe.throw(_("未找到组织架构模板文件。"))
 	return json.loads(YONGXIN_Q2_ORG_TEMPLATE.read_text(encoding="utf-8"))
+
+
+def _load_xlsx_workbook(source: Path):
+	try:
+		from openpyxl import load_workbook
+	except ImportError:
+		frappe.throw(_("缺少 openpyxl，无法读取组织基线 Excel。"))
+	return load_workbook(source, read_only=True, data_only=True)
+
+
+def _preview_q3_org_cells(sheet, limit=80):
+	if not sheet:
+		return []
+
+	cells = []
+	for row in sheet.iter_rows():
+		for cell in row:
+			value = _organization_source_name(cell.value)
+			if not value:
+				continue
+			first_line = value.splitlines()[0].strip()
+			cells.append(
+				{
+					"source_cell": cell.coordinate,
+					"raw_department_name": first_line,
+					"department_name": _organization_business_name(first_line),
+					"raw_value": value,
+				}
+			)
+			if len(cells) >= limit:
+				return cells
+	return cells
+
+
+def _preview_organization_sheet(workbook, sheet_name, field_aliases, limit=25):
+	if sheet_name not in workbook.sheetnames:
+		return {"sheet_name": sheet_name, "found": False, "rows": [], "errors": [_("工作表不存在。")]}
+
+	sheet = workbook[sheet_name]
+	header_row, header_indexes = _find_organization_header_indexes(sheet, field_aliases)
+	if not header_indexes:
+		return {
+			"sheet_name": sheet_name,
+			"found": True,
+			"header_row": None,
+			"rows": [],
+			"errors": [_("未找到姓名、部门等组织字段表头。")],
+		}
+
+	rows = []
+	for row_index, values in enumerate(sheet.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
+		raw = {
+			fieldname: values[index] if index < len(values) else None
+			for fieldname, index in header_indexes.items()
+		}
+		normalized = _normalize_organization_preview_row(row_index, raw)
+		if not normalized:
+			continue
+		rows.append(normalized)
+		if len(rows) >= limit:
+			break
+
+	return {
+		"sheet_name": sheet_name,
+		"found": True,
+		"header_row": header_row,
+		"matched_fields": sorted(header_indexes),
+		"rows": rows,
+		"errors": [],
+	}
+
+
+def _find_organization_header_indexes(sheet, field_aliases, max_scan_rows=12):
+	for row_index, values in enumerate(sheet.iter_rows(max_row=max_scan_rows, values_only=True), start=1):
+		headers = {
+			_clean_organization_header(value): index
+			for index, value in enumerate(values)
+			if _clean_organization_header(value)
+		}
+		matches = {}
+		for fieldname, aliases in field_aliases.items():
+			for alias in aliases:
+				index = headers.get(_clean_organization_header(alias))
+				if index is not None:
+					matches[fieldname] = index
+					break
+		if matches.get("employee_name") and (matches.get("raw_department_name") or matches.get("department_name")):
+			return row_index, matches
+	return None, {}
+
+
+def _normalize_organization_preview_row(row_index, raw):
+	raw_department_name = _organization_source_name(
+		raw.get("raw_department_name") or raw.get("department_name")
+	)
+	department_name = _organization_business_name(raw.get("department_name")) or _organization_business_name(raw_department_name)
+	raw_designation_name = _organization_source_name(raw.get("raw_designation_name"))
+	designation_name = _organization_business_name(raw_designation_name)
+	employee_name = _organization_source_name(raw.get("employee_name"))
+
+	if not employee_name and not raw_department_name and not raw_designation_name:
+		return None
+
+	return {
+		"row_number": row_index,
+		"employee_code": _organization_source_name(raw.get("employee_code")),
+		"employee_name": employee_name,
+		"raw_department_name": raw_department_name,
+		"department_name": department_name,
+		"raw_designation_name": raw_designation_name,
+		"designation_name": designation_name,
+		"grade": _organization_source_name(raw.get("grade")),
+		"reports_to": _organization_source_name(raw.get("reports_to")),
+	}
+
+
+def _clean_organization_header(value):
+	return re.sub(r"\s+", "", _organization_source_name(value).replace("/", ""))
+
+
+def _organization_source_name(value):
+	return cstr(value).strip()
+
+
+def _organization_business_name(value):
+	text = _organization_source_name(value)
+	if not text:
+		return ""
+	text = ORGANIZATION_TECHNICAL_SUFFIX_RE.sub("", text).strip()
+	for separator in ("／", "\\", ">", "｜", "|"):
+		text = text.replace(separator, "/")
+	parts = [part.strip() for part in text.split("/") if part.strip()]
+	if parts:
+		text = parts[-1]
+	dash_parts = [part.strip() for part in re.split(r"\s*[-－]\s*", text) if part.strip()]
+	if len(dash_parts) > 1:
+		text = dash_parts[-1]
+	return ORGANIZATION_TECHNICAL_SUFFIX_RE.sub("", text).strip()
 
 
 def _count_seed_nodes(nodes):
