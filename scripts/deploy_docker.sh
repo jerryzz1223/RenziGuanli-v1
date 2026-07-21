@@ -113,8 +113,14 @@ compose up -d
 echo "Preparing generated asset and dependency directories..."
 compose exec -T --user root frappe bash -lc '
 set -euo pipefail
-mkdir -p /workspace/node_modules /workspace/hrms/public/dist
-chown -R frappe:frappe /workspace/node_modules /workspace/hrms/public/dist
+for directory in \
+  /workspace/node_modules \
+  /workspace/frontend/node_modules \
+  /workspace/roster/node_modules \
+  /workspace/hrms/public/dist; do
+  mkdir -p "${directory}"
+  chown -R frappe:frappe "${directory}"
+done
 '
 
 echo "Installing locked frontend dependencies..."
