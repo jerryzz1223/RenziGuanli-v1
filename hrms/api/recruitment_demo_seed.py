@@ -260,10 +260,22 @@ def _ensure_applicant(
 		"phone_number": "13800000000",
 		"notes": note,
 	}
-	if frappe.db.exists("Job Applicant", email):
-		doc = frappe.get_doc("Job Applicant", email)
+	existing_name = frappe.db.get_value("Job Applicant", {"email_id": email}, "name")
+	if existing_name:
+		doc = frappe.get_doc("Job Applicant", existing_name)
 		existing_values = values.copy()
-		existing_values.pop("status")
+		accepted_offer = frappe.db.get_value(
+			"Job Offer",
+			{"job_applicant": doc.name, "status": "Accepted", "docstatus": 1},
+			"name",
+		)
+		if accepted_offer:
+			# An accepted offer is the source of truth: a repeated demo seed must
+			# never downgrade its applicant to Shortlisted.  Repair legacy data
+			# that was created before the onboarding import prerequisite existed.
+			existing_values.pop("status")
+			if doc.status != "Accepted":
+				doc.status = "Accepted"
 		_set_fields(doc, existing_values)
 		doc.save(ignore_permissions=True)
 		return doc
@@ -406,7 +418,7 @@ def seed_recruitment_demo(company: str = COMPANY) -> dict[str, Any]:
 	)
 
 	accepted = _ensure_applicant(
-		"陈试用", "test-rec-accepted@example.test", PRODUCTION_DESIGNATION, production_opening.name, "Shortlisted", "完成两轮面试，录用。"
+		"陈试用", "test-rec-accepted@example.test", PRODUCTION_DESIGNATION, production_opening.name, "Accepted", "完成两轮面试，录用。"
 	)
 	pending = _ensure_applicant(
 		"林待定", "test-rec-pending@example.test", QUALITY_DESIGNATION, quality_opening.name, "Shortlisted", "通过筛选，等待候选人回复录用。"

@@ -1,12 +1,16 @@
 {
  "actions": [],
  "creation": "2026-07-06 00:00:00.000000",
- "description": "钉钉集成设置",
+ "description": "钉钉考勤与审批同步设置。第一期仅开放“内网服务器主动拉取 API（Internal Server Pull API）”；先完成员工映射与试运行，再启用每日自动同步。",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "company",
   "enabled",
   "sync_mode",
+  "daily_sync_enabled",
+  "sync_lookback_days",
+  "approval_process_codes",
   "app_id",
   "corp_id",
   "agent_id",
@@ -27,86 +31,127 @@
  ],
  "fields": [
   {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "同步公司（Company）",
+   "options": "Company"
+  },
+  {
    "default": "0",
    "fieldname": "enabled",
    "fieldtype": "Check",
-   "label": "启用钉钉集成"
+   "description": "默认关闭，避免尚未核对员工映射或权限时误拉取生产数据。仅在试运行通过后启用。",
+   "label": "启用钉钉集成（Enable DingTalk Integration）"
   },
   {
    "default": "Excel导入（默认）",
    "fieldname": "sync_mode",
    "fieldtype": "Select",
-   "label": "同步模式",
+   "label": "同步模式（Sync Mode）",
    "options": "Excel导入（默认）\n连接平台+本地网关\n内网服务器主动拉取API\n公网小网关"
   },
   {
+   "default": "0",
+   "fieldname": "daily_sync_enabled",
+   "fieldtype": "Check",
+   "description": "启用后每天凌晨同步昨天，并回补最近 N 天；应在手工试运行通过后最后开启。",
+   "label": "启用每日自动同步（Enable Daily Sync）"
+  },
+  {
+   "default": "7",
+   "fieldname": "sync_lookback_days",
+   "fieldtype": "Int",
+   "description": "建议保留 7 天，用于处理补卡、审批晚到或撤销。",
+   "label": "考勤回补天数（Attendance Lookback Days）"
+  },
+  {
+   "description": "每行一个，格式：请假=流程编码；加班=流程编码；补卡=流程编码；外出=流程编码；出差=流程编码。未填写时，系统只同步考勤，不会同步审批明细。",
+   "fieldname": "approval_process_codes",
+   "fieldtype": "Small Text",
+   "label": "审批流程编码（Approval Process Codes）"
+  },
+  {
+   "depends_on": "eval:doc.public_gateway_enabled",
    "fieldname": "app_id",
    "fieldtype": "Data",
-   "label": "App ID"
+   "label": "应用 ID（App ID）"
   },
   {
+   "depends_on": "eval:doc.public_gateway_enabled",
    "fieldname": "corp_id",
    "fieldtype": "Data",
-   "label": "CorpId"
+   "label": "企业 ID（CorpId）"
   },
   {
+   "depends_on": "eval:doc.public_gateway_enabled",
    "fieldname": "agent_id",
    "fieldtype": "Data",
-   "label": "AgentId"
+   "label": "应用代理 ID（AgentId）"
   },
   {
+   "description": "第一期 API 同步必填；由钉钉企业内部应用提供。",
    "fieldname": "client_id",
    "fieldtype": "Data",
-   "label": "Client ID / AppKey"
+   "label": "客户端 ID / 应用 Key（Client ID / AppKey）"
   },
   {
+   "description": "第一期 API 同步必填；仅保存在服务器密码字段中，切勿发送到聊天或提交到 Git。",
    "fieldname": "client_secret",
    "fieldtype": "Password",
-   "label": "Client Secret / AppSecret"
+   "label": "客户端密钥 / 应用密钥（Client Secret / AppSecret）"
   },
   {
+   "description": "由系统使用客户端凭证自动申请和刷新，请勿手工填写。",
    "fieldname": "access_token",
    "fieldtype": "Password",
-   "label": "Access Token"
+   "label": "访问令牌（Access Token）",
+   "read_only": 1
   },
   {
+   "description": "由系统在刷新访问令牌后自动更新。",
    "fieldname": "token_expires_at",
    "fieldtype": "Datetime",
-   "label": "Token 过期时间"
+   "label": "令牌过期时间（Token Expiry Time）",
+   "read_only": 1
   },
   {
    "default": "0",
    "fieldname": "local_gateway_enabled",
    "fieldtype": "Check",
-   "label": "启用本地网关"
+   "label": "启用本地网关（Enable Local Gateway）"
   },
   {
+   "depends_on": "eval:doc.local_gateway_enabled",
    "fieldname": "local_gateway_url",
    "fieldtype": "Data",
-   "label": "本地网关地址"
+   "label": "本地网关地址（Local Gateway URL）"
   },
   {
    "default": "0",
    "fieldname": "public_gateway_enabled",
    "fieldtype": "Check",
-   "label": "启用员工端公网小网关"
+   "description": "员工端展示属于后续阶段；第一期每日考勤同步不需要开启。",
+   "label": "启用员工端公网小网关（Enable Public Employee Gateway）"
   },
   {
+   "depends_on": "eval:doc.public_gateway_enabled",
    "fieldname": "public_gateway_base_url",
    "fieldtype": "Data",
-   "label": "公网小网关地址"
+   "label": "公网小网关地址（Public Gateway URL）"
   },
   {
    "default": "profile\nattendance",
+   "depends_on": "eval:doc.public_gateway_enabled",
    "fieldname": "employee_gateway_scopes",
    "fieldtype": "Small Text",
-   "label": "员工端开放范围"
+   "label": "员工端开放范围（Employee Gateway Scopes）"
   },
   {
-   "default": "当前方案：管理后台仍在公司人资系统；钉钉只作为员工入口和数据源。公网小网关只暴露员工本人查询接口，不暴露 Desk 后台、薪资管理、规则配置和批量数据。",
+   "default": "第一期：服务器主动拉取钉钉考勤与审批，先写入原始记录和考勤草稿，经过人事确认后才影响月度汇总与薪资。员工端和公网小网关属于后续阶段。",
    "fieldname": "server_deployment_note",
    "fieldtype": "Small Text",
-   "label": "服务器部署说明"
+   "label": "部署说明（Deployment Notes）",
+   "read_only": 1
   },
   {
    "fieldname": "last_department_sync_at",

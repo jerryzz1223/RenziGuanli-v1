@@ -56,6 +56,9 @@ def get_employee_email(employee_id: str) -> str | None:
 		as_dict=True,
 	)
 
+	if not employee_emails:
+		return None
+
 	return (
 		employee_emails.prefered_email
 		or employee_emails.user_id

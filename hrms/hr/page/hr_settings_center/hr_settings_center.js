@@ -250,7 +250,7 @@ frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
 						<p>${__("员工端继续使用钉钉，管理、计算、分析、沉淀放在人资系统；钉钉数据先单向同步，不反向深度写入。")}</p>
 					</div>
 					<div class="btn-group">
-						<button class="btn btn-default btn-sm" data-action="apply-dingtalk-defaults">${__("填入永新钉钉应用")}</button>
+						<button class="btn btn-default btn-sm" data-action="apply-dingtalk-defaults">${__("应用安全默认设置")}</button>
 						<button class="btn btn-default btn-sm" data-action="load-dingtalk-status">${__("读取连接状态")}</button>
 					</div>
 				</div>
@@ -417,7 +417,7 @@ preview_sync_payload
 		$(page.body).find("[data-action='apply-dingtalk-defaults']").on("click", function () {
 			frappe.call("hrms.api.dingtalk_integration.apply_dingtalk_default_settings").then((r) => {
 				frappe.msgprint({
-					title: __("永新钉钉应用已填入"),
+					title: __("已应用安全默认设置"),
 					message: `<pre>${escape(JSON.stringify(r.message || {}, null, 2))}</pre>`,
 					wide: true,
 				});

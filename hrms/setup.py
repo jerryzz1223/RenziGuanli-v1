@@ -836,8 +836,12 @@ def after_migrate():
 	update_select_perm_after_install()
 
 	from hrms.api.employee_field_template import ensure_personnel_pages
+	from hrms.api.dingtalk_integration import ensure_dingtalk_company_scope
+	from hrms.localize_zh import apply_hrms_zh_translations
 
 	ensure_personnel_pages()
+	ensure_dingtalk_company_scope()
+	apply_hrms_zh_translations()
 
 
 def delete_custom_fields(custom_fields: dict):

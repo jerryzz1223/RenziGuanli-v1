@@ -108,6 +108,37 @@ sites/common_site_config.json
 
 这些文件属于服务器环境，不属于应用代码。
 
+## Docker 一键升级（推荐）
+
+如果服务器按本项目的 `docker/docker-compose.yml` 运行，请使用 Docker 专用部署脚本。它会依次检查 Docker、创建并修复构建目录权限、按 `yarn.lock` 安装前端依赖（包括 `html2canvas`）、执行数据库迁移和前端构建、清缓存、重启 Frappe，并检查服务是否恢复响应。
+
+先在本机提交并推送代码：
+
+```sh
+git add <改动文件>
+git commit -m "你的改动说明"
+git push
+```
+
+然后登录服务器，在仓库根目录执行这一条：
+
+```sh
+cd ~/Renzi/app
+sudo bash scripts/deploy_docker.sh --pull
+```
+
+`--pull` 只接受快进更新；如果服务器仓库有未提交改动，脚本会停止，避免意外覆盖。若你已经通过 zip、SCP 或其他方式把代码同步到服务器，则不加 `--pull`：
+
+```sh
+sudo bash scripts/deploy_docker.sh
+```
+
+默认站点名是 `hrms.localhost`。如服务器使用不同站点名，显式指定：
+
+```sh
+sudo bash scripts/deploy_docker.sh --pull --site hrms.example.com
+```
+
 ## 本地数据库与服务器数据库分离
 
 最优做法是环境隔离：

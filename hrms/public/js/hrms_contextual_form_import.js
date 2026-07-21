@@ -140,6 +140,7 @@
 	window.hrmsFormImport = { open: open_import_dialog, download(template_key) { return get_template(template_key).then(download_template); }, addPageActions: add_page_import_actions };
 
 	const LIST_IMPORTS = {
+		"Employee Onboarding": { key: "employee_onboarding", label: "员工入职衔接表" },
 		"Employee Transfer": { key: "employee_transfer", label: "人事异动表单" },
 		"Employee Promotion": { key: "qualification_review", label: "转正/晋升表单" },
 		"Employee Separation": { key: "resignation_application", label: "离职表单" },

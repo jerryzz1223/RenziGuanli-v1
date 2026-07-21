@@ -729,7 +729,10 @@ class AttendanceImportCenter {
 			<div class="hrms-attendance-section hrms-attendance-integration">
 				<div class="hrms-attendance-list-head">
 					<h3>${this.escape(__("钉钉打卡对接"))}</h3>
-					<div><button class="btn btn-default btn-sm" data-view="custom-rules">${this.escape(__("查看规则"))}</button></div>
+					<div>
+						<button class="btn btn-default btn-sm" data-action="dingtalk-settings">${this.escape(__("配置钉钉"))}</button>
+						<button class="btn btn-primary btn-sm" data-action="dingtalk-sync">${this.escape(__("手工同步日期"))}</button>
+					</div>
 				</div>
 				<ol>
 					<li>${this.escape(__("在钉钉开放平台创建企业内部应用，取得 CorpId、AppKey、AppSecret。"))}</li>
@@ -737,10 +740,28 @@ class AttendanceImportCenter {
 					<li>${this.escape(__("本系统保存钉钉应用配置后，定时拉取打卡记录、补卡、请假、外出、出差、加班审批。"))}</li>
 					<li>${this.escape(__("拉取后的原始数据先进入明细记录，再由自定义规则生成每日考勤、异常确认和月度终稿。"))}</li>
 				</ol>
-				<div class="alert alert-info">${this.escape(__("当前阶段先以 Excel 导入模拟钉钉输出，页面结构已按后续 API 对接预留。"))}</div>
+				<div class="alert alert-info">${this.escape(__("同步只生成每日考勤草稿与异常，不会直接修改员工主档、月度锁定记录或薪资。每日自动任务默认关闭，配置并完成小范围验证后才可开启。"))}</div>
 			</div>
 		`;
-		this.body().querySelector("[data-view]").addEventListener("click", (event) => this.set_view(event.target.dataset.view));
+		this.body().querySelector("[data-action='dingtalk-settings']").addEventListener("click", () => frappe.set_route("hr-settings-center", "dingtalk-integration"));
+		this.body().querySelector("[data-action='dingtalk-sync']").addEventListener("click", () => this.sync_dingtalk_attendance_for_date());
+	}
+
+	sync_dingtalk_attendance_for_date() {
+		if (!this.ensure_company()) return;
+		frappe.prompt(
+			[{ fieldname: "work_date", fieldtype: "Date", label: __("同步考勤日期"), default: frappe.datetime.add_days(frappe.datetime.get_today(), -1), reqd: 1 }],
+			(values) =>
+				frappe.call({
+					method: "hrms.api.dingtalk_integration.sync_attendance_from_dingtalk",
+					args: { work_date: values.work_date, company: this.company, convert_to_draft: 1 },
+					freeze: true,
+					freeze_message: __("正在同步钉钉原始数据并生成每日考勤草稿..."),
+					callback: () => this.set_view("daily"),
+				}),
+			__("手工同步钉钉考勤"),
+			__("开始同步"),
+		);
 	}
 
 	render_placeholder(title, description, nextView = "") {

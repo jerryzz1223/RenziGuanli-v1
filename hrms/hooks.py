@@ -32,7 +32,7 @@ app_include_js = [
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260713a",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260721a",
 ]
 
 # website
@@ -244,6 +244,9 @@ doc_events = {
 # ---------------
 
 scheduler_events = {
+	"cron": {
+		"30 2 * * *": ["hrms.api.dingtalk_integration.run_scheduled_dingtalk_attendance_sync"],
+	},
 	"all": [
 		"hrms.hr.doctype.interview.interview.send_interview_reminder",
 	],

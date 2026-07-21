@@ -2,12 +2,15 @@
  "actions": [],
  "allow_rename": 1,
  "creation": "2026-07-06 00:00:00.000000",
- "description": "钉钉原始同步数据",
+ "description": "钉钉原始同步数据（DingTalk Raw Sync Data）。只作为可追溯证据；不会直接修改正式考勤或薪资。",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "company",
   "source_type",
   "external_id",
+  "dingtalk_userid",
+  "business_date",
   "sync_batch",
   "payload_json",
   "payload_hash",
@@ -18,10 +21,17 @@
  ],
  "fields": [
   {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司（Company）",
+   "options": "Company"
+  },
+  {
    "fieldname": "source_type",
    "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "来源类型",
+   "label": "来源类型（Source Type）",
    "options": "department\nuser\nattendance\napproval\nemployee_status",
    "reqd": 1
   },
@@ -29,47 +39,59 @@
    "fieldname": "external_id",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "钉钉外部ID",
+   "label": "钉钉外部编号（External ID）",
    "reqd": 1
+  },
+  {
+   "fieldname": "dingtalk_userid",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "钉钉用户 ID（UserId）"
+  },
+  {
+   "fieldname": "business_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "业务日期（Business Date）"
   },
   {
    "fieldname": "sync_batch",
    "fieldtype": "Data",
-   "label": "同步批次"
+   "label": "同步批次（Sync Batch）"
   },
   {
    "fieldname": "payload_json",
    "fieldtype": "Code",
-   "label": "原始 Payload",
+   "label": "原始数据包（Payload）",
    "options": "JSON"
   },
   {
    "fieldname": "payload_hash",
    "fieldtype": "Data",
-   "label": "Payload Hash"
+   "label": "数据包哈希（Payload Hash）"
   },
   {
    "default": "已接收",
    "fieldname": "sync_status",
    "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "同步状态",
+   "label": "同步状态（Sync Status）",
    "options": "已接收\n已处理\n失败"
   },
   {
    "fieldname": "received_at",
    "fieldtype": "Datetime",
-   "label": "接收时间"
+   "label": "接收时间（Received At）"
   },
   {
    "fieldname": "processed_at",
    "fieldtype": "Datetime",
-   "label": "处理时间"
+   "label": "处理时间（Processed At）"
   },
   {
    "fieldname": "error_message",
    "fieldtype": "Small Text",
-   "label": "错误信息"
+   "label": "错误信息（Error Message）"
   }
  ],
  "links": [],

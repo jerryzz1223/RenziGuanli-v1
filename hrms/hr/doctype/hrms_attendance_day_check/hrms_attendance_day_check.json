@@ -78,7 +78,7 @@
    "fieldname": "source_kind",
    "fieldtype": "Select",
    "label": "来源类型",
-   "options": "旧模板\n钉钉原始导出\n人工调整",
+   "options": "旧模板\n钉钉原始导出\n钉钉API同步\n人工调整",
    "reqd": 1
   },
   {

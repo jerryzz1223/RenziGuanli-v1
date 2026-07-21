@@ -10,6 +10,7 @@
   "attendance_month",
   "source_file",
   "source_type",
+  "dingtalk_sync_log",
   "source_checksum",
   "status",
   "daily_sheet_rows",
@@ -45,6 +46,12 @@
    "fieldname": "source_type",
    "fieldtype": "Data",
    "label": "来源类型"
+  },
+  {
+   "fieldname": "dingtalk_sync_log",
+   "fieldtype": "Link",
+   "label": "钉钉同步日志",
+   "options": "HRMS DingTalk Sync Log"
   },
   {
    "fieldname": "source_checksum",

@@ -74,7 +74,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "异常类型",
-   "options": "忘打卡\n迟到\n早退\n旷工\n未申请加班"
+   "options": "员工未匹配\n忘打卡\n迟到\n早退\n旷工\n未申请加班"
   },
   {
    "fieldname": "expected_shift",
