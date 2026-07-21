@@ -121,6 +121,7 @@ for directory in \
   mkdir -p "${directory}"
   chown -R frappe:frappe "${directory}"
 done
+chown frappe:frappe /workspace/yarn.lock
 '
 
 echo "Installing locked frontend dependencies..."
