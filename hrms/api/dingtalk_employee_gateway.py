@@ -67,16 +67,21 @@ def _exchange_auth_code_for_userid(auth_code):
 
 
 def _employee_from_dingtalk_userid(dingtalk_userid):
-	map_name = frappe.db.exists(DINGTALK_USER_MAP_DOCTYPE, {"dingtalk_userid": dingtalk_userid})
+	company = _settings().get("company")
+	if not company:
+		frappe.throw(_("钉钉同步公司尚未配置"))
+	map_name = frappe.db.exists(DINGTALK_USER_MAP_DOCTYPE, {"company": company, "dingtalk_userid": dingtalk_userid})
 	if not map_name:
 		frappe.throw(_("当前钉钉账号尚未同步到人资系统，请先执行员工同步"))
 
 	mapping = frappe.get_doc(DINGTALK_USER_MAP_DOCTYPE, map_name)
 	if mapping.get("employee"):
+		if frappe.db.get_value("Employee", mapping.employee, "company") != company:
+			frappe.throw(_("当前钉钉账号的员工映射与同步公司不一致"))
 		return mapping.employee
 
 	if mapping.get("employee_code"):
-		employee = frappe.db.get_value("Employee", {"custom_employee_code": mapping.employee_code}, "name")
+		employee = frappe.db.get_value("Employee", {"custom_employee_code": mapping.employee_code, "company": company}, "name")
 		if employee:
 			return employee
 

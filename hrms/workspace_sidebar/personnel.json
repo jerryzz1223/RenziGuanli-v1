@@ -79,6 +79,17 @@
    "collapsible": 0,
    "indent": 0,
    "keep_closed": 0,
+   "label": "入职规则配置",
+   "link_to": "Employee Onboarding Template",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 1,
+   "collapsible": 0,
+   "indent": 0,
+   "keep_closed": 0,
    "label": "转正管理",
    "link_to": "Employee Promotion",
    "link_type": "DocType",

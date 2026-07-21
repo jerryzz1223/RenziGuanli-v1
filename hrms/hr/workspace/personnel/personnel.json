@@ -62,6 +62,16 @@
   {
    "hidden": 0,
    "is_query_report": 0,
+   "label": "入职规则配置",
+   "link_count": 0,
+   "link_to": "Employee Onboarding Template",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
    "label": "转正管理",
    "link_count": 0,
    "link_to": "Employee Promotion",

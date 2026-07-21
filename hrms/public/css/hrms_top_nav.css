@@ -484,6 +484,15 @@ body.hrms-module-shell .body-sidebar-container {
 	overflow-y: auto;
 }
 
+@media (min-width: 768px) {
+	body.hrms-module-shell > .body-sidebar-container,
+	body.hrms-module-shell .body-sidebar-container {
+		flex: 0 0 220px;
+		min-width: 220px;
+		width: 220px;
+	}
+}
+
 .hrms-import-landing,
 .hrms-import-wizard,
 .hrms-export-shell {
@@ -783,15 +792,23 @@ body.hrms-module-shell .body-sidebar-container {
 }
 
 .hrms-unified-sidebar-app__text strong {
+	display: block;
 	font-size: 15px;
 	font-weight: 650;
 	line-height: 1.2;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .hrms-unified-sidebar-app__text small {
 	color: var(--text-muted, #6b7280);
+	display: block;
 	font-size: 12px;
 	line-height: 1.2;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .hrms-unified-sidebar-list {

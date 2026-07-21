@@ -46,10 +46,79 @@ TRANSLATIONS = {
 	"Performance": "绩效",
 	"Appraisal Template": "考核模板",
 	"Recruitment": "招聘",
+	"Job Opening": "招聘职位",
+	"Job Openings": "招聘职位",
+	"Add Job Opening": "添加招聘职位",
+	"Create Job Opening": "创建招聘职位",
+	"Create your first Job Opening": "创建首个招聘职位",
+	"Description of a Job Opening": "招聘职位说明",
+	"Job Title": "职位名称",
+	"Job Opening Template": "招聘职位模板",
+	"Publish on website": "发布到网站",
+	"List View": "列表视图",
+	"Default Layout": "默认布局",
+	"Created On": "创建时间",
+	"ID": "编号",
+	"Status": "状态",
 	"Attendance": "考勤",
 	"Tax & Benefits": "税务与福利",
 	"Shift & Attendance": "考勤排班",
 	"Home": "主页",
+	"Search": "搜索",
+	"Save": "保存",
+	"Enabled": "已启用",
+	"Disabled": "已停用",
+	"HRMS DingTalk Settings": "钉钉集成设置（HRMS DingTalk Settings）",
+	"HRMS DingTalk Raw Record": "钉钉原始记录（HRMS DingTalk Raw Record）",
+	"HRMS DingTalk User Map": "钉钉员工映射（HRMS DingTalk User Map）",
+	"HRMS DingTalk Sync Log": "钉钉同步日志（HRMS DingTalk Sync Log）",
+	"DingTalk": "钉钉（DingTalk）",
+	"department": "部门（Department）",
+	"user": "用户（User）",
+	"attendance": "考勤（Attendance）",
+	"approval": "审批（Approval）",
+	"employee_status": "员工状态（Employee Status）",
+	"内网服务器主动拉取API": "内网服务器主动拉取 API（Internal Server Pull API）",
+	"Excel导入（默认）": "Excel 导入（默认 / Default）",
+	"连接平台+本地网关": "连接平台 + 本地网关（Platform + Local Gateway）",
+	"公网小网关": "公网小网关（Public Gateway）",
+	"Assign": "分派",
+	"Attachments": "附件",
+	"Tags": "标签",
+	"Share": "分享",
+	"Last Edited By You": "你最近编辑",
+	"Created By You": "你创建",
+	"Created By": "创建人",
+	"Last Edited By": "最近编辑人",
+	"You": "你",
+	"weeks ago": "周前",
+	"week ago": "周前",
+	"days ago": "天前",
+	"day ago": "天前",
+	"Quick Edit Fields": "快速编辑字段",
+	"Department": "部门",
+	"Parent Department": "上级部门",
+	"All Departments": "所有部门",
+	"Is Group": "是否分组",
+	"Payroll Cost Center": "薪资成本中心",
+	"Leave Block List": "假期封存列表",
+	"Days for which Holidays are blocked for this department.": "该部门适用的假期封存日期列表。",
+	"Organization Management": "组织管理",
+	"Organization Level": "组织层级",
+	"Organization Role": "组织角色",
+	"Organization Manager": "组织负责人",
+	"Proxy Manager": "代理负责人",
+	"Planned Headcount": "编制人数",
+	"Actual Headcount": "现有人数",
+	"Vacancy Count": "空缺人数",
+	"Recruitment Plan": "招聘计划",
+	"Organization Source Cell": "组织图来源单元格",
+	"Approvers": "审批人",
+	"Approver": "审批人",
+	"The first Approver in the list will be set as the default Approver.": "列表中的第一位审批人将作为默认审批人。",
+	"Shift Request Approver": "班次申请审批人",
+	"Leave Approver": "请假审批人",
+	"Expense Approver": "费用审批人",
 	"Dashboard": "数据面板",
 	"Accounting Entries": "会计分录",
 	"Payment Entry": "收付款凭证",
@@ -142,6 +211,15 @@ def _upsert_translation(source_text, translated_text):
 		frappe.get_doc({"doctype": "Translation", **values}).insert(ignore_permissions=True)
 
 
+def apply_hrms_zh_translations():
+	"""Persist HRMS Chinese labels so DocType titles and option values render consistently."""
+	for source, translated in TRANSLATIONS.items():
+		_upsert_translation(source, translated)
+	frappe.clear_cache()
+	frappe.db.commit()
+	return {"translations": len(TRANSLATIONS)}
+
+
 def _localize_workspace_content(workspace_name):
 	if not frappe.db.exists("Workspace", workspace_name):
 		return
@@ -199,8 +277,7 @@ def _localize_expense_claim_types():
 
 
 def apply_expense_claim_translations():
-	for source, translated in TRANSLATIONS.items():
-		_upsert_translation(source, translated)
+	apply_hrms_zh_translations()
 
 	number_cards = {
 		"Expense Claims (This Month)": "费用报销（本月）",

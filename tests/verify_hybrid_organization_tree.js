@@ -8,8 +8,10 @@ const jsPath = path.join(pageDir, "organizational_chart.js");
 const cssPath = path.join(pageDir, "organizational_chart.css");
 const seedPath = path.join(pageDir, "yongxin_q2_org_structure.json");
 const departmentJsPath = path.join(root, "hrms", "public", "js", "erpnext", "department_list.js");
+const departmentFormJsPath = path.join(root, "hrms", "public", "js", "erpnext", "department.js");
 const hooksPath = path.join(root, "hrms", "hooks.py");
 const setupPath = path.join(root, "hrms", "setup.py");
+const localizeZhPath = path.join(root, "hrms", "localize_zh.py");
 const navPath = path.join(root, "hrms", "public", "js", "hrms_home_redirect_v6.js");
 const topNavPath = path.join(root, "hrms", "public", "js", "hrms_top_nav.js");
 
@@ -31,8 +33,10 @@ const js = read(jsPath);
 const css = read(cssPath);
 const seed = read(seedPath);
 const departmentJs = read(departmentJsPath);
+const departmentFormJs = read(departmentFormJsPath);
 const hooks = read(hooksPath);
 const setup = read(setupPath);
+const localizeZh = read(localizeZhPath);
 const nav = read(navPath);
 const topNav = read(topNavPath);
 
@@ -146,6 +150,64 @@ for (const marker of [
 	"listview.refresh()",
 ]) {
 	mustInclude(departmentJs, marker, `Department list quick edit/delete missing marker: ${marker}`);
+}
+
+for (const marker of [
+	"localize_department_form_labels",
+	"frm.set_df_property",
+	"parent_department",
+	"上级部门",
+	"is_group",
+	"是否分组",
+	"disabled",
+	"已停用",
+	"leave_block_list",
+	"假期封存列表",
+	"hrms_org_section",
+	"组织管理",
+	"hrms_org_level",
+	"组织层级",
+	"hrms_org_role",
+	"组织角色",
+	"hrms_org_manager",
+	"组织负责人",
+	"hrms_org_proxy",
+	"代理负责人",
+	"hrms_planned_headcount",
+	"编制人数",
+	"hrms_actual_headcount",
+	"现有人数",
+	"hrms_vacancy_count",
+	"空缺人数",
+	"hrms_recruitment_plan",
+	"招聘计划",
+	"approvers",
+	"审批人",
+]) {
+	mustInclude(departmentFormJs, marker, `Department form localization missing marker: ${marker}`);
+}
+
+for (const marker of [
+	'"Parent Department": "上级部门"',
+	'"All Departments": "所有部门"',
+	'"Is Group": "是否分组"',
+	'"Disabled": "已停用"',
+	'"Leave Block List": "假期封存列表"',
+	'"Organization Management": "组织管理"',
+	'"Organization Level": "组织层级"',
+	'"Planned Headcount": "编制人数"',
+	'"Actual Headcount": "现有人数"',
+	'"Vacancy Count": "空缺人数"',
+	'"Recruitment Plan": "招聘计划"',
+	'"Search": "搜索"',
+	'"Save": "保存"',
+	'"Assign": "分派"',
+	'"Attachments": "附件"',
+	'"Tags": "标签"',
+	'"Share": "分享"',
+	'"Enabled": "已启用"',
+]) {
+	mustInclude(localizeZh, marker, `Chinese localization dictionary missing marker: ${marker}`);
 }
 
 for (const marker of [

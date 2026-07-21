@@ -2,11 +2,13 @@
  "actions": [],
  "allow_rename": 1,
  "creation": "2026-07-06 00:00:00.000000",
- "description": "钉钉同步日志",
+ "description": "钉钉同步日志（DingTalk Sync Log）。记录每次同步的范围、数量、异常与结果。",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "company",
   "sync_type",
+  "business_date",
   "sync_direction",
   "status",
   "started_at",
@@ -19,17 +21,30 @@
  ],
  "fields": [
   {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司（Company）",
+   "options": "Company"
+  },
+  {
+   "fieldname": "business_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "业务日期（Business Date）"
+  },
+  {
    "fieldname": "sync_type",
    "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "同步类型",
+   "label": "同步类型（Sync Type）",
    "options": "部门同步\n员工同步\n考勤同步\n审批同步\n状态同步"
   },
   {
    "default": "钉钉到人资系统",
    "fieldname": "sync_direction",
    "fieldtype": "Select",
-   "label": "同步方向",
+   "label": "同步方向（Sync Direction）",
    "options": "钉钉到人资系统\n人资系统到钉钉"
   },
   {
@@ -37,47 +52,47 @@
    "fieldname": "status",
    "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "状态",
+   "label": "状态（Status）",
    "options": "运行中\n已完成\n部分失败\n失败"
   },
   {
    "fieldname": "started_at",
    "fieldtype": "Datetime",
-   "label": "开始时间"
+   "label": "开始时间（Started At）"
   },
   {
    "fieldname": "finished_at",
    "fieldtype": "Datetime",
-   "label": "结束时间"
+   "label": "结束时间（Finished At）"
   },
   {
    "default": "0",
    "fieldname": "records_received",
    "fieldtype": "Int",
-   "label": "接收记录数"
+   "label": "接收记录数（Records Received）"
   },
   {
    "default": "0",
    "fieldname": "records_created",
    "fieldtype": "Int",
-   "label": "新建记录数"
+   "label": "新建记录数（Records Created）"
   },
   {
    "default": "0",
    "fieldname": "records_updated",
    "fieldtype": "Int",
-   "label": "更新记录数"
+   "label": "更新记录数（Records Updated）"
   },
   {
    "default": "0",
    "fieldname": "records_failed",
    "fieldtype": "Int",
-   "label": "失败记录数"
+   "label": "失败记录数（Records Failed）"
   },
   {
    "fieldname": "error_message",
    "fieldtype": "Small Text",
-   "label": "错误信息"
+   "label": "错误信息（Error Message）"
   }
  ],
  "links": [],

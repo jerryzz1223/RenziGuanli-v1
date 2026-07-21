@@ -2,10 +2,11 @@
  "actions": [],
  "allow_rename": 1,
  "creation": "2026-07-06 00:00:00.000000",
- "description": "钉钉用户与员工档案映射",
+ "description": "钉钉用户与员工档案映射（DingTalk User Mapping）。考勤同步必须先通过此映射定位到永新员工档案。",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "company",
   "dingtalk_userid",
   "employee",
   "employee_code",
@@ -18,10 +19,17 @@
  ],
  "fields": [
   {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司（Company）",
+   "options": "Company"
+  },
+  {
    "fieldname": "dingtalk_userid",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "钉钉 UserId",
+   "label": "钉钉用户 ID（UserId）",
    "reqd": 1,
    "unique": 1
   },
@@ -29,47 +37,47 @@
    "fieldname": "employee",
    "fieldtype": "Link",
    "in_list_view": 1,
-   "label": "员工",
+   "label": "员工（Employee）",
    "options": "Employee"
   },
   {
    "fieldname": "employee_code",
    "fieldtype": "Data",
-   "label": "工号"
+   "label": "工号（Employee Code）"
   },
   {
    "fieldname": "employee_name",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "姓名"
+   "label": "姓名（Employee Name）"
   },
   {
    "fieldname": "mobile",
    "fieldtype": "Data",
-   "label": "手机号"
+   "label": "手机号（Mobile）"
   },
   {
    "fieldname": "department_id",
    "fieldtype": "Data",
-   "label": "钉钉部门ID"
+   "label": "钉钉部门 ID（Department ID）"
   },
   {
    "fieldname": "department_name",
    "fieldtype": "Data",
-   "label": "部门名称"
+   "label": "部门名称（Department Name）"
   },
   {
    "default": "待匹配",
    "fieldname": "sync_status",
    "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "同步状态",
+   "label": "同步状态（Sync Status）",
    "options": "待匹配\n已同步\n冲突\n忽略"
   },
   {
    "fieldname": "last_synced_at",
    "fieldtype": "Datetime",
-   "label": "最近同步时间"
+   "label": "最近同步时间（Last Synced At）"
   }
  ],
  "links": [],

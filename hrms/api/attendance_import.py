@@ -640,15 +640,17 @@ def preview_attendance_workbook(file_url: str):
 	}
 
 
-def _insert_day_check(batch_name, row, company, source_kind="旧模板", source_sheet="", correction_version=1):
+def _insert_day_check(batch_name, row, company, source_kind="旧模板", source_sheet="", correction_version=1, allow_unmatched=False):
 	employee_code = _first_value(row, "工号")
 	employee_name = _first_value(row, "姓名")
 	attendance_date = _parse_date(_first_value(row, "日期", "workDate"))
 	if not employee_name or not attendance_date:
 		return None
 	employee = _employee_lookup(employee_code, employee_name)
-	if not _employee_matches_company(employee, company):
+	if not _employee_matches_company(employee, company) and not allow_unmatched:
 		return None
+	if employee and not _employee_matches_company(employee, company):
+		employee = None
 	shift_name = _first_value(row, "班次")
 	actual_in_time = _first_value(row, "上班时间")
 	actual_out_time = _first_value(row, "下班时间")
@@ -1060,6 +1062,14 @@ def _make_exception(day_check, exception_type, handling_method="", deduct_absenc
 
 def _build_exception_candidates(day_check):
 	candidates = []
+	if not day_check.employee:
+		candidates.append(
+			{
+				"exception_type": "员工未匹配",
+				"handling_method": "请在人事侧确认钉钉 UserId、工号与员工档案的映射；确认前不得进入月度锁定或薪资。",
+				"remarks": "钉钉原始数据已保留，等待人事匹配员工。",
+			}
+		)
 	if day_check.missing_in or day_check.missing_out:
 		candidates.append(
 			{

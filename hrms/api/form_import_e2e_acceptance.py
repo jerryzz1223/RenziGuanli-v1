@@ -191,6 +191,11 @@ def _verify_activated_target(row):
 	if frappe.get_meta(target.doctype).is_submittable:
 		if target.docstatus != 1:
 			frappe.throw(_("{0} 未提交。").format(target.doctype))
+		if target.doctype == "Employee Onboarding":
+			if not target.activities or any(not activity.task for activity in target.activities):
+				frappe.throw(_("入职单未生成完整办理任务。"))
+			if target.boarding_status not in ("Pending", "In Process", "Completed"):
+				frappe.throw(_("入职单状态异常：{0}").format(target.boarding_status))
 	elif target.doctype == intake.BUSINESS_PROCESS_RECORD_DOCTYPE and target.status not in ("待跟进", "已生效"):
 		frappe.throw(_("正式业务记录未生效。"))
 	elif target.doctype == "HRMS Employee Salary Change" and target.status != "已批准":

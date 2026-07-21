@@ -30,6 +30,83 @@ TRANSFER_DESIGNATION = "TEST-异动岗位"
 PROTECTED_COMPANIES = ("永新", "1")
 
 
+def _ensure_onboarding_import_fixture():
+	"""Create isolated candidate/Offer/template/holiday inputs for onboarding imports."""
+	from hrms.api import recruitment_demo_seed
+
+	recruitment_demo_seed.seed_recruitment_demo(company=TEST_COMPANY)
+	template = intake.ensure_default_employee_onboarding_template(TEST_COMPANY)
+	email = "test-form-onboarding@example.test"
+	applicant_name = frappe.db.get_value("Job Applicant", {"email_id": email}, "name")
+	if applicant_name:
+		applicant = frappe.get_doc("Job Applicant", applicant_name)
+		applicant.applicant_name = "TEST-FORM-ONBOARDING"
+		applicant.designation = TEST_DESIGNATION
+		applicant.status = "Accepted"
+		applicant.save(ignore_permissions=True)
+	else:
+		applicant = frappe.get_doc(
+			{
+				"doctype": "Job Applicant",
+				"applicant_name": "TEST-FORM-ONBOARDING",
+				"email_id": email,
+				"phone_number": "13900000118",
+				"designation": TEST_DESIGNATION,
+				"status": "Accepted",
+			}
+		).insert(ignore_permissions=True)
+	offer_name = frappe.db.get_value(
+		"Job Offer",
+		{"job_applicant": applicant.name, "company": TEST_COMPANY, "docstatus": 1, "status": "Accepted"},
+		"name",
+		order_by="modified desc",
+	)
+	if offer_name:
+		offer = frappe.get_doc("Job Offer", offer_name)
+	else:
+		draft_offer_name = frappe.db.get_value(
+			"Job Offer",
+			{"job_applicant": applicant.name, "company": TEST_COMPANY, "docstatus": 0},
+			"name",
+			order_by="modified desc",
+		)
+		if draft_offer_name:
+			offer = frappe.get_doc("Job Offer", draft_offer_name)
+			offer.status = "Accepted"
+			offer.save(ignore_permissions=True)
+			offer.submit()
+		else:
+			offer = frappe.get_doc(
+				{
+					"doctype": "Job Offer",
+					"job_applicant": applicant.name,
+					"applicant_name": applicant.applicant_name,
+					"applicant_email": applicant.email_id,
+					"status": "Accepted",
+					"offer_date": "2099-07-01",
+					"designation": TEST_DESIGNATION,
+					"company": TEST_COMPANY,
+				}
+			).insert(ignore_permissions=True)
+			offer.submit()
+	if offer.docstatus == 0:
+		offer.status = "Accepted"
+		offer.save(ignore_permissions=True)
+		offer.submit()
+	holiday_title = "TEST-HRMS Form Import 2099 Holiday List"
+	holiday_name = frappe.db.get_value("Holiday List", {"holiday_list_name": holiday_title}, "name")
+	if not holiday_name:
+		holiday_name = frappe.get_doc(
+			{
+				"doctype": "Holiday List",
+				"holiday_list_name": holiday_title,
+				"from_date": "2099-01-01",
+				"to_date": "2099-12-31",
+			}
+		).insert(ignore_permissions=True).name
+	return {"candidate_email": email, "job_offer_no": offer.name, "onboarding_template": template["title"], "holiday_list": holiday_name}
+
+
 def _protected_snapshot():
 	return {
 		company: {
@@ -53,7 +130,7 @@ def _assert_test_foundation():
 
 def _values_for(profile):
 	"""Return one valid, human-readable row for a form profile."""
-	return {
+	values = {
 		"company": TEST_COMPANY,
 		"employee_code": ACTIVE_EMPLOYEE_CODE,
 		"employee_name": ACTIVE_EMPLOYEE_NAME,
@@ -203,6 +280,10 @@ def _values_for(profile):
 		"completed_date": "2099-01-31",
 		"remarks": f"{SEED_TAG} / {profile['label']}",
 	}
+	if profile["key"] == intake.EMPLOYEE_ONBOARDING_TEMPLATE_KEY:
+		values.update(_ensure_onboarding_import_fixture())
+		values.update({"date_of_joining": "2099-07-08", "boarding_begins_on": "2099-07-07", "notify_users_by_email": "否"})
+	return values
 
 
 def _create_workbook_file(profile):

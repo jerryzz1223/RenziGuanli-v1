@@ -21,6 +21,7 @@ FORM_IMPORT_ROW_DOCTYPE = "HRMS Form Import Row"
 FORM_APPROVAL_MATRIX_DOCTYPE = "HRMS Form Approval Matrix"
 BUSINESS_PROCESS_RECORD_DOCTYPE = "HRMS Business Process Record"
 EMPLOYEE_ROSTER_TEMPLATE_KEY = "employee_roster"
+EMPLOYEE_ONBOARDING_TEMPLATE_KEY = "employee_onboarding"
 
 
 DEFAULT_FORM_APPROVAL_ROUTES = {
@@ -80,6 +81,26 @@ FORM_IMPORT_PROFILES = [
 			_column("education_level", "学历", False),
 			_column("graduation_school", "毕业院校", False),
 			_column("major", "科系", False, ["专业"]),
+		],
+	},
+	{
+		"key": EMPLOYEE_ONBOARDING_TEMPLATE_KEY,
+		"module": "人事",
+		"label": "员工入职衔接",
+		"description": "将已接受候选人和已提交的 Offer 接入标准入职流程；审核生效后生成入职任务，全部必办任务完成后才能创建员工主档。",
+		"source_sheets": ["入职衔接表"],
+		"processing_target": "员工入职流程 / 入职任务（审核、Offer 关联后）",
+		"target_doctype": "Employee Onboarding",
+		"fill_instructions": "候选人邮箱必须对应状态为“Accepted”的候选人；Offer 编号必须是该候选人的已提交且已接受 Offer；入职流程模板可在“入职规则配置”中维护。",
+		"columns": [
+			_column("candidate_email", "候选人邮箱", True, ["邮箱", "Email"]),
+			_column("job_offer_no", "Offer编号", True, ["录用通知单号", "Offer单号"]),
+			_column("onboarding_template", "入职流程模板", True, ["入职模板", "流程模板"]),
+			_column("date_of_joining", "入职日期", True, ["到职日期", "预计入职日期"]),
+			_column("boarding_begins_on", "入职办理开始日", True, ["办理开始日"]),
+			_column("holiday_list", "假期列表", True, ["节假日表"]),
+			_column("department", "部门", False, ["单位"]), _column("designation", "岗位", False, ["职务"]),
+			_column("notify_users_by_email", "邮件通知", False, ["是否邮件通知"]), _column("remarks", "备注"),
 		],
 	},
 	{
@@ -475,6 +496,10 @@ def _normalise_text(value):
 	return str(value).strip()
 
 
+def _is_truthy_flag(value):
+	return _normalise_text(value).lower() in {"1", "true", "yes", "y", "是"}
+
+
 def _normalise_header(value):
 	return re.sub(r"\s+", "", _normalise_text(value).replace("（", "(").replace("）", ")").replace("\n", ""))
 
@@ -586,7 +611,7 @@ def _department_exists(company, department):
 
 
 def _business_date(data):
-	for key in ("attendance_date", "transfer_date", "review_date", "application_date", "occurred_on", "proposal_date", "training_date", "summary_date", "exit_date"):
+	for key in ("date_of_joining", "boarding_begins_on", "attendance_date", "transfer_date", "review_date", "application_date", "occurred_on", "proposal_date", "training_date", "summary_date", "exit_date"):
 		value = data.get(key)
 		if not value:
 			continue
@@ -598,8 +623,55 @@ def _business_date(data):
 
 
 def _record_key(profile, data, row_number):
-	bits = [profile["key"], data.get("external_id") or data.get("employee_code") or data.get("candidate_name") or data.get("proposal_no") or data.get("feedback_no") or "ROW", data.get("attendance_date") or data.get("transfer_date") or data.get("payroll_month") or data.get("training_date") or row_number]
+	bits = [profile["key"], data.get("external_id") or data.get("employee_code") or data.get("candidate_email") or data.get("candidate_name") or data.get("proposal_no") or data.get("feedback_no") or "ROW", data.get("date_of_joining") or data.get("attendance_date") or data.get("transfer_date") or data.get("payroll_month") or data.get("training_date") or row_number]
 	return "-".join(_normalise_text(value).replace(" ", "")[:40] for value in bits)
+
+
+def _onboarding_import_context(data, company):
+	"""Resolve and validate the immutable recruitment prerequisites for onboarding."""
+	errors = []
+	candidate_email = _normalise_text(data.get("candidate_email"))
+	applicant_name = frappe.db.get_value("Job Applicant", {"email_id": candidate_email}, "name") if candidate_email else ""
+	applicant = frappe.get_doc("Job Applicant", applicant_name) if applicant_name else None
+	if not applicant:
+		errors.append(_("未找到候选人邮箱：{0}").format(candidate_email or _("未填写")))
+	elif applicant.status != "Accepted":
+		errors.append(_("候选人 {0} 当前状态为 {1}，必须先设为 Accepted。").format(candidate_email, applicant.status))
+
+	offer_no = _normalise_text(data.get("job_offer_no"))
+	offer = frappe.get_doc("Job Offer", offer_no) if offer_no and frappe.db.exists("Job Offer", offer_no) else None
+	if not offer:
+		errors.append(_("未找到 Offer 编号：{0}").format(offer_no or _("未填写")))
+	else:
+		if offer.docstatus != 1:
+			errors.append(_("Offer {0} 尚未提交，不能进入入职流程。").format(offer_no))
+		if offer.status != "Accepted":
+			errors.append(_("Offer {0} 当前状态为 {1}，必须先确认 Accepted。").format(offer_no, offer.status or _("未填写")))
+		if offer.company != company:
+			errors.append(_("Offer {0} 不属于当前公司 {1}。").format(offer_no, company))
+		if applicant and offer.job_applicant != applicant.name:
+			errors.append(_("Offer {0} 与候选人邮箱 {1} 不匹配。").format(offer_no, candidate_email))
+
+	template_value = _normalise_text(data.get("onboarding_template"))
+	template_name = ""
+	if template_value:
+		template_name = frappe.db.exists("Employee Onboarding Template", template_value) or frappe.db.get_value(
+			"Employee Onboarding Template", {"title": template_value}, "name"
+		)
+	template = frappe.get_doc("Employee Onboarding Template", template_name) if template_name else None
+	if not template:
+		errors.append(_("未找到入职流程模板：{0}").format(template_value or _("未填写")))
+	else:
+		if template.company and template.company != company:
+			errors.append(_("入职流程模板 {0} 不属于当前公司 {1}。").format(template.title, company))
+		if not template.activities:
+			errors.append(_("入职流程模板 {0} 尚未配置办理任务。").format(template.title))
+
+	holiday_list = _normalise_text(data.get("holiday_list"))
+	if holiday_list and not frappe.db.exists("Holiday List", holiday_list):
+		errors.append(_("未找到假期列表：{0}").format(holiday_list))
+
+	return frappe._dict({"errors": errors, "applicant": applicant, "offer": offer, "template": template, "holiday_list": holiday_list})
 
 
 def _validate_rows(profile, company, plan):
@@ -613,6 +685,8 @@ def _validate_rows(profile, company, plan):
 		department = _department_exists(company, data.get("department"))
 		if data.get("department") and not department:
 			errors.append(_("未匹配到当前公司部门：{0}").format(data["department"]))
+		if profile["key"] == EMPLOYEE_ONBOARDING_TEMPLATE_KEY:
+			errors.extend(_onboarding_import_context(data, company).errors)
 		result.append({
 			**item,
 			"employee": employee,
@@ -647,7 +721,7 @@ def create_form_import_template_file(template_key: str):
 	instructions.append(["模板名称", profile["label"]])
 	instructions.append(["所属模块", profile["module"]])
 	instructions.append(["后续处理", profile["processing_target"]])
-	instructions.append(["填写规则", "仅填写“数据”页；工号、部门必须与当前公司员工/组织资料完全一致；日期建议使用 YYYY-MM-DD。"])
+	instructions.append(["填写规则", profile.get("fill_instructions") or "仅填写“数据”页；工号、部门必须与当前公司员工/组织资料完全一致；日期建议使用 YYYY-MM-DD。"])
 	instructions.append(["安全规则", "上传先做字段和数据校验。签核型表单仅进入待处理数据池，不会自动变更员工状态或生成薪资。"])
 	instructions.column_dimensions["A"].width = 16
 	instructions.column_dimensions["B"].width = 100
@@ -896,6 +970,37 @@ def _require_link(doctype, value, label):
 	return value
 
 
+@frappe.whitelist()
+def ensure_default_employee_onboarding_template(company: str):
+	"""Create one editable, company-scoped onboarding rule template on explicit request.
+
+	This intentionally never overwrites an existing rule.  HR can edit the task,
+	role, duration and whether it blocks employee creation in the standard
+	Employee Onboarding Template form afterwards.
+	"""
+	_require_form_import_reviewer()
+	if not company or not frappe.db.exists("Company", company):
+		frappe.throw(_("请选择有效公司"))
+	title = _("{0} 标准入职流程").format(company)
+	existing = frappe.db.get_value("Employee Onboarding Template", {"company": company, "title": title}, "name")
+	if existing:
+		return {"name": existing, "title": title, "existing": 1}
+	doc = frappe.get_doc(
+		{
+			"doctype": "Employee Onboarding Template",
+			"title": title,
+			"company": company,
+			"activities": [
+				{"activity_name": _("入职资料核验"), "role": "HR User", "begin_on": 0, "duration": 1, "required_for_employee_creation": 1, "description": _("核验身份、学历、联系方式、劳动合同及入职材料。")},
+				{"activity_name": _("部门与工位安排"), "role": "HR Manager", "begin_on": 0, "duration": 1, "required_for_employee_creation": 1, "description": _("确认部门、岗位、直接主管、工位与必要工作设备。")},
+				{"activity_name": _("考勤与薪资资料配置"), "role": "HR Manager", "begin_on": 0, "duration": 1, "required_for_employee_creation": 1, "description": _("确认考勤组、假期列表、薪资基础资料及员工系统账号。")},
+				{"activity_name": _("新员工安全培训"), "role": "HR User", "begin_on": 1, "duration": 1, "required_for_employee_creation": 0, "description": _("完成公司制度、安全与岗位基础培训登记。")},
+			],
+		}
+	).insert(ignore_permissions=True)
+	return {"name": doc.name, "title": doc.title, "existing": 0}
+
+
 def _active_attendance_lock_version(company, payroll_month):
 	if not payroll_month:
 		frappe.throw(_("薪资来源必须填写月份。"))
@@ -994,6 +1099,36 @@ def _insert_target(row, data, payroll_month="", attendance_lock_version="", appr
 				"normalized_data_json": json.dumps(data, ensure_ascii=False),
 				"approval_history_json": row.approval_history_json,
 				"remarks": data.get("remarks"),
+			}
+		).insert(ignore_permissions=True)
+
+	if target == "Employee Onboarding":
+		onboarding = _onboarding_import_context(data, row.company)
+		if onboarding.errors:
+			frappe.throw("；".join(onboarding.errors))
+		template = onboarding.template
+		department = template.department or row.department or _department_exists(row.company, data.get("department"))
+		designation = template.designation or data.get("designation")
+		if designation and not frappe.db.exists("Designation", designation):
+			frappe.throw(_("岗位不存在或尚未维护：{0}").format(designation))
+		from hrms.controllers.employee_boarding_controller import get_onboarding_details
+
+		activities = get_onboarding_details(template.name, "Employee Onboarding Template")
+		return frappe.get_doc(
+			{
+				"doctype": target,
+				"job_applicant": onboarding.applicant.name,
+				"job_offer": onboarding.offer.name,
+				"employee_onboarding_template": template.name,
+				"employee_name": onboarding.applicant.applicant_name,
+				"company": row.company,
+				"department": department,
+				"designation": designation,
+				"date_of_joining": _date_from(data.get("date_of_joining"), _("入职日期")),
+				"boarding_begins_on": _date_from(data.get("boarding_begins_on"), _("入职办理开始日")),
+				"holiday_list": onboarding.holiday_list,
+				"notify_users_by_email": 1 if _is_truthy_flag(data.get("notify_users_by_email")) else 0,
+				"activities": activities,
 			}
 		).insert(ignore_permissions=True)
 

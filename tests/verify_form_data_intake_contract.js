@@ -8,6 +8,7 @@ const page = fs.readFileSync(path.join(root, "hrms/hr/page/form_data_intake/form
 const nav = fs.readFileSync(path.join(root, "hrms/public/js/hrms_top_nav.js"), "utf8");
 const contextualActions = fs.readFileSync(path.join(root, "hrms/public/js/hrms_contextual_form_import.js"), "utf8");
 const employeeList = fs.readFileSync(path.join(root, "hrms/public/js/erpnext/employee_list.js"), "utf8");
+const onboardingList = fs.readFileSync(path.join(root, "hrms/hr/doctype/employee_onboarding/employee_onboarding_list.js"), "utf8");
 
 const workbookSheets = [
 	"模块", "花名册", "员工职务调动申请表", "人员职能资格认定表", "人事组员工劳动合同到期意愿调查表", "人事组员工辞职申请单", "26Q3组织架构图", "2026年度人员面试清单",
@@ -36,9 +37,27 @@ assert(contextualActions.includes("window.hrmsFormImport"));
 assert(contextualActions.includes('"Employee Transfer"'));
 assert(contextualActions.includes('"Training Event"'));
 assert(contextualActions.includes('"Appraisal"'));
+assert(contextualActions.includes('"Employee Onboarding"'));
 assert(contextualActions.includes("HRMS Form Import Row"));
 assert(employeeList.includes('__("表单导入")'));
 assert(employeeList.includes('"employee_roster"'));
 assert(api.includes('"target_doctype": "Employee Transfer"'));
+for (const marker of [
+	'EMPLOYEE_ONBOARDING_TEMPLATE_KEY = "employee_onboarding"',
+	'"label": "员工入职衔接"',
+	'"target_doctype": "Employee Onboarding"',
+	"def _onboarding_import_context(data, company):",
+	"def ensure_default_employee_onboarding_template(company: str):",
+	'"job_applicant": onboarding.applicant.name',
+	'"job_offer": onboarding.offer.name',
+	'"employee_onboarding_template": template.name',
+]) assert(api.includes(marker), `Onboarding import flow is missing: ${marker}`);
+for (const marker of ["入职规则配置", "初始化标准入职规则", "Employee Onboarding Template"]) {
+	assert(onboardingList.includes(marker), `Onboarding rule management entry is missing: ${marker}`);
+}
+for (const marker of ["frappe.show_alert", "已创建标准入职规则", "已打开现有入职规则"]) {
+	assert(onboardingList.includes(marker), `Onboarding rule feedback is missing: ${marker}`);
+}
+assert(!onboardingList.includes('filters: [["boarding_status", "=", "Pending"]]'), "Onboarding list must not hide completed or draft records by default.");
 
 console.log("form data intake contract verified: all workbook source sheets assigned, template/preview/import routes wired");

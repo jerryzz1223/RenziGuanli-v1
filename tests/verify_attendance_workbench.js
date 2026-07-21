@@ -41,6 +41,8 @@ const attendancePageJsPath = mustExist("hrms/hr/page/attendance_import_center/at
 const attendancePageJson = JSON.parse(fs.readFileSync(attendancePageJsonPath, "utf8"));
 const attendancePageJs = fs.readFileSync(attendancePageJsPath, "utf8");
 const homeRedirectJs = read("hrms/public/js/hrms_home_redirect_v6.js");
+const topNavCss = read("hrms/public/css/hrms_top_nav.css");
+const hooks = read("hrms/hooks.py");
 
 if (attendancePageJson.name !== "attendance-import-center" || attendancePageJson.title !== "考勤导入中心") {
 	throw new Error("Attendance import center page route/title is incorrect.");
@@ -118,6 +120,12 @@ if (attendancePageJs.includes("dingtalk_export_v1 当前仅支持预览")) {
 if (!homeRedirectJs.includes('label: "考勤导入中心", route: "/desk/attendance-import-center/import"')) {
 	throw new Error("The global attendance sidebar must provide an import-center route.");
 }
+
+for (const marker of ["flex: 0 0 220px", "min-width: 220px", "white-space: nowrap", "text-overflow: ellipsis"]) {
+	mustInclude(topNavCss, marker, `Attendance sidebar header layout is missing ${marker}.`);
+}
+
+mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260721a", "The sidebar stylesheet cache key must change with its layout.");
 
 if (attendancePageJs.includes("data-upload>${frappe.utils.escape_html(__(\"添加报表\"))}")) {
 	throw new Error("添加报表 must open the report view, not reuse the upload action.");
