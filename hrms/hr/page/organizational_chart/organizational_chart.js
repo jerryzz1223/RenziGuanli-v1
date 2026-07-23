@@ -38,7 +38,7 @@ class HybridOrganizationChart {
 		this.page.add_inner_button(__("收起全部"), () => this.collapse_all());
 		this.page.add_inner_button(__("导入架构模板"), () => this.import_yongxin_template());
 		this.page.add_inner_button(__("导出"), () => this.export_chart());
-		window.hrmsFormImport?.addPageActions(this.page, "org_structure", "表单导入");
+		window.hrmsFormImport?.addPageActions(this.page, "org_structure", "组织架构与编制", "表单导入");
 		this.page.set_primary_action(__("新增部门"), () => this.add_department());
 	}
 

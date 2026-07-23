@@ -23,6 +23,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 API_PATH = PROJECT_ROOT / "hrms" / "api" / "attendance_import.py"
 REAL_EXPORT = Path("/Users/lrj/Desktop/考勤表.xlsx")
 COMPANY_WORKBOOK = Path("/Users/lrj/Documents/SAD/YOngxin/人资/副本人资系统沟通表260713.xlsx")
+COMPANY_ATTENDANCE_REGISTER = Path("/Users/lrj/Documents/SAD/YOngxin/人资/各种表单/考勤.xlsx")
 
 
 def _skip_reason() -> str | None:
@@ -32,6 +33,8 @@ def _skip_reason() -> str | None:
 		return f"Skipping DingTalk export preview contract: missing real DingTalk fixture {REAL_EXPORT}"
 	if not COMPANY_WORKBOOK.exists():
 		return f"Skipping DingTalk export preview contract: missing company workbook fixture {COMPANY_WORKBOOK}"
+	if not COMPANY_ATTENDANCE_REGISTER.exists():
+		return f"Skipping DingTalk export preview contract: missing company attendance register fixture {COMPANY_ATTENDANCE_REGISTER}"
 	return None
 
 
@@ -80,6 +83,9 @@ def test_preview_real_dingtalk_export():
 	}
 	assert "请假/事假(小时)" in preview["field_mapping"]
 	assert preview["database_writes"] == 0
+	assert preview["import_validation"]["status"] == "可导入"
+	assert preview["import_validation"]["missing_required_fields"] == []
+	assert preview["import_validation"]["matched_field_count"] >= 20
 	warnings = {warning["code"]: warning["count"] for warning in preview["quality_warnings"]}
 	assert warnings["missing_employee_code"] == 299
 	assert warnings["missing_attendance_group"] == 299
@@ -107,6 +113,72 @@ def test_preview_company_workbook_preserves_raw_and_manual_daily_sources():
 	assert "上班缺卡" in preview["daily_sources"]["dingtalk_raw"]["field_mapping"]
 	for field in ("请假/旷工(小时)", "请假/公假(天)", "请假/产假(天)", "请假/团圆假(天)"):
 		assert field in preview["daily_sources"]["dingtalk_raw"]["field_mapping"]
+
+
+def test_company_attendance_register_has_a_dedicated_preview_contract():
+	module = load_attendance_module()
+	workbook = load_workbook(COMPANY_ATTENDANCE_REGISTER, data_only=True, read_only=True)
+	preview = module._preview_company_attendance_register_v1(workbook)
+
+	assert module._is_company_attendance_register_v1(workbook)
+	assert preview["source_type"] == "company_attendance_register_v1"
+	assert preview["missing_sheets"] == []
+	assert preview["sheets"][0]["sheet_name"] == "每日统计"
+	assert preview["sheets"][0]["row_count"] == 198
+	assert "请假/事假(小时)" in preview["field_mapping"]
+	assert {sheet["sheet_name"] for sheet in preview["sheets"]} == {"每日统计", "出勤明细", "出勤异常", "苹果树"}
+	assert preview["import_validation"]["status"] == "可导入"
+	assert preview["sheets"][0]["import_behavior"] == "写入每日考勤核对"
+	assert next(sheet for sheet in preview["sheets"] if sheet["sheet_name"] == "出勤异常")["import_behavior"] == "保留为异常核对来源，不自动生成处理结论"
+
+
+def test_revoked_batch_does_not_block_reimport_of_the_same_source_file():
+	module = load_attendance_module()
+	captured = {}
+	active_batch = types.SimpleNamespace(name="ACTIVE-BATCH", status="已导入", daily_sheet_rows=12)
+	module._source_file_checksum = lambda _file_url: "same-source-checksum"
+
+	def get_value(doctype, filters, fieldname):
+		captured.update({"doctype": doctype, "filters": filters, "fieldname": fieldname})
+		return active_batch.name
+
+	module.frappe.db = types.SimpleNamespace(get_value=get_value)
+	module.frappe.get_doc = lambda doctype, name: active_batch
+	batch, duplicate = module._create_attendance_batch("/private/files/attendance.xlsx", "2026-07", "永新", "company_attendance_register_v1")
+
+	assert duplicate is True
+	assert batch is active_batch
+	assert captured["filters"]["status"] == ["!=", "已撤销"]
+
+
+def test_field_mapping_catalog_explains_the_import_contract_without_writing_data():
+	module = load_attendance_module()
+	catalog = module.get_attendance_field_mapping_catalog()
+
+	profile = next(item for item in catalog["profiles"] if item["source_type"] == "dingtalk_export_v1")
+	assert "employee_name" in profile["required_target_fields"]
+	assert "attendance_date" in profile["required_target_fields"]
+	assert catalog["write_policy"] == "只读说明，不写入考勤数据"
+
+
+def test_rule_evaluation_is_explicit_and_never_mutates_imported_attendance():
+	module = load_attendance_module()
+	assert module.ATTENDANCE_RULE_APPLICATION_MODES == ("仅展示", "导入校验", "异常提示")
+	assert module._rule_execution_notice() == "规则不会自动修改导入数据、月度终稿或薪资。"
+
+
+def test_attendance_template_catalog_explains_uploadable_company_workbook():
+	module = load_attendance_module()
+	templates = module.list_attendance_import_templates()
+	keys = {template["key"] for template in templates}
+
+	assert "company_attendance_register_v1" in keys
+	assert "company_daily_statistics_v1" in keys
+	assert "attendance_exception_v1" in keys
+	assert "apple_reward_v1" in keys
+	company_workbook = next(template for template in templates if template["key"] == "company_attendance_register_v1")
+	assert company_workbook["upload_mode"] == "whole_workbook"
+	assert "每日统计" in company_workbook["sheet_names"]
 
 
 def test_monthly_scope_uses_company_month_and_lock_version():
@@ -150,6 +222,11 @@ if __name__ == "__main__":
 		raise SystemExit(0)
 	test_preview_real_dingtalk_export()
 	test_preview_company_workbook_preserves_raw_and_manual_daily_sources()
+	test_company_attendance_register_has_a_dedicated_preview_contract()
+	test_revoked_batch_does_not_block_reimport_of_the_same_source_file()
+	test_field_mapping_catalog_explains_the_import_contract_without_writing_data()
+	test_rule_evaluation_is_explicit_and_never_mutates_imported_attendance()
+	test_attendance_template_catalog_explains_uploadable_company_workbook()
 	test_monthly_scope_uses_company_month_and_lock_version()
 	test_real_dingtalk_export_has_a_daily_statistics_import_path()
 	test_manual_adjustment_takes_precedence_without_deleting_raw_source()

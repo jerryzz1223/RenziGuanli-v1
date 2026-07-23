@@ -1,0 +1,43 @@
+.hrms-data-operations {
+	max-width: 1100px;
+	margin: 0 auto;
+}
+
+.hrms-data-operations__summary {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 16px;
+	margin: 16px 0;
+}
+
+.hrms-data-operations__card,
+.hrms-data-operations__panel {
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+	background: var(--card-bg, #fff);
+	padding: 16px;
+}
+
+.hrms-data-operations__card {
+	display: grid;
+	gap: 5px;
+}
+
+.hrms-data-operations__card strong {
+	font-size: 28px;
+}
+
+.hrms-data-operations__card span {
+	color: var(--text-muted);
+}
+
+.hrms-data-operations__card.is-danger { border-left: 4px solid var(--red-500); }
+.hrms-data-operations__card.is-warning { border-left: 4px solid var(--orange-500); }
+.hrms-data-operations__card.is-success { border-left: 4px solid var(--green-500); }
+.hrms-data-operations__panel { margin-top: 16px; }
+.hrms-data-operations__panel h4 { margin-top: 0; }
+.hrms-data-operations__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+
+@media (max-width: 700px) {
+	.hrms-data-operations__summary { grid-template-columns: 1fr; }
+}

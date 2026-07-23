@@ -1,8 +1,11 @@
 // Copyright (c) 2018, Frappe Technologies Pvt. Ltd. and contributors
 // For license information, please see license.txt
 
+{% include 'hrms/hr/employee_business_code_selector.js' %}
+
 frappe.ui.form.on("Employee Separation", {
 	setup: function (frm) {
+		window.hrmsEmployeeBusinessCodeSelector.setup(frm);
 		frm.add_fetch("employee_separation_template", "company", "company");
 		frm.add_fetch("employee_separation_template", "department", "department");
 		frm.add_fetch("employee_separation_template", "designation", "designation");
@@ -10,6 +13,7 @@ frappe.ui.form.on("Employee Separation", {
 	},
 
 	refresh: function (frm) {
+		window.hrmsEmployeeBusinessCodeSelector.refresh(frm);
 		if (frm.doc.employee) {
 			frm.add_custom_button(
 				__("Employee"),
@@ -35,6 +39,14 @@ frappe.ui.form.on("Employee Separation", {
 				__("View"),
 			);
 		}
+	},
+
+	employee: function (frm) {
+		window.hrmsEmployeeBusinessCodeSelector.employee_selected(frm);
+	},
+
+	employee_code_display: function (frm) {
+		window.hrmsEmployeeBusinessCodeSelector.resolve_employee(frm);
 	},
 
 	employee_separation_template: function (frm) {

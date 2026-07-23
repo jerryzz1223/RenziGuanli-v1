@@ -19,7 +19,8 @@ from frappe.utils import getdate
 
 COMPANY = "TEST-HRMS"
 SEED_PREFIX = "TEST-REC-"
-TEST_DEPARTMENT = "TEST-HRMS-DEPT - TEST"
+# Department records now use the business name as their canonical link value.
+TEST_DEPARTMENT = "TEST-HRMS-DEPT"
 INTERVIEWER = "Administrator"
 
 PRODUCTION_DESIGNATION = f"{SEED_PREFIX}生产操作员"

@@ -2,7 +2,7 @@
  "actions": [],
  "allow_rename": 1,
  "creation": "2026-07-06 00:00:00.000000",
- "description": "钉钉原始同步数据（DingTalk Raw Sync Data）。只作为可追溯证据；不会直接修改正式考勤或薪资。",
+ "description": "钉钉原始同步数据。只作为可追溯证据；不会直接修改正式考勤或薪资。",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
@@ -24,14 +24,14 @@
    "fieldname": "company",
    "fieldtype": "Link",
    "in_list_view": 1,
-   "label": "公司（Company）",
+   "label": "公司",
    "options": "Company"
   },
   {
    "fieldname": "source_type",
    "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "来源类型（Source Type）",
+   "label": "来源类型",
    "options": "department\nuser\nattendance\napproval\nemployee_status",
    "reqd": 1
   },
@@ -39,59 +39,59 @@
    "fieldname": "external_id",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "钉钉外部编号（External ID）",
+   "label": "钉钉外部编号",
    "reqd": 1
   },
   {
    "fieldname": "dingtalk_userid",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "钉钉用户 ID（UserId）"
+   "label": "钉钉用户编号"
   },
   {
    "fieldname": "business_date",
    "fieldtype": "Date",
    "in_list_view": 1,
-   "label": "业务日期（Business Date）"
+   "label": "业务日期"
   },
   {
    "fieldname": "sync_batch",
    "fieldtype": "Data",
-   "label": "同步批次（Sync Batch）"
+   "label": "同步批次"
   },
   {
    "fieldname": "payload_json",
    "fieldtype": "Code",
-   "label": "原始数据包（Payload）",
+   "label": "原始数据包",
    "options": "JSON"
   },
   {
    "fieldname": "payload_hash",
    "fieldtype": "Data",
-   "label": "数据包哈希（Payload Hash）"
+   "label": "数据包校验值"
   },
   {
    "default": "已接收",
    "fieldname": "sync_status",
    "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "同步状态（Sync Status）",
+   "label": "同步状态",
    "options": "已接收\n已处理\n失败"
   },
   {
    "fieldname": "received_at",
    "fieldtype": "Datetime",
-   "label": "接收时间（Received At）"
+   "label": "接收时间"
   },
   {
    "fieldname": "processed_at",
    "fieldtype": "Datetime",
-   "label": "处理时间（Processed At）"
+   "label": "处理时间"
   },
   {
    "fieldname": "error_message",
    "fieldtype": "Small Text",
-   "label": "错误信息（Error Message）"
+   "label": "错误信息"
   }
  ],
  "links": [],

@@ -12,6 +12,10 @@
   "source_sheet",
   "source_row_number",
   "correction_version",
+  "adjusted_from",
+  "manual_adjustment_reason",
+  "adjusted_by",
+  "adjusted_on",
   "attendance_date",
   "employee",
   "employee_code",
@@ -97,6 +101,32 @@
    "fieldtype": "Int",
    "label": "更正版本",
    "reqd": 1
+  },
+  {
+   "fieldname": "adjusted_from",
+   "fieldtype": "Link",
+   "label": "更正来源",
+   "options": "HRMS Attendance Day Check",
+   "read_only": 1
+  },
+  {
+   "fieldname": "manual_adjustment_reason",
+   "fieldtype": "Small Text",
+   "label": "人工更正原因",
+   "read_only": 1
+  },
+  {
+   "fieldname": "adjusted_by",
+   "fieldtype": "Link",
+   "label": "更正人",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "adjusted_on",
+   "fieldtype": "Datetime",
+   "label": "更正时间",
+   "read_only": 1
   },
   {
    "fieldname": "attendance_date",

@@ -42,6 +42,41 @@ PAYROLL_TEMPLATE_KEYS = {
 	"exit_payroll_settlement",
 }
 ORGANIZATION_TEMPLATE_KEYS = {"org_structure"}
+# The workbook is a catalogue of HR inputs, not a separate application.  Keep
+# every template reachable from the business screen where its approved data is
+# subsequently handled.  The central intake page remains the cross-module
+# audit queue.
+FORM_IMPORT_ENTRY_ROUTES = {
+	"employee_roster": "/desk/employee",
+	"employee_onboarding": "/desk/employee-onboarding",
+	"org_structure": "/desk/organizational-chart",
+	"employee_transfer": "/desk/employee-transfer",
+	"qualification_review": "/desk/employee-promotion",
+	"contract_intent": "/desk/hrms-business-process-record",
+	"resignation_application": "/desk/employee-separation",
+	"recruitment_interview": "/desk/job-applicant",
+	"attendance_daily": "/desk/attendance-import-center",
+	"attendance_department_summary": "/desk/attendance-import-center",
+	"leave_export": "/desk/attendance-import-center",
+	"attendance_exception": "/desk/attendance-import-center",
+	"apple_reward": "/desk/attendance-import-center",
+	"attendance_final": "/desk/attendance-import-center",
+	"salary_structure_change": "/desk/payroll-input-center",
+	"reward_punishment": "/desk/payroll-input-center",
+	"skill_certificate_allowance": "/desk/payroll-input-center",
+	"full_attendance_bonus": "/desk/payroll-input-center",
+	"housing_allowance": "/desk/payroll-input-center",
+	"education_allowance": "/desk/payroll-input-center",
+	"dormitory_fee": "/desk/payroll-input-center",
+	"social_insurance": "/desk/payroll-input-center",
+	"service_award": "/desk/payroll-input-center",
+	"proposal_improvement": "/desk/hrms-business-process-record",
+	"exit_payroll_settlement": "/desk/payroll-input-center",
+	"training_registration": "/desk/training-event",
+	"certificate_management": "/desk/hrms-business-process-record",
+	"performance_summary": "/desk/appraisal",
+	"system_feedback": "/desk/hrms-data-operations",
+}
 BUSINESS_PROCESS_TEMPLATE_CONFIG = {
 	"org_structure": {"record_type": "组织变更", "date_keys": ("effective_date",), "title": lambda data: _("组织变更：{0}").format(data.get("department") or "")},
 	"contract_intent": {"record_type": "合同续签意愿", "date_keys": ("contract_end_date", "survey_date"), "title": lambda data: _("合同意愿：{0}").format(data.get("employee_name") or "")},
@@ -607,7 +642,31 @@ def _employee_by_name(company, employee_name):
 def _department_exists(company, department):
 	if not department:
 		return ""
-	return frappe.db.get_value("Department", {"company": company, "name": department}, "name") or ""
+	# Spreadsheet templates use the human-facing department name (for example
+	# “行政课”), while Frappe stores the canonical link as “行政课 - 1D”.
+	# Accept either representation, but keep the Company filter so a row can
+	# never cross into another subsidiary by accident.
+	return (
+		frappe.db.get_value("Department", {"company": company, "name": department}, "name")
+		or frappe.db.get_value("Department", {"company": company, "department_name": department}, "name")
+		or ""
+	)
+
+
+def _department_display_name(department):
+	"""Return the business-facing department name without exposing Frappe's suffix."""
+	if not department:
+		return ""
+	department_name = frappe.db.get_value("Department", department, "department_name")
+	if department_name:
+		return _normalise_text(department_name)
+	# Older Department records may not have department_name populated. This is a
+	# display fallback only; the canonical link remains unchanged.
+	return re.sub(r"\s+-\s+[^-]+$", "", _normalise_text(department)).strip()
+
+
+def _matches_department_display_name(department, business_name):
+	return _department_display_name(department).casefold() == _normalise_text(business_name).casefold()
 
 
 def _business_date(data):
@@ -683,6 +742,13 @@ def _validate_rows(profile, company, plan):
 		if data.get("employee_code") and not employee:
 			errors.append(_("未匹配到当前公司在职员工工号：{0}").format(data["employee_code"]))
 		department = _department_exists(company, data.get("department"))
+		if data.get("department") and not department and employee:
+			# Employee was resolved within the selected company. Use its existing
+			# Department link when the spreadsheet provides the same business name,
+			# even if legacy Department.company metadata is inconsistent.
+			current_department = frappe.db.get_value("Employee", employee, "department")
+			if _matches_department_display_name(current_department, data.get("department")):
+				department = current_department
 		if data.get("department") and not department:
 			errors.append(_("未匹配到当前公司部门：{0}").format(data["department"]))
 		if profile["key"] == EMPLOYEE_ONBOARDING_TEMPLATE_KEY:
@@ -705,6 +771,7 @@ def list_form_import_templates(module_name: str = ""):
 	return [{
 		"key": profile["key"], "module": profile["module"], "label": profile["label"], "description": profile["description"],
 		"source_sheets": profile["source_sheets"], "processing_target": profile["processing_target"], "entry_mode": profile.get("entry_mode", "staging"),
+		"entry_route": FORM_IMPORT_ENTRY_ROUTES.get(profile["key"], "/desk/form-data-intake"),
 		"columns": profile["columns"],
 	} for profile in profiles]
 
@@ -962,6 +1029,106 @@ def _employee_context_for_row(row):
 	if context.company != row.company:
 		frappe.throw(_("员工 {0} 不属于当前公司 {1}。 ").format(row.employee, row.company))
 	return context
+
+
+def _ensure_designation(designation):
+	"""Return a usable Designation, creating a deliberately named master when needed.
+
+	Organisation import is the owning workflow for a newly introduced position.
+	Creating it at activation time prevents an uploaded Excel row from changing
+	masters before the organisation administrator has approved it.
+	"""
+	designation = _normalise_text(designation)
+	if not designation:
+		return ""
+	existing = frappe.db.get_value("Designation", {"designation_name": designation}, "name")
+	if existing:
+		return existing
+	# Older ERPNext sites use the display value as the document name.
+	if frappe.db.exists("Designation", designation):
+		return designation
+	return frappe.get_doc({"doctype": "Designation", "designation_name": designation}).insert(ignore_permissions=True).name
+
+
+def _organisation_head_employee(company, data):
+	"""Resolve an optional department head without ever crossing company data."""
+	head = _employee_by_code(company, data.get("department_head_code"))
+	if not head:
+		head = _employee_by_name(company, data.get("department_head_name"))
+	if data.get("department_head_code") or data.get("department_head_name"):
+		if not head:
+			frappe.throw(_("负责人未匹配到当前公司在职员工：{0}。").format(
+				data.get("department_head_code") or data.get("department_head_name")
+			))
+	return head
+
+
+def _apply_organisation_structure(row, target):
+	"""Create or update only the approved Department/Designation masters.
+
+	The staging record remains the immutable evidence of headcount, role and
+	effective date.  Department links are resolved by current company so the
+	Yongxin data cannot accidentally be connected to another company later.
+	"""
+	data = _row_data(row)
+	department_name = _normalise_text(data.get("department"))
+	if not department_name:
+		frappe.throw(_("组织架构记录缺少部门，不能发布。"))
+	if data.get("company") and _normalise_text(data.get("company")) != _normalise_text(row.company):
+		frappe.throw(_("导入表中的公司与当前永新公司不一致，不能发布。"))
+
+	parent_name = _department_exists(row.company, data.get("parent_department"))
+	if data.get("parent_department") and not parent_name:
+		frappe.throw(_("上级部门不存在或不属于当前公司：{0}。请先发布上级部门。 ").format(data.get("parent_department")))
+
+	department_name = _department_exists(row.company, department_name) or department_name
+	if parent_name and parent_name == department_name:
+		frappe.throw(_("部门不能将自身设置为上级部门。"))
+
+	head = _organisation_head_employee(row.company, data)
+	# ``_department_exists`` recognises both current display names and legacy
+	# suffixed document IDs (for example ``行政科 - 1D``).  Reuse that result
+	# here instead of querying the raw display field again, otherwise a legacy
+	# department would be mistaken for a new one during an approved import.
+	existing = _department_exists(row.company, data.get("department"))
+	created = not bool(existing)
+	if existing:
+		department = frappe.get_doc("Department", existing)
+		department.parent_department = parent_name or ""
+		department.disabled = 0
+	else:
+		department = frappe.get_doc(
+			{
+				"doctype": "Department",
+				"department_name": data.get("department"),
+				"company": row.company,
+				"parent_department": parent_name or "",
+			}
+		)
+	if head and frappe.get_meta("Department").get_field("department_head"):
+		department.department_head = head
+	department.save(ignore_permissions=True)
+
+	designation = _ensure_designation(data.get("designation"))
+	target.status = "已生效"
+	target.approval_history_json = row.approval_history_json
+	target.summary = "；".join(
+		filter(
+			None,
+			[
+				_('部门：{0}').format(department.name),
+				_('上级部门：{0}').format(parent_name) if parent_name else "",
+				_('岗位：{0}').format(designation) if designation else "",
+				_('编制人数：{0}').format(data.get("headcount")) if data.get("headcount") else "",
+			],
+		)
+	)
+	target.save(ignore_permissions=True)
+	return _("组织架构已{0}部门“{1}”{2}。").format(
+		_("创建") if created else _("更新"),
+		department.name,
+		_("，并维护岗位“{0}”").format(designation) if designation else "",
+	)
 
 
 def _require_link(doctype, value, label):
@@ -1514,7 +1681,17 @@ def generate_form_import_target(row_name: str, payroll_month: str = "", attendan
 	if row.review_status != "已批准":
 		frappe.throw(_("请先完成人事审核并批准该行。"))
 	if row.target_name:
-		return {"name": row.name, "target_doctype": row.target_doctype, "target_name": row.target_name, "status": row.status, "existing": 1}
+		if row.target_doctype and frappe.db.exists(row.target_doctype, row.target_name):
+			return {"name": row.name, "target_doctype": row.target_doctype, "target_name": row.target_name, "status": row.status, "existing": 1}
+		# A reviewed import must remain recoverable when an administrator has
+		# withdrawn a draft or cleanup removed a test document.  Do not discard
+		# the immutable upload/review evidence; only remove the stale Link so the
+		# exact same approved row can create a fresh formal draft.
+		row.target_doctype = ""
+		row.target_name = ""
+		row.status = "已批准"
+		row.processing_error = _("原正式草稿已不存在，已保留审核记录并允许重新生成。")
+		row.save(ignore_permissions=True)
 	try:
 		target = _insert_target(row, _row_data(row), payroll_month, attendance_lock_version, appraisal_cycle)
 	except Exception as error:
@@ -1537,6 +1714,8 @@ def generate_form_import_target(row_name: str, payroll_month: str = "", attendan
 def _activate_non_submittable_target(row, target):
 	"""Apply the minimum explicit business confirmation for non-submittable doctypes."""
 	if target.doctype == BUSINESS_PROCESS_RECORD_DOCTYPE:
+		if row.template_key == "org_structure":
+			return _apply_organisation_structure(row, target)
 		follow_up_types = {"组织变更", "合同续签意愿", "提案改善", "系统反馈"}
 		target.status = "待跟进" if target.record_type in follow_up_types else "已生效"
 		target.approval_history_json = row.approval_history_json

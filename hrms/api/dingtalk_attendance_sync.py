@@ -12,6 +12,7 @@ import json
 from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import frappe
 from frappe import _
@@ -86,7 +87,11 @@ def _nested_items(payload: Any) -> list[dict[str, Any]]:
 			"items",
 			"list",
 			"attendance",
+			"attendance_result_list",
+			"attendanceResultList",
 			"attendanceRecords",
+			"check_record_list",
+			"checkRecordList",
 			"checkRecords",
 			"check_record",
 		):
@@ -109,7 +114,10 @@ def _event_datetime(value: Any) -> datetime | None:
 		if number > 10_000_000_000:
 			number //= 1000
 		try:
-			return datetime.fromtimestamp(number)
+			# DingTalk timestamps are UTC instants; attendance dates/times in this
+			# installation are evaluated in China Standard Time, not the container's
+			# default timezone.
+			return datetime.fromtimestamp(number, tz=ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
 		except (OverflowError, OSError, ValueError):
 			return None
 	text = str(value).replace("T", " ").replace("Z", "")
@@ -155,6 +163,23 @@ def _is_off_duty(event: dict[str, Any]) -> bool:
 def _is_missing_event(event: dict[str, Any]) -> bool:
 	value = str(_first(event, "timeResult", "time_result", "attendanceResult", "attendance_result", "result")).lower()
 	return any(flag in value for flag in ("notsigned", "not_signed", "missing", "缺卡", "未打卡"))
+
+
+def _is_usable_attendance_event(event: dict[str, Any]) -> bool:
+	"""Ignore a successful-but-empty API envelope.
+
+	The legacy updatedata endpoint returns a result envelope for every user even
+	when the requested day has no accessible clock detail.  Treating that
+	envelope as a missed punch creates false absence and red-apple deductions.
+	"""
+	return any(
+		event.get(key) not in (None, "", [], {})
+		for key in (
+			"userCheckTime", "user_check_time", "checkTime", "check_time", "baseCheckTime",
+			"checkType", "check_type", "timeResult", "time_result", "attendanceResult",
+			"actualAttendanceHours", "actual_attendance_hours", "workHours", "work_hours",
+		)
+	)
 
 
 def _mapping(company: str, user_id: str) -> Any:
@@ -271,10 +296,11 @@ def convert_dingtalk_raw_attendance_to_daily_checks(
 		frappe.delete_doc(DAY_CHECK_DOCTYPE, name, ignore_permissions=True, force=True)
 
 	grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+	empty_raw_records = 0
 	for raw in raw_records:
-		items = _nested_items(_payload(raw.payload_json))
+		items = [event for event in _nested_items(_payload(raw.payload_json)) if _is_usable_attendance_event(event)]
 		if not items:
-			items = [{"userId": raw.dingtalk_userid, "workDate": str(day)}]
+			empty_raw_records += 1
 		for event in items:
 			user_id = str(_first(event, "userId", "userid", "user_id") or raw.dingtalk_userid or "")
 			if user_id and _event_day(event, day) == day:
@@ -301,10 +327,27 @@ def convert_dingtalk_raw_attendance_to_daily_checks(
 	batch.daily_sheet_rows = created
 	batch.status = "已导入"
 	batch.notes = json.dumps(
-		{"business_date": str(day), "source": "DingTalk API", "raw_records": len(raw_records), "drafts": created, "rejected": rejected},
+		{
+			"business_date": str(day),
+			"source": "DingTalk API",
+			"raw_records": len(raw_records),
+			"usable_clock_records": len(raw_records) - empty_raw_records,
+			"empty_clock_detail_records": empty_raw_records,
+			"drafts": created,
+			"rejected": rejected,
+		},
 		ensure_ascii=False,
 	)
 	batch.save(ignore_permissions=True)
 	exceptions = attendance.generate_attendance_exceptions(batch.name) if created else {"created": 0}
 	frappe.db.commit()
-	return {"batch": batch.name, "raw_records": len(raw_records), "created": created, "updated": 0, "rejected": rejected, "exceptions": exceptions.get("created", 0)}
+	return {
+		"batch": batch.name,
+		"raw_records": len(raw_records),
+		"usable_clock_records": len(raw_records) - empty_raw_records,
+		"empty_clock_detail_records": empty_raw_records,
+		"created": created,
+		"updated": 0,
+		"rejected": rejected,
+		"exceptions": exceptions.get("created", 0),
+	}

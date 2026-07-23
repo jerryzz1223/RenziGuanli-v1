@@ -117,10 +117,16 @@ for directory in \
   /workspace/node_modules \
   /workspace/frontend/node_modules \
   /workspace/roster/node_modules \
-  /workspace/hrms/public/dist; do
+  /workspace/hrms/public/dist \
+  /workspace/hrms/public/frontend \
+  /workspace/hrms/public/roster \
+  /workspace/hrms/www; do
   mkdir -p "${directory}"
   chown -R frappe:frappe "${directory}"
 done
+# Vite creates a short-lived config module next to vite.config.js, so the
+# source directory itself (not only node_modules) must be writable by frappe.
+chown frappe:frappe /workspace/frontend /workspace/roster
 chown frappe:frappe /workspace/yarn.lock
 '
 

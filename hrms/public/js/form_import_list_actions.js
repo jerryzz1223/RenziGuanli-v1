@@ -23,13 +23,20 @@
 			...existing,
 			onload(listview) {
 				previous_onload?.(listview);
-				listview.page.add_inner_button(__("表单导入"), () => {
-					if (window.hrmsFormImport?.open) {
-						window.hrmsFormImport.open(config.key, { title: `${config.label}${__("导入")}` });
+				// The global contextual importer owns the shared page marker.  Reuse it
+				// here so DocType-specific hooks cannot create a duplicate import button.
+				if (window.hrmsFormImport?.addPageActions) {
+					window.hrmsFormImport.addPageActions(listview.page, config.key, config.label);
+					return;
+				}
+				const attach_when_ready = () => {
+					if (window.hrmsFormImport?.addPageActions) {
+						window.hrmsFormImport.addPageActions(listview.page, config.key, config.label);
 						return;
 					}
 					frappe.msgprint(__("导入组件正在加载，请稍后重试。"));
-				});
+				};
+				setTimeout(attach_when_ready, 200);
 			},
 		};
 	});

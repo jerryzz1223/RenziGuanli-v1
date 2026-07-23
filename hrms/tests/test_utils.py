@@ -1,7 +1,6 @@
 import frappe
 from frappe.utils import add_months, get_first_day, get_last_day, getdate, now_datetime
 
-from erpnext.setup.doctype.department.department import get_abbreviated_name
 from erpnext.setup.doctype.designation.test_designation import create_designation
 from erpnext.setup.utils import enable_all_roles_and_domains
 
@@ -109,13 +108,12 @@ def create_company(
 
 
 def create_department(name: str, company: str = "_Test Company") -> str:
-	docname = get_abbreviated_name(name, company)
-
-	if frappe.db.exists("Department", docname):
-		return docname
+	existing = frappe.db.get_value("Department", {"department_name": name, "company": company}, "name")
+	if existing:
+		return existing
 
 	department = frappe.new_doc("Department")
-	department.update({"doctype": "Department", "department_name": name, "company": "_Test Company"})
+	department.update({"doctype": "Department", "department_name": name, "company": company})
 	department.insert()
 	return department.name
 

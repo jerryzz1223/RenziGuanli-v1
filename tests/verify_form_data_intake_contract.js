@@ -26,6 +26,11 @@ assert(api.includes("def preview_form_import(file_url: str, template_key: str, c
 assert(api.includes("def import_form_workbook(file_url: str, template_key: str, company: str, notes: str = \"\")"));
 assert(api.includes("缺少必填值"));
 assert(api.includes("未匹配到当前公司在职员工工号"));
+assert(api.includes('"department_name": department'), "Form imports must resolve the human-facing Department name, not only the internal Frappe link value.");
+assert(api.includes("Spreadsheet templates use the human-facing department name"), "Department display-name matching must remain documented in the import contract.");
+assert(api.includes("def _department_display_name(department):"), "Imports must expose a business-facing Department name without Frappe's suffix.");
+assert(api.includes("def _matches_department_display_name(department, business_name):"), "Imports must verify business department names against the employee's current department link.");
+assert(api.includes("current_department = frappe.db.get_value(\"Employee\", employee, \"department\")"), "Employee-linked department fallback is required for legacy Department metadata.");
 assert(api.includes("签核型表单"));
 assert(page.includes("create_form_import_template_file"));
 assert(page.includes("preview_form_import"));
@@ -39,6 +44,7 @@ assert(contextualActions.includes('"Training Event"'));
 assert(contextualActions.includes('"Appraisal"'));
 assert(contextualActions.includes('"Employee Onboarding"'));
 assert(contextualActions.includes("HRMS Form Import Row"));
+assert(contextualActions.includes("导入入职衔接表"));
 assert(employeeList.includes('__("表单导入")'));
 assert(employeeList.includes('"employee_roster"'));
 assert(api.includes('"target_doctype": "Employee Transfer"'));
@@ -52,8 +58,11 @@ for (const marker of [
 	'"job_offer": onboarding.offer.name',
 	'"employee_onboarding_template": template.name',
 ]) assert(api.includes(marker), `Onboarding import flow is missing: ${marker}`);
-for (const marker of ["入职规则配置", "初始化标准入职规则", "Employee Onboarding Template"]) {
+for (const marker of ["管理入职任务规则", "创建标准任务清单", "发起入职办理", "Employee Onboarding Template"]) {
 	assert(onboardingList.includes(marker), `Onboarding rule management entry is missing: ${marker}`);
+}
+for (const marker of ["已接受候选人", "已接受 Offer", "入职任务清单", "已在员工花名册中的人员不要重复办理入职"]) {
+	assert(onboardingList.includes(marker), `Onboarding start guidance is missing: ${marker}`);
 }
 for (const marker of ["frappe.show_alert", "已创建标准入职规则", "已打开现有入职规则"]) {
 	assert(onboardingList.includes(marker), `Onboarding rule feedback is missing: ${marker}`);

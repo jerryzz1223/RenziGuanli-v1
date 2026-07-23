@@ -87,7 +87,13 @@
 		},
 	];
 
+	// Keep cross-module and administration functions here.  Day-to-day imports
+	// remain on their own module pages; this menu is the discoverable fallback
+	// for HR administrators and the audit centre.
 	const moreItems = [
+		{ label: "数据导入中心", route: "/desk/form-data-intake", roles: ["HR Manager", "System Manager"] },
+		{ label: "数据处理中心", route: "/desk/hrms-data-operations", roles: ["System Manager"] },
+		{ label: "系统运行状态", route: "/desk/system-health-report", roles: ["System Manager"] },
 		{ label: "费用", route: "/desk/expenses" },
 		{ label: "社保个税", route: "/desk/tax-&-benefits" },
 		{ label: "HR 设置", route: "/desk/hr-settings" },
@@ -96,7 +102,9 @@
 	let accountInfo = null;
 	let accountInfoLoading = false;
 	let accountEventsBound = false;
+	let moreEventsBound = false;
 	let companyContextPromise = null;
+	let companyFilterSyncTimer = null;
 	const companyContext = {
 		companies: [],
 		current: "",
@@ -152,7 +160,7 @@
 	}
 
 	function resolveInitialCompany(companies) {
-		const available = new Set(companies);
+		const available = new Set(companies.map((company) => company.name));
 		const stored = readStoredCompany();
 		if (stored && available.has(stored)) return stored;
 		if (available.has(PREFERRED_COMPANY)) return PREFERRED_COMPANY;
@@ -164,11 +172,17 @@
 	function loadCompanyContext() {
 		if (companyContextPromise) return companyContextPromise;
 		const getCompanies = window.frappe?.db?.get_list
-			? frappe.db.get_list("Company", { fields: ["name"], order_by: "name asc", limit_page_length: 500 })
+			? frappe.db.get_list("Company", { fields: ["name", "company_name", "abbr"], order_by: "name asc", limit_page_length: 500 })
 			: Promise.resolve([]);
 		companyContextPromise = Promise.resolve(getCompanies)
 			.then((rows) => {
-				companyContext.companies = (rows || []).map((row) => row.name).filter(Boolean);
+				companyContext.companies = (rows || [])
+					.map((row) => ({
+						name: String(row.name || "").trim(),
+						company_name: String(row.company_name || row.name || "").trim(),
+						abbr: String(row.abbr || "").trim(),
+					}))
+					.filter((row) => row.name);
 				companyContext.current = resolveInitialCompany(companyContext.companies);
 				return companyContext.current;
 			})
@@ -186,7 +200,7 @@
 
 	function setCurrentCompany(company) {
 		const nextCompany = String(company || "").trim();
-		if (!nextCompany || (companyContext.companies.length && !companyContext.companies.includes(nextCompany))) {
+		if (!nextCompany || (companyContext.companies.length && !companyContext.companies.some((company) => company.name === nextCompany))) {
 			return getCurrentCompany();
 		}
 		if (nextCompany === companyContext.current) return nextCompany;
@@ -196,12 +210,95 @@
 		return nextCompany;
 	}
 
+	function listSupportsCompanyFilter(listView) {
+		if (!listView?.doctype || !listView?.filter_area) return false;
+		const meta = listView.meta || window.frappe?.get_meta?.(listView.doctype);
+		return Boolean((meta?.fields || []).some((field) => field.fieldname === "company"));
+	}
+
+	function applyCompanyFilterToActiveList(company) {
+		const listView = window.cur_list;
+		if (!company || !listSupportsCompanyFilter(listView)) return;
+
+		const existingFilters = listView.filter_area.get?.() || [];
+		const currentCompanyFilter = existingFilters.find((filter) => filter?.[1] === "company" && filter?.[2] === "=");
+		if (currentCompanyFilter?.[3] === company) return;
+
+		// The global company selector is authoritative. Remove a saved or stale
+		// Company filter first, then apply the selected company to the Frappe list.
+		Promise.resolve(listView.filter_area.remove("company"))
+			.then(() => listView.filter_area.add(listView.doctype, "company", "=", company))
+			.catch(() => {
+				// A non-standard page may expose a partial List API; custom HRMS pages
+				// listen to the company-context event separately.
+			});
+	}
+
+	function scheduleCompanyFilterSync(company = getCurrentCompany()) {
+		window.clearTimeout(companyFilterSyncTimer);
+		companyFilterSyncTimer = window.setTimeout(() => applyCompanyFilterToActiveList(company), 120);
+	}
+
 	window.hrmsCompanyContext = {
 		ready: loadCompanyContext,
 		getCurrentCompany,
 		setCurrentCompany,
-		getCompanies: () => [...companyContext.companies],
+		getCompanies: () => companyContext.companies.map((company) => company.name),
+		getCompanyOptions: () => companyContext.companies.map((company) => ({ ...company })),
 	};
+
+	function companyOptionLabel(company) {
+		if (!company) return "";
+		return company.company_name && company.company_name !== company.name
+			? `${company.company_name}（编码：${company.name}）`
+			: company.name;
+	}
+
+	function canManageCompanyIdentity() {
+		const roles = window.frappe?.user_roles || window.frappe?.boot?.user?.roles || [];
+		return Array.isArray(roles) && roles.includes("System Manager");
+	}
+
+	function reloadCompanyContext() {
+		companyContextPromise = null;
+		return loadCompanyContext().then(() => {
+			scheduleRender();
+			window.dispatchEvent(new CustomEvent("hrms:company-identity-updated", { detail: { company: getCurrentCompany() } }));
+		});
+	}
+
+	function openCompanyIdentityDialog() {
+		const company = getCurrentCompany();
+		if (!company || !window.frappe?.call || !window.frappe?.ui?.Dialog) return;
+
+		frappe.call("hrms.api.company_identity.get_company_identity", { company }).then((response) => {
+			const identity = response.message || {};
+			const dialog = new frappe.ui.Dialog({
+				title: __("管理公司名称"),
+				fields: [
+					{ fieldname: "company_code", fieldtype: "Data", label: __("公司编码（不可修改）"), default: identity.name, read_only: 1 },
+					{ fieldname: "company_name", fieldtype: "Data", label: __("公司显示名称"), default: identity.company_name, reqd: 1 },
+					{ fieldname: "abbr", fieldtype: "Data", label: __("公司简称 / Abbr"), default: identity.abbr, reqd: 1 },
+					{ fieldtype: "HTML", fieldname: "company_identity_note", options: `<div class="text-muted small">${escapeHtml(identity.note || __("显示名称用于页面展示；公司编码保持不变。"))}</div>` },
+				],
+				primary_action_label: __("保存名称"),
+				primary_action(values) {
+					frappe.call({
+						method: "hrms.api.company_identity.update_company_identity",
+						args: { company, company_name: values.company_name, abbr: values.abbr },
+						freeze: true,
+						freeze_message: __("正在保存公司名称…"),
+						callback(result) {
+							dialog.hide();
+							reloadCompanyContext();
+							frappe.show_alert({ message: result.message?.message || __("公司名称已更新"), indicator: "green" });
+						},
+					});
+				},
+			});
+			dialog.show();
+		});
+	}
 
 	function escapeHtml(value) {
 		return String(value == null ? "" : value)
@@ -362,6 +459,31 @@
 		return element;
 	}
 
+	function canViewMoreItem(item) {
+		if (!item.roles?.length) return true;
+		const roles = window.frappe?.user_roles || [];
+		return roles.some((role) => item.roles.includes(role));
+	}
+
+	function closeMoreMenus(except = null) {
+		document.querySelectorAll(".hrms-top-module-nav__more.is-open").forEach((wrapper) => {
+			if (wrapper === except) return;
+			wrapper.classList.remove("is-open");
+			wrapper.querySelector(".hrms-top-module-nav__more-trigger")?.setAttribute("aria-expanded", "false");
+		});
+	}
+
+	function bindMoreDocumentEvents() {
+		if (moreEventsBound) return;
+		document.addEventListener("click", (event) => {
+			if (!event.target.closest(".hrms-top-module-nav__more")) closeMoreMenus();
+		});
+		document.addEventListener("keydown", (event) => {
+			if (event.key === "Escape") closeMoreMenus();
+		});
+		moreEventsBound = true;
+	}
+
 	function renderMore(active) {
 		const wrapper = document.createElement("div");
 		wrapper.className = "hrms-top-module-nav__more";
@@ -370,18 +492,45 @@
 		trigger.type = "button";
 		trigger.className = `hrms-top-module-nav__item hrms-top-module-nav__more-trigger${active ? " is-active" : ""}`;
 		trigger.setAttribute("aria-haspopup", "menu");
+		trigger.setAttribute("aria-expanded", "false");
 		trigger.textContent = "更多";
 
 		const menu = document.createElement("div");
 		menu.className = "hrms-top-module-nav__menu";
 		menu.setAttribute("role", "menu");
-		moreItems.forEach((item) => {
+		moreItems.filter(canViewMoreItem).forEach((item) => {
 			const menuItem = document.createElement("button");
 			menuItem.type = "button";
 			menuItem.className = "hrms-top-module-nav__menu-item";
 			menuItem.textContent = item.label;
-			menuItem.addEventListener("click", () => navigate(item.route));
+			menuItem.addEventListener("click", () => {
+				closeMoreMenus();
+				navigate(item.route);
+			});
 			menu.appendChild(menuItem);
+		});
+
+		trigger.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			const opening = !wrapper.classList.contains("is-open");
+			closeMoreMenus(wrapper);
+			wrapper.classList.toggle("is-open", opening);
+			trigger.setAttribute("aria-expanded", String(opening));
+			if (opening) menu.querySelector("button")?.focus();
+		});
+		trigger.addEventListener("keydown", (event) => {
+			if (event.key !== "ArrowDown") return;
+			event.preventDefault();
+			wrapper.classList.add("is-open");
+			trigger.setAttribute("aria-expanded", "true");
+			menu.querySelector("button")?.focus();
+		});
+		menu.addEventListener("keydown", (event) => {
+			if (event.key !== "Escape") return;
+			event.preventDefault();
+			closeMoreMenus();
+			trigger.focus();
 		});
 
 		wrapper.appendChild(trigger);
@@ -472,11 +621,25 @@
 			selector.add(new Option(current || __("加载公司中…"), current || ""));
 			selector.disabled = true;
 		} else {
-			companies.forEach((company) => selector.add(new Option(company, company, false, company === current)));
+			companies.forEach((company) => selector.add(new Option(companyOptionLabel(company), company.name, false, company.name === current)));
 			selector.value = current;
 			selector.addEventListener("change", () => setCurrentCompany(selector.value));
 		}
 		wrapper.appendChild(selector);
+
+		if (companies.length && canManageCompanyIdentity()) {
+			const editButton = document.createElement("button");
+			editButton.type = "button";
+			editButton.className = "hrms-top-company-context__edit";
+			editButton.textContent = __("编辑");
+			editButton.title = __("管理当前公司显示名称");
+			editButton.setAttribute("aria-label", __("管理当前公司显示名称"));
+			editButton.addEventListener("click", (event) => {
+				event.preventDefault();
+				openCompanyIdentityDialog();
+			});
+			wrapper.appendChild(editButton);
+		}
 		return wrapper;
 	}
 
@@ -502,6 +665,7 @@
 		}
 
 		const active = activeLabel();
+		bindMoreDocumentEvents();
 		nav.replaceChildren();
 
 		const brand = document.createElement("button");
@@ -516,7 +680,8 @@
 		modules.forEach((module) => {
 			moduleList.appendChild(button(module.label, module.route, module.label === active));
 		});
-		moduleList.appendChild(renderMore(!active && routeSlug() !== "hrms-workbench"));
+		const moreActive = !active && routeSlug() !== "hrms-workbench";
+		moduleList.appendChild(renderMore(moreActive));
 		nav.appendChild(moduleList);
 		nav.appendChild(renderCompanyContext());
 		nav.appendChild(renderAccountMenu());
@@ -532,12 +697,24 @@
 		scheduleRender();
 	}
 
-	window.addEventListener("hashchange", scheduleRender);
-	window.addEventListener("popstate", scheduleRender);
-	window.addEventListener(COMPANY_CONTEXT_EVENT, scheduleRender);
+	window.addEventListener("hashchange", () => {
+		scheduleRender();
+		scheduleCompanyFilterSync();
+	});
+	window.addEventListener("popstate", () => {
+		scheduleRender();
+		scheduleCompanyFilterSync();
+	});
+	window.addEventListener(COMPANY_CONTEXT_EVENT, (event) => {
+		scheduleRender();
+		scheduleCompanyFilterSync(event.detail?.company);
+	});
 
 	if (window.frappe && frappe.router && frappe.router.on) {
-		frappe.router.on("change", scheduleRender);
+		frappe.router.on("change", () => {
+			scheduleRender();
+			scheduleCompanyFilterSync();
+		});
 	}
 
 	new MutationObserver(() => {
@@ -546,5 +723,8 @@
 		}
 	}).observe(document.documentElement, { childList: true, subtree: true });
 
-	loadCompanyContext().then(scheduleRender);
+	loadCompanyContext().then(() => {
+		scheduleRender();
+		scheduleCompanyFilterSync();
+	});
 })();

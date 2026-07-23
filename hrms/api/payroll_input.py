@@ -795,13 +795,37 @@ def _employee_lookup(employee_code=None, employee_name=None):
 	return None
 
 
-def _department_lookup(department):
+def _department_lookup(department, company=None):
+	"""Resolve a Department link without leaking legacy company suffixes.
+
+	The HR workspace now keeps the business department name as its document ID.
+	Older imported records can still contain values such as ``行政科 - 1D``.
+	Accept that historical representation only when it resolves inside the same
+	company; never fall through to a department belonging to another company.
+	"""
 	department = (department or "").strip()
 	if not department:
 		return None
-	if frappe.db.exists("Department", department):
+	filters = {"name": department}
+	if company:
+		filters["company"] = company
+	if frappe.db.get_value("Department", filters, "name"):
 		return department
-	return frappe.db.get_value("Department", {"department_name": department}, "name")
+	filters = {"department_name": department}
+	if company:
+		filters["company"] = company
+	resolved = frappe.db.get_value("Department", filters, "name")
+	if resolved:
+		return resolved
+	# Pre-normalisation identifiers were stored as “显示名 - 公司缩写”.  Do
+	# not remove arbitrary punctuation: only retry the final suffix pattern.
+	legacy_display_name = re.sub(r"\s+-\s+[^-]+$", "", department).strip()
+	if legacy_display_name and legacy_display_name != department:
+		filters = {"department_name": legacy_display_name}
+		if company:
+			filters["company"] = company
+		return frappe.db.get_value("Department", filters, "name")
+	return None
 
 
 def _default_company():
@@ -1395,7 +1419,9 @@ def upsert_payroll_welfare_source_record(**kwargs):
 	rule = _welfare_rule(source_type)
 	variable_type = data.get("variable_type") or WELFARE_SOURCE_VARIABLE_TYPE_MAP.get(source_type)
 	direction = data.get("direction") or rule.get("direction")
-	department = _department_lookup(data.get("department") or employee_context.get("department")) or data.get("department") or employee_context.get("department")
+	department = _department_lookup(
+		data.get("department") or employee_context.get("department"), company
+	) or data.get("department") or employee_context.get("department")
 	trace_payload, trace_hash = _source_trace_hash(
 		{
 			"company": company,
@@ -1507,7 +1533,7 @@ def sync_welfare_sources_to_payroll_variables(company: str, payroll_month: str, 
 				"employee": row.employee,
 				"employee_code": row.employee_code,
 				"employee_name": row.employee_name,
-				"department": row.department,
+				"department": _department_lookup(row.department, company) or row.department,
 				"variable_type": variable_type,
 				"amount": flt(row.amount),
 				"source_sheet": WELFARE_SOURCE_SYNC_SHEET,

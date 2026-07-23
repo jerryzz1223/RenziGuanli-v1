@@ -23,6 +23,34 @@ frappe.ui.form.on("Department", {
 				});
 			});
 		});
+
+		if (!frm.is_new() && frm.doc.department_name?.trim() && frm.doc.name !== frm.doc.department_name.trim()) {
+			frm.add_custom_button(__("规范正式部门名称"), function () {
+				frappe.prompt(
+					[
+						{
+							fieldname: "confirmation",
+							fieldtype: "Data",
+							label: __("确认文字"),
+							description: __("请输入“确认规范部门名称”。"),
+							reqd: 1,
+						},
+					],
+					(values) => {
+						frappe
+							.call({
+								method: "hrms.api.department_identity.rename_department_to_business_name",
+								args: { department: frm.doc.name, confirmation: values.confirmation },
+								freeze: true,
+								freeze_message: __("正在更新部门关联..."),
+							})
+							.then((r) => frappe.set_route("Form", "Department", r.message.name));
+					},
+					__("规范正式部门名称"),
+					__("执行")
+				);
+			});
+		}
 	},
 
 	after_delete: function () {

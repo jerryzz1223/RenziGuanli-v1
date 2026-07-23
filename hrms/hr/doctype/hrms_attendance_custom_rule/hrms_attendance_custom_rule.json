@@ -12,6 +12,10 @@
   "rule_group",
   "rule_type",
   "priority",
+  "application_mode",
+  "last_evaluated_on",
+  "last_hit_count",
+  "last_evaluation_summary",
   "source_section",
   "source_module",
   "source_document",
@@ -62,6 +66,33 @@
    "fieldname": "priority",
    "fieldtype": "Int",
    "label": "优先级"
+  },
+  {
+   "default": "仅展示",
+   "fieldname": "application_mode",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "使用方式",
+   "options": "仅展示\n导入校验\n异常提示"
+  },
+  {
+   "fieldname": "last_evaluated_on",
+   "fieldtype": "Datetime",
+   "label": "最近提示检查",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "last_hit_count",
+   "fieldtype": "Int",
+   "label": "最近命中数",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_evaluation_summary",
+   "fieldtype": "Small Text",
+   "label": "最近检查范围",
+   "read_only": 1
   },
   {
    "fieldname": "source_section",

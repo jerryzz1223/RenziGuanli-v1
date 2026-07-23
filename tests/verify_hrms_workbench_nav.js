@@ -38,10 +38,14 @@ for (const marker of ["/assets/hrms/js/hrms_top_nav.js", "/assets/hrms/css/hrms_
 	}
 }
 
-for (const marker of ["工作台", "人事", "/desk/hrms-workbench", "/desk/personnel", "/desk/department", "/desk/attendance-import-center", "/desk/payroll-input-center"]) {
+for (const marker of ["工作台", "人事", "/desk/hrms-workbench", "/desk/personnel", "/desk/department", "/desk/attendance-import-center", "/desk/payroll-input-center", "/desk/form-data-intake", "/desk/hrms-data-operations", "aria-expanded", "bindMoreDocumentEvents", "closeMoreMenus"]) {
 	if (!topNavSource.includes(marker)) {
 		throw new Error(`Top navigation is missing marker: ${marker}`);
 	}
+}
+
+if (!topNavCssSource.includes(".hrms-top-module-nav__more.is-open .hrms-top-module-nav__menu")) {
+	throw new Error("More menu must support an explicit click-open state, not hover only.");
 }
 
 for (const marker of [

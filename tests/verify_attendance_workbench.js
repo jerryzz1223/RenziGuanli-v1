@@ -55,17 +55,37 @@ for (const marker of [
 	"bind_route_events",
 	"hrms:route-change",
 	"preview_attendance_workbook",
+	"list_attendance_import_templates",
+	"create_attendance_import_template_file",
+	"download_attendance_template",
+	"公司考勤工作簿（推荐）",
+	"下载模板",
 	"import_attendance_workbook",
 	"generate_attendance_exceptions",
 	"generate_monthly_attendance_summary",
 	"list_attendance_custom_rules",
 	"seed_attendance_custom_rules",
 	"upsert_attendance_custom_rule",
-	"1.1每日统计",
-	"1.2请假单",
-	"1.3苹果树",
+	"get_attendance_field_mapping_catalog",
+	"get_attendance_rule_usage_summary",
+	"evaluate_attendance_rules",
+	"get_attendance_rule_hits",
+	"导入批次管理",
+	"撤回最近一次导入",
+	"批量删除选中数据",
+	"管理导入批次",
+	"create_attendance_manual_adjustment",
+	"字段映射与导入校验",
+	"规则不会自动修改导入数据",
+	"运行提示检查",
+	"查看命中",
+	"打开日核对",
+	"人工更正",
+	"每日统计、出勤明细、出勤异常和苹果树",
+	"旧版三表兼容文件",
 	"每日考勤核对",
 	"考勤异常处理",
+	"部门确认",
 	"月度考勤终稿",
 	"标准工时",
 	"实际出勤",
@@ -113,6 +133,20 @@ if (attendancePageJs.includes("${this.render_workflow_tabs()}")) {
 	throw new Error("Attendance workbench must use the unified left sidebar, not render duplicate workflow tabs.");
 }
 
+if (attendancePageJs.includes("forEach((button) => this.open_custom_rule_from_center(button.dataset.editRuleFromCenter))")) {
+	throw new Error("Attendance rule details must not open while the rule center is rendering.");
+}
+
+mustInclude(
+	attendancePageJs,
+	'button.addEventListener("click", () => this.open_custom_rule_from_center(button.dataset.editRuleFromCenter))',
+	"Attendance rule details must be opened only by an explicit click.",
+);
+
+mustInclude(attendancePageJs, "this.import_result = result;", "Attendance import must retain the actual completion result.");
+mustInclude(attendancePageJs, "this.preview_result = null;", "Attendance import must clear the pre-import confirmation state after completion.");
+mustInclude(attendancePageJs, "文件已有有效导入批次，未重复写入。", "Duplicate imports must not be reported as new writes.");
+
 if (attendancePageJs.includes("dingtalk_export_v1 当前仅支持预览")) {
 	throw new Error("DingTalk four-sheet exports must offer a controlled daily-statistics import after preview.");
 }
@@ -125,7 +159,7 @@ for (const marker of ["flex: 0 0 220px", "min-width: 220px", "white-space: nowra
 	mustInclude(topNavCss, marker, `Attendance sidebar header layout is missing ${marker}.`);
 }
 
-mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260721a", "The sidebar stylesheet cache key must change with its layout.");
+mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260723b", "The sidebar stylesheet cache key must change with its layout.");
 
 if (attendancePageJs.includes("data-upload>${frappe.utils.escape_html(__(\"添加报表\"))}")) {
 	throw new Error("添加报表 must open the report view, not reuse the upload action.");
@@ -154,6 +188,20 @@ for (const marker of [
 	"list_attendance_custom_rules",
 	"seed_attendance_custom_rules",
 	"upsert_attendance_custom_rule",
+	"get_attendance_field_mapping_catalog",
+	"get_attendance_rule_usage_summary",
+	"evaluate_attendance_rules",
+	"get_attendance_rule_hits",
+	"list_attendance_import_batches",
+	"revoke_attendance_import_batch",
+	"revoke_latest_attendance_import_batch",
+	"bulk_revoke_attendance_import_batches",
+	"_attendance_import_batch_impact",
+	"SUPPORTED_ATTENDANCE_HINT_RULE_CODES",
+	"last_evaluation_summary",
+	"create_attendance_manual_adjustment",
+	"import_validation",
+	"application_mode",
 	"generate_attendance_exceptions",
 	"generate_monthly_attendance_summary",
 	"_is_valid_approval",
@@ -185,11 +233,19 @@ for (const marker of [
 	"请假/事假(小时)",
 	"COMPANY_ATTENDANCE_WORKBOOK_SOURCES",
 	"company_attendance_workbook_v1",
+	"company_attendance_register_v1",
+	"_preview_company_attendance_register_v1",
+	"_is_company_attendance_register_v1",
+	"list_attendance_import_templates",
+	"create_attendance_import_template_file",
 	"_preview_company_attendance_workbook",
 	"HRMS Attendance Month Lock",
 	"HRMS Attendance Lock Audit",
 	"lock_attendance_month",
 	"unlock_attendance_month",
+	"list_attendance_department_confirmations",
+	"review_attendance_department_confirmation",
+	"HRMS Attendance Department Confirmation",
 	"_attendance_scope_filters",
 	"TEST_ATTENDANCE_DEMO_COMPANY",
 	"TEST_ATTENDANCE_DEMO_MONTH",
@@ -202,9 +258,10 @@ for (const marker of [
 
 for (const [folder, markers] of [
 	["hrms_attendance_import_batch", ["company", "source_type", "source_checksum"]],
-	["hrms_attendance_day_check", ["company", "source_kind", "source_sheet", "source_row_number", "correction_version", "public_leave_hours", "maternity_leave_hours", "reunion_leave_hours"]],
+	["hrms_attendance_day_check", ["company", "source_kind", "source_sheet", "source_row_number", "correction_version", "adjusted_from", "manual_adjustment_reason", "public_leave_hours", "maternity_leave_hours", "reunion_leave_hours"]],
 	["hrms_attendance_month_lock", ["HRMS Attendance Month Lock", "company", "attendance_month", "active_version", "status"]],
 	["hrms_attendance_lock_audit", ["HRMS Attendance Lock Audit", "company", "attendance_month", "action", "reason", "lock_version"]],
+	["hrms_attendance_department_confirmation", ["HRMS Attendance Department Confirmation", "company", "attendance_month", "department", "confirmation_status", "attendance_lock_version"]],
 ]) {
 	const jsonPath = mustExist(`hrms/hr/doctype/${folder}/${folder}.json`);
 	const pyPath = mustExist(`hrms/hr/doctype/${folder}/${folder}.py`);
@@ -221,7 +278,7 @@ for (const [folder, titleMarkers] of [
 	["hrms_attendance_exception", ["HRMS Attendance Exception", "考勤异常处理", "exception_type", "handling_method", "confirmation_status", "deduct_absence_hours", "red_apple_penalty"]],
 	["hrms_apple_reward_record", ["HRMS Apple Reward Record", "苹果树奖惩记录", "green_apples", "red_apples", "reward_amount", "is_valid_approval"]],
 	["hrms_monthly_attendance_summary", ["HRMS Monthly Attendance Summary", "月度考勤终稿", "overtime_1_5_hours", "overtime_2_hours", "overtime_3_hours", "adjusted_working_hours", "actual_clock_attendance_hours", "night_shift_allowance", "adjusted_absence_hours"]],
-	["hrms_attendance_custom_rule", ["HRMS Attendance Custom Rule", "考勤自定义规则", "rule_code", "rule_group", "trigger_condition", "action_result", "source_document"]],
+	["hrms_attendance_custom_rule", ["HRMS Attendance Custom Rule", "考勤自定义规则", "rule_code", "rule_group", "application_mode", "last_evaluated_on", "last_hit_count", "trigger_condition", "action_result", "source_document"]],
 ]) {
 	const jsonPath = mustExist(`hrms/hr/doctype/${folder}/${folder}.json`);
 	const pyPath = mustExist(`hrms/hr/doctype/${folder}/${folder}.py`);
@@ -236,7 +293,8 @@ for (const [folder, titleMarkers] of [
 for (const marker of [
 	"hrms-attendance-kpi-grid",
 	"hrms-attendance-toolbar",
-	"出勤0人",
+	"attendance-people",
+	"待确认异常",
 	"打卡记录",
 	"补卡记录",
 	"请假记录",

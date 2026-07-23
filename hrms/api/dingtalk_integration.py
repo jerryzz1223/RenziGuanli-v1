@@ -12,11 +12,20 @@ DINGTALK_SETTINGS_DOCTYPE = "HRMS DingTalk Settings"
 DINGTALK_RAW_RECORD_DOCTYPE = "HRMS DingTalk Raw Record"
 DINGTALK_USER_MAP_DOCTYPE = "HRMS DingTalk User Map"
 DINGTALK_SYNC_LOG_DOCTYPE = "HRMS DingTalk Sync Log"
+ATTENDANCE_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
 DINGTALK_API_BASE_URL = "https://api.dingtalk.com"
 DINGTALK_OAPI_BASE_URL = "https://oapi.dingtalk.com"
 DINGTALK_ACCESS_TOKEN_URL = "https://api.dingtalk.com/v1.0/oauth2/accessToken"
-DINGTALK_DEPARTMENT_LIST_PATH = "/v1.0/contact/departments"
-DINGTALK_DEPARTMENT_USERS_PATH = "/v1.0/contact/departments/{dept_id}/users"
+# DingTalk's current enterprise address-book read endpoints are served by the
+# OAPI host.  The previous v1.0 paths returned HTTP 404 before a permission
+# check could occur, which made a valid application appear misconfigured.
+DINGTALK_DEPARTMENT_LIST_PATH = "/topapi/v2/department/listsub"
+DINGTALK_DEPARTMENT_USERS_PATH = "/topapi/v2/user/list"
+# ``getupdatedata`` is an incremental user/day endpoint.  It can legitimately
+# return an empty envelope even when the user has historical attendance.  The
+# attendance-list endpoint is the primary batch result feed for HR review.
+DINGTALK_ATTENDANCE_LIST_PATH = "/attendance/list"
+DINGTALK_ATTENDANCE_LIST_RECORD_PATH = "/attendance/listRecord"
 DINGTALK_ATTENDANCE_UPDATEDATA_PATH = "/topapi/attendance/getupdatedata"
 DINGTALK_PROCESS_INSTANCE_IDS_PATH = "/topapi/processinstance/listids"
 DINGTALK_PROCESS_INSTANCE_DETAIL_PATH = "/topapi/processinstance/get"
@@ -211,9 +220,11 @@ def save_dingtalk_connection_settings(settings_json: str | dict | None = None, *
 		if fieldname in payload:
 			doc.set(fieldname, payload.get(fieldname))
 	if payload.get("client_secret"):
-		doc.set_password("client_secret", payload.get("client_secret"))
+		# Password fields are encrypted by Frappe during ``doc.save()``. Document
+		# does not expose a ``set_password`` method on the supported version.
+		doc.set("client_secret", payload.get("client_secret"))
 	if payload.get("access_token"):
-		doc.set_password("access_token", payload.get("access_token"))
+		doc.set("access_token", payload.get("access_token"))
 	if payload.get("token_expires_at"):
 		doc.set("token_expires_at", payload.get("token_expires_at"))
 	doc.save(ignore_permissions=False)
@@ -228,7 +239,10 @@ def _request_access_token(client_id, client_secret):
 		json={"appKey": client_id, "appSecret": client_secret},
 		timeout=20,
 	)
-	response.raise_for_status()
+	if not response.ok:
+		# Do not call ``raise_for_status`` here: its exception string includes the
+		# full OAPI URL and would expose the access token in the query string.
+		frappe.throw(_("钉钉接口请求失败（HTTP {0}）。").format(response.status_code))
 	data = response.json()
 	access_token = data.get("accessToken") or data.get("access_token")
 	expire_in = int(data.get("expireIn") or data.get("expires_in") or 7200)
@@ -250,7 +264,8 @@ def get_dingtalk_access_token_value():
 		frappe.throw(_("请先配置钉钉 Client ID 和 Client Secret"))
 
 	access_token, expire_in = _request_access_token(client_id, client_secret)
-	settings.set_password("access_token", access_token)
+	# Let Frappe save the token into its encrypted Password store.
+	settings.set("access_token", access_token)
 	settings.token_expires_at = now_datetime() + timedelta(seconds=max(expire_in - 300, 60))
 	settings.save(ignore_permissions=False)
 	return access_token
@@ -258,31 +273,48 @@ def get_dingtalk_access_token_value():
 
 def _dingtalk_api_request(method, path, params=None, json_body=None, use_oapi=False, form_body=None):
 	import requests
+	from requests.adapters import HTTPAdapter
+	from urllib3.util.retry import Retry
 
 	access_token = get_dingtalk_access_token_value()
+	retry = Retry(
+		total=3,
+		connect=3,
+		read=3,
+		backoff_factor=0.5,
+		status_forcelist=(429, 500, 502, 503, 504),
+		allowed_methods=frozenset(("GET", "POST")),
+		raise_on_status=False,
+	)
+	session = requests.Session()
+	session.mount("https://", HTTPAdapter(max_retries=retry))
 	if use_oapi:
 		url = f"{DINGTALK_OAPI_BASE_URL}{path}"
 		request_params = dict(params or {})
 		request_params["access_token"] = access_token
-		response = requests.request(
+	else:
+		url = f"{DINGTALK_API_BASE_URL}{path}"
+		request_params = params
+
+	try:
+		response = session.request(
 			method,
 			url,
 			params=request_params,
-			json=json_body if form_body is None else None,
-			data=form_body,
+			json=json_body if use_oapi and form_body is None else json_body,
+			data=form_body if use_oapi else None,
+			headers={} if use_oapi else {"x-acs-dingtalk-access-token": access_token},
 			timeout=30,
 		)
-	else:
-		url = f"{DINGTALK_API_BASE_URL}{path}"
-		response = requests.request(
-			method,
-			url,
-			params=params,
-			json=json_body,
-			headers={"x-acs-dingtalk-access-token": access_token},
-			timeout=30,
-		)
-	response.raise_for_status()
+	except requests.RequestException as exc:
+		# Never return the request URL: the OAPI access token is carried in its
+		# query string and must not leak into Desk messages or terminal output.
+		frappe.throw(_("钉钉网络连接失败，系统已重试 3 次；请稍后重试。原因：{0}").format(type(exc).__name__))
+	if not response.ok:
+		# ``requests.raise_for_status`` includes the URL in its exception text.
+		# OAPI puts the short-lived access token in the query string, so returning
+		# that exception would leak it to Desk and to terminal history.
+		frappe.throw(_("钉钉接口请求失败（HTTP {0}）。").format(response.status_code))
 	data = response.json()
 	errcode = data.get("errcode")
 	if errcode not in (None, 0):
@@ -339,7 +371,7 @@ def apply_dingtalk_default_settings():
 		if fieldname in defaults:
 			doc.set(fieldname, defaults[fieldname])
 	if defaults.get("client_secret"):
-		doc.set_password("client_secret", defaults["client_secret"])
+		doc.set("client_secret", defaults["client_secret"])
 	doc.enabled = 0
 	doc.daily_sync_enabled = 0
 	doc.sync_lookback_days = doc.get("sync_lookback_days") or 7
@@ -358,7 +390,12 @@ def fetch_dingtalk_departments(parent_dept_id: str = "1"):
 	"""
 	_require_dingtalk_manager()
 	_require_api_sync_enabled()
-	return _dingtalk_api_request("GET", DINGTALK_DEPARTMENT_LIST_PATH, params={"deptId": str(parent_dept_id or "1")})
+	return _dingtalk_api_request(
+		"POST",
+		DINGTALK_DEPARTMENT_LIST_PATH,
+		use_oapi=True,
+		json_body={"dept_id": int(parent_dept_id or 1), "language": "zh_CN"},
+	)
 
 
 @frappe.whitelist()
@@ -370,29 +407,38 @@ def sync_departments_from_dingtalk(root_dept_id: str = "1", max_depth: int = 20,
 	seen = set()
 	received = 0
 	failed = 0
+	errors = []
 	try:
 		while queue:
 			parent_id, depth = queue.pop(0)
 			if parent_id in seen or depth > int(max_depth or 20):
 				continue
 			seen.add(parent_id)
-			payload = _dingtalk_api_request("GET", DINGTALK_DEPARTMENT_LIST_PATH, params={"deptId": parent_id})
+			payload = _dingtalk_api_request(
+				"POST",
+				DINGTALK_DEPARTMENT_LIST_PATH,
+				use_oapi=True,
+				json_body={"dept_id": int(parent_id), "language": "zh_CN"},
+			)
 			departments = _extract_result_list(payload, "departments", "dept_infos", "deptInfos", "result")
 			for item in departments:
+				received += 1
 				try:
 					department = normalize_dingtalk_department(item)
 					if not department["parent_id"]:
 						department["raw"]["parent_id"] = parent_id
 						department = normalize_dingtalk_department(department["raw"])
 					upsert_raw_record("department", department["external_id"], department["raw"], log.name, company=company)
-					received += 1
 					if department["external_id"] and department["external_id"] not in seen:
 						queue.append((department["external_id"], depth + 1))
-				except Exception:
+				except Exception as exc:
 					failed += 1
+					if len(errors) < 10:
+						errors.append("部门 {0}: {1}".format(parent_id, str(exc)))
 		_settings_doc().db_set("last_department_sync_at", now_datetime())
-		_finish_sync_log(log, "已完成" if not failed else "部分失败", received, 0, received - failed, failed)
-		return {"received": received, "failed": failed, "root_dept_id": root_dept_id}
+		error_message = "\n".join(errors)
+		_finish_sync_log(log, "已完成" if not failed else "部分失败", received, 0, received - failed, failed, error_message)
+		return {"received": received, "failed": failed, "root_dept_id": root_dept_id, "error_message": error_message}
 	except Exception as exc:
 		_finish_sync_log(log, "失败", received, 0, received - failed, failed + 1, str(exc))
 		raise
@@ -402,8 +448,18 @@ def sync_departments_from_dingtalk(root_dept_id: str = "1", max_depth: int = 20,
 def fetch_dingtalk_department_users(dept_id: str, cursor: int = 0, size: int = 100):
 	_require_dingtalk_manager()
 	_require_api_sync_enabled()
-	path = DINGTALK_DEPARTMENT_USERS_PATH.format(dept_id=str(dept_id))
-	return _dingtalk_api_request("GET", path, params={"cursor": cursor or 0, "size": min(int(size or 100), 100)})
+	return _dingtalk_api_request(
+		"POST",
+		DINGTALK_DEPARTMENT_USERS_PATH,
+		use_oapi=True,
+		json_body={
+			"dept_id": int(dept_id),
+			"cursor": int(cursor or 0),
+			"size": min(int(size or 100), 100),
+			"order_field": "modify_desc",
+			"contain_access_limit": True,
+		},
+	)
 
 
 def _department_ids_for_user_sync(department_ids_json=None, company: str = ""):
@@ -431,30 +487,45 @@ def sync_users_from_dingtalk(department_ids_json: str | list | None = None, size
 	department_ids = _department_ids_for_user_sync(department_ids_json, company)
 	received = 0
 	failed = 0
+	errors = []
 	try:
 		for dept_id in department_ids:
 			cursor = 0
 			while True:
-				path = DINGTALK_DEPARTMENT_USERS_PATH.format(dept_id=str(dept_id))
-				payload = _dingtalk_api_request("GET", path, params={"cursor": cursor or 0, "size": min(int(size or 100), 100)})
+				payload = _dingtalk_api_request(
+					"POST",
+					DINGTALK_DEPARTMENT_USERS_PATH,
+					use_oapi=True,
+					json_body={
+						"dept_id": int(dept_id),
+						"cursor": int(cursor or 0),
+						"size": min(int(size or 100), 100),
+						"order_field": "modify_desc",
+						"contain_access_limit": True,
+					},
+				)
 				users = _extract_result_list(payload, "users", "user_list", "userList", "result")
 				for item in users:
+					received += 1
 					try:
 						if not _first(item, "dept_id_list", "deptIdList", "department", "departmentIds"):
 							item["department_id"] = dept_id
 						user = normalize_dingtalk_user(item)
 						upsert_raw_record("user", user["external_id"], user["raw"], log.name, company=company, dingtalk_userid=user["dingtalk_userid"])
 						upsert_user_mapping(user, company)
-						received += 1
-					except Exception:
+					except Exception as exc:
 						failed += 1
+						if len(errors) < 10:
+							user_id = _first(item, "userid", "userId", "user_id", "id") or "未知用户"
+							errors.append("员工 {0}: {1}".format(user_id, str(exc)))
 				next_cursor = _next_cursor(payload)
 				if next_cursor in (None, "", cursor):
 					break
 				cursor = next_cursor
 		_settings_doc().db_set("last_user_sync_at", now_datetime())
-		_finish_sync_log(log, "已完成" if not failed else "部分失败", received, 0, received - failed, failed)
-		return {"received": received, "failed": failed, "department_count": len(department_ids)}
+		error_message = "\n".join(errors)
+		_finish_sync_log(log, "已完成" if not failed else "部分失败", received, 0, received - failed, failed, error_message)
+		return {"received": received, "failed": failed, "department_count": len(department_ids), "error_message": error_message}
 	except Exception as exc:
 		_finish_sync_log(log, "失败", received, 0, received - failed, failed + 1, str(exc))
 		raise
@@ -488,6 +559,65 @@ def _userids_for_attendance_sync(userids_json=None, limit=0, company: str = ""):
 	return [row.dingtalk_userid for row in rows if row.dingtalk_userid]
 
 
+def _chunks(values, size):
+	for index in range(0, len(values), size):
+		yield values[index : index + size]
+
+
+def _fetch_dingtalk_attendance_results(userids: list[str], business_date: date) -> tuple[dict[str, list], int, dict[str, str]]:
+	"""Fetch actual attendance results in documented batches of at most 50 users."""
+	results_by_user = {str(user_id): [] for user_id in userids}
+	endpoint_by_user = {str(user_id): "attendance/list" for user_id in userids}
+	request_count = 0
+	date_text = f"{business_date} 00:00:00"
+	for user_chunk in _chunks(userids, 50):
+		offset = 0
+		while True:
+			payload = _dingtalk_api_request(
+				"POST",
+				DINGTALK_ATTENDANCE_LIST_PATH,
+				use_oapi=True,
+				json_body={
+					"workDateFrom": date_text,
+					"workDateTo": date_text,
+					"userIdList": user_chunk,
+					"offset": offset,
+					"limit": 50,
+					"isI18n": False,
+				},
+			)
+			request_count += 1
+			for record in payload.get("recordresult") or []:
+				user_id = str(_first(record, "userId", "userid", "user_id") or "")
+				if user_id:
+					results_by_user.setdefault(user_id, []).append(record)
+			if not payload.get("hasMore"):
+				break
+			offset += 1
+		# Some enterprises return an empty result feed but do expose the detailed
+		# record endpoint.  Use it only as a fallback for this chunk so we neither
+		# duplicate records nor confuse an empty result with an absence.
+		if not any(results_by_user.get(str(user_id)) for user_id in user_chunk):
+			detail_payload = _dingtalk_api_request(
+				"POST",
+				DINGTALK_ATTENDANCE_LIST_RECORD_PATH,
+				use_oapi=True,
+				json_body={
+					"userIds": user_chunk,
+					"checkDateFrom": date_text,
+					"checkDateTo": date_text,
+					"isI18n": False,
+				},
+			)
+			request_count += 1
+			for record in detail_payload.get("recordresult") or []:
+				user_id = str(_first(record, "userId", "userid", "user_id") or "")
+				if user_id:
+					results_by_user.setdefault(user_id, []).append(record)
+					endpoint_by_user[user_id] = "attendance/listRecord"
+	return results_by_user, request_count, endpoint_by_user
+
+
 @frappe.whitelist()
 def sync_attendance_from_dingtalk(
 	work_date: str,
@@ -495,24 +625,47 @@ def sync_attendance_from_dingtalk(
 	limit: int = 0,
 	company: str = "",
 	convert_to_draft: bool = True,
+	sync_log: str = "",
+	finalize_log: bool = True,
 ):
 	"""Read one business date into raw storage, then build draft daily checks only."""
 	_require_dingtalk_manager()
 	company = _require_api_sync_enabled(company)
 	business_date = getdate(work_date)
-	log = _new_sync_log("考勤同步", company=company, business_date=business_date)
+	log = _get_or_start_attendance_sync_log(sync_log, company, business_date)
+	if _sync_cancel_requested(log.name):
+		if finalize_log:
+			_finish_sync_log(log, "已撤销", error_message="同步任务在开始前已取消；未写入考勤草稿。")
+		return {"sync_log": log.name, "received": 0, "failed": 0, "work_date": str(business_date), "cancelled": True}
 	userids = _userids_for_attendance_sync(userids_json, limit=limit, company=company)
 	received = 0
 	failed = 0
+	errors = []
 	try:
-		for userid in userids:
-			try:
-				payload = _dingtalk_api_request(
-					"POST",
-					DINGTALK_ATTENDANCE_UPDATEDATA_PATH,
-					use_oapi=True,
-					form_body={"userid": userid, "work_date": f"{business_date} 00:00:00"},
-				)
+		try:
+			results_by_user, request_count, endpoint_by_user = _fetch_dingtalk_attendance_results(userids, business_date)
+			if _sync_cancel_requested(log.name):
+				if finalize_log:
+					_finish_sync_log(log, "已撤销", error_message="同步任务已取消；未写入考勤草稿。")
+				return {"sync_log": log.name, "received": 0, "failed": 0, "work_date": str(business_date), "cancelled": True}
+			for userid in userids:
+				if _sync_cancel_requested(log.name):
+					break
+				# Normalize the batch response to the same immutable raw-payload shape
+				# used by the daily converter and raw-record viewer.
+				payload = {
+					"errcode": 0,
+					"errmsg": "ok",
+					"source_endpoint": endpoint_by_user.get(str(userid), "attendance/list"),
+					"request_count": request_count,
+					"result": {
+						"userid": userid,
+						"work_date": f"{business_date} 00:00:00",
+						"check_record_list": results_by_user.get(str(userid), []),
+						"attendance_result_list": results_by_user.get(str(userid), []),
+						"approve_list": [],
+					},
+				}
 				upsert_raw_record(
 					DINGTALK_ATTENDANCE_SOURCE_TYPE,
 					f"{userid}:{business_date}",
@@ -523,19 +676,129 @@ def sync_attendance_from_dingtalk(
 					dingtalk_userid=userid,
 				)
 				received += 1
-			except Exception:
-				failed += 1
+			if _sync_cancel_requested(log.name):
+				if finalize_log:
+					_finish_sync_log(log, "已撤销", received, 0, 0, 0, "同步任务已取消；原始响应可能已保留，但未生成考勤草稿。")
+				return {"sync_log": log.name, "received": received, "failed": 0, "work_date": str(business_date), "cancelled": True}
+		except Exception as exc:
+			# Keep an explicit failure rather than silently treating a failed batch as
+			# an employee with no punch.  The previous raw data remains auditable.
+			failed = len(userids)
+			errors.append("批量获取打卡结果失败：{0}".format(str(exc)))
 		_settings_doc().db_set("last_attendance_sync_at", now_datetime())
 		conversion = {}
-		if convert_to_draft:
+		if convert_to_draft and not failed:
 			from hrms.api.dingtalk_attendance_sync import convert_dingtalk_raw_attendance_to_daily_checks
 
 			conversion = convert_dingtalk_raw_attendance_to_daily_checks(company, str(business_date), log.name, enforce_role=False)
-		_finish_sync_log(log, "已完成" if not failed else "部分失败", received, conversion.get("created", 0), conversion.get("updated", 0), failed)
-		return {"received": received, "failed": failed, "work_date": str(business_date), "conversion": conversion}
+		error_message = "\n".join(errors)
+		if finalize_log:
+			_finish_sync_log(log, "已完成" if not failed else "部分失败", received, conversion.get("created", 0), conversion.get("updated", 0), failed, error_message)
+		return {"sync_log": log.name, "received": received, "failed": failed, "work_date": str(business_date), "conversion": conversion, "error_message": error_message}
 	except Exception as exc:
-		_finish_sync_log(log, "失败", received, 0, received - failed, failed + 1, str(exc))
+		if finalize_log:
+			_finish_sync_log(log, "失败", received, 0, received - failed, failed + 1, str(exc))
 		raise
+
+
+def _sync_cancel_requested(sync_log: str) -> bool:
+	return frappe.db.get_value(DINGTALK_SYNC_LOG_DOCTYPE, sync_log, "status") in {"取消请求", "已撤销"}
+
+
+def _get_or_start_attendance_sync_log(sync_log: str, company: str, business_date: date):
+	if not sync_log:
+		return _new_sync_log("考勤同步", company=company, business_date=business_date)
+	log = frappe.get_doc(DINGTALK_SYNC_LOG_DOCTYPE, sync_log)
+	if log.company != company or log.sync_type != "考勤同步" or getdate(log.business_date) != business_date:
+		frappe.throw(_("同步任务与当前公司或日期不匹配。"))
+	if log.status not in {"取消请求", "已撤销"}:
+		log.status = "运行中"
+		log.started_at = now_datetime()
+		log.error_message = ""
+		log.save(ignore_permissions=False)
+	return log
+
+
+@frappe.whitelist()
+def queue_dingtalk_attendance_sync(work_date: str, company: str = ""):
+	"""Queue a one-day pull so closing the browser does not interrupt the import."""
+	_require_dingtalk_manager()
+	company = _require_api_sync_enabled(company)
+	business_date = getdate(work_date)
+	log = _new_sync_log("考勤同步", company=company, business_date=business_date)
+	log.status = "已排队"
+	log.error_message = "已提交后台任务；可在“钉钉同步记录”查看进度或撤销。"
+	log.save(ignore_permissions=False)
+	frappe.enqueue(
+		"hrms.api.dingtalk_integration.run_queued_dingtalk_attendance_sync",
+		queue="long",
+		timeout=1800,
+		enqueue_after_commit=True,
+		company=company,
+		work_date=str(business_date),
+		sync_log=log.name,
+	)
+	return {"sync_log": log.name, "status": log.status, "business_date": str(business_date)}
+
+
+def run_queued_dingtalk_attendance_sync(company: str, work_date: str, sync_log: str):
+	"""Worker entrypoint: raw evidence first, then replaceable daily drafts."""
+	log = frappe.get_doc(DINGTALK_SYNC_LOG_DOCTYPE, sync_log)
+	if _sync_cancel_requested(log.name):
+		_finish_sync_log(log, "已撤销", error_message="后台任务启动前已取消。")
+		return {"sync_log": log.name, "cancelled": True}
+	try:
+		raw = sync_attendance_from_dingtalk(
+			work_date,
+			company=company,
+			convert_to_draft=False,
+			sync_log=log.name,
+			finalize_log=False,
+		)
+		if raw.get("cancelled") or _sync_cancel_requested(log.name):
+			_finish_sync_log(log, "已撤销", raw.get("received", 0), error_message="后台同步已取消；没有生成每日考勤草稿。")
+			return {"sync_log": log.name, "cancelled": True}
+		if raw.get("failed"):
+			_finish_sync_log(log, "部分失败", raw.get("received", 0), 0, 0, raw.get("failed", 0), raw.get("error_message", ""))
+			return raw
+		from hrms.api.dingtalk_attendance_sync import convert_dingtalk_raw_attendance_to_daily_checks
+
+		converted = convert_dingtalk_raw_attendance_to_daily_checks(company, work_date, log.name, enforce_role=False)
+		if _sync_cancel_requested(log.name):
+			from hrms.api.attendance_import import revoke_attendance_import_batch
+
+			revoke_attendance_import_batch(converted["batch"], reason="人事在同步执行中请求撤销", enforce_role=False)
+			_finish_sync_log(log, "已撤销", raw.get("received", 0), error_message="已撤销本次同步生成的每日草稿。")
+			return {"sync_log": log.name, "cancelled": True}
+		_finish_sync_log(log, "已完成", raw.get("received", 0), converted.get("created", 0), converted.get("updated", 0), raw.get("failed", 0), raw.get("error_message", ""))
+		return {**raw, "conversion": converted}
+	except Exception as exc:
+		_finish_sync_log(log, "失败", error_message=str(exc))
+		raise
+
+
+@frappe.whitelist()
+def cancel_dingtalk_attendance_sync(sync_log: str):
+	"""Cancel a queued/running task, or withdraw its completed draft batch."""
+	_require_dingtalk_manager()
+	log = frappe.get_doc(DINGTALK_SYNC_LOG_DOCTYPE, sync_log)
+	if log.sync_type != "考勤同步":
+		frappe.throw(_("只能撤销考勤同步任务。"))
+	if log.status == "已排队":
+		_finish_sync_log(log, "已撤销", error_message="人事已在任务启动前撤销。")
+		return {"sync_log": log.name, "status": "已撤销", "message": "已取消后台任务。"}
+	if log.status in {"运行中", "取消请求"}:
+		log.status = "取消请求"
+		log.error_message = "人事已请求取消；系统将停止后续草稿生成并保留原始审计记录。"
+		log.save(ignore_permissions=False)
+		return {"sync_log": log.name, "status": "取消请求", "message": "已请求取消，正在等待当前接口请求结束。"}
+	batch_name = frappe.db.get_value(ATTENDANCE_BATCH_DOCTYPE, {"dingtalk_sync_log": log.name}, "name")
+	if batch_name:
+		from hrms.api.attendance_import import revoke_attendance_import_batch
+
+		result = revoke_attendance_import_batch(batch_name, reason="人事撤销钉钉同步", enforce_role=False)
+		return {"sync_log": log.name, "status": "已撤销", "batch": batch_name, **result}
+	return {"sync_log": log.name, "status": log.status, "message": "该任务未生成可撤销的考勤草稿。"}
 
 
 @frappe.whitelist()
@@ -735,11 +998,14 @@ def normalize_dingtalk_user(payload):
 		department_id = str(department_ids or "")
 	return {
 		"source_type": "user",
-		"external_id": str(_first(payload, "userid", "userId", "user_id", "id")),
-		"dingtalk_userid": str(_first(payload, "userid", "userId", "user_id", "id")),
-		"employee_name": _first(payload, "name", "employeeName", "username"),
+		# Accept both the live DingTalk response and a previously normalized value.
+		# ``upsert_user_mapping`` intentionally normalizes defensively, so the
+		# latter form must retain its UserId instead of being treated as blank.
+		"external_id": str(_first(payload, "external_id", "dingtalk_userid", "userid", "userId", "user_id", "id")),
+		"dingtalk_userid": str(_first(payload, "dingtalk_userid", "userid", "userId", "user_id", "id")),
+		"employee_name": _first(payload, "employee_name", "name", "employeeName", "username"),
 		"mobile": _first(payload, "mobile", "phone", "telephone"),
-		"employee_code": _first(payload, "job_number", "jobNumber", "employeeNo", "employee_code"),
+		"employee_code": _first(payload, "employee_code", "job_number", "jobNumber", "employeeNo"),
 		"title": _first(payload, "title", "position", "jobTitle"),
 		"department_id": department_id,
 		"department_name": _first(payload, "department_name", "deptName"),
@@ -842,6 +1108,288 @@ def _finish_sync_log(doc, status, received=0, created=0, updated=0, failed=0, er
 	)
 	doc.save(ignore_permissions=False)
 	return doc
+
+
+def _month_date_range(attendance_month: str):
+	"""Return an inclusive/exclusive date range for a YYYY-MM value."""
+	month = str(attendance_month or "").strip()
+	if len(month) != 7 or month[4] != "-":
+		month = str(getdate(now_datetime()))[:7]
+	year, number = (int(value) for value in month.split("-"))
+	start = date(year, number, 1)
+	end = date(year + 1, 1, 1) if number == 12 else date(year, number + 1, 1)
+	return start, end
+
+
+def _count_dingtalk_mappings(company: str):
+	rows = frappe.get_all(
+		DINGTALK_USER_MAP_DOCTYPE,
+		filters={"company": company},
+		fields=["sync_status"],
+		limit_page_length=0,
+	)
+	counts = {"total": len(rows), "matched": 0, "pending": 0, "conflict": 0, "ignored": 0}
+	for row in rows:
+		status = row.get("sync_status")
+		if status == "已同步":
+			counts["matched"] += 1
+		elif status == "冲突":
+			counts["conflict"] += 1
+		elif status == "忽略":
+			counts["ignored"] += 1
+		else:
+			counts["pending"] += 1
+	return counts
+
+
+def _raw_record_counts(company: str):
+	return {
+		source_type: frappe.db.count(DINGTALK_RAW_RECORD_DOCTYPE, {"company": company, "source_type": source_type})
+		for source_type in ("department", "user", DINGTALK_ATTENDANCE_SOURCE_TYPE, DINGTALK_APPROVAL_SOURCE_TYPE)
+	}
+
+
+@frappe.whitelist()
+def get_dingtalk_attendance_hub_status(company: str = "", attendance_month: str = ""):
+	"""A safe operational summary for the attendance workbench, without raw payloads."""
+	_require_dingtalk_manager()
+	company = _require_sync_company(company)
+	start, end = _month_date_range(attendance_month)
+	day_checks = frappe.get_all(
+		"HRMS Attendance Day Check",
+		filters=[
+			["company", "=", company],
+			["source_kind", "=", "钉钉API同步"],
+			["attendance_date", ">=", start],
+			["attendance_date", "<", end],
+		],
+		fields=["name", "import_batch"],
+		limit_page_length=0,
+	)
+	batch_names = sorted({row.import_batch for row in day_checks if row.import_batch})
+	exception_count = (
+		frappe.db.count("HRMS Attendance Exception", {"import_batch": ["in", batch_names]}) if batch_names else 0
+	)
+	logs = frappe.get_all(
+		DINGTALK_SYNC_LOG_DOCTYPE,
+		filters={"company": company},
+		fields=[
+			"name", "sync_type", "business_date", "status", "started_at", "finished_at",
+			"records_received", "records_created", "records_updated", "records_failed", "error_message",
+		],
+		order_by="modified desc",
+		limit_page_length=8,
+	)
+	settings = _settings_doc()
+	return {
+		"company": company,
+		"attendance_month": str(start)[:7],
+		"connection": {
+			"configured": bool(settings.get("client_id") and settings.get_password("client_secret", raise_exception=False)),
+			"enabled": bool(settings.get("enabled")),
+			"api_mode": settings.get("sync_mode") == DINGTALK_API_SYNC_MODE,
+			"daily_sync_enabled": bool(settings.get("daily_sync_enabled")),
+			"last_department_sync_at": settings.get("last_department_sync_at"),
+			"last_user_sync_at": settings.get("last_user_sync_at"),
+			"last_attendance_sync_at": settings.get("last_attendance_sync_at"),
+			"last_approval_sync_at": settings.get("last_approval_sync_at"),
+		},
+		"raw_records": _raw_record_counts(company),
+		"mappings": _count_dingtalk_mappings(company),
+		"attendance": {"daily_drafts": len(day_checks), "exceptions": exception_count},
+		"logs": logs,
+	}
+
+
+@frappe.whitelist()
+def list_dingtalk_attendance_sync_runs(company: str = "", attendance_month: str = "", work_date: str = "", page_length: int = 50):
+	"""List operational sync runs with their replaceable attendance draft batch."""
+	_require_dingtalk_manager()
+	company = _require_sync_company(company)
+	filters = [["company", "=", company], ["sync_type", "=", "考勤同步"]]
+	if work_date:
+		filters.append(["business_date", "=", getdate(work_date)])
+	else:
+		start, end = _month_date_range(attendance_month)
+		filters.extend([["business_date", ">=", start], ["business_date", "<", end]])
+	logs = frappe.get_all(
+		DINGTALK_SYNC_LOG_DOCTYPE,
+		filters=filters,
+		fields=[
+			"name", "business_date", "status", "started_at", "finished_at", "records_received",
+			"records_created", "records_updated", "records_failed", "error_message",
+		],
+		order_by="modified desc",
+		limit_page_length=max(int(page_length or 50), 1),
+	)
+	log_names = [row.name for row in logs]
+	batches = frappe.get_all(
+		ATTENDANCE_BATCH_DOCTYPE,
+		filters={"company": company, "dingtalk_sync_log": ["in", log_names or ["__none__"]]},
+		fields=["name", "dingtalk_sync_log", "status", "attendance_month", "daily_sheet_rows", "imported_on"],
+		limit_page_length=0,
+	)
+	batch_by_log = {row.dingtalk_sync_log: row for row in batches}
+	for row in logs:
+		batch = batch_by_log.get(row.name)
+		row["batch"] = batch.name if batch else ""
+		row["batch_status"] = batch.status if batch else ""
+		row["daily_drafts"] = batch.daily_sheet_rows if batch else 0
+		row["can_cancel"] = row.status in {"已排队", "运行中", "取消请求"} or bool(batch and batch.status not in {"已撤销", "已生成月度终稿"})
+	return logs
+
+
+@frappe.whitelist()
+def sync_dingtalk_directory(company: str = ""):
+	"""Sync departments followed by users; mappings remain reviewable drafts."""
+	_require_dingtalk_manager()
+	company = _require_api_sync_enabled(company)
+	departments = sync_departments_from_dingtalk(company=company)
+	users = sync_users_from_dingtalk(company=company)
+	return {"company": company, "departments": departments, "users": users, "mappings": _count_dingtalk_mappings(company)}
+
+
+def _event_value(event, *keys):
+	return _first(event, *keys) if isinstance(event, dict) else ""
+
+
+@frappe.whitelist()
+def list_dingtalk_clock_records(company: str = "", attendance_month: str = "", work_date: str = "", page_length: int = 200):
+	"""Present stored DingTalk attendance evidence as usable clock-record rows.
+
+	The API deliberately returns parsed, minimum-needed fields rather than the raw
+	payload; the full payload remains restricted to the raw-record DocType.
+	"""
+	_require_dingtalk_manager()
+	company = _require_sync_company(company)
+	filters = [["company", "=", company], ["source_type", "=", DINGTALK_ATTENDANCE_SOURCE_TYPE]]
+	if work_date:
+		filters.append(["business_date", "=", getdate(work_date)])
+	else:
+		start, end = _month_date_range(attendance_month)
+		filters.extend([["business_date", ">=", start], ["business_date", "<", end]])
+	raw_rows = frappe.get_all(
+		DINGTALK_RAW_RECORD_DOCTYPE,
+		filters=filters,
+		fields=["name", "dingtalk_userid", "business_date", "payload_json", "received_at"],
+		order_by="business_date desc, modified desc",
+		limit_page_length=max(int(page_length or 200), 1),
+	)
+	mapping_rows = frappe.get_all(
+		DINGTALK_USER_MAP_DOCTYPE,
+		filters={"company": company},
+		fields=["dingtalk_userid", "employee", "employee_code", "employee_name", "department_name", "sync_status"],
+		limit_page_length=0,
+	)
+	mappings = {row.dingtalk_userid: row for row in mapping_rows}
+	from hrms.api.dingtalk_attendance_sync import _event_datetime, _is_usable_attendance_event, _nested_items, _payload
+
+	records = []
+	for raw in raw_rows:
+		# Do not render a successful-but-empty API envelope as a clock record.
+		# It is visible in the data-quality summary instead and cannot be used for payroll.
+		items = [event for event in _nested_items(_payload(raw.payload_json)) if _is_usable_attendance_event(event)]
+		for event in items:
+			user_id = str(_event_value(event, "userId", "userid", "user_id") or raw.dingtalk_userid or "")
+			mapping = mappings.get(user_id)
+			check_time = _event_datetime(_event_value(event, "userCheckTime", "user_check_time", "checkTime", "check_time", "baseCheckTime"))
+			records.append(
+				{
+					"employee_name": mapping.employee_name if mapping else _event_value(event, "name", "employeeName") or "未匹配员工",
+					"employee_code": mapping.employee_code if mapping else _event_value(event, "jobNumber", "job_number", "employeeNo"),
+					"department": mapping.department_name if mapping else _event_value(event, "departmentName", "deptName"),
+					"mapping_status": mapping.sync_status if mapping else "待匹配",
+					"attendance_date": str(raw.business_date or ""),
+					"check_time": check_time.strftime("%H:%M:%S") if check_time else "",
+					"check_type": _event_value(event, "checkType", "check_type", "type"),
+					"time_result": _event_value(event, "timeResult", "time_result", "attendanceResult", "attendance_result", "result"),
+					"location": _event_value(event, "userAddress", "user_address", "address", "location"),
+					"device": _event_value(event, "deviceId", "device_id", "deviceName", "device_name"),
+					"source": "钉钉 API",
+					"raw_record": raw.name,
+				}
+			)
+	records.sort(key=lambda row: (row["attendance_date"], row["check_time"]), reverse=True)
+	return records[: max(int(page_length or 200), 1)]
+
+
+@frappe.whitelist()
+def get_dingtalk_clock_record_summary(company: str = "", attendance_month: str = "", work_date: str = ""):
+	"""Explain whether stored API attendance evidence contains usable punch detail."""
+	_require_dingtalk_manager()
+	company = _require_sync_company(company)
+	filters = [["company", "=", company], ["source_type", "=", DINGTALK_ATTENDANCE_SOURCE_TYPE]]
+	if work_date:
+		filters.append(["business_date", "=", getdate(work_date)])
+	else:
+		start, end = _month_date_range(attendance_month)
+		filters.extend([["business_date", ">=", start], ["business_date", "<", end]])
+	rows = frappe.get_all(DINGTALK_RAW_RECORD_DOCTYPE, filters=filters, fields=["name", "payload_json", "business_date"], limit_page_length=0)
+	from hrms.api.dingtalk_attendance_sync import _is_usable_attendance_event, _nested_items, _payload
+
+	usable_records = 0
+	punch_events = 0
+	for row in rows:
+		events = [event for event in _nested_items(_payload(row.payload_json)) if _is_usable_attendance_event(event)]
+		if events:
+			usable_records += 1
+			punch_events += len(events)
+	return {
+		"raw_records": len(rows),
+		"usable_records": usable_records,
+		"empty_detail_records": len(rows) - usable_records,
+		"punch_events": punch_events,
+		"usable_for_daily_review": bool(usable_records),
+		"message": (
+			"已获取可用打卡明细，可生成每日考勤草稿。"
+			if usable_records
+			else "钉钉接口已响应，但未返回可用上下班打卡明细；系统不会据此生成旷工或缺卡扣款。请检查应用考勤权限、考勤数据可见范围和所选日期。"
+		),
+	}
+
+
+@frappe.whitelist()
+def list_dingtalk_approval_records(company: str = "", attendance_month: str = "", approval_type: str = "", page_length: int = 200):
+	"""Expose approval evidence to detailed attendance tabs once process codes are configured."""
+	_require_dingtalk_manager()
+	company = _require_sync_company(company)
+	start, end = _month_date_range(attendance_month)
+	rows = frappe.get_all(
+		DINGTALK_RAW_RECORD_DOCTYPE,
+		filters=[["company", "=", company], ["source_type", "=", DINGTALK_APPROVAL_SOURCE_TYPE], ["business_date", ">=", start], ["business_date", "<", end]],
+		fields=["name", "external_id", "dingtalk_userid", "business_date", "payload_json", "sync_status", "received_at"],
+		order_by="business_date desc, modified desc",
+		limit_page_length=max(int(page_length or 200), 1),
+	)
+	mappings = {
+		row.dingtalk_userid: row
+		for row in frappe.get_all(DINGTALK_USER_MAP_DOCTYPE, filters={"company": company}, fields=["dingtalk_userid", "employee_code", "employee_name", "department_name", "sync_status"], limit_page_length=0)
+	}
+	configured = {value: key for key, value in _configured_approval_processes().items()}
+	records = []
+	for row in rows:
+		payload = _json_loads(row.payload_json)
+		body = payload.get("result") if isinstance(payload, dict) and isinstance(payload.get("result"), dict) else payload
+		process_code = _event_value(body, "process_code", "processCode")
+		label = configured.get(str(process_code), "未分类审批")
+		if approval_type and label != approval_type:
+			continue
+		mapping = mappings.get(row.dingtalk_userid)
+		records.append(
+			{
+				"employee_name": mapping.employee_name if mapping else "未匹配员工",
+				"employee_code": mapping.employee_code if mapping else "",
+				"department": mapping.department_name if mapping else "",
+				"approval_type": label,
+				"business_date": str(row.business_date or ""),
+				"approval_status": _event_value(body, "status", "result", "approval_status"),
+				"process_code": process_code,
+				"approval_no": row.external_id,
+				"mapping_status": mapping.sync_status if mapping else "待匹配",
+				"raw_record": row.name,
+			}
+		)
+	return records
 
 
 @frappe.whitelist()

@@ -21,7 +21,7 @@ from hrms.api import form_import_demo_seed as demo_seed
 
 
 TEST_COMPANY = "TEST-HRMS"
-TEST_TAG = "TEST-FORM-E2E-20260717-V8"
+TEST_TAG = "TEST-FORM-E2E-20260723-V10"
 PROTECTED_COMPANIES = ("永新", "1")
 SEPARATION_EMPLOYEE_CODE = f"{TEST_TAG}-SEPARATION-001"
 PERFORMANCE_EMPLOYEE_CODE = f"{TEST_TAG}-PERFORMANCE-001"
@@ -196,8 +196,16 @@ def _verify_activated_target(row):
 				frappe.throw(_("入职单未生成完整办理任务。"))
 			if target.boarding_status not in ("Pending", "In Process", "Completed"):
 				frappe.throw(_("入职单状态异常：{0}").format(target.boarding_status))
-	elif target.doctype == intake.BUSINESS_PROCESS_RECORD_DOCTYPE and target.status not in ("待跟进", "已生效"):
-		frappe.throw(_("正式业务记录未生效。"))
+	elif target.doctype == intake.BUSINESS_PROCESS_RECORD_DOCTYPE:
+		if target.status not in ("待跟进", "已生效"):
+			frappe.throw(_("正式业务记录未生效。"))
+		if row.template_key == "org_structure":
+			data = intake._row_data(row)
+			department = intake._department_exists(row.company, data.get("department"))
+			if not department:
+				frappe.throw(_("组织架构生效后没有创建或更新部门主数据。"))
+			if data.get("designation") and not frappe.db.get_value("Designation", {"designation_name": data.get("designation")}, "name"):
+				frappe.throw(_("组织架构生效后没有维护岗位主数据。"))
 	elif target.doctype == "HRMS Employee Salary Change" and target.status != "已批准":
 		frappe.throw(_("薪资异动没有进入已批准状态。"))
 	elif target.doctype == "HRMS Payroll Welfare Source Record" and target.confirmation_status != "已确认":
@@ -229,6 +237,26 @@ def _ensure_test_attendance_lock(attendance_month):
 	return attendance_import.lock_attendance_month(TEST_COMPANY, attendance_month, f"{TEST_TAG}：考勤终稿审核通过后锁定")[
 		"attendance_lock_version"
 	]
+
+
+def _confirm_test_department_attendance(attendance_month):
+	"""Complete the same monthly department-confirmation gate used by payroll.
+
+	A confirmed attendance-final form is deliberately not enough to lock a
+	month: HR must still receive each department's monthly confirmation.  The
+	acceptance run must exercise that production gate rather than bypass it.
+	"""
+	from hrms.api import attendance_import
+
+	confirmations = attendance_import.list_attendance_department_confirmations(TEST_COMPANY, attendance_month)
+	for confirmation in confirmations:
+		if confirmation.confirmation_status != "已确认":
+			attendance_import.review_attendance_department_confirmation(
+				confirmation.name,
+				"confirm",
+				remarks=f"{TEST_TAG}：部门月度工时确认",
+			)
+	return len(confirmations)
 
 
 def _ensure_test_holiday_list(employee):
@@ -357,13 +385,14 @@ def run_form_import_e2e_acceptance(tag: str = TEST_TAG):
 			if profile["key"] in intake.PAYROLL_TEMPLATE_KEYS and not payroll_lock_version:
 				if result["templates"].get("attendance_final", {}).get("activation") != "passed":
 					frappe.throw(_("薪资资料验收前必须先完成月度考勤终稿确认。"))
+				_confirm_test_department_attendance("2099-07")
 				payroll_lock_version = _ensure_test_attendance_lock("2099-07")
 			if profile["key"] == "resignation_application":
 				row_for_holiday = frappe.get_doc(intake.FORM_IMPORT_ROW_DOCTYPE, item["row"])
 				_ensure_test_holiday_list(row_for_holiday.employee)
 			item["approval_steps"] = _approval_to_final(item["row"])
 			row = frappe.get_doc(intake.FORM_IMPORT_ROW_DOCTYPE, item["row"])
-			if not row.target_name:
+			if not row.target_name or not row.target_doctype or not frappe.db.exists(row.target_doctype, row.target_name):
 				generated = intake.generate_form_import_target(
 					item["row"],
 					attendance_lock_version=payroll_lock_version if profile["key"] in intake.PAYROLL_TEMPLATE_KEYS else "",

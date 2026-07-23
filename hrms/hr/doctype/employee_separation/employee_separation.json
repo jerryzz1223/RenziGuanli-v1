@@ -7,6 +7,7 @@
  "engine": "InnoDB",
  "field_order": [
   "employee",
+  "employee_code_display",
   "employee_name",
   "department",
   "designation",
@@ -32,6 +33,11 @@
    "label": "Employee",
    "options": "Employee",
    "reqd": 1
+  },
+  {
+   "fieldname": "employee_code_display",
+   "fieldtype": "Data",
+   "label": "员工工号"
   },
   {
    "fetch_from": "employee.employee_name",

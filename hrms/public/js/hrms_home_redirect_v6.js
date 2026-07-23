@@ -283,7 +283,6 @@
 						{ label: "统计首页", route: "/desk/attendance-import-center/summary", slug: "attendance-import-center/summary" },
 						{ label: "每日考勤", route: "/desk/attendance-import-center/daily", slug: "attendance-import-center/daily" },
 						{ label: "月考勤表", route: "/desk/attendance-import-center/monthly", slug: "attendance-import-center/monthly" },
-						{ label: "明细记录", route: "/desk/attendance-import-center/records", slug: "attendance-import-center/records" },
 						{ label: "考勤报表", route: "/desk/attendance-import-center/reports", slug: "attendance-import-center/reports" },
 						{ label: "考勤确认", route: "/desk/attendance-import-center/exceptions", slug: "attendance-import-center/exceptions" },
 					],
@@ -452,9 +451,16 @@
 			label: "更多",
 			route: "/desk/hr-settings-center",
 			icon: "M",
-			keys: ["hr-settings-center", "expenses", "tax-&-benefits", "hr-settings"],
+			keys: ["hr-settings-center", "expenses", "tax-&-benefits", "hr-settings", "form-data-intake", "hrms-data-operations"],
 			items: [
 				{ type: "link", label: "主页", route: "/desk/hr-settings-center", slug: "hr-settings-center" },
+				{
+					type: "section",
+					label: "数据导入",
+					children: [
+						{ label: "人资表单导入中心", route: "/desk/form-data-intake", slug: "form-data-intake", roles: ["HR Manager", "System Manager"] },
+					],
+				},
 				{
 					type: "section",
 					label: "设置",
@@ -463,6 +469,13 @@
 						{ label: "费用", route: "/desk/expenses", slug: "expenses" },
 						{ label: "社保个税", route: "/desk/tax-&-benefits", slug: "tax-&-benefits" },
 						{ label: "HR 设置", route: "/desk/hr-settings", slug: "hr-settings" },
+					],
+				},
+				{
+					type: "section",
+					label: "系统管理",
+					children: [
+						{ label: "数据处理中心", route: "/desk/hrms-data-operations", slug: "hrms-data-operations", roles: ["System Manager"] },
 					],
 				},
 			],
@@ -711,6 +724,17 @@
 		].join("");
 	}
 
+	function can_access_hrms_item(item) {
+		var required_roles = (item && item.roles) || [];
+		if (!required_roles.length) {
+			return true;
+		}
+		var user_roles = (window.frappe && (frappe.user_roles || (frappe.boot && frappe.boot.user && frappe.boot.user.roles))) || [];
+		return required_roles.some(function (role) {
+			return user_roles.indexOf(role) !== -1;
+		});
+	}
+
 	function render_hrms_sidebar_items(sidebar, module, active_slug) {
 		var signature = module.label + ":" + active_slug;
 		if (sidebar.dataset.hrmsUnifiedSidebar === signature) {
@@ -738,8 +762,15 @@
 		];
 
 		(module.items || []).forEach(function (item) {
+			if (!can_access_hrms_item(item)) {
+				return;
+			}
 			if (item.type === "link") {
 				body.push(hrms_sidebar_link_html(item, active_slug));
+				return;
+			}
+			var visible_children = (item.children || []).filter(can_access_hrms_item);
+			if (!visible_children.length) {
 				return;
 			}
 
@@ -761,7 +792,7 @@
 				section_collapsed ? " hrms-sidebar-child-hidden" : "",
 				'">',
 			);
-			(item.children || []).forEach(function (child) {
+			visible_children.forEach(function (child) {
 				body.push(hrms_sidebar_link_html(child, active_slug));
 			});
 			body.push("</div></div>");

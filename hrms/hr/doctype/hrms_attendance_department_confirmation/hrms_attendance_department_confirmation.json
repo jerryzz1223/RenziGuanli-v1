@@ -1,0 +1,163 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-07-23 00:00:00.000000",
+ "description": "部门对每日出勤或月度工时汇总的确认记录；月度确认完成后才允许锁定考勤。",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "attendance_month",
+  "attendance_date",
+  "confirmation_scope",
+  "attendance_lock_version",
+  "department",
+  "current_headcount",
+  "attendance_count",
+  "leave_count",
+  "exception_count",
+  "confirmation_status",
+  "department_contact",
+  "confirmed_by",
+  "confirmed_on",
+  "signoff_attachment",
+  "return_reason",
+  "remarks",
+  "source_checksum"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "attendance_month",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "考勤月份",
+   "reqd": 1
+  },
+  {
+   "fieldname": "attendance_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "出勤日期"
+  },
+  {
+   "default": "月度部门工时",
+   "fieldname": "confirmation_scope",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "确认范围",
+   "options": "每日部门出勤\n月度部门工时",
+   "reqd": 1
+  },
+  {
+   "fieldname": "attendance_lock_version",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "考勤版本",
+   "reqd": 1
+  },
+  {
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "部门",
+   "options": "Department",
+   "reqd": 1
+  },
+  {
+   "fieldname": "current_headcount",
+   "fieldtype": "Int",
+   "label": "现有人数"
+  },
+  {
+   "fieldname": "attendance_count",
+   "fieldtype": "Int",
+   "label": "出勤人数"
+  },
+  {
+   "fieldname": "leave_count",
+   "fieldtype": "Int",
+   "label": "请假人数"
+  },
+  {
+   "fieldname": "exception_count",
+   "fieldtype": "Int",
+   "label": "异常人数"
+  },
+  {
+   "default": "待部门确认",
+   "fieldname": "confirmation_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "确认状态",
+   "options": "待部门确认\n已确认\n已退回",
+   "reqd": 1
+  },
+  {
+   "fieldname": "department_contact",
+   "fieldtype": "Data",
+   "label": "部门考勤负责人"
+  },
+  {
+   "fieldname": "confirmed_by",
+   "fieldtype": "Link",
+   "label": "确认人",
+   "options": "User"
+  },
+  {
+   "fieldname": "confirmed_on",
+   "fieldtype": "Datetime",
+   "label": "确认时间"
+  },
+  {
+   "fieldname": "signoff_attachment",
+   "fieldtype": "Attach",
+   "label": "签字凭证"
+  },
+  {
+   "fieldname": "return_reason",
+   "fieldtype": "Small Text",
+   "label": "退回原因"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "备注"
+  },
+  {
+   "fieldname": "source_checksum",
+   "fieldtype": "Data",
+   "label": "来源校验码"
+  }
+ ],
+ "module": "HR",
+ "name": "HRMS Attendance Department Confirmation",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "report": 1,
+   "write": 1,
+   "role": "System Manager"
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "report": 1,
+   "write": 1,
+   "role": "HR Manager"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "department"
+}

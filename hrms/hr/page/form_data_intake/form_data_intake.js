@@ -88,7 +88,7 @@ class FormDataIntake {
 			<div class="hrms-form-template__meta"><span>${this.escape(item.module)}</span><small>${this.escape((item.source_sheets || []).join(" / "))}</small></div>
 			<h3>${this.escape(item.label)}</h3><p>${this.escape(item.description)}</p>
 			<div class="hrms-form-template__target">${this.escape(__("后续处理："))}${this.escape(item.processing_target)}</div>
-			<div class="hrms-form-template__actions"><button class="btn btn-default btn-sm" data-download="${this.escape(item.key)}">${this.escape(__("下载模板"))}</button><button class="btn btn-primary btn-sm" data-select="${this.escape(item.key)}">${this.escape(item.entry_mode === "employee_roster" ? "进入导入" : "填写后上传")}</button></div>
+			<div class="hrms-form-template__actions"><button class="btn btn-default btn-sm" data-route="${this.escape(item.entry_route || "/desk/form-data-intake")}">${this.escape(__("进入对应模块"))}</button><button class="btn btn-default btn-sm" data-download="${this.escape(item.key)}">${this.escape(__("下载模板"))}</button><button class="btn btn-primary btn-sm" data-select="${this.escape(item.key)}">${this.escape(item.entry_mode === "employee_roster" ? "进入导入" : "填写后上传")}</button></div>
 		</article>`;
 	}
 
@@ -111,6 +111,10 @@ class FormDataIntake {
 	bind_events() {
 		this.wrapper.querySelectorAll("[data-module]").forEach((button) => button.addEventListener("click", () => { this.module = button.dataset.module || ""; this.selected = null; this.file_url = ""; this.preview = null; this.refresh(); }));
 		this.wrapper.querySelectorAll("[data-select]").forEach((button) => button.addEventListener("click", () => { this.selected = this.templates.find((item) => item.key === button.dataset.select); this.file_url = ""; this.preview = null; this.render(); }));
+		this.wrapper.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", () => {
+			const route = button.dataset.route || "/desk/form-data-intake";
+			window.location.assign(route);
+		}));
 		this.wrapper.querySelectorAll("[data-download]").forEach((button) => button.addEventListener("click", () => this.download_template(button.dataset.download)));
 		this.wrapper.querySelectorAll("[data-upload]").forEach((button) => button.addEventListener("click", () => this.open_uploader()));
 		this.wrapper.querySelector("[data-import]")?.addEventListener("click", () => this.import_file());

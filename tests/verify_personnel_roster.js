@@ -13,6 +13,11 @@ const employeeArchiveJsonPath = path.join(root, "hrms", "hr", "page", "employee_
 const employeeArchiveJsPath = path.join(root, "hrms", "hr", "page", "employee_archive", "employee_archive.js");
 const employeeTransferPath = path.join(root, "hrms", "hr", "doctype", "employee_transfer", "employee_transfer.js");
 const employeeTransferJsonPath = path.join(root, "hrms", "hr", "doctype", "employee_transfer", "employee_transfer.json");
+const employeePromotionPath = path.join(root, "hrms", "hr", "doctype", "employee_promotion", "employee_promotion.js");
+const employeePromotionJsonPath = path.join(root, "hrms", "hr", "doctype", "employee_promotion", "employee_promotion.json");
+const employeeSeparationPath = path.join(root, "hrms", "hr", "doctype", "employee_separation", "employee_separation.js");
+const employeeSeparationJsonPath = path.join(root, "hrms", "hr", "doctype", "employee_separation", "employee_separation.json");
+const employeeCodeSelectorPath = path.join(root, "hrms", "hr", "employee_business_code_selector.js");
 const employeeDetailJsonPath = path.join(root, "hrms", "hr", "page", "employee_detail", "employee_detail.json");
 const employeeDetailJsPath = path.join(root, "hrms", "hr", "page", "employee_detail", "employee_detail.js");
 const personnelPath = path.join(root, "hrms", "hr", "workspace", "personnel", "personnel.json");
@@ -72,6 +77,8 @@ for (const marker of [
 	"_hydrate_employee_roster_display_values",
 	"_department_display_name",
 	"department_display",
+	"get_employee_by_business_code",
+	"page_length = min(max(frappe.utils.cint(page_length) or 20, 10), 500)",
 ]) {
 	mustInclude(employeeApi, marker, `Employee roster API is missing phase-one behavior: ${marker}`);
 }
@@ -231,25 +238,30 @@ if (employeeArchiveJs.includes("hrms-archive-page hrms-employee-roster-view")) {
 	throw new Error("员工档案库必须使用独立页面样式，不能复用花名册页面类。");
 }
 
-const employeeTransfer = fs.readFileSync(employeeTransferPath, "utf8");
-const employeeTransferJson = JSON.parse(fs.readFileSync(employeeTransferJsonPath, "utf8"));
-const employeeCodeDisplayField = employeeTransferJson.fields.find((field) => field.fieldname === "employee_code_display");
-if (!employeeCodeDisplayField || employeeCodeDisplayField.fetch_from !== "employee.custom_employee_code" || !employeeCodeDisplayField.read_only) {
-	throw new Error("员工调岗必须定义只读的员工工号显示字段，并从 Employee.custom_employee_code 获取值。");
-}
-
+const employeeCodeSelector = fs.readFileSync(employeeCodeSelectorPath, "utf8");
 for (const marker of [
+	"get_employee_by_business_code",
 	"employee_code_display",
-	"员工工号",
-	"toggle_display(\"employee\"",
-	"toggle_display(\"employee_code_display\"",
-	"更换员工",
+	"toggle_display(\"employee\", false)",
+	"custom_employee_code",
+	"employee_number",
 ]) {
-	mustInclude(employeeTransfer, marker, `员工调岗必须用公司工号展示员工，缺少：${marker}`);
+	mustInclude(employeeCodeSelector, marker, `员工工号选择器缺少：${marker}`);
 }
 
-if (employeeTransfer.includes('frm.set_value("employee", employee_code_display)')) {
-	throw new Error("员工调岗不得把工号写入 Employee Link；Employee.name 只能保留作内部关联键。");
+for (const [doctype, jsPath, jsonPath] of [
+	["Employee Transfer", employeeTransferPath, employeeTransferJsonPath],
+	["Employee Promotion", employeePromotionPath, employeePromotionJsonPath],
+	["Employee Separation", employeeSeparationPath, employeeSeparationJsonPath],
+]) {
+	const source = fs.readFileSync(jsPath, "utf8");
+	const json = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+	const employeeCodeDisplayField = json.fields.find((field) => field.fieldname === "employee_code_display");
+	if (!employeeCodeDisplayField || employeeCodeDisplayField.fieldtype !== "Data" || employeeCodeDisplayField.read_only) {
+		throw new Error(`${doctype} 必须提供可输入的员工工号字段。`);
+	}
+	mustInclude(source, "employee_business_code_selector.js", `${doctype} 必须接入统一员工工号选择器。`);
+	mustInclude(source, "employee_code_display", `${doctype} 必须由公司工号选择员工。`);
 }
 
 if (!fs.existsSync(employeeDetailJsonPath) || !fs.existsSync(employeeDetailJsPath)) {

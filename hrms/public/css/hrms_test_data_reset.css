@@ -1,0 +1,15 @@
+/* TEST-ONLY: companion styling for hrms_test_data_reset.js. */
+.hrms-test-data-reset {
+	position: fixed;
+	right: 20px;
+	bottom: 20px;
+	z-index: 1040;
+	box-shadow: 0 4px 14px rgb(0 0 0 / 22%);
+}
+
+@media (max-width: 767px) {
+	.hrms-test-data-reset {
+		right: 12px;
+		bottom: 12px;
+	}
+}

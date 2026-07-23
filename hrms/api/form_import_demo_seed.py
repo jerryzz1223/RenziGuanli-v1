@@ -23,8 +23,10 @@ SEED_TAG = "TEST-FORM-IMPORT-ALL-20260715-V1"
 ROSTER_EMPLOYEE_CODE = "TEST-FORM-ROSTER-001"
 ACTIVE_EMPLOYEE_CODE = "TEST-REG-003"
 ACTIVE_EMPLOYEE_NAME = "TEST-REG-003"
-TEST_DEPARTMENT = "TEST-HRMS-DEPT - TEST"
-TRANSFER_DEPARTMENT = "TEST-生产部 - TEST"
+# Department identity no longer appends the Company abbreviation.  Keep the
+# isolated acceptance fixture aligned with the same business-name contract.
+TEST_DEPARTMENT = "TEST-HRMS-DEPT"
+TRANSFER_DEPARTMENT = "TEST-生产部"
 TEST_DESIGNATION = "TEST-正式岗位"
 TRANSFER_DESIGNATION = "TEST-异动岗位"
 PROTECTED_COMPANIES = ("永新", "1")
@@ -36,11 +38,14 @@ def _ensure_onboarding_import_fixture():
 
 	recruitment_demo_seed.seed_recruitment_demo(company=TEST_COMPANY)
 	template = intake.ensure_default_employee_onboarding_template(TEST_COMPANY)
-	email = "test-form-onboarding@example.test"
+	# Keep this candidate isolated from earlier acceptance runs.  A Job Offer
+	# can create only one Employee Onboarding document, so a fresh fixture is
+	# required when validating the complete staging-to-activation chain again.
+	email = "test-form-onboarding-v10@example.test"
 	applicant_name = frappe.db.get_value("Job Applicant", {"email_id": email}, "name")
 	if applicant_name:
 		applicant = frappe.get_doc("Job Applicant", applicant_name)
-		applicant.applicant_name = "TEST-FORM-ONBOARDING"
+		applicant.applicant_name = "TEST-FORM-ONBOARDING-V10"
 		applicant.designation = TEST_DESIGNATION
 		applicant.status = "Accepted"
 		applicant.save(ignore_permissions=True)
@@ -48,7 +53,7 @@ def _ensure_onboarding_import_fixture():
 		applicant = frappe.get_doc(
 			{
 				"doctype": "Job Applicant",
-				"applicant_name": "TEST-FORM-ONBOARDING",
+				"applicant_name": "TEST-FORM-ONBOARDING-V10",
 				"email_id": email,
 				"phone_number": "13900000118",
 				"designation": TEST_DESIGNATION,
@@ -136,6 +141,10 @@ def _values_for(profile):
 		"employee_name": ACTIVE_EMPLOYEE_NAME,
 		"candidate_name": "TEST-CANDIDATE-001",
 		"department": TEST_DEPARTMENT,
+		# The dedicated organisation activation test updates this existing test
+		# department.  Leave the parent empty rather than fabricating a link that
+		# would correctly fail the same-company safety validation.
+		"parent_department": "",
 		"assigned_department": TEST_DEPARTMENT,
 		"owner_department": TEST_DEPARTMENT,
 		"from_department": TEST_DEPARTMENT,

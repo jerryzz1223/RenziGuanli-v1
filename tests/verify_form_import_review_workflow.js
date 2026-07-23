@@ -9,6 +9,7 @@ const formScript = fs.readFileSync(path.join(root, "hrms/public/js/hrms_form_imp
 const listScript = fs.readFileSync(path.join(root, "hrms/public/js/hrms_form_import_review_list.js"), "utf8");
 const hooks = fs.readFileSync(path.join(root, "hrms/hooks.py"), "utf8");
 const welfareSourceSchema = fs.readFileSync(path.join(root, "hrms/hr/doctype/hrms_payroll_welfare_source_record/hrms_payroll_welfare_source_record.json"), "utf8");
+const payrollInput = fs.readFileSync(path.join(root, "hrms/api/payroll_input.py"), "utf8");
 
 for (const marker of [
 	'def review_form_import_row(row_name: str, decision: str, review_note: str = "")',
@@ -44,6 +45,40 @@ assert(hooks.includes('"HRMS Form Import Row": "public/js/hrms_form_import_revie
 assert(hooks.includes('"HRMS Form Import Row": "public/js/hrms_form_import_review_list.js"'), "Missing row list script registration");
 for (const value of ["薪资主数据", "证书多能工津贴", "奖惩提报", "离职薪资结算", "参考"]) {
 	assert(welfareSourceSchema.includes(value), `Payroll welfare source schema rejects configured value: ${value}`);
+}
+
+// Priority master-data and payroll forms must remain reachable from the
+// business screen where users complete the approved workflow, not only from
+// the central staging queue.
+for (const [templateKey, route] of [
+	["org_structure", "/desk/organizational-chart"],
+	["employee_onboarding", "/desk/employee-onboarding"],
+	["employee_transfer", "/desk/employee-transfer"],
+	["qualification_review", "/desk/employee-promotion"],
+	["resignation_application", "/desk/employee-separation"],
+	["salary_structure_change", "/desk/payroll-input-center"],
+	["social_insurance", "/desk/payroll-input-center"],
+	["dormitory_fee", "/desk/payroll-input-center"],
+	["attendance_final", "/desk/attendance-import-center"],
+]) {
+	assert(api.includes(`"${templateKey}": "${route}"`), `Priority form ${templateKey} is missing its business-module entry route.`);
+}
+
+for (const marker of [
+	"def _apply_organisation_structure(row, target):",
+	"_ensure_designation(data.get(\"designation\"))",
+	"组织架构已{0}部门",
+	"_confirm_test_department_attendance",
+]) {
+	assert(api.includes(marker) || fs.readFileSync(path.join(root, "hrms/api/form_import_e2e_acceptance.py"), "utf8").includes(marker), `Master-data/attendance activation safeguard is missing: ${marker}`);
+}
+
+for (const marker of [
+	"def _department_lookup(department, company=None):",
+	"legacy_display_name",
+	"_department_lookup(row.department, company)",
+]) {
+	assert(payrollInput.includes(marker), `Payroll must resolve legacy department links inside the selected company: ${marker}`);
 }
 
 console.log("form import review workflow contract passed");

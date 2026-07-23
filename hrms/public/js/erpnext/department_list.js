@@ -13,6 +13,15 @@
 	function setup_department_list_actions(listview) {
 		if (!listview || !listview.page || listview.page.__hrms_department_actions_ready) return;
 		listview.page.__hrms_department_actions_ready = true;
+		attach_department_import_action(listview);
+		const roles = frappe.user_roles || [];
+		const isSystemManager = roles.includes("System Manager") || frappe.session.user === "Administrator";
+
+		if (isSystemManager) {
+			listview.page.add_inner_button(__("规范部门名称"), function () {
+				show_department_name_normalisation_dialog(listview);
+			});
+		}
 
 		listview.page.add_inner_button(__("快速编辑"), function () {
 			const selected = get_selected_departments(listview);
@@ -31,6 +40,139 @@
 			}
 			show_department_bulk_delete_dialog(listview, selected);
 		});
+	}
+
+	function attach_department_import_action(listview) {
+		const add_action = () => {
+			if (!window.hrmsFormImport?.addPageActions) return false;
+			window.hrmsFormImport.addPageActions(
+				listview.page,
+				"org_structure",
+				__("组织架构与编制"),
+				__("导入组织架构"),
+			);
+			return true;
+		};
+
+		// The contextual importer is bundled globally.  Delay once only if Frappe
+		// creates this ListView before the global asset has finished evaluating.
+		if (!add_action()) setTimeout(add_action, 300);
+	}
+
+	function get_list_company(listview) {
+		const filters = listview?.filter_area?.get?.() || [];
+		const companyFilter = filters.find((filter) => filter?.[1] === "company" && filter?.[2] === "=");
+		if (companyFilter?.[3]) return companyFilter[3];
+
+		try {
+			const context = JSON.parse(localStorage.getItem("hrms_company_context") || "{}");
+			if (context.current) return context.current;
+		} catch (error) {
+			// The dialog still lets the administrator select a company manually.
+		}
+
+		return frappe.defaults.get_default("company") || YONGXIN_COMPANY;
+	}
+
+	function show_department_name_normalisation_dialog(listview) {
+		let latestPlan = null;
+		const dialog = new frappe.ui.Dialog({
+			title: __("规范部门正式名称"),
+			fields: [
+				{
+					fieldname: "company",
+					fieldtype: "Link",
+					options: "Company",
+					label: __("公司"),
+					reqd: 1,
+					default: get_list_company(listview),
+				},
+				{
+					fieldname: "preview",
+					fieldtype: "HTML",
+				},
+				{
+					fieldname: "confirmation",
+					fieldtype: "Data",
+					label: __("确认文字"),
+					description: __("预检通过后，输入“确认规范部门名称”才能执行。"),
+				},
+			],
+			primary_action_label: __("执行正式重命名"),
+			primary_action(values) {
+				if (!latestPlan?.can_execute) {
+					frappe.msgprint(__("当前预检未通过，不能执行重命名。"));
+					return;
+				}
+				frappe
+					.call({
+						method: "hrms.api.department_identity.normalise_department_names",
+						args: { company: values.company, confirmation: values.confirmation },
+						freeze: true,
+						freeze_message: __("正在更新部门名称及关联字段..."),
+					})
+					.then((r) => {
+						dialog.hide();
+						frappe.show_alert({ message: r.message?.message || __("部门名称已规范化"), indicator: "green" });
+						listview.refresh();
+					});
+			},
+		});
+
+		const renderPreview = () => {
+			const company = dialog.get_value("company");
+			const wrapper = dialog.fields_dict.preview.$wrapper;
+			if (!company) {
+				wrapper.html(`<p class="text-muted">${__("请选择公司后进行预检。")}</p>`);
+				return;
+			}
+
+			wrapper.html(`<p class="text-muted">${__("正在预检部门、员工和上级部门关联...")}</p>`);
+			frappe
+				.call({
+					method: "hrms.api.department_identity.preview_department_name_normalisation",
+					args: { company },
+				})
+				.then((r) => {
+					latestPlan = r.message || {};
+					const conflicts = latestPlan.conflicts || [];
+					const samples = (latestPlan.changes || [])
+						.slice(0, 8)
+						.map(
+							(row) =>
+								`<li><code>${frappe.utils.escape_html(row.name)}</code> → <strong>${frappe.utils.escape_html(
+									row.target_name,
+								)}</strong></li>`,
+						)
+						.join("");
+					const conflictHtml = conflicts.length
+						? `<div class="alert alert-danger mt-3"><strong>${__("发现冲突，未允许执行")}</strong><ul>${conflicts
+								.map((item) => `<li>${frappe.utils.escape_html(item.message)}</li>`)
+								.join("")}</ul></div>`
+						: `<div class="alert alert-success mt-3">${__("预检通过：可以安全执行正式重命名。")}</div>`;
+
+					wrapper.html(`
+						<div class="small text-muted">${frappe.utils.escape_html(latestPlan.note || "")}</div>
+						<div class="mt-2">${__("需重命名：{0} 个；保持不变：{1} 个；受影响员工：{2} 人；子部门链接：{3} 条。", [
+							latestPlan.rename_count || 0,
+							latestPlan.unchanged_count || 0,
+							latestPlan.linked_records?.employees || 0,
+							latestPlan.linked_records?.child_departments || 0,
+						])}</div>
+						${samples ? `<ul class="mt-2">${samples}</ul>` : ""}
+						${conflictHtml}
+					`);
+					dialog.get_primary_btn().prop("disabled", !latestPlan.can_execute);
+				})
+				.catch(() => {
+					latestPlan = null;
+					dialog.get_primary_btn().prop("disabled", true);
+				});
+		};
+
+		dialog.fields_dict.company.df.change = renderPreview;
+		dialog.show();
+		renderPreview();
 	}
 
 	function get_selected_departments(listview) {

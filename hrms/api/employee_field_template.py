@@ -2045,6 +2045,44 @@ def _hydrate_employee_roster_display_values(rows):
 
 
 @frappe.whitelist()
+def get_employee_by_business_code(employee_code: str, company: str = ""):
+	"""Resolve the public company work number to the internal Employee link value."""
+	if not frappe.has_permission(EMPLOYEE_DOCTYPE, "read"):
+		frappe.throw(_("无权查询员工信息"), frappe.PermissionError)
+
+	employee_code = str(employee_code or "").strip()
+	if not employee_code:
+		return None
+
+	filters = {"status": "Active"}
+	if company:
+		filters["company"] = company
+
+	rows = frappe.get_list(
+		EMPLOYEE_DOCTYPE,
+		filters=filters,
+		or_filters=[
+			[EMPLOYEE_DOCTYPE, "custom_employee_code", "=", employee_code],
+			[EMPLOYEE_DOCTYPE, "employee_number", "=", employee_code],
+		],
+		fields=["name", "employee_name", "custom_employee_code", "employee_number", "company"],
+		limit_page_length=2,
+	)
+	if not rows:
+		return None
+	if len(rows) > 1:
+		frappe.throw(_("工号 {0} 匹配到多名在职员工，请先在员工花名册中处理重复工号。").format(employee_code))
+
+	employee = rows[0]
+	return {
+		"name": employee.name,
+		"employee_name": employee.employee_name,
+		"employee_code": employee.custom_employee_code or employee.employee_number,
+		"company": employee.company,
+	}
+
+
+@frappe.whitelist()
 def get_employee_roster(
 	filters: str = "{}",
 	search: str = "",
@@ -2061,7 +2099,7 @@ def get_employee_roster(
 	sort_field = EMPLOYEE_ROSTER_SORT_OPTIONS.get(sort_by) or "modified"
 	sort_order = "asc" if str(sort_order).lower() == "asc" else "desc"
 	page = max(frappe.utils.cint(page), 1)
-	page_length = min(max(frappe.utils.cint(page_length) or 20, 10), 100)
+	page_length = min(max(frappe.utils.cint(page_length) or 20, 10), 500)
 	start = (page - 1) * page_length
 	fields = _get_roster_fetch_fields(columns)
 

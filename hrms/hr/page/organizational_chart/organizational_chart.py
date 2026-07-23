@@ -429,6 +429,11 @@ def update_department_fields(department: str, values: str | dict):
 	values = frappe.parse_json(values) if isinstance(values, str) else (values or {})
 	meta = frappe.get_meta("Department")
 	updated = {}
+	target_name = cstr(values.get("department_name") or doc.department_name).strip()
+	if target_name and target_name != doc.name:
+		from hrms.overrides.department_identity import validate_department_name_available
+
+		validate_department_name_available(target_name, doc.company, doc.name)
 
 	for fieldname, value in values.items():
 		if fieldname not in DEPARTMENT_QUICK_EDIT_FIELDS or not meta.has_field(fieldname):
@@ -440,6 +445,16 @@ def update_department_fields(department: str, values: str | dict):
 
 	if updated:
 		doc.save(ignore_permissions=False)
+		if "department_name" in updated and doc.name != target_name:
+			from hrms.api.department_identity import rename_department_document
+
+			department = rename_department_document(doc.name, target_name)
+			return {
+				"name": department,
+				"department_name": target_name,
+				"updated": updated,
+				"message": _("部门名称及正式关联名称已同步更新。"),
+			}
 
 	return {
 		"name": doc.name,

@@ -140,7 +140,8 @@
 	window.hrmsFormImport = { open: open_import_dialog, download(template_key) { return get_template(template_key).then(download_template); }, addPageActions: add_page_import_actions };
 
 	const LIST_IMPORTS = {
-		"Employee Onboarding": { key: "employee_onboarding", label: "员工入职衔接表" },
+		Department: { key: "org_structure", label: "组织架构与编制", button_label: "导入组织架构" },
+		"Employee Onboarding": { key: "employee_onboarding", label: "员工入职衔接表", button_label: "导入入职衔接表" },
 		"Employee Transfer": { key: "employee_transfer", label: "人事异动表单" },
 		"Employee Promotion": { key: "qualification_review", label: "转正/晋升表单" },
 		"Employee Separation": { key: "resignation_application", label: "离职表单" },
@@ -161,7 +162,7 @@
 		// so the URL is not a dependable source of the DocType. ListView is.
 		const config = LIST_IMPORTS[listview?.doctype];
 		if (!config || !listview) return;
-		add_page_import_actions(listview.page, config.key, config.label);
+		add_page_import_actions(listview.page, config.key, config.label, config.button_label);
 	}
 
 	function schedule_list_import_action() {

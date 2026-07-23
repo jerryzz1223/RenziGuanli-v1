@@ -248,6 +248,25 @@ body:has(#hrms-top-module-nav) > .main-section {
 	outline: 0;
 }
 
+.hrms-top-company-context__edit {
+	background: transparent;
+	border: 0;
+	border-radius: 5px;
+	color: var(--text-muted, #6b7280);
+	cursor: pointer;
+	font: inherit;
+	font-size: 12px;
+	line-height: 28px;
+	padding: 0 4px;
+}
+
+.hrms-top-company-context__edit:hover,
+.hrms-top-company-context__edit:focus {
+	background: var(--control-bg, #f3f4f6);
+	color: var(--text-color, #1f2937);
+	outline: 0;
+}
+
 .hrms-account-menu__trigger,
 .hrms-account-menu__item {
 	border: 0;
@@ -414,7 +433,8 @@ body:has(#hrms-top-module-nav) > .main-section {
 }
 
 .hrms-top-module-nav__more:hover .hrms-top-module-nav__menu,
-.hrms-top-module-nav__more:focus-within .hrms-top-module-nav__menu {
+.hrms-top-module-nav__more:focus-within .hrms-top-module-nav__menu,
+.hrms-top-module-nav__more.is-open .hrms-top-module-nav__menu {
 	display: block;
 }
 

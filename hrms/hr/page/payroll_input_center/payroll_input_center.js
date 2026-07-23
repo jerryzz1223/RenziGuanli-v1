@@ -48,11 +48,18 @@ class PayrollInputCenter {
 
 	show() {
 		this.page.set_primary_action(__("上传薪资变量"), () => this.open_uploader());
-		window.hrmsFormImport?.addPageActions(this.page, "salary_structure_change", "薪资构成", "导入薪资构成");
-		window.hrmsFormImport?.addPageActions(this.page, "reward_punishment", "奖惩提报", "导入奖惩提报");
-		window.hrmsFormImport?.addPageActions(this.page, "housing_allowance", "住房补贴", "导入住房补贴");
-		window.hrmsFormImport?.addPageActions(this.page, "dormitory_fee", "宿舍费", "导入宿舍费");
-		window.hrmsFormImport?.addPageActions(this.page, "social_insurance", "社保名单", "导入社保名单");
+		[
+			["salary_structure_change", "薪资构成", "导入薪资构成"],
+			["reward_punishment", "奖惩提报", "导入奖惩提报"],
+			["skill_certificate_allowance", "证书与多能工津贴", "导入证书津贴"],
+			["full_attendance_bonus", "全勤奖", "导入全勤奖"],
+			["housing_allowance", "住房补贴", "导入住房补贴"],
+			["education_allowance", "学历补贴", "导入学历补贴"],
+			["dormitory_fee", "宿舍费与水电扣款", "导入宿舍费"],
+			["social_insurance", "社保公积金名单", "导入社保名单"],
+			["service_award", "继续服务奖", "导入继续服务奖"],
+			["exit_payroll_settlement", "离职人员薪资结算", "导入离职结算"],
+		].forEach(([key, label, buttonLabel]) => window.hrmsFormImport?.addPageActions(this.page, key, label, buttonLabel));
 		this.bind_route_events();
 		this.bind_company_context();
 		this.render();
