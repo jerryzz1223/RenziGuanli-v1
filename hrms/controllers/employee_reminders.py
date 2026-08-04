@@ -60,12 +60,16 @@ def send_holidays_reminder_in_advance(employee, holidays):
 
 	employee_doc = frappe.get_doc("Employee", employee)
 	employee_email = get_employee_email(employee_doc)
+	recipients = get_valid_recipients([employee_email])
+	if not recipients:
+		return
+
 	frequency = frappe.db.get_single_value("HR Settings", "frequency")
 	sender_email = get_sender_email()
 	email_header = _("Holidays this Month.") if frequency == "Monthly" else _("Holidays this Week.")
 	frappe.sendmail(
 		sender=sender_email,
-		recipients=[employee_email],
+		recipients=recipients,
 		subject=_("Upcoming Holidays Reminder"),
 		template="holiday_reminder",
 		args=dict(
@@ -95,8 +99,10 @@ def send_birthday_reminders():
 	employees_born_today = get_employees_who_are_born_today()
 
 	for company, birthday_persons in employees_born_today.items():
-		employee_emails = get_all_employee_emails(company)
-		birthday_person_emails = [get_employee_email(doc) for doc in birthday_persons]
+		employee_emails = get_valid_recipients(get_all_employee_emails(company))
+		birthday_person_emails = get_valid_recipients(
+			[get_employee_email(doc) for doc in birthday_persons]
+		)
 		recipients = list(set(employee_emails) - set(birthday_person_emails))
 
 		reminder_text, message = get_birthday_reminder_text_and_message(birthday_persons)
@@ -128,6 +134,10 @@ def get_birthday_reminder_text_and_message(birthday_persons):
 
 
 def send_birthday_reminder(recipients, reminder_text, birthday_persons, message, sender=None):
+	recipients = get_valid_recipients(recipients)
+	if not recipients:
+		return
+
 	frappe.sendmail(
 		sender=sender,
 		recipients=recipients,
@@ -177,7 +187,7 @@ def get_employees_having_an_event_today(event_type):
 				`status` = 'Active'
 		""",
 			"postgres": f"""
-			SELECT "personal_email", "company", "company_email", "user_id", "employee_name" AS 'name', "image"
+			SELECT "personal_email", "company", "company_email", "user_id", "employee_name" AS 'name', "image", "date_of_joining"
 			FROM "tabEmployee"
 			WHERE
 				DATE_PART('day', {condition_column}) = date_part('day', %(today)s)
@@ -218,8 +228,10 @@ def send_work_anniversary_reminders():
 	message += _("Everyone, let’s congratulate them on their work anniversary!")
 
 	for company, anniversary_persons in employees_joined_today.items():
-		employee_emails = get_all_employee_emails(company)
-		anniversary_person_emails = [get_employee_email(doc) for doc in anniversary_persons]
+		employee_emails = get_valid_recipients(get_all_employee_emails(company))
+		anniversary_person_emails = get_valid_recipients(
+			[get_employee_email(doc) for doc in anniversary_persons]
+		)
 		recipients = list(set(employee_emails) - set(anniversary_person_emails))
 
 		reminder_text = get_work_anniversary_reminder_text(anniversary_persons)
@@ -272,6 +284,10 @@ def send_work_anniversary_reminder(
 	message,
 	sender=None,
 ):
+	recipients = get_valid_recipients(recipients)
+	if not recipients:
+		return
+
 	frappe.sendmail(
 		sender=sender,
 		recipients=recipients,
@@ -288,3 +304,26 @@ def send_work_anniversary_reminder(
 
 def get_sender_email() -> str | None:
 	return frappe.db.get_single_value("HR Settings", "sender_email")
+
+
+def get_valid_recipients(recipients) -> list[str]:
+	if not recipients:
+		return []
+
+	if isinstance(recipients, str):
+		recipients = [recipients]
+
+	valid_recipients = []
+	seen = set()
+	for recipient in recipients:
+		if not recipient:
+			continue
+
+		email = recipient.strip() if isinstance(recipient, str) else recipient
+		if not email or email in seen:
+			continue
+
+		seen.add(email)
+		valid_recipients.append(email)
+
+	return valid_recipients

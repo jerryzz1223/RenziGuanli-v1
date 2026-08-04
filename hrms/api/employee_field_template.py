@@ -20,6 +20,10 @@ EMPLOYEE_IMPORT_TEMPLATE_FILENAME = "员工导入模板.xlsx"
 EMPLOYEE_EXPORT_FILENAME = "员工花名册导出.xlsx"
 EMPLOYEE_FAILED_ROWS_FILENAME = "员工花名册失败行.xlsx"
 EMPLOYEE_FALLBACK_DATE_OF_BIRTH = "1905-01-01"
+HR_SETTINGS_MANAGER_ROLES = ("HR Manager", "System Manager")
+HR_SETTINGS_PAGE_ROLES = list(HR_SETTINGS_MANAGER_ROLES)
+HRMS_DEVELOPER_PAGE_ROLES = ["System Manager"]
+HRMS_ACCESS_PAGE_ROLES = ["System Manager"]
 
 PERSONNEL_PAGE_DEFINITIONS = [
 	{"name": "employee-detail", "title": "员工档案详情", "icon": "user"},
@@ -27,8 +31,30 @@ PERSONNEL_PAGE_DEFINITIONS = [
 	{"name": "employee-roster-import", "title": "导入花名册", "icon": "upload"},
 	{"name": "employee-roster-export", "title": "导出花名册", "icon": "download"},
 	{"name": "personnel-reports", "title": "人事报表", "icon": "bar-chart"},
-	{"name": "staff-attribute-settings", "title": "员工属性设置", "icon": "settings"},
-	{"name": "hr-settings-center", "title": "设置中心", "icon": "settings"},
+	{
+		"name": "staff-attribute-settings",
+		"title": "员工属性设置",
+		"icon": "settings",
+		"roles": HR_SETTINGS_PAGE_ROLES,
+	},
+	{
+		"name": "hr-settings-center",
+		"title": "设置中心",
+		"icon": "settings",
+		"roles": HR_SETTINGS_PAGE_ROLES,
+	},
+	{
+		"name": "hrms-developer-center",
+		"title": "开发中心",
+		"icon": "code",
+		"roles": HRMS_DEVELOPER_PAGE_ROLES,
+	},
+	{
+		"name": "hrms-access-center",
+		"title": "账户与权限中心",
+		"icon": "key",
+		"roles": HRMS_ACCESS_PAGE_ROLES,
+	},
 	{"name": "employee-property-history", "title": "任职记录", "icon": "timeline"},
 	{"name": "attendance-import-center", "title": "考勤导入中心", "icon": "upload"},
 	{"name": "payroll-input-center", "title": "薪资输入中心", "icon": "database"},
@@ -37,6 +63,25 @@ PERSONNEL_PAGE_DEFINITIONS = [
 LEGACY_PERSONNEL_PAGE_SLUGS = {
 	"employee-property-history": "employee-property-hi",
 }
+
+
+def _require_hr_settings_manager():
+	"""Protect schema/configuration changes from ordinary HR users.
+
+	The settings centre is deliberately a business-admin surface.  Creating or
+	changing fields ultimately writes Custom Field and Property Setter records,
+	so hiding the navigation link alone is not a sufficient control.
+	"""
+	frappe.only_for(HR_SETTINGS_MANAGER_ROLES)
+
+
+def _can_manage_personnel_pages():
+	return frappe.session.user == "Administrator" or "System Manager" in frappe.get_roles(frappe.session.user)
+
+
+def _require_system_manager():
+	"""Keep account and permission summaries out of ordinary HR accounts."""
+	frappe.only_for("System Manager")
 
 PROPERTY_HISTORY_FIELD_CONTRACT = ["property", "current", "new", "fieldname"]
 PROPERTY_HISTORY_SOURCES = [
@@ -467,7 +512,6 @@ COMPANY_ROSTER_FIELD_ORDER = [
 	"custom_housing_fund",
 	"company",
 	"status",
-	"naming_series",
 ]
 
 HEADER_FIELD_ALIASES = {
@@ -560,7 +604,6 @@ OPTION_LABEL_MAP = {
 }
 
 IMPORT_EXAMPLE_VALUES = {
-	"naming_series": "HR-EMP-",
 	"first_name": "示例员工",
 	"gender": "男",
 	"date_of_birth": "2000-01-01",
@@ -595,6 +638,11 @@ NON_CONFIGURABLE_FIELDNAMES = {
 	"connections_tab",
 }
 
+# Frappe needs naming_series to create the internal Employee document name, but
+# it is not personnel data. Keep it out of every HR-facing field surface so
+# employees are consistently identified by company work number and name.
+EMPLOYEE_INTERNAL_FIELDNAMES = {"naming_series"}
+
 DEFAULT_FIELD_CATEGORY_BY_SECTION = {
 	"basic_details_tab": "个人信息",
 	"basic_information": "个人信息",
@@ -616,7 +664,6 @@ DEFAULT_FIELD_CATEGORY_BY_SECTION = {
 }
 
 FIELD_OVERRIDES = {
-	"naming_series": {"category": "在职信息", "field_label": "单据编号模板", "description": "员工编号生成规则"},
 	"first_name": {"category": "个人信息", "field_label": "姓名", "description": "员工真实姓名"},
 	"middle_name": {"category": "个人信息", "field_label": "中间名"},
 	"last_name": {"category": "个人信息", "field_label": "姓"},
@@ -802,6 +849,7 @@ def _get_template_doc():
 	_apply_field_governance_defaults(doc)
 	_apply_company_roster_defaults(doc)
 	_apply_employee_required_defaults(doc)
+	_apply_employee_internal_field_policy(doc)
 	ensure_required_roster_columns(doc)
 	return doc
 
@@ -811,6 +859,45 @@ def _apply_field_governance_defaults(doc):
 	for row in doc.template_items:
 		if _apply_field_governance_defaults_to_row(row):
 			changed = True
+	if changed:
+		doc.save(ignore_permissions=True)
+
+
+def _is_employee_internal_field(fieldname):
+	return fieldname in EMPLOYEE_INTERNAL_FIELDNAMES
+
+
+def _apply_employee_internal_field_policy(doc):
+	"""Prevent internal document naming fields from leaking into HR-facing configuration."""
+	changed = False
+	for row in doc.template_items:
+		if not _is_employee_internal_field(row.fieldname):
+			continue
+
+		for fieldname in (
+			"enabled",
+			"required",
+			"search_enabled",
+			"import_enabled",
+			"export_enabled",
+			"form_visible",
+			"detail_visible",
+			"roster_visible",
+		):
+			if not _template_item_supports_field(fieldname):
+				continue
+			if _template_row_int(row, fieldname) != 0:
+				row.set(fieldname, 0)
+				changed = True
+
+		for fieldname in ("aliases", "detail_block", "record_type"):
+			if _template_item_supports_field(fieldname) and row.get(fieldname):
+				row.set(fieldname, "")
+				changed = True
+		if _template_item_supports_field("detail_block_order") and _template_row_int(row, "detail_block_order"):
+			row.detail_block_order = 0
+			changed = True
+
 	if changed:
 		doc.save(ignore_permissions=True)
 
@@ -1138,6 +1225,12 @@ def _cleanup_legacy_personnel_pages(page_name):
 
 @frappe.whitelist()
 def ensure_personnel_pages():
+	# Page registration writes Desk metadata.  It runs automatically during
+	# migration; interactive calls from ordinary users are intentionally a no-op
+	# so navigation cannot be used as a privilege-escalation path.
+	if not _can_manage_personnel_pages():
+		return {"created": [], "updated": [], "cleaned": [], "skipped": True}
+
 	created = []
 	updated = []
 	cleaned = []
@@ -1157,7 +1250,9 @@ def ensure_personnel_pages():
 		cleaned.extend(cleaned_names)
 
 		if not existing_name:
-			frappe.get_doc(values).insert(ignore_permissions=True)
+			page_doc = frappe.get_doc(values)
+			page_doc.set("roles", [{"role": role} for role in page.get("roles", [])])
+			page_doc.insert(ignore_permissions=True)
 			created.append(page_name)
 			continue
 
@@ -1166,6 +1261,15 @@ def ensure_personnel_pages():
 				frappe.db.set_value("Page", existing_name, fieldname, values[fieldname], update_modified=False)
 				if page_name not in updated:
 					updated.append(page_name)
+
+		desired_roles = list(page.get("roles", []))
+		page_doc = frappe.get_doc("Page", existing_name)
+		current_roles = [row.role for row in page_doc.roles]
+		if current_roles != desired_roles:
+			page_doc.set("roles", [{"role": role} for role in desired_roles])
+			page_doc.save(ignore_permissions=True)
+			if page_name not in updated:
+				updated.append(page_name)
 
 	if created or updated or cleaned:
 		frappe.clear_cache()
@@ -1290,6 +1394,8 @@ def _get_employee_import_fields(doc):
 	rows = []
 
 	for row in doc.template_items:
+		if _is_employee_internal_field(row.fieldname):
+			continue
 		if row.fieldname not in meta_fields:
 			continue
 		is_minimum_import_field = _is_employee_import_required_field(row.fieldname, row)
@@ -1342,6 +1448,8 @@ def _get_employee_export_fields(doc):
 	meta_fields = _get_employee_meta_field_map()
 	rows = []
 	for row in doc.template_items:
+		if _is_employee_internal_field(row.fieldname):
+			continue
 		if row.fieldname not in meta_fields:
 			continue
 		if not row.get("enabled"):
@@ -1724,7 +1832,7 @@ def _apply_manual_header_mappings(context, manual_mappings=None):
 
 
 def _get_rows_by_category(doc):
-	fields = [_serialize_item(row) for row in doc.template_items]
+	fields = [_serialize_item(row) for row in doc.template_items if not _is_employee_internal_field(row.fieldname)]
 	categories = []
 	for category in EMPLOYEE_TEMPLATE_CATEGORIES:
 		categories.append(
@@ -1739,7 +1847,7 @@ def _get_rows_by_category(doc):
 @frappe.whitelist()
 def get_employee_field_template():
 	doc = _get_template_doc()
-	fields = [_serialize_item(row) for row in doc.template_items]
+	fields = [_serialize_item(row) for row in doc.template_items if not _is_employee_internal_field(row.fieldname)]
 	return {
 		"enabled": int(doc.enabled or 0),
 		"categories": _get_rows_by_category(doc),
@@ -1749,7 +1857,7 @@ def get_employee_field_template():
 
 def _get_employee_field_center_payload():
 	doc = _get_template_doc()
-	fields = [_serialize_item(row) for row in doc.template_items]
+	fields = [_serialize_item(row) for row in doc.template_items if not _is_employee_internal_field(row.fieldname)]
 	fields_by_block = {}
 	for field in fields:
 		block = field.get("detail_block")
@@ -1823,11 +1931,13 @@ def _get_record_type_summaries(fields):
 
 @frappe.whitelist()
 def get_employee_field_center():
+	_require_hr_settings_manager()
 	return _get_employee_field_center_payload()
 
 
 @frappe.whitelist()
 def get_hr_settings_center():
+	_require_hr_settings_manager()
 	field_center = _get_employee_field_center_payload()
 	return {
 		"modules": [
@@ -1845,7 +1955,636 @@ def get_hr_settings_center():
 
 
 @frappe.whitelist()
+def get_hrms_access_center():
+	"""Return a deliberately small account/role summary for the admin landing page.
+
+	Passwords are never queried or returned.  The only credential-related text is
+	the documented initial local development account, so administrators understand
+	why a user's existing password cannot appear in this screen.
+	"""
+	_require_system_manager()
+	users = frappe.get_all(
+		"User",
+		fields=["name", "full_name", "user_type", "enabled", "last_login"],
+		order_by="name asc",
+		ignore_permissions=True,
+	)
+	user_names = [user.name for user in users]
+	roles_by_user = {name: [] for name in user_names}
+	if user_names:
+		role_rows = frappe.get_all(
+			"Has Role",
+			filters={"parenttype": "User", "parent": ["in", user_names]},
+			fields=["parent", "role"],
+			order_by="parent asc, idx asc",
+			ignore_permissions=True,
+		)
+		for row in role_rows:
+			roles_by_user.setdefault(row.parent, []).append(row.role)
+
+	role_users = {}
+	for user_name, assigned_roles in roles_by_user.items():
+		for role in assigned_roles:
+			role_users.setdefault(role, set()).add(user_name)
+
+	role_doctypes = {}
+	for permission_doctype in ("DocPerm", "Custom DocPerm"):
+		for row in frappe.get_all(
+			permission_doctype,
+			fields=["role", "parent"],
+			ignore_permissions=True,
+		):
+			if row.role and row.parent:
+				role_doctypes.setdefault(row.role, set()).add(row.parent)
+
+	primary_roles = ("System Manager", "HR Manager", "HR User", "Employee", "Guest")
+	role_labels = {
+		"Administrator": "超级管理员",
+		"System Manager": "系统管理员",
+		"HR Manager": "人资管理员",
+		"HR User": "人事专员",
+		"Employee": "员工",
+		"Employee Self Service": "员工自助",
+		"Expense Approver": "费用审批人",
+		"Leave Approver": "请假审批人",
+		"Interviewer": "面试官",
+		"Guest": "访客",
+		"Sales Master Manager": "销售主数据管理员",
+		"Maintenance Manager": "维护管理员",
+	}
+	accounts = []
+	for user in users:
+		roles = roles_by_user.get(user.name, [])
+		accounts.append(
+			{
+				"user": user.name,
+				"full_name": user.full_name or user.name,
+				"user_type": user.user_type or "System User",
+				"enabled": int(user.enabled or 0),
+				"roles": [role for role in roles if role in primary_roles] or roles[:1],
+				"assigned_roles": roles,
+				"assigned_role_labels": [role_labels.get(role, _(role)) for role in roles],
+				"role_count": len(roles),
+				"last_login": user.last_login,
+			}
+		)
+
+	role_descriptions = {
+		"System Manager": "系统配置与开发管理角色，可维护账户、角色、权限、页面和数据模型。",
+		"HR Manager": "人资管理角色，用于员工档案、人事配置、考勤和薪资等管理操作。",
+		"HR User": "人事经办角色，用于日常录入、查询和处理人资业务，不应拥有系统开发权限。",
+		"Employee": "员工自助角色，用于查看和办理与本人相关的员工业务。",
+		"Employee Self Service": "员工自助扩展角色，用于请假、考勤、费用等个人业务入口。",
+		"Guest": "匿名访客角色，不用于后台管理账户。",
+	}
+	roles = []
+	for role in frappe.get_all(
+		"Role",
+		fields=["name", "is_custom", "disabled", "desk_access"],
+		order_by="disabled asc, is_custom desc, name asc",
+		ignore_permissions=True,
+	):
+		configured_doctypes = sorted(role_doctypes.get(role.name, set()))
+		assigned_users = role_users.get(role.name, set())
+		user_count = len(assigned_users - {"Administrator"})
+		roles.append(
+			{
+				**role,
+				"label": role_labels.get(role.name, _(role.name)),
+				"user_count": user_count,
+				"administrator_assigned": int("Administrator" in assigned_users),
+				"permission_doctype_count": len(configured_doctypes),
+				"permission_doctypes": [
+					{"name": doctype, "label": _(doctype)} for doctype in configured_doctypes[:6]
+				],
+				"is_project_used": int(
+					bool(user_count)
+					or role.name in role_descriptions
+					or role.name in {"Leave Approver", "Expense Approver", "Interviewer"}
+				),
+				"description": role_descriptions.get(
+					role.name,
+					"框架或业务模块提供的角色；只有分配给账户并配置业务单据权限后才会实际生效。",
+				),
+			}
+		)
+
+	return {
+		"accounts": accounts,
+		"roles": roles,
+		"initial_local_account": {
+			"user": "Administrator",
+			"password": "admin",
+			"notice": "仅为 README 中的本地开发初始凭据；无法查看或恢复任何账户的当前密码，部署前必须修改。",
+		},
+	}
+
+
+def _configuration_record_count(doctype):
+	meta = frappe.get_meta(doctype)
+	if meta.issingle:
+		return 1
+	return frappe.db.count(doctype)
+
+
+@frappe.whitelist()
+def get_hrms_developer_configuration_map():
+	"""Describe the supported no-code controls and their real runtime consumers."""
+	_require_system_manager()
+	definitions = [
+		{
+			"key": "employee-fields",
+			"category": "员工档案",
+			"label": "员工字段、导入导出与详情资料块",
+			"doctype": TEMPLATE_DOCTYPE,
+			"purpose": "控制员工字段显示、别名、导入映射、导出模板和详情资料块。",
+			"where_used": "员工档案详情、员工花名册导入、导出和人事报表。",
+			"storage": "HRMS Employee Field Template 与受控 Custom Field",
+			"manage_route": "hr-settings-center",
+			"verify_route": "employee-detail",
+			"test_hint": "修改后打开员工档案、导入预览和导出模板，确认同一字段配置同时生效。",
+		},
+		{
+			"key": "workflow",
+			"category": "审批流程",
+			"label": "工作流与审批状态",
+			"doctype": "Workflow",
+			"purpose": "配置单据状态、允许执行转换的角色以及审批动作。",
+			"where_used": "启用了工作流的请假、人事、薪资等业务单据。",
+			"storage": "Workflow / Workflow State / Workflow Transition",
+			"manage_route": "List/Workflow",
+			"verify_route": "List/Workflow",
+			"test_hint": "使用申请人与审批人两个测试账户提交同一业务单据，验证状态和按钮随角色变化。",
+		},
+		{
+			"key": "form-approval-matrix",
+			"category": "导入审批",
+			"label": "人资表单审批矩阵",
+			"doctype": "HRMS Form Approval Matrix",
+			"purpose": "按导入表单类型和业务条件确定审批步骤与审批角色。",
+			"where_used": "人资表单导入中心；保存和提交导入批次时由 form_data_intake.py 读取。",
+			"storage": "HRMS Form Approval Matrix",
+			"manage_route": "List/HRMS Form Approval Matrix",
+			"verify_route": "form-data-intake",
+			"test_hint": "新建导入批次并进入提交预览，检查生成的审批步骤是否与矩阵一致。",
+		},
+		{
+			"key": "attendance-rules",
+			"category": "考勤规则",
+			"label": "考勤自定义规则",
+			"doctype": "HRMS Attendance Custom Rule",
+			"purpose": "配置考勤导入时的匹配、校验、异常识别和处理规则。",
+			"where_used": "考勤导入中心；attendance_import.py 在预检和入库时读取。",
+			"storage": "HRMS Attendance Custom Rule",
+			"manage_route": "List/HRMS Attendance Custom Rule",
+			"verify_route": "attendance-import-center",
+			"test_hint": "上传同一份考勤样例做预检，比较修改前后的命中规则和异常结果。",
+		},
+		{
+			"key": "payroll-rules",
+			"category": "薪资规则",
+			"label": "薪资计算规则",
+			"doctype": "HRMS Payroll Rule",
+			"purpose": "配置全勤、加班、夜班、福利资格和结算参数。",
+			"where_used": "薪资输入中心；payroll_input.py 计算与校验薪资输入记录时读取。",
+			"storage": "HRMS Payroll Rule（按公司隔离）",
+			"manage_route": "List/HRMS Payroll Rule",
+			"verify_route": "payroll-input-center",
+			"test_hint": "在薪资输入中心运行规则预览，确认计算明细引用了当前公司的规则版本。",
+		},
+		{
+			"key": "payroll-mapping",
+			"category": "薪资导入",
+			"label": "薪资字段映射",
+			"doctype": "HRMS Payroll Field Mapping",
+			"purpose": "把外部薪资列名映射为系统字段，控制导入识别方式。",
+			"where_used": "薪资输入中心的文件预览与导入；payroll_input.py 读取。",
+			"storage": "HRMS Payroll Field Mapping",
+			"manage_route": "List/HRMS Payroll Field Mapping",
+			"verify_route": "payroll-input-center",
+			"test_hint": "用固定样例文件执行预览，检查原始列是否映射到预期系统字段。",
+		},
+		{
+			"key": "dingtalk",
+			"category": "系统集成",
+			"label": "钉钉连接与同步设置",
+			"doctype": "HRMS DingTalk Settings",
+			"purpose": "配置钉钉应用身份、同步开关和网关参数。",
+			"where_used": "钉钉员工同步、考勤同步和网关接口；dingtalk_integration.py 与 dingtalk_employee_gateway.py 读取。",
+			"storage": "HRMS DingTalk Settings（单例配置）",
+			"manage_route": "Form/HRMS DingTalk Settings/HRMS DingTalk Settings",
+			"verify_route": "hr-settings-center",
+			"test_hint": "先执行连接测试和预览同步；确认成功后再开启正式同步，避免直接写入错误数据。",
+		},
+	]
+	for item in definitions:
+		item["record_count"] = _configuration_record_count(item["doctype"])
+		item["status"] = "已接入业务" if item["record_count"] else "已接入，尚未配置记录"
+	return {
+		"items": definitions,
+		"boundary": {
+			"no_code": "字段显示与映射、已有规则参数、工作流、角色权限和用户数据范围可在系统内修改。",
+			"requires_code": "新增计算算法、外部协议、新数据关系或绕过现有规则引擎的行为仍需代码、迁移和回归测试。",
+		},
+	}
+
+
+def _model_catalog_record_count(doctype):
+	"""Return a safe catalogue count without making the guide depend on optional modules."""
+	if not frappe.db.exists("DocType", doctype):
+		return 0
+	try:
+		return _configuration_record_count(doctype)
+	except Exception:
+		return 0
+
+
+@frappe.whitelist()
+def get_hrms_model_governance_catalog():
+	"""Expose the small, project-relevant model catalogue instead of the full framework registry."""
+	_require_system_manager()
+	definitions = [
+		{
+			"doctype": "Employee",
+			"label": "员工档案",
+			"category": "核心业务模型",
+			"usage": "正在使用",
+			"purpose": "保存员工身份、任职、组织归属和在职状态，是大多数人资业务的主档案。",
+			"where_used": "员工档案、花名册导入导出、考勤、薪资、审批和人事报表。",
+			"manage_route": "employee-detail",
+			"manage_label": "进入员工档案",
+			"safe_change": "字段显示、中文名称、导入映射请在“员工字段与导入导出”中维护。",
+			"risk": "中",
+			"origin": "HRMS 标准模型",
+		},
+		{
+			"doctype": "Company",
+			"label": "公司",
+			"category": "核心业务模型",
+			"usage": "正在使用",
+			"purpose": "定义数据所属公司和业务隔离边界。",
+			"where_used": "员工、部门、考勤、薪资、权限数据范围和所有公司级规则。",
+			"manage_route": "List/Company",
+			"manage_label": "管理公司",
+			"safe_change": "可以维护公司资料；删除或改名会影响大量关联记录。",
+			"risk": "高",
+			"origin": "Frappe/ERP 标准模型",
+		},
+		{
+			"doctype": "Department",
+			"label": "部门",
+			"category": "核心业务模型",
+			"usage": "正在使用",
+			"purpose": "保存组织层级、部门归属和部门负责人。",
+			"where_used": "组织架构、员工档案、招聘计划、审批人和数据权限。",
+			"manage_route": "List/Department",
+			"manage_label": "管理部门",
+			"safe_change": "日常组织调整可以维护；字段结构通过受控配置处理。",
+			"risk": "中",
+			"origin": "HRMS 标准模型",
+		},
+		{
+			"doctype": "Designation",
+			"label": "职位",
+			"category": "核心业务模型",
+			"usage": "正在使用",
+			"purpose": "定义岗位/职位名称及其组织来源信息。",
+			"where_used": "员工档案、招聘、编制计划、岗位分析和审批条件。",
+			"manage_route": "List/Designation",
+			"manage_label": "管理职位",
+			"safe_change": "可维护职位资料；不要直接修改标准字段类型。",
+			"risk": "中",
+			"origin": "HRMS 标准模型",
+		},
+		{
+			"doctype": "Job Applicant",
+			"label": "候选人",
+			"category": "核心业务模型",
+			"usage": "按功能使用",
+			"purpose": "保存应聘者、应聘职位和招聘阶段信息。",
+			"where_used": "招聘、面试、录用和候选人报表。",
+			"manage_route": "List/Job Applicant",
+			"manage_label": "查看候选人",
+			"safe_change": "业务数据在招聘模块维护；结构变更需要先评估导入和审批。",
+			"risk": "中",
+			"origin": "HRMS 标准模型",
+		},
+		{
+			"doctype": "Attendance",
+			"label": "考勤记录",
+			"category": "核心业务模型",
+			"usage": "正在使用",
+			"purpose": "保存员工每日考勤结果。",
+			"where_used": "考勤导入、异常检查、月度统计和薪资计算。",
+			"manage_route": "attendance-import-center",
+			"manage_label": "进入考勤中心",
+			"safe_change": "匹配和异常逻辑在“考勤自定义规则”中维护，不直接改模型。",
+			"risk": "高",
+			"origin": "HRMS 标准模型",
+		},
+		{
+			"doctype": "Leave Application",
+			"label": "请假申请",
+			"category": "核心业务模型",
+			"usage": "按功能使用",
+			"purpose": "保存员工请假期间、类型、审批和状态。",
+			"where_used": "请假、考勤、审批和假期余额计算。",
+			"manage_route": "List/Leave Application",
+			"manage_label": "查看请假申请",
+			"safe_change": "审批路径使用工作流配置；日期和余额算法仍由业务代码控制。",
+			"risk": "高",
+			"origin": "HRMS 标准模型",
+		},
+		{
+			"doctype": "Salary Slip",
+			"label": "工资单",
+			"category": "核心业务模型",
+			"usage": "按功能使用",
+			"purpose": "保存员工每个薪资周期的计算和结算结果。",
+			"where_used": "薪资计算、工资单、财务凭证和员工自助查询。",
+			"manage_route": "payroll-input-center",
+			"manage_label": "进入薪资中心",
+			"safe_change": "计算参数和映射使用薪资规则页面维护，不直接改工资单结构。",
+			"risk": "高",
+			"origin": "HRMS 标准模型",
+		},
+		{
+			"doctype": TEMPLATE_DOCTYPE,
+			"label": "员工字段模板",
+			"category": "无代码业务配置",
+			"usage": "已接入业务",
+			"purpose": "控制员工字段的显示、中文名称、必填、导入导出和详情资料块。",
+			"where_used": "员工档案详情、花名册导入导出和人事报表。",
+			"manage_route": "hr-settings-center",
+			"manage_label": "管理员工字段",
+			"safe_change": "这里是员工字段的首选入口，保存后由现有业务页面读取。",
+			"risk": "低",
+			"origin": "本项目扩展模型",
+		},
+		{
+			"doctype": "HRMS Form Approval Matrix",
+			"label": "人资表单审批矩阵",
+			"category": "无代码业务配置",
+			"usage": "已接入业务",
+			"purpose": "按导入表单和条件选择审批步骤、审批角色。",
+			"where_used": "人资表单导入中心的保存、提交和审批步骤生成。",
+			"manage_route": "List/HRMS Form Approval Matrix",
+			"manage_label": "管理审批矩阵",
+			"safe_change": "可以页面化维护；修改后用固定导入样例验证审批步骤。",
+			"risk": "中",
+			"origin": "本项目扩展模型",
+		},
+		{
+			"doctype": "HRMS Attendance Custom Rule",
+			"label": "考勤自定义规则",
+			"category": "无代码业务配置",
+			"usage": "已接入业务",
+			"purpose": "配置考勤导入的匹配、校验、异常识别和处理参数。",
+			"where_used": "考勤导入中心预检和正式入库。",
+			"manage_route": "List/HRMS Attendance Custom Rule",
+			"manage_label": "管理考勤规则",
+			"safe_change": "可以页面化维护；用同一考勤文件比较修改前后预检结果。",
+			"risk": "中",
+			"origin": "本项目扩展模型",
+		},
+		{
+			"doctype": "HRMS Payroll Rule",
+			"label": "薪资计算规则",
+			"category": "无代码业务配置",
+			"usage": "已接入业务",
+			"purpose": "配置全勤、加班、夜班、福利资格和结算参数。",
+			"where_used": "薪资输入中心的计算、校验和规则预览。",
+			"manage_route": "List/HRMS Payroll Rule",
+			"manage_label": "管理薪资规则",
+			"safe_change": "可以页面化维护；发布前必须使用固定月份样例对比计算明细。",
+			"risk": "高",
+			"origin": "本项目扩展模型",
+		},
+		{
+			"doctype": "HRMS Payroll Field Mapping",
+			"label": "薪资字段映射",
+			"category": "无代码业务配置",
+			"usage": "已接入业务",
+			"purpose": "把外部薪资表列名映射为系统字段。",
+			"where_used": "薪资文件预览、导入和结果字段汇总。",
+			"manage_route": "List/HRMS Payroll Field Mapping",
+			"manage_label": "管理字段映射",
+			"safe_change": "可以页面化维护；用固定文件验证每一列的目标字段。",
+			"risk": "中",
+			"origin": "本项目扩展模型",
+		},
+		{
+			"doctype": "HRMS DingTalk Settings",
+			"label": "钉钉连接设置",
+			"category": "无代码业务配置",
+			"usage": "按功能使用",
+			"purpose": "保存钉钉应用身份、同步开关和网关参数。",
+			"where_used": "钉钉员工、审批和考勤同步。",
+			"manage_route": "Form/HRMS DingTalk Settings/HRMS DingTalk Settings",
+			"manage_label": "管理钉钉连接",
+			"safe_change": "先连接测试和预览，再开启正式同步；不要在说明页展示密钥。",
+			"risk": "高",
+			"origin": "本项目扩展模型",
+		},
+		{
+			"doctype": "Workflow",
+			"label": "工作流",
+			"category": "无代码业务配置",
+			"usage": "按功能使用",
+			"purpose": "配置业务状态、转换动作和允许执行转换的角色。",
+			"where_used": "已启用工作流的请假、人事、薪资和导入业务。",
+			"manage_route": "List/Workflow",
+			"manage_label": "管理工作流",
+			"safe_change": "使用申请人与审批人两个测试账户验证完整状态流转。",
+			"risk": "高",
+			"origin": "Frappe 标准配置模型",
+		},
+		{
+			"doctype": "HRMS Data Cleanup Log",
+			"label": "数据清理日志",
+			"category": "系统内部记录",
+			"usage": "后台自动使用",
+			"purpose": "记录后台关联数据清理任务的执行结果。",
+			"where_used": "数据清理任务与运维审计，不是日常业务配置。",
+			"manage_route": "hrms-data-operations",
+			"manage_label": "查看运行状态",
+			"safe_change": "只查看，不要手工新增、修改字段或改权限。",
+			"risk": "禁止直接修改",
+			"origin": "本项目内部模型",
+		},
+		{
+			"doctype": "HRMS Business Process Record",
+			"label": "业务流程运行记录",
+			"category": "系统内部记录",
+			"usage": "后台自动使用",
+			"purpose": "保存自动化业务流程的运行状态和关联信息。",
+			"where_used": "后台任务、流程恢复和运维排查。",
+			"manage_route": "hrms-data-operations",
+			"manage_label": "查看运行状态",
+			"safe_change": "只查看；人工编辑会破坏流程状态一致性。",
+			"risk": "禁止直接修改",
+			"origin": "本项目内部模型",
+		},
+		{
+			"doctype": "HRMS Form Import Batch",
+			"label": "表单导入批次",
+			"category": "系统内部记录",
+			"usage": "后台自动使用",
+			"purpose": "保存一次表单导入的批次、审批和处理状态。",
+			"where_used": "人资表单导入中心。",
+			"manage_route": "form-data-intake",
+			"manage_label": "进入导入中心",
+			"safe_change": "从导入中心操作，不在单据类型编辑器中修改。",
+			"risk": "禁止直接修改",
+			"origin": "本项目内部模型",
+		},
+		{
+			"doctype": "HRMS Form Import Row",
+			"label": "表单导入明细行",
+			"category": "系统内部记录",
+			"usage": "后台自动使用",
+			"purpose": "保存导入批次中的逐行解析和校验结果。",
+			"where_used": "人资表单导入预览、错误定位和正式入库。",
+			"manage_route": "form-data-intake",
+			"manage_label": "进入导入中心",
+			"safe_change": "只由导入流程生成；不要人工编辑。",
+			"risk": "禁止直接修改",
+			"origin": "本项目内部模型",
+		},
+		{
+			"doctype": "HRMS Attendance Month Lock",
+			"label": "考勤月度锁定",
+			"category": "系统内部记录",
+			"usage": "后台自动使用",
+			"purpose": "记录考勤月份是否已锁定，防止结算后数据继续变化。",
+			"where_used": "考勤月结、撤回和薪资结算保护。",
+			"manage_route": "attendance-import-center",
+			"manage_label": "进入考勤中心",
+			"safe_change": "通过考勤中心执行锁定或撤回，不直接编辑底层记录。",
+			"risk": "禁止直接修改",
+			"origin": "本项目内部模型",
+		},
+	]
+
+	items = []
+	for index, item in enumerate(definitions):
+		item = dict(item)
+		item["id"] = index + 1
+		item["record_count"] = _model_catalog_record_count(item["doctype"])
+		item["exists"] = int(bool(frappe.db.exists("DocType", item["doctype"])))
+		item["structure_route"] = f"Form/DocType/{item['doctype']}"
+		items.append(item)
+
+	return {
+		"items": items,
+		"summary": {
+			"project_model_count": len(items),
+			"business_model_count": sum(1 for item in items if item["category"] == "核心业务模型"),
+			"config_model_count": sum(1 for item in items if item["category"] == "无代码业务配置"),
+			"internal_model_count": sum(1 for item in items if item["category"] == "系统内部记录"),
+			"framework_model_count": frappe.db.count("DocType"),
+		},
+		"guidance": {
+			"need_to_know": "不需要了解全部底层模型。日常管理只需要理解核心业务模型和无代码配置；系统内部记录只用于排查。",
+			"doctype_meaning": "单据类型是数据结构定义：它同时决定保存哪些字段、表单如何呈现、数据存到哪里、权限和工作流如何挂接。",
+			"raw_registry": "完整列表包含 Frappe、ERPNext、HRMS 和本项目扩展模型，很多库存、会计或框架模型并未进入本项目的人资导航。",
+		},
+	}
+
+
+@frappe.whitelist()
+def test_hrms_effective_permission(
+	user: str,
+	doctype: str,
+	permission_type: str = "read",
+	document_name: str | None = None,
+):
+	"""Run a read-only check through Frappe's real effective-permission engine."""
+	_require_system_manager()
+	allowed_permission_types = {
+		"select",
+		"read",
+		"write",
+		"create",
+		"delete",
+		"submit",
+		"cancel",
+		"amend",
+		"report",
+		"import",
+		"export",
+		"print",
+		"email",
+		"share",
+	}
+	if not frappe.db.exists("User", user):
+		frappe.throw(_("账户 {0} 不存在").format(user))
+	if not frappe.db.exists("DocType", doctype):
+		frappe.throw(_("单据类型 {0} 不存在").format(doctype))
+	if permission_type not in allowed_permission_types:
+		frappe.throw(_("不支持的权限类型：{0}").format(permission_type))
+
+	document_name = (document_name or "").strip()
+	doc = None
+	if document_name:
+		if not frappe.db.exists(doctype, document_name):
+			frappe.throw(_("{0} 记录 {1} 不存在").format(doctype, document_name))
+		doc = frappe.get_doc(doctype, document_name)
+
+	roles = frappe.get_roles(user)
+	allowed = bool(frappe.has_permission(doctype, permission_type, doc=doc, user=user))
+	user_permissions = frappe.get_all(
+		"User Permission",
+		filters={"user": user},
+		fields=["allow", "for_value", "applicable_for", "is_default", "hide_descendants"],
+		order_by="allow asc, for_value asc",
+		ignore_permissions=True,
+	)
+	permission_field = {
+		"select": "select",
+		"read": "read",
+		"write": "write",
+		"create": "create",
+		"delete": "delete",
+		"submit": "submit",
+		"cancel": "cancel",
+		"amend": "amend",
+		"report": "report",
+		"import": "import",
+		"export": "export",
+		"print": "print",
+		"email": "email",
+		"share": "share",
+	}[permission_type]
+	granting_roles = set()
+	for permission_doctype in ("DocPerm", "Custom DocPerm"):
+		for row in frappe.get_all(
+			permission_doctype,
+			filters={"parent": doctype, "role": ["in", roles], permission_field: 1},
+			fields=["role"],
+			ignore_permissions=True,
+		):
+			granting_roles.add(row.role)
+
+	return {
+		"allowed": int(allowed),
+		"user": user,
+		"doctype": doctype,
+		"document_name": document_name,
+		"permission_type": permission_type,
+		"roles": roles,
+		"granting_roles": sorted(granting_roles),
+		"user_permissions": user_permissions,
+		"scope_mode": "具体记录" if document_name else "单据类型入口",
+		"explanation": (
+			"系统实际权限引擎允许该操作。" if allowed else "系统实际权限引擎拒绝该操作。"
+		),
+	}
+
+
+@frappe.whitelist()
 def save_employee_field_center(items: str):
+	_require_hr_settings_manager()
 	return save_employee_field_template(items)
 
 
@@ -1870,12 +2609,13 @@ def get_employee_import_export_schema():
 
 EMPLOYEE_ROSTER_STATUS_CARDS = [
 	{"label": "在职", "filters": {"status": "Active"}},
-	{"label": "全职", "filters": {"employment_type": "Full-time"}},
-	{"label": "实习生", "filters": {"employment_type": "Intern"}},
-	{"label": "外包", "filters": {"employment_type": "Contract"}},
-	{"label": "试用期", "filters": {"status": "Active", "employment_type": "Probation"}},
+	{"label": "全职", "filters": {"status": "Active", "employment_type": "Full-time"}},
+	{"label": "实习生", "filters": {"status": "Active", "employment_type": "Intern"}},
+	{"label": "外包", "filters": {"status": "Active", "employment_type": "Contract"}},
+	{"label": "退休返聘", "filters": {"status": "Active", "employment_type": "Retainer"}},
+	{"label": "试用期", "filters": {"status": "Active", "custom_is_confirmed": "否"}},
 	{"label": "待离职", "filters": {"status": "Inactive"}},
-	{"label": "正式", "filters": {"status": "Active"}},
+	{"label": "正式", "filters": {"status": "Active", "custom_is_confirmed": "是"}},
 	{"label": "已离职", "filters": {"status": "Left"}},
 ]
 
@@ -1933,7 +2673,8 @@ def _get_employee_roster_columns():
 	fields = [
 		_serialize_item(row)
 		for row in doc.template_items
-		if row.get("enabled")
+		if not _is_employee_internal_field(row.fieldname)
+		and row.get("enabled")
 		and (_field_flag_enabled(row, "roster_visible", 0) or row.fieldname in EMPLOYEE_ROSTER_REQUIRED_COLUMNS)
 	]
 	fields_by_name = {field["fieldname"]: field for field in fields}
@@ -1957,7 +2698,15 @@ def _get_employee_roster_columns():
 def _build_employee_roster_filters(filters=None):
 	filters = _parse_json(filters, {}) or {}
 	meta_fields = _get_employee_meta_field_map()
-	allowed_filters = {"status", "employment_type", "department", "designation", "company", "branch"}
+	allowed_filters = {
+		"status",
+		"employment_type",
+		"custom_is_confirmed",
+		"department",
+		"designation",
+		"company",
+		"branch",
+	}
 	employee_filters = {}
 
 	for fieldname, value in filters.items():
@@ -2044,6 +2793,30 @@ def _hydrate_employee_roster_display_values(rows):
 	return rows
 
 
+def _employee_business_code_value(row):
+	return str(row.get("custom_employee_code") or row.get("employee_number") or "").strip()
+
+
+def _employee_business_code_sort_key(row):
+	value = _employee_business_code_value(row)
+	return tuple(
+		(0, int(part)) if part.isdigit() else (1, part.casefold())
+		for part in re.split(r"(\d+)", value)
+	)
+
+
+def _sort_employee_roster_by_business_code(rows, sort_order):
+	populated = [row for row in rows if _employee_business_code_value(row)]
+	blank = [row for row in rows if not _employee_business_code_value(row)]
+	populated.sort(
+		key=_employee_business_code_sort_key,
+		reverse=sort_order == "desc",
+	)
+	# Missing work numbers remain visible as data-quality exceptions, but never
+	# appear before valid work numbers in either direction.
+	return populated + blank
+
+
 @frappe.whitelist()
 def get_employee_by_business_code(employee_code: str, company: str = ""):
 	"""Resolve the public company work number to the internal Employee link value."""
@@ -2103,25 +2876,36 @@ def get_employee_roster(
 	start = (page - 1) * page_length
 	fields = _get_roster_fetch_fields(columns)
 
-	rows = frappe.get_all(
-		EMPLOYEE_DOCTYPE,
-		filters=employee_filters,
-		or_filters=or_filters,
-		fields=fields,
-		order_by=f"{sort_field} {sort_order}",
-		limit_start=start,
-		limit_page_length=page_length,
-	)
-	rows = _hydrate_employee_roster_display_values(rows)
-	total = len(
-		frappe.get_all(
+	if sort_field == "custom_employee_code":
+		all_rows = frappe.get_all(
 			EMPLOYEE_DOCTYPE,
 			filters=employee_filters,
 			or_filters=or_filters,
-			pluck="name",
+			fields=fields,
 			limit_page_length=0,
 		)
-	)
+		total = len(all_rows)
+		rows = _sort_employee_roster_by_business_code(all_rows, sort_order)[start : start + page_length]
+	else:
+		rows = frappe.get_all(
+			EMPLOYEE_DOCTYPE,
+			filters=employee_filters,
+			or_filters=or_filters,
+			fields=fields,
+			order_by=f"{sort_field} {sort_order}",
+			limit_start=start,
+			limit_page_length=page_length,
+		)
+		total = len(
+			frappe.get_all(
+				EMPLOYEE_DOCTYPE,
+				filters=employee_filters,
+				or_filters=or_filters,
+				pluck="name",
+				limit_page_length=0,
+			)
+		)
+	rows = _hydrate_employee_roster_display_values(rows)
 
 	return {
 		"rows": rows,
@@ -2187,7 +2971,9 @@ def _get_employee_detail_sections(doc, department_display=""):
 	fields = [
 		_serialize_item(row)
 		for row in template.template_items
-		if row.get("enabled") and _field_flag_enabled(row, "detail_visible", 1)
+		if not _is_employee_internal_field(row.fieldname)
+		and row.get("enabled")
+		and _field_flag_enabled(row, "detail_visible", 1)
 	]
 	sections = []
 	doc_values = doc.as_dict()
@@ -2765,6 +3551,33 @@ def _normalise_import_value(fieldname, value, field):
 	return str(value).strip()
 
 
+def _normalise_probation_employment_type(values, warnings, row_index=None):
+	"""Keep work nature and employee stage as separate, auditable fields.
+
+	Legacy sheets sometimes put "试用期" in the 工作性质 column. In this HR
+	model, 工作性质 is an Employment Type (全职、实习生、外包、退休返聘), while
+	试用/正式 is the confirmation stage. Preserve an explicit confirmation value
+	when supplied and otherwise mark the imported employee as not confirmed.
+	"""
+	if values.get("employment_type") != "Probation":
+		return
+
+	values["employment_type"] = "Full-time"
+	if values.get("custom_is_confirmed") in (None, ""):
+		values["custom_is_confirmed"] = "否"
+		warnings.append(
+			_("第 {0} 行：工作性质“试用期”已按“全职 + 未转正”导入，避免将员工阶段误建为工作性质。").format(
+				row_index or ""
+			)
+		)
+	else:
+		warnings.append(
+			_("第 {0} 行：工作性质“试用期”已按“全职”导入；是否转正保留表格中的人工填写值。").format(
+				row_index or ""
+			)
+		)
+
+
 def _get_default_company():
 	default_company = frappe.defaults.get_user_default("Company") or frappe.defaults.get_global_default("company")
 	if default_company and frappe.db.exists("Company", default_company):
@@ -2968,6 +3781,7 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 		values["naming_series"] = "HR-EMP-"
 	if not values.get("status"):
 		values["status"] = "Active"
+	_normalise_probation_employment_type(values, warnings, row_index)
 	if not values.get("date_of_birth") and fields_by_name.get("date_of_birth"):
 		values["date_of_birth"] = EMPLOYEE_FALLBACK_DATE_OF_BIRTH
 		warnings.append(
@@ -3607,6 +4421,7 @@ def _sync_employee_field_label_property(row):
 
 @frappe.whitelist()
 def save_employee_field_template(items: str):
+	_require_hr_settings_manager()
 	items = _parse_json(items, [])
 	doc = _get_template_doc()
 	rows_by_fieldname = {row.fieldname: row for row in doc.template_items}
@@ -3616,6 +4431,10 @@ def save_employee_field_template(items: str):
 		fieldname = item.get("fieldname")
 		if fieldname not in rows_by_fieldname:
 			frappe.throw(_("字段不存在: {0}").format(fieldname))
+		# Internal Frappe document naming is deliberately not configurable from
+		# the HR field center. Ignore stale browser payloads that still contain it.
+		if _is_employee_internal_field(fieldname):
+			continue
 
 		row = rows_by_fieldname[fieldname]
 		if item.get("category"):
@@ -3648,6 +4467,7 @@ def save_employee_field_template(items: str):
 			row.detail_block_order = frappe.utils.cint(item.get("detail_block_order"))
 
 	doc.save(ignore_permissions=True)
+	_apply_employee_internal_field_policy(doc)
 	frappe.clear_cache(doctype=EMPLOYEE_DOCTYPE)
 	return get_employee_field_template()
 
@@ -3662,6 +4482,7 @@ def create_employee_custom_field(
 	required: bool | int | str = False,
 	search_enabled: bool | int | str = False,
 ):
+	_require_hr_settings_manager()
 	_validate_category(category)
 	fieldtype = _normalise_fieldtype(fieldtype)
 
@@ -3715,7 +4536,11 @@ def create_employee_custom_field(
 
 @frappe.whitelist()
 def set_employee_template_field_enabled(fieldname: str, enabled: int | str):
+	_require_hr_settings_manager()
 	doc = _get_template_doc()
+	if _is_employee_internal_field(fieldname):
+		_apply_employee_internal_field_policy(doc)
+		return get_employee_field_template()
 	for row in doc.template_items:
 		if row.fieldname == fieldname:
 			row.enabled = 1 if frappe.utils.cint(enabled) else 0

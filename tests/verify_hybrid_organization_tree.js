@@ -28,6 +28,12 @@ function mustInclude(source, marker, message) {
 	}
 }
 
+function mustMatch(source, pattern, message) {
+	if (!pattern.test(source)) {
+		throw new Error(message || `Missing pattern: ${pattern}`);
+	}
+}
+
 const py = read(pyPath);
 const js = read(jsPath);
 const css = read(cssPath);
@@ -247,6 +253,11 @@ for (const marker of [
 	"data-action=\"open-person\"",
 	"data-person-name",
 	"data-employee",
+	"data-employee-route",
+	"normalize_employee_route_value",
+	"resolve_employee_route_value",
+	"HR-EMP-",
+	"请先在右侧确认员工详情",
 	"expand_all",
 	"collapse_all",
 	"export_chart",
@@ -270,11 +281,34 @@ for (const marker of [
 	".hrms-org-person-token.is-unmatched",
 	".hrms-org-person-detail",
 	".hrms-org-detail",
+	"min-height: 0",
+	"align-self: stretch",
+	"height: 100%",
+	"overflow-y: auto",
+	"overscroll-behavior: contain",
+	"overflow-wrap: anywhere",
+	"white-space: normal",
+	"width: 100%",
+	"height: 22px",
+	"padding: 10px 12px 11px",
+	"top: 2px",
 	".hrms-org-employee-row",
 	".hrms-org-toolbar",
 ]) {
 	mustInclude(css, marker, `Hybrid organization CSS missing marker: ${marker}`);
 }
+
+mustMatch(
+	css,
+	/\.hrms-org-page\s*\{[^}]*\bheight:\s*calc\(100vh - 52px\);[^}]*\boverflow:\s*hidden;/s,
+	"Hybrid organization page must constrain itself to the viewport and prevent document-level scrolling",
+);
+
+mustMatch(
+	css,
+	/\.hrms-org-detail\s*\{[^}]*\balign-self:\s*stretch;[^}]*\bheight:\s*100%;[^}]*\boverflow-y:\s*auto;/s,
+	"Hybrid organization detail panel must remain fixed in its grid column and scroll independently",
+);
 
 for (const marker of [
 	'{ type: "link", label: "组织管理", route: "/desk/department", slug: "department" }',

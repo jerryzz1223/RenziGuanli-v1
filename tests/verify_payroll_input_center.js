@@ -38,6 +38,11 @@ if (pageJson.name !== "payroll-input-center" || pageJson.title !== "薪资输入
 
 for (const marker of [
 	"frappe.pages[\"payroll-input-center\"]",
+	"导入薪资资料",
+	"open_payroll_import_selector",
+	"open_source_form_import_selector",
+	"source_form_imports",
+	"clear_inner_toolbar",
 	"preview_payroll_variable_workbook",
 	"import_payroll_variable_workbook",
 	"load_import_batches",
@@ -75,6 +80,10 @@ for (const marker of [
 	"readonly",
 ]) {
 	mustInclude(pageJs, marker, `Payroll input center page is missing marker: ${marker}`);
+}
+
+if (pageJs.includes("window.hrmsFormImport?.addPageActions")) {
+	throw new Error("Payroll page must use one unified import entry instead of registering every salary source as a top toolbar button.");
 }
 
 const api = read("hrms/api/payroll_input.py");

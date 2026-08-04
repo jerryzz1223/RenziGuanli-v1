@@ -503,7 +503,7 @@ class EmployeeDetailPage {
 		const meta = [
 			header.employment_type,
 			header.status ? __(header.status) : "",
-			header.custom_employee_code,
+			header.custom_employee_code ? `${__("工号")}：${header.custom_employee_code}` : "",
 			header.cell_number,
 		].filter(Boolean);
 		return `
@@ -514,7 +514,7 @@ class EmployeeDetailPage {
 					</div>
 					<div>
 						<div class="hrms-employee-detail-title">
-							<h2>${frappe.utils.escape_html(header.employee_name || header.name || "")}</h2>
+							<h2>${frappe.utils.escape_html(header.employee_name || __("未命名员工"))}</h2>
 							<span class="hrms-employee-detail-tag">${frappe.utils.escape_html(__("员工"))}</span>
 						</div>
 						<div class="hrms-employee-detail-meta">
@@ -842,6 +842,11 @@ class EmployeeDetailPage {
 					frappe.msgprint(__("只有管理员可以编辑员工资料。"));
 					return;
 				}
+				if (window.hrmsEmployeeNavigation?.openEmployeeFormForEdit) {
+					window.hrmsEmployeeNavigation.openEmployeeFormForEdit(this.employee);
+					return;
+				}
+				frappe.route_options = { hrms_allow_employee_form: 1 };
 				frappe.set_route("Form", "Employee", this.employee);
 			});
 		});

@@ -1,0 +1,367 @@
+.hrms-access-center {
+	max-width: 1180px;
+	padding: 12px 0 40px;
+}
+
+.hrms-access-center__hero,
+.hrms-access-center__guide,
+.hrms-access-center__permission-model,
+.hrms-access-center__panel,
+.hrms-access-center__action {
+	background: var(--card-bg, #fff);
+	border: 1px solid var(--border-color, #dfe3e8);
+	border-radius: 10px;
+}
+
+.hrms-access-center__permission-model {
+	display: grid;
+	gap: 0;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	margin-top: 16px;
+	overflow: hidden;
+}
+
+.hrms-access-center__permission-model article {
+	display: flex;
+	gap: 10px;
+	min-height: 132px;
+	padding: 16px;
+}
+
+.hrms-access-center__permission-model article + article {
+	border-left: 1px solid var(--border-color, #dfe3e8);
+}
+
+.hrms-access-center__permission-model article > span {
+	align-items: center;
+	background: #eaf4ff;
+	border-radius: 999px;
+	color: #1877c9;
+	display: flex;
+	flex: 0 0 28px;
+	font-weight: 600;
+	height: 28px;
+	justify-content: center;
+}
+
+.hrms-access-center__permission-model article.is-result {
+	background: #f6fbf7;
+}
+
+.hrms-access-center__permission-model article.is-result > span {
+	background: #e2f4e8;
+	color: #23824b;
+}
+
+.hrms-access-center__permission-model strong,
+.hrms-access-center__permission-model p {
+	display: block;
+}
+
+.hrms-access-center__permission-model p {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	line-height: 1.55;
+	margin: 7px 0 0;
+}
+
+.hrms-access-center__hero {
+	align-items: flex-start;
+	display: flex;
+	gap: 20px;
+	justify-content: space-between;
+	padding: 20px 22px;
+}
+
+.hrms-access-center__hero h3,
+.hrms-access-center__panel h4 {
+	margin: 0 0 6px;
+}
+
+.hrms-access-center__hero p,
+.hrms-access-center__panel-head p {
+	color: var(--text-muted, #6b7280);
+	margin: 0;
+}
+
+.hrms-access-center__scope {
+	background: var(--subtle-fg, #f5f7fa);
+	border-radius: 8px;
+	flex: none;
+	padding: 8px 12px;
+	white-space: nowrap;
+}
+
+.hrms-access-center__scope strong,
+.hrms-access-center__scope span,
+.hrms-access-center__account-table small,
+.hrms-access-center__action span {
+	display: block;
+}
+
+.hrms-access-center__scope span,
+.hrms-access-center__account-table small,
+.hrms-access-center__action span {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	margin-top: 3px;
+}
+
+.hrms-access-center__guide,
+.hrms-access-center__actions {
+	display: grid;
+	gap: 12px;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	margin-top: 16px;
+}
+
+.hrms-access-center__guide {
+	background: #f7fbff;
+	border-color: #d9ebf7;
+	padding: 14px 16px;
+}
+
+.hrms-access-center__guide div {
+	border-left: 2px solid #8ec5ef;
+	padding-left: 10px;
+}
+
+.hrms-access-center__guide strong,
+.hrms-access-center__guide span {
+	display: block;
+}
+
+.hrms-access-center__guide span {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	line-height: 1.45;
+	margin-top: 4px;
+}
+
+.hrms-access-center__panel {
+	margin-top: 16px;
+	padding: 18px 20px;
+}
+
+.hrms-access-center__panel-head {
+	align-items: flex-start;
+	display: flex;
+	gap: 12px;
+	justify-content: space-between;
+	margin-bottom: 12px;
+}
+
+.hrms-access-center__account-table {
+	margin-bottom: 0;
+}
+
+.hrms-access-center__account-table th,
+.hrms-access-center__account-table td {
+	vertical-align: middle;
+}
+
+.hrms-access-center__filter {
+	margin: 0 0 12px;
+	max-width: 360px;
+}
+
+.hrms-access-center__role-toolbar {
+	align-items: center;
+	display: flex;
+	gap: 16px;
+	justify-content: space-between;
+}
+
+.hrms-access-center__role-toolbar label {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	font-weight: 400;
+	white-space: nowrap;
+}
+
+.hrms-access-center__role-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 5px;
+}
+
+.hrms-access-center__role-chip,
+.hrms-access-center__role-more {
+	background: #f3f6f8;
+	border: 1px solid #e0e7ec;
+	border-radius: 999px;
+	color: #40505c;
+	font-size: 12px;
+	line-height: 1.25;
+	padding: 3px 7px;
+}
+
+.hrms-access-center__role-more {
+	background: transparent;
+}
+
+.hrms-access-center__account-actions {
+	white-space: nowrap;
+}
+
+.hrms-access-center__account-actions .btn + .btn {
+	margin-left: 6px;
+}
+
+.hrms-access-center__account-table .indicator-pill {
+	display: inline-block;
+	margin: 4px 0 0;
+}
+
+.hrms-access-center__role-panel {
+	padding-bottom: 14px;
+}
+
+.hrms-access-center__role-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	max-height: 520px;
+	overflow: auto;
+	padding: 2px;
+}
+
+.hrms-access-center__role-card {
+	align-items: flex-start;
+	border: 1px solid var(--border-color, #dfe3e8);
+	border-radius: 8px;
+	display: flex;
+	gap: 10px;
+	justify-content: space-between;
+	min-height: 108px;
+	padding: 14px 16px;
+}
+
+.hrms-access-center__role-title strong,
+.hrms-access-center__role-title span {
+	display: block;
+}
+
+.hrms-access-center__role-title span,
+.hrms-access-center__role-copy small {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	margin-top: 3px;
+}
+
+.hrms-access-center__role-copy {
+	min-width: 0;
+}
+
+.hrms-access-center__role-copy p {
+	color: var(--text-muted, #6b7280);
+	font-size: 13px;
+	line-height: 1.45;
+	margin: 7px 0 4px;
+}
+
+.hrms-access-center__doctype-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin-top: 8px;
+}
+
+.hrms-access-center__doctype-list code {
+	background: #f4f6f8;
+	border-radius: 4px;
+	color: #475569;
+	font-size: 11px;
+	padding: 2px 5px;
+}
+
+.hrms-access-center__role-actions {
+	display: flex;
+	flex: none;
+	gap: 6px;
+}
+
+.hrms-access-center__role-card.is-disabled {
+	background: #fafafa;
+	opacity: 0.65;
+}
+
+.hrms-access-center__action {
+	appearance: none;
+	color: var(--text-color, #1f2937);
+	cursor: pointer;
+	min-height: 94px;
+	padding: 14px;
+	text-align: left;
+}
+
+.hrms-access-center__action:hover,
+.hrms-access-center__action:focus-visible {
+	border-color: var(--primary, #2490ef);
+	box-shadow: 0 0 0 2px rgba(36, 144, 239, 0.12);
+	outline: 0;
+}
+
+.hrms-access-center__password-note {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 16px;
+}
+
+@media (max-width: 900px) {
+	.hrms-access-center__guide,
+	.hrms-access-center__actions {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.hrms-access-center__permission-model {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.hrms-access-center__permission-model article:nth-child(3) {
+		border-left: 0;
+		border-top: 1px solid var(--border-color, #dfe3e8);
+	}
+
+	.hrms-access-center__permission-model article:nth-child(4) {
+		border-top: 1px solid var(--border-color, #dfe3e8);
+	}
+}
+
+@media (max-width: 640px) {
+	.hrms-access-center__hero,
+	.hrms-access-center__panel-head {
+		flex-direction: column;
+	}
+
+	.hrms-access-center__guide,
+	.hrms-access-center__actions,
+	.hrms-access-center__permission-model {
+		grid-template-columns: 1fr;
+	}
+
+	.hrms-access-center__permission-model article + article {
+		border-left: 0;
+		border-top: 1px solid var(--border-color, #dfe3e8);
+	}
+
+	.hrms-access-center__role-card,
+	.hrms-access-center__role-toolbar {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.hrms-access-center__role-actions {
+		flex-wrap: wrap;
+	}
+
+	.hrms-access-center__account-actions .btn {
+		margin: 3px 0;
+	}
+
+	.hrms-access-center__account-actions .btn + .btn {
+		margin-left: 0;
+	}
+}

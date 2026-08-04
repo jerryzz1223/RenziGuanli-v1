@@ -32,11 +32,15 @@ COMPANY_ATTENDANCE_REGISTER_V1_SHEETS = {
 }
 COMPANY_DAILY_STATISTICS_COLUMNS = [
 	("姓名", ""), ("工号", ""), ("日期", ""), ("实际部门", ""), ("班次", ""), ("上班时间", ""), ("下班时间", ""),
-	("上班缺卡", ""), ("下班缺卡", ""), ("旷工", ""), ("标准工时", ""), ("实际出勤(小时)", ""), ("关联审批单", ""),
-	("工作日加班(小时)", ""), ("休息日加班(小时)", ""), ("节假日加班(小时)", ""), ("大夜班", ""), ("小夜班", ""),
+	("上班缺卡", ""), ("下班缺卡", ""), ("旷工", ""), ("标准工时", ""), ("实际出勤（小时）", ""), ("关联审批单", ""),
+	("工作日加班（小时）", ""), ("休息日加班（小时）", ""), ("节假日加班（小时）", ""), ("大夜班", ""), ("小夜班", ""),
 	("请假", "事假(小时)"), ("", "病假(小时)"), ("", "婚假(天)"), ("", "特休(小时)"), ("", "丧假(小时)"),
 	("", "工伤(小时)"), ("", "公假(天)"), ("", "产假(天)"), ("", "团圆假(天)"), ("", "排休(小时)"),
-	("", "旷工(小时)"), ("上班未打卡次数", ""), ("下班未打卡次数", ""), ("迟到次数", ""), ("早退次数", ""),
+	("", "旷工(小时)"),
+	# The company source sheet retains a second leave summary block without units.
+	# It is kept as source evidence and is not added to leave hours.
+	("请假", "婚假"), ("", "丧假"), ("", "公假"), ("", "产假"), ("", "团圆假"),
+	("旷工", ""), ("上班未打卡次数", ""), ("下班未打卡次数", ""), ("迟到次数", ""), ("早退次数", ""),
 ]
 ATTENDANCE_IMPORT_TEMPLATES = [
 	{
@@ -88,6 +92,23 @@ ATTENDANCE_IMPORT_TEMPLATES = [
 		"writes": "兼容导入历史数据。",
 	},
 ]
+# Export profiles follow the company documents in ``5.2人资考勤.xlsx``:
+# operational detail is kept separate from the three payroll-facing monthly forms.
+ATTENDANCE_EXPORT_PROFILES = {
+	"company_attendance_workbook": {
+		"label": "公司考勤工作簿",
+		"sheet_keys": ["daily_statistics", "attendance_detail", "leave_evidence", "attendance_exception", "missing_card", "apple_reward", "monthly_draft", "monthly_signed", "monthly_finance"],
+	},
+	"daily_statistics": {"label": "每日统计", "sheet_keys": ["daily_statistics"]},
+	"attendance_detail": {"label": "出勤明细", "sheet_keys": ["attendance_detail"]},
+	"leave_evidence": {"label": "请假单", "sheet_keys": ["leave_evidence"]},
+	"attendance_exception": {"label": "出勤异常", "sheet_keys": ["attendance_exception"]},
+	"missing_card": {"label": "忘打卡", "sheet_keys": ["missing_card"]},
+	"apple_reward": {"label": "苹果树", "sheet_keys": ["apple_reward"]},
+	"monthly_draft": {"label": "考勤初稿", "sheet_keys": ["monthly_draft"]},
+	"monthly_signed": {"label": "考勤终稿（签字版）", "sheet_keys": ["monthly_signed"]},
+	"monthly_finance": {"label": "考勤终稿（财务版）", "sheet_keys": ["monthly_finance"]},
+}
 DINGTALK_EXPORT_V1_SCHEMA = {
 	"source_type": "dingtalk_export_v1",
 	"daily_header_rows": (3, 4),
@@ -135,6 +156,7 @@ DINGTALK_DAILY_FIELD_MAPPING = {
 	"请假/排休(小时)": "rest_leave_hours",
 	"请假/旷工(小时)": "absent_hours",
 	"旷工": "absence_summary",
+	"旷工_2": "absent_hours",
 }
 ATTENDANCE_IMPORT_REQUIRED_FIELDS = ("employee_name", "employee_code", "attendance_date")
 ATTENDANCE_FIELD_CATALOG = [
@@ -904,12 +926,37 @@ def _style_template_headers(sheet, header_rows, widths=None):
 
 
 def _add_daily_statistics_template_sheet(workbook, sheet_name="每日统计"):
+	from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+	from openpyxl.utils import get_column_letter
+
 	sheet = workbook.create_sheet(sheet_name)
 	sheet.append([parent for parent, _child in COMPANY_DAILY_STATISTICS_COLUMNS])
 	sheet.append([child for _parent, child in COMPANY_DAILY_STATISTICS_COLUMNS])
-	_style_template_headers(sheet, [1, 2], [14, 12, 17, 16, 28, 13, 13, 12, 12, 12, 12, 16, 30] + [16] * 20)
+
+	# Match the company register: fixed fields are vertically merged, while the
+	# two leave sections retain their original grouped headers for direct upload.
+	for column, (_parent, child) in enumerate(COMPANY_DAILY_STATISTICS_COLUMNS, start=1):
+		if not child:
+			sheet.merge_cells(start_row=1, start_column=column, end_row=2, end_column=column)
+	sheet.merge_cells("S1:AC1")
+	sheet.merge_cells("AD1:AH1")
+
+	yellow = PatternFill("solid", fgColor="FFF2CC")
+	thin = Side(style="thin", color="000000")
+	border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	for row in sheet.iter_rows(min_row=1, max_row=2, min_col=1, max_col=len(COMPANY_DAILY_STATISTICS_COLUMNS)):
+		for cell in row:
+			cell.fill = yellow
+			cell.font = Font(name="新宋体", size=12, bold=True)
+			cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+			cell.border = border
+
+	for index, width in enumerate([15] + [13] * 38, start=1):
+		sheet.column_dimensions[get_column_letter(index)].width = width
+	sheet.row_dimensions[1].height = 51.2
+	sheet.row_dimensions[2].height = 51.2
 	sheet.freeze_panes = "A3"
-	sheet.auto_filter.ref = f"A2:{sheet.cell(row=2, column=len(COMPANY_DAILY_STATISTICS_COLUMNS)).column_letter}3"
+	sheet.auto_filter.ref = f"A2:{get_column_letter(len(COMPANY_DAILY_STATISTICS_COLUMNS))}1000"
 	return sheet
 
 
@@ -1013,6 +1060,287 @@ def create_attendance_import_template_file(template_key: str):
 	return {"file_url": file_doc.file_url, "file_name": filename, "template_key": template_key}
 
 
+def _attendance_export_profile_or_throw(export_profile):
+	profile = ATTENDANCE_EXPORT_PROFILES.get(export_profile)
+	if not profile:
+		frappe.throw(_("未找到考勤导出表单：{0}").format(export_profile))
+	return profile
+
+
+def _export_number(value):
+	value = flt(value)
+	return "" if value == 0 else value
+
+
+def _export_leave_days(value):
+	value = flt(value)
+	return "" if value == 0 else round(value / STANDARD_DAY_HOURS, 2)
+
+
+def _export_attendance_date(value):
+	if not value:
+		return ""
+	attendance_date = getdate(value)
+	return f"{attendance_date.strftime('%y-%m-%d')} 星期{'一二三四五六日'[attendance_date.weekday()]}"
+
+
+def _apply_export_header_style(sheet, header_rows, widths, fill_color="FFF2CC"):
+	from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+	from openpyxl.utils import get_column_letter
+
+	fill = PatternFill("solid", fgColor=fill_color)
+	thin = Side(style="thin", color="000000")
+	border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	for row in sheet.iter_rows(min_row=min(header_rows), max_row=max(header_rows), min_col=1, max_col=len(widths)):
+		for cell in row:
+			cell.fill = fill
+			cell.font = Font(name="新宋体", size=11, bold=True)
+			cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+			cell.border = border
+	for index, width in enumerate(widths, start=1):
+		sheet.column_dimensions[get_column_letter(index)].width = width
+
+
+def _append_daily_statistics_export_rows(sheet, rows):
+	for row in rows:
+		sheet.append(
+			[
+				getattr(row, "employee_name", ""), getattr(row, "employee_code", ""), _export_attendance_date(getattr(row, "attendance_date", "")),
+				getattr(row, "department", ""), getattr(row, "shift_name", ""), getattr(row, "actual_in_time", ""), getattr(row, "actual_out_time", ""),
+				"缺卡" if getattr(row, "missing_in", 0) else "", "缺卡" if getattr(row, "missing_out", 0) else "", _export_number(getattr(row, "absent_hours", 0)),
+				_export_number(getattr(row, "standard_hours", 0)), _export_number(getattr(row, "actual_attendance_hours", 0)), getattr(row, "leave_summary", ""),
+				_export_number(getattr(row, "workday_overtime_hours", 0)), _export_number(getattr(row, "restday_overtime_hours", 0)), _export_number(getattr(row, "holiday_overtime_hours", 0)),
+				_export_number(getattr(row, "large_night_shift_count", 0)), _export_number(getattr(row, "small_night_shift_count", 0)),
+				_export_number(getattr(row, "personal_leave_hours", 0)), _export_number(getattr(row, "sick_leave_hours", 0)), _export_leave_days(getattr(row, "marriage_leave_hours", 0)),
+				_export_number(getattr(row, "annual_leave_hours", 0)), _export_number(getattr(row, "bereavement_leave_hours", 0)), _export_number(getattr(row, "work_injury_leave_hours", 0)),
+				_export_leave_days(getattr(row, "public_leave_hours", 0)), _export_leave_days(getattr(row, "maternity_leave_hours", 0)), _export_leave_days(getattr(row, "reunion_leave_hours", 0)),
+				_export_number(getattr(row, "rest_leave_hours", 0)), _export_number(getattr(row, "absent_hours", 0)),
+				_export_leave_days(getattr(row, "marriage_leave_hours", 0)), _export_leave_days(getattr(row, "bereavement_leave_hours", 0)), _export_leave_days(getattr(row, "public_leave_hours", 0)),
+				_export_leave_days(getattr(row, "maternity_leave_hours", 0)), _export_leave_days(getattr(row, "reunion_leave_hours", 0)), _export_number(getattr(row, "absent_hours", 0)),
+				_export_number(getattr(row, "missing_in", 0)), _export_number(getattr(row, "missing_out", 0)), _export_number(getattr(row, "late_count", 0)), _export_number(getattr(row, "early_count", 0)),
+			]
+		)
+
+
+def _add_attendance_detail_export_sheet(workbook, rows, attendance_month):
+	from openpyxl.styles import Alignment, Border, Side
+
+	sheet = workbook.create_sheet("出勤明细")
+	month_label = attendance_month.replace("-", "")
+	sheet.append(["部门", month_label, "", "", "", "", "备注", "对比日期", "", "", "", ""])
+	sheet.append(["", "现有人数", "出勤人数", "请假人数", "请假人员", "请假说明", "", "现有人数", "出勤人数", "请假人数", "请假人员", "请假说明"])
+	sheet.merge_cells("A1:A2")
+	sheet.merge_cells("B1:G1")
+	sheet.merge_cells("H1:L1")
+	_apply_export_header_style(sheet, [1, 2], [18, 13, 13, 13, 20, 38, 36, 13, 13, 13, 20, 38])
+	thin = Side(style="thin", color="000000")
+	border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	by_department = defaultdict(list)
+	for row in rows:
+		by_department[getattr(row, "department", "") or _("未分配部门")].append(row)
+	for department, members in sorted(by_department.items()):
+		attending = sum(1 for row in members if flt(getattr(row, "actual_attendance_hours", 0)) > 0)
+		leaving = [row for row in members if flt(getattr(row, "leave_hours", 0)) > 0]
+		sheet.append([department, len(members), attending, len(leaving), "、".join(getattr(row, "employee_name", "") for row in leaving), "；".join(getattr(row, "leave_summary", "") for row in leaving if getattr(row, "leave_summary", "")), "", len(members), attending, len(leaving), "", ""])
+		for cell in sheet[sheet.max_row]:
+			cell.border = border
+			cell.alignment = Alignment(vertical="top", wrap_text=True)
+	sheet.freeze_panes = "A3"
+	return sheet
+
+
+def _add_leave_evidence_export_sheet(workbook, rows):
+	from openpyxl.styles import Alignment, Border, Side
+
+	headers = [
+		"序号", "数据id", "请假类型（实际）", "请假说明确认", "请假类型", "开始时间", "结束时间", "时长", "逝者关系", "死亡证明", "结婚证明",
+		"结婚证、出生证、准生证", "亲属关系证明", "病假证明", "请假事由", "图片", "审批编号", "创建时间", "创建人", "当前负责人", "审批结果", "审批状态",
+		"更新时间", "完成时间", "创建人部门", "审批单标题", "历史审批人", "耗时(时:分:秒)", "审批记录",
+	]
+	sheet = workbook.create_sheet("请假单")
+	sheet.append(headers)
+	_apply_export_header_style(sheet, [1], [10, 20, 16, 18, 16, 20, 20, 12, 16, 16, 16, 22, 20, 24, 36, 20, 20, 20, 16, 16, 16, 16, 20, 20, 18, 32, 24, 18, 50])
+	thin = Side(style="thin", color="000000")
+	border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	for index, row in enumerate(rows, start=1):
+		duration = _export_number(getattr(row, "leave_hours", 0))
+		sheet.append([
+			index, "", getattr(row, "leave_type", ""), "", getattr(row, "leave_type", ""), getattr(row, "leave_start", ""), getattr(row, "leave_end", ""),
+			f"{duration:g}小时" if isinstance(duration, (int, float)) else "", "", "", "", "", "", "", getattr(row, "leave_reason", ""), "", getattr(row, "approval_no", ""),
+			getattr(row, "creation", ""), getattr(row, "employee_name", ""), "", getattr(row, "approval_result", ""), getattr(row, "approval_status", ""), "", "", getattr(row, "department", ""), "", "", "", "",
+		])
+		for cell in sheet[sheet.max_row]:
+			cell.border = border
+			cell.alignment = Alignment(vertical="top", wrap_text=True)
+	sheet.freeze_panes = "A2"
+	return sheet
+
+
+def _add_attendance_exception_export_sheet(workbook, rows):
+	from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+	sheet = workbook.create_sheet("出勤异常")
+	sheet.append(["", "出勤异常：迟到、早退、旷工、未打卡、后补假卡"])
+	sheet.append(["", "序号", "姓名", "工号", "出勤日期", "单位", "应上班时间", "实际上班时间", "实际下班时间", "异常类型", "处理方式", "备注", "签字确认"])
+	sheet.merge_cells("B1:M1")
+	_apply_export_header_style(sheet, [1, 2], [4, 10, 14, 14, 17, 18, 30, 17, 17, 18, 28, 36, 18])
+	thin = Side(style="thin", color="000000")
+	border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	for index, row in enumerate(rows, start=1):
+		sheet.append(["", index, getattr(row, "employee_name", ""), getattr(row, "employee_code", ""), _export_attendance_date(getattr(row, "attendance_date", "")), getattr(row, "department", ""), getattr(row, "expected_shift", ""), getattr(row, "actual_in_time", ""), getattr(row, "actual_out_time", ""), getattr(row, "exception_type", ""), getattr(row, "handling_method", ""), getattr(row, "remarks", ""), getattr(row, "confirmed_by", "")])
+		for cell in sheet[sheet.max_row]:
+			cell.border = border
+			cell.alignment = Alignment(vertical="top", wrap_text=True)
+	sheet.freeze_panes = "B3"
+	return sheet
+
+
+def _add_missing_card_export_sheet(workbook, rows, attendance_month):
+	from openpyxl.styles import Alignment, Border, Font, Side
+
+	sheet = workbook.create_sheet("忘打卡")
+	sheet.append([])
+	sheet.append([f"{attendance_month.replace('-', '')}忘打卡名单"])
+	sheet.merge_cells("B2:J2")
+	sheet["B2"].font = Font(name="新宋体", size=14, bold=True)
+	sheet["B2"].alignment = Alignment(horizontal="center")
+	sheet.append(["", "序号", "部门", "创建时间", "补卡时间", "补卡类型", "补卡理由", "创建人", "签名", "备注"])
+	_apply_export_header_style(sheet, [3], [4, 10, 18, 20, 20, 18, 30, 16, 18, 36])
+	thin = Side(style="thin", color="000000")
+	border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	missing_rows = [row for row in rows if getattr(row, "exception_type", "") == "忘打卡"]
+	for index, row in enumerate(missing_rows, start=1):
+		sheet.append(["", index, getattr(row, "department", ""), getattr(row, "creation", ""), _export_attendance_date(getattr(row, "attendance_date", "")), "忘刷卡补卡", getattr(row, "remarks", "") or "忘打卡", getattr(row, "employee_name", ""), getattr(row, "confirmed_by", ""), getattr(row, "handling_method", "")])
+		for cell in sheet[sheet.max_row]:
+			cell.border = border
+			cell.alignment = Alignment(vertical="top", wrap_text=True)
+	sheet.freeze_panes = "B4"
+	return sheet
+
+
+def _add_apple_reward_export_sheet(workbook, rows):
+	from openpyxl.styles import Alignment, Border, Side
+
+	sheet = workbook.create_sheet("苹果树")
+	sheet.append([])
+	sheet.append([])
+	sheet.append(["", "序号", "创建时间", "奖/惩日期", "部门", "受奖/惩人", "绿苹果", "红苹果", "奖/惩项目", "备注", "创建人", "审批编号"])
+	_apply_export_header_style(sheet, [3], [4, 10, 20, 16, 18, 16, 12, 12, 48, 36, 16, 20])
+	thin = Side(style="thin", color="000000")
+	border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	for index, row in enumerate(rows, start=1):
+		sheet.append(["", index, getattr(row, "creation", ""), getattr(row, "reward_date", ""), getattr(row, "department", ""), getattr(row, "employee_name", ""), _export_number(getattr(row, "green_apples", 0)), _export_number(getattr(row, "red_apples", 0)), getattr(row, "reward_item", ""), "", getattr(row, "created_by_name", ""), getattr(row, "approval_no", "")])
+		for cell in sheet[sheet.max_row]:
+			cell.border = border
+			cell.alignment = Alignment(vertical="top", wrap_text=True)
+	sheet.freeze_panes = "B4"
+	return sheet
+
+
+def _monthly_export_columns(profile_key):
+	base = [
+		("序号", "sequence"), ("部门", "department"), ("姓名", "employee_name"), ("工号", "employee_code"), ("入职时间", "date_of_joining"),
+		("标准工时（小时）", "standard_hours"), ("钉钉导出实际出勤（小时）", "actual_attendance_hours"), ("1.5倍加班（小时）", "overtime_1_5_hours"),
+		("2倍加班（小时）", "overtime_2_hours"), ("3倍加班（小时）", "overtime_3_hours"), ("大夜班", "large_night_shift_count"), ("小夜班", "small_night_shift_count"),
+		("事假（小时）", "personal_leave_hours"), ("病假（小时）", "sick_leave_hours"), ("特休（小时）", "annual_leave_hours"), ("工伤（小时）", "work_injury_leave_hours"),
+		("排休（小时）", "rest_leave_hours"), ("旷工（小时）", "absent_hours"),
+	]
+	if profile_key == "monthly_draft":
+		return base + [("签名", ""), ("备注", "")]
+	return base + [
+		("实际打卡出勤A（验算）", "actual_clock_attendance_hours"), ("应补1倍工时B", "paid_leave_makeup_hours"), ("应扣2倍工时F", "leave_deductible_hours"),
+		("工作日排休应扣1.5倍工时E", "workday_rest_leave_hours"), ("调整后缺勤工时", "adjusted_absence_hours"), ("调整后工时", "adjusted_working_hours"),
+		("1.5倍结算工时", "overtime_1_5_settlement_hours"), ("2倍结算工时", "overtime_2_settlement_hours"), ("3倍结算工时", "overtime_3_settlement_hours"),
+		("绿苹果", "green_apples"), ("红苹果", "red_apples"), ("苹果树金额", "apple_reward_amount"), ("红苹果扣款", "red_apple_penalty"),
+		("夜班津贴", "night_shift_allowance"), ("全勤（含迟到）", "full_attendance_deduction"), ("签名", ""), ("备注", ""),
+	]
+
+
+def _add_monthly_attendance_export_sheet(workbook, profile_key, attendance_month, rows):
+	from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+	from openpyxl.utils import get_column_letter
+
+	name_map = {"monthly_draft": "考勤初稿", "monthly_signed": "考勤终稿（签字版）", "monthly_finance": "考勤终稿（财务版）"}
+	columns = _monthly_export_columns(profile_key)
+	sheet = workbook.create_sheet(name_map[profile_key])
+	sheet.append([f"{attendance_month.replace('-', '年')}月工时奖惩确认表"])
+	sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(columns))
+	sheet["A1"].font = Font(name="新宋体", size=16, bold=True)
+	sheet["A1"].alignment = Alignment(horizontal="center")
+	sheet.append([label for label, _fieldname in columns])
+	_apply_export_header_style(sheet, [2], [12, 16, 14, 14, 16] + [16] * (len(columns) - 5))
+	thin = Side(style="thin", color="000000")
+	border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	for index, row in enumerate(rows, start=1):
+		values = []
+		for _label, fieldname in columns:
+			if fieldname == "sequence":
+				values.append(index)
+			elif fieldname == "date_of_joining":
+				values.append(str(getattr(row, fieldname, "") or ""))
+			elif not fieldname:
+				values.append("")
+			elif fieldname in {"department", "employee_name", "employee_code"}:
+				values.append(getattr(row, fieldname, ""))
+			else:
+				values.append(_export_number(getattr(row, fieldname, 0)))
+		sheet.append(values)
+		for cell in sheet[sheet.max_row]:
+			cell.border = border
+			cell.alignment = Alignment(vertical="top", wrap_text=True)
+	sheet.freeze_panes = "A3"
+	sheet.auto_filter.ref = f"A2:{get_column_letter(len(columns))}{max(sheet.max_row, 3)}"
+	return sheet
+
+
+@frappe.whitelist()
+def download_attendance_export(company: str, attendance_month: str, export_profile: str = "company_attendance_workbook"):
+	"""Generate a read-only company/month export in the source workbook formats."""
+	from openpyxl import Workbook
+
+	_require_attendance_reviewer()
+	company = _require_company(company)
+	attendance_month = attendance_month or datetime.today().strftime("%Y-%m")
+	_month_bounds(attendance_month)
+	profile = _attendance_export_profile_or_throw(export_profile)
+	daily_rows = _prefer_manual_daily_rows(_get_month_records(DAY_CHECK_DOCTYPE, "attendance_date", attendance_month, company))
+	batch_ids = sorted({_cell_text(getattr(row, "import_batch", "")) for row in daily_rows if getattr(row, "import_batch", "")})
+	leave_rows = frappe.get_all(LEAVE_EVIDENCE_DOCTYPE, filters={"import_batch": ["in", batch_ids or ["__none__"]]}, fields=["*"], order_by="leave_start asc, employee_name asc", limit_page_length=0)
+	exceptions = frappe.get_all(EXCEPTION_DOCTYPE, filters={"import_batch": ["in", batch_ids or ["__none__"]]}, fields=["*"], order_by="attendance_date asc, employee_name asc", limit_page_length=0)
+	apple_rows = _company_apple_records(attendance_month, company)
+	monthly_rows = frappe.get_all(MONTHLY_SUMMARY_DOCTYPE, filters={"company": company, "attendance_month": attendance_month}, fields=["*"], order_by="department asc, employee_name asc", limit_page_length=0)
+
+	workbook = Workbook()
+	workbook.remove(workbook.active)
+	for sheet_key in profile["sheet_keys"]:
+		if sheet_key == "daily_statistics":
+			sheet = _add_daily_statistics_template_sheet(workbook)
+			_append_daily_statistics_export_rows(sheet, daily_rows)
+		elif sheet_key == "attendance_detail":
+			_add_attendance_detail_export_sheet(workbook, daily_rows, attendance_month)
+		elif sheet_key == "leave_evidence":
+			_add_leave_evidence_export_sheet(workbook, leave_rows)
+		elif sheet_key == "attendance_exception":
+			_add_attendance_exception_export_sheet(workbook, exceptions)
+		elif sheet_key == "missing_card":
+			_add_missing_card_export_sheet(workbook, exceptions, attendance_month)
+		elif sheet_key == "apple_reward":
+			_add_apple_reward_export_sheet(workbook, apple_rows)
+		elif sheet_key in {"monthly_draft", "monthly_signed", "monthly_finance"}:
+			_add_monthly_attendance_export_sheet(workbook, sheet_key, attendance_month, monthly_rows)
+
+	output = BytesIO()
+	workbook.save(output)
+	filename = f"{attendance_month}_{profile['label']}.xlsx"
+	file_doc = frappe.get_doc({"doctype": "File", "file_name": filename, "content": output.getvalue(), "is_private": 0}).insert(ignore_permissions=True)
+	return {
+		"file_url": file_doc.file_url,
+		"file_name": filename,
+		"export_profile": export_profile,
+		"row_counts": {"daily_statistics": len(daily_rows), "leave_evidence": len(leave_rows), "attendance_exception": len(exceptions), "apple_reward": len(apple_rows), "monthly_summary": len(monthly_rows)},
+	}
+
+
 def _insert_day_check(batch_name, row, company, source_kind="旧模板", source_sheet="", correction_version=1, allow_unmatched=False):
 	employee_code = _first_value(row, "工号")
 	employee_name = _first_value(row, "姓名")
@@ -1029,7 +1357,7 @@ def _insert_day_check(batch_name, row, company, source_kind="旧模板", source_
 	actual_out_time = _first_value(row, "下班时间")
 	missing_in = 1 if _first_value(row, "上班缺卡") or _float_value(row, "上班未打卡次数") else 0
 	missing_out = 1 if _first_value(row, "下班缺卡") or _float_value(row, "下班未打卡次数") else 0
-	absent_hours = _float_value(row, "请假/旷工(小时)", "旷工(小时)", "旷工")
+	absent_hours = _float_value(row, "请假/旷工(小时)", "旷工_2", "旷工(小时)", "旷工")
 	standard_hours = _float_value(row, "标准工时")
 	actual_attendance_hours = _float_value(row, "实际出勤（小时）", "实际出勤(小时)", "实际出勤")
 	personal_leave_hours = _float_value(row, "请假/事假(小时)", "事假(小时)")

@@ -39,3 +39,13 @@ hrms/public/frontend
 hrms/www/hrms.html
 hrms/public/roster
 hrms/www/roster.html
+
+# Local-only operational trial artefacts. These may contain backups or
+# personally identifiable HR source data and must never be committed.
+.local-backups/
+.local-trial/
+
+# Local Codex worktrees and generated analysis artefacts are not deployable
+# application source and may contain environment-specific or sensitive data.
+.worktrees/
+outputs/

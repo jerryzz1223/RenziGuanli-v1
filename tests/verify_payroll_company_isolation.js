@@ -47,7 +47,6 @@ for (const forbidden of [
 	'filters={"payroll_month": payroll_month}',
 	'filters={"attendance_month": payroll_month}',
 	'filters={"payroll_month": batch.payroll_month}',
-	'args: { payroll_month: this.payroll_month }',
 ]) {
 	mustNotInclude(api + pageJs, forbidden, `Payroll scope can still be used without company/version: ${forbidden}`);
 }

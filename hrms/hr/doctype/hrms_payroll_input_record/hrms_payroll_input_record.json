@@ -25,6 +25,7 @@
   "large_night_shift_count",
   "small_night_shift_count",
   "apple_reward_amount",
+  "attendance_full_deduction",
   "full_attendance_bonus",
   "housing_subsidy",
   "education_subsidy",
@@ -157,6 +158,12 @@
    "fieldname": "apple_reward_amount",
    "fieldtype": "Currency",
    "label": "红绿苹果"
+  },
+  {
+   "default": "0",
+   "fieldname": "attendance_full_deduction",
+   "fieldtype": "Currency",
+   "label": "考勤全勤扣款"
   },
   {
    "default": "0",

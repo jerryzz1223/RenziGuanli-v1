@@ -1,11 +1,14 @@
 .hrms-org-page {
 	background: #f6f8fa;
+	box-sizing: border-box;
 	color: #1f2933;
 	display: grid;
 	gap: 12px;
 	grid-template-columns: 196px minmax(0, 1fr) 320px;
+	height: calc(100vh - 52px);
 	margin: -15px;
-	min-height: calc(100vh - 52px);
+	min-height: 0;
+	overflow: hidden;
 	padding: 12px;
 }
 
@@ -15,9 +18,11 @@
 	background: #fff;
 	border: 1px solid #e5e9ef;
 	border-radius: 6px;
+	min-height: 0;
 }
 
 .hrms-org-sidebar {
+	overflow-y: auto;
 	padding: 12px 8px;
 }
 
@@ -56,7 +61,9 @@
 .hrms-org-main {
 	display: flex;
 	flex-direction: column;
+	min-height: 0;
 	min-width: 0;
+	overflow: hidden;
 }
 
 .hrms-org-toolbar {
@@ -107,7 +114,9 @@
 
 .hrms-org-tree-canvas {
 	flex: 1;
+	min-height: 0;
 	overflow: auto;
+	overscroll-behavior: contain;
 	padding: 18px 18px 40px;
 }
 
@@ -182,12 +191,14 @@
 	background: #fff;
 	border: 1px solid #d9e0e7;
 	border-radius: 6px;
+	box-sizing: border-box;
 	box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
 	cursor: pointer;
 	min-width: 150px;
 	overflow: hidden;
 	position: relative;
 	text-align: center;
+	width: 180px;
 }
 
 .hrms-org-node.active {
@@ -200,12 +211,13 @@
 
 .hrms-org-node-bar {
 	background: #33b889;
-	height: 14px;
+	height: 22px;
 }
 
 .hrms-org-node--company {
 	border-color: #d89f28;
 	min-width: 190px;
+	width: 210px;
 }
 
 .hrms-org-node--company .hrms-org-node-bar,
@@ -216,6 +228,7 @@
 .hrms-org-node--company_leadership {
 	border-color: #d89f28;
 	min-width: 220px;
+	width: 240px;
 }
 
 .hrms-org-node--director .hrms-org-node-bar {
@@ -240,13 +253,15 @@
 }
 
 .hrms-org-node-body {
-	padding: 10px 28px 11px 12px;
+	padding: 10px 12px 11px;
 }
 
 .hrms-org-node-body strong,
 .hrms-org-node-body span,
 .hrms-org-node-body small {
 	display: block;
+	overflow-wrap: anywhere;
+	white-space: normal;
 }
 
 .hrms-org-node-body strong {
@@ -278,21 +293,27 @@
 	font-size: 11px;
 	font-style: normal;
 	line-height: 1.35;
+	overflow-wrap: anywhere;
+	white-space: normal;
 }
 
 .hrms-org-person-token {
 	background: transparent;
 	border: 0;
 	border-radius: 4px;
+	box-sizing: border-box;
 	color: #1f2933;
 	display: block;
 	font-size: 11px;
 	line-height: 1.35;
 	margin: 1px auto;
 	max-width: 100%;
+	min-width: 0;
+	overflow-wrap: anywhere;
 	padding: 1px 3px;
 	text-align: center;
-	width: fit-content;
+	white-space: normal;
+	width: 100%;
 }
 
 .hrms-org-person-token:hover {
@@ -321,19 +342,25 @@
 .hrms-org-node-toggle {
 	background: #fff;
 	border: 1px solid #d9e0e7;
-	border-radius: 10px;
+	border-radius: 9px;
 	font-size: 11px;
-	height: 20px;
-	line-height: 18px;
+	height: 18px;
+	line-height: 16px;
 	position: absolute;
-	right: 6px;
-	top: 20px;
-	width: 20px;
+	right: 5px;
+	top: 2px;
+	width: 18px;
 }
 
 .hrms-org-detail {
-	overflow: auto;
+	align-self: stretch;
+	box-sizing: border-box;
+	height: 100%;
+	max-height: none;
+	overflow-y: auto;
+	overscroll-behavior: contain;
 	padding: 14px;
+	position: static;
 }
 
 .hrms-org-detail-head {
@@ -487,10 +514,24 @@
 @media (max-width: 1180px) {
 	.hrms-org-page {
 		grid-template-columns: 176px minmax(0, 1fr);
+		height: auto;
+		min-height: calc(100vh - 52px);
+		overflow: visible;
+	}
+
+	.hrms-org-main {
+		overflow: visible;
+	}
+
+	.hrms-org-tree-canvas {
+		max-height: 70vh;
 	}
 
 	.hrms-org-detail {
 		grid-column: 1 / -1;
+		height: auto;
+		max-height: none;
+		position: static;
 	}
 }
 
@@ -504,7 +545,9 @@
 
 	.hrms-org-page {
 		display: block;
+		height: auto;
 		margin: 0;
+		overflow: visible;
 		padding: 0;
 	}
 

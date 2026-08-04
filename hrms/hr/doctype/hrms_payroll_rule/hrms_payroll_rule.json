@@ -6,6 +6,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "company",
   "rule_code",
   "rule_name",
   "rule_category",
@@ -14,7 +15,10 @@
   "editable",
   "effective_from",
   "effective_to",
+  "calculation_mode",
+  "output_field",
   "formula_expression",
+  "formula_version",
   "parameters_json",
   "rule_text",
   "source_file",
@@ -26,12 +30,20 @@
  ],
  "fields": [
   {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
    "fieldname": "rule_code",
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "规则编码",
-   "reqd": 1,
-   "unique": 1
+   "reqd": 1
   },
   {
    "fieldname": "rule_name",
@@ -77,10 +89,29 @@
    "label": "生效结束"
   },
   {
+   "default": "说明/来源",
+   "fieldname": "calculation_mode",
+   "fieldtype": "Select",
+   "label": "计算方式",
+   "options": "公式\n参数表\n来源字段\n人工确认\n说明/来源"
+  },
+  {
+   "fieldname": "output_field",
+   "fieldtype": "Data",
+   "label": "结果字段"
+  },
+  {
    "fieldname": "formula_expression",
    "fieldtype": "Code",
-   "label": "公式/规则",
+   "label": "计算公式",
    "options": "Text"
+  },
+  {
+   "default": "1",
+   "fieldname": "formula_version",
+   "fieldtype": "Int",
+   "label": "公式版本",
+   "read_only": 1
   },
   {
    "fieldname": "parameters_json",
@@ -169,5 +200,6 @@
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
+ "track_changes": 1,
  "title_field": "rule_name"
 }

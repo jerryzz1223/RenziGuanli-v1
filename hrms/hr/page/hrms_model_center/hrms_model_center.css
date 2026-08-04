@@ -1,0 +1,228 @@
+.hrms-model-center {
+	max-width: 1160px;
+	padding: 12px 0 40px;
+}
+
+.hrms-model-center__hero,
+.hrms-model-center__explain,
+.hrms-model-center__summary,
+.hrms-model-center__catalogue,
+.hrms-model-center__advanced {
+	background: var(--card-bg, #fff);
+	border: 1px solid var(--border-color, #dfe3e8);
+	border-radius: 9px;
+	margin-bottom: 14px;
+}
+
+.hrms-model-center__hero {
+	align-items: flex-start;
+	display: flex;
+	gap: 16px;
+	justify-content: space-between;
+	padding: 20px;
+}
+
+.hrms-model-center__hero h3,
+.hrms-model-center__toolbar h4,
+.hrms-model-center__advanced h4,
+.hrms-model-center__model h4 {
+	margin: 0;
+}
+
+.hrms-model-center__hero p,
+.hrms-model-center__toolbar p,
+.hrms-model-center__advanced p,
+.hrms-model-center__model p {
+	color: var(--text-muted, #6b7280);
+	line-height: 1.55;
+	margin: 5px 0 0;
+}
+
+.hrms-model-center__explain {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	overflow: hidden;
+}
+
+.hrms-model-center__explain > div {
+	border-right: 1px solid var(--border-color, #dfe3e8);
+	padding: 15px;
+}
+
+.hrms-model-center__explain > div:last-child {
+	border-right: 0;
+}
+
+.hrms-model-center__explain > div > span {
+	align-items: center;
+	background: #edf5ff;
+	border-radius: 50%;
+	color: #1675d1;
+	display: inline-flex;
+	font-weight: 600;
+	height: 24px;
+	justify-content: center;
+	margin-right: 7px;
+	width: 24px;
+}
+
+.hrms-model-center__explain p {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	line-height: 1.5;
+	margin: 8px 0 0;
+}
+
+.hrms-model-center__summary {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	padding: 14px 18px;
+}
+
+.hrms-model-center__summary div {
+	border-right: 1px solid var(--border-color, #dfe3e8);
+	padding: 5px 14px;
+}
+
+.hrms-model-center__summary div:last-child {
+	border-right: 0;
+}
+
+.hrms-model-center__summary strong,
+.hrms-model-center__summary span {
+	display: block;
+}
+
+.hrms-model-center__summary strong {
+	font-size: 22px;
+}
+
+.hrms-model-center__summary span {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	margin-top: 3px;
+}
+
+.hrms-model-center__catalogue {
+	padding: 18px;
+}
+
+.hrms-model-center__toolbar,
+.hrms-model-center__model-head,
+.hrms-model-center__model-footer,
+.hrms-model-center__advanced {
+	align-items: flex-start;
+	display: flex;
+	gap: 14px;
+	justify-content: space-between;
+}
+
+.hrms-model-center__toolbar input {
+	max-width: 320px;
+}
+
+.hrms-model-center__filters {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 7px;
+	margin: 14px 0;
+}
+
+.hrms-model-center__model {
+	border: 1px solid var(--border-color, #dfe3e8);
+	border-radius: 8px;
+	margin-top: 10px;
+	padding: 15px;
+}
+
+.hrms-model-center__model-head code {
+	background: transparent;
+	color: var(--text-muted, #6b7280);
+	display: block;
+	font-size: 11px;
+	margin-top: 4px;
+	padding: 0;
+}
+
+.hrms-model-center__category {
+	background: #edf5ff;
+	border-radius: 999px;
+	color: #2b70ad;
+	display: inline-block;
+	font-size: 11px;
+	margin-bottom: 6px;
+	padding: 2px 7px;
+}
+
+.hrms-model-center__badges {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	justify-content: flex-end;
+}
+
+.hrms-model-center__model-grid {
+	display: grid;
+	gap: 14px;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	margin: 14px 0;
+}
+
+.hrms-model-center__model-grid > div {
+	background: var(--subtle-fg, #f6f7f8);
+	border-radius: 6px;
+	padding: 11px 12px;
+}
+
+.hrms-model-center__model-grid p {
+	font-size: 12px;
+}
+
+.hrms-model-center__model-footer {
+	align-items: center;
+	border-top: 1px solid var(--border-color, #dfe3e8);
+	padding-top: 12px;
+}
+
+.hrms-model-center__model-footer > span {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+}
+
+.hrms-model-center__model-footer .btn + .btn {
+	margin-left: 5px;
+}
+
+.hrms-model-center__advanced {
+	align-items: center;
+	background: #fffaf1;
+	padding: 16px 18px;
+}
+
+.hrms-model-center__empty {
+	color: var(--text-muted, #6b7280);
+	padding: 36px;
+	text-align: center;
+}
+
+@media (max-width: 800px) {
+	.hrms-model-center__explain,
+	.hrms-model-center__summary,
+	.hrms-model-center__model-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.hrms-model-center__explain > div,
+	.hrms-model-center__summary div {
+		border-bottom: 1px solid var(--border-color, #dfe3e8);
+		border-right: 0;
+	}
+
+	.hrms-model-center__hero,
+	.hrms-model-center__toolbar,
+	.hrms-model-center__model-head,
+	.hrms-model-center__model-footer,
+	.hrms-model-center__advanced {
+		flex-direction: column;
+	}
+}

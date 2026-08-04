@@ -5,6 +5,46 @@
 	const COMPANY_CONTEXT_EVENT = "hrms:company-context-changed";
 	const COMPANY_CONTEXT_STORAGE_PREFIX = "hrms_company_context";
 	const PREFERRED_COMPANY = "永新";
+	const HR_SETTINGS_MANAGER_ROLES = ["HR Manager", "System Manager"];
+	const SYSTEM_ADMIN_ROLES = ["System Manager"];
+	const CONTEXTUAL_ADMIN_PAGES = {
+		doctype: {
+			title: "数据模型管理",
+			description: "用于新建独立业务单据和字段结构。员工属性请回设置中心维护。",
+			parent: "开发中心",
+			route: "hrms-developer-center",
+		},
+		page: {
+			title: "页面与工作区管理",
+			description: "用于维护页面和导航。业务入口应优先指向对应的业务中心。",
+			parent: "开发中心",
+			route: "hrms-developer-center",
+		},
+		"permission-manager": {
+			title: "权限矩阵",
+			description: "为角色配置各业务单据的读、写、创建、提交等权限。",
+			parent: "账户与权限中心",
+			route: "hrms-access-center",
+		},
+		user: {
+			title: "用户管理",
+			description: "创建、停用或重置登录账号；角色与数据范围在账户与权限中心统一梳理。",
+			parent: "账户与权限中心",
+			route: "hrms-access-center",
+		},
+		role: {
+			title: "角色管理",
+			description: "定义岗位可使用的功能集合，再到权限矩阵配置具体单据权限。",
+			parent: "账户与权限中心",
+			route: "hrms-access-center",
+		},
+		"user-permission": {
+			title: "数据范围限制",
+			description: "按公司、员工等对象限制用户可见的数据；这不是账户或角色列表。",
+			parent: "账户与权限中心",
+			route: "hrms-access-center",
+		},
+	};
 
 	const modules = [
 		{ label: "工作台", route: "/desk/hrms-workbench", keys: ["hrms-workbench"] },
@@ -87,16 +127,20 @@
 		},
 	];
 
-	// Keep cross-module and administration functions here.  Day-to-day imports
-	// remain on their own module pages; this menu is the discoverable fallback
-	// for HR administrators and the audit centre.
+	// More is reserved for low-frequency, cross-module HR services. Settings
+	// and system administration live in the account menu instead.
 	const moreItems = [
-		{ label: "数据导入中心", route: "/desk/form-data-intake", roles: ["HR Manager", "System Manager"] },
-		{ label: "数据处理中心", route: "/desk/hrms-data-operations", roles: ["System Manager"] },
-		{ label: "系统运行状态", route: "/desk/system-health-report", roles: ["System Manager"] },
-		{ label: "费用", route: "/desk/expenses" },
-		{ label: "社保个税", route: "/desk/tax-&-benefits" },
-		{ label: "HR 设置", route: "/desk/hr-settings" },
+		{
+			label: "社保个税",
+			description: "社保、公积金及个人所得税服务",
+			route: "/desk/tax-&-benefits",
+		},
+		{
+			label: "电子合同（未开放）",
+			description: "高效签约服务暂未开放",
+			unavailable: true,
+			notice: "电子合同功能暂未开放。当前可在员工档案中查看合同信息。",
+		},
 	];
 
 	let accountInfo = null;
@@ -241,6 +285,7 @@
 
 	window.hrmsCompanyContext = {
 		ready: loadCompanyContext,
+		reload: reloadCompanyContext,
 		getCurrentCompany,
 		setCurrentCompany,
 		getCompanies: () => companyContext.companies.map((company) => company.name),
@@ -255,8 +300,31 @@
 	}
 
 	function canManageCompanyIdentity() {
+		return hasAnyRole(SYSTEM_ADMIN_ROLES);
+	}
+
+	function currentUserRoles() {
 		const roles = window.frappe?.user_roles || window.frappe?.boot?.user?.roles || [];
-		return Array.isArray(roles) && roles.includes("System Manager");
+		return Array.isArray(roles) ? roles : [];
+	}
+
+	function hasAnyRole(allowedRoles) {
+		return currentUserRoles().some((role) => allowedRoles.includes(role));
+	}
+
+	function showAccessDenied() {
+		if (window.frappe?.msgprint) {
+			frappe.msgprint(__("此功能仅对人资管理员或系统管理员开放。"));
+		}
+	}
+
+	function showFeatureUnavailable(message) {
+		const text = __(message || "该功能暂未开放。");
+		if (window.frappe?.show_alert) {
+			frappe.show_alert({ message: text, indicator: "orange" });
+			return;
+		}
+		window.alert(text);
 	}
 
 	function reloadCompanyContext() {
@@ -413,6 +481,18 @@
 
 	function accountAction(action) {
 		const user = currentUserId();
+		const requiredRoles = {
+			settings: HR_SETTINGS_MANAGER_ROLES,
+			"user-permissions": SYSTEM_ADMIN_ROLES,
+			users: SYSTEM_ADMIN_ROLES,
+			roles: SYSTEM_ADMIN_ROLES,
+			"user-permission-list": SYSTEM_ADMIN_ROLES,
+			"developer-tools": SYSTEM_ADMIN_ROLES,
+		};
+		if (requiredRoles[action] && !hasAnyRole(requiredRoles[action])) {
+			showAccessDenied();
+			return;
+		}
 		if (action === "profile" && user && window.frappe?.set_route) {
 			frappe.set_route("Form", "User", user);
 			return;
@@ -426,7 +506,7 @@
 			return;
 		}
 		if (action === "user-permissions") {
-			openSettingsModule("用户与权限");
+			frappe.set_route("hrms-access-center");
 			return;
 		}
 		if (action === "users" && window.frappe?.set_route) {
@@ -439,6 +519,14 @@
 		}
 		if (action === "user-permission-list" && window.frappe?.set_route) {
 			frappe.set_route("List", "User Permission");
+			return;
+		}
+		if (action === "developer-tools" && window.frappe?.set_route) {
+			frappe.set_route("hrms-developer-center");
+			return;
+		}
+		if (action === "data-operations" && window.frappe?.set_route) {
+			frappe.set_route("hrms-data-operations");
 			return;
 		}
 		if (action === "logout") {
@@ -461,8 +549,7 @@
 
 	function canViewMoreItem(item) {
 		if (!item.roles?.length) return true;
-		const roles = window.frappe?.user_roles || [];
-		return roles.some((role) => item.roles.includes(role));
+		return hasAnyRole(item.roles);
 	}
 
 	function closeMoreMenus(except = null) {
@@ -493,22 +580,48 @@
 		trigger.className = `hrms-top-module-nav__item hrms-top-module-nav__more-trigger${active ? " is-active" : ""}`;
 		trigger.setAttribute("aria-haspopup", "menu");
 		trigger.setAttribute("aria-expanded", "false");
-		trigger.textContent = "更多";
+		trigger.innerHTML = `<span>更多</span><span class="hrms-top-module-nav__more-caret" aria-hidden="true"></span>`;
 
 		const menu = document.createElement("div");
 		menu.className = "hrms-top-module-nav__menu";
 		menu.setAttribute("role", "menu");
+		menu.setAttribute("aria-label", __("更多服务"));
+
+		const title = document.createElement("div");
+		title.className = "hrms-top-module-nav__menu-title";
+		title.textContent = __("更多服务");
+		menu.appendChild(title);
+
+		const menuList = document.createElement("div");
+		menuList.className = "hrms-top-module-nav__menu-list";
 		moreItems.filter(canViewMoreItem).forEach((item) => {
 			const menuItem = document.createElement("button");
 			menuItem.type = "button";
-			menuItem.className = "hrms-top-module-nav__menu-item";
-			menuItem.textContent = item.label;
+			menuItem.className = `hrms-top-module-nav__menu-item${item.unavailable ? " is-unavailable" : ""}`;
+			menuItem.innerHTML = `<span class="hrms-top-module-nav__menu-item-title">${escapeHtml(item.label)}</span><span class="hrms-top-module-nav__menu-item-description">${escapeHtml(item.description || "")}</span>`;
+			if (item.unavailable) {
+				menuItem.setAttribute("aria-disabled", "true");
+				menuItem.title = item.notice || __("该功能暂未开放。");
+			}
 			menuItem.addEventListener("click", () => {
+				if (item.unavailable) {
+					showFeatureUnavailable(item.notice);
+					return;
+				}
 				closeMoreMenus();
 				navigate(item.route);
 			});
-			menu.appendChild(menuItem);
+			menuList.appendChild(menuItem);
 		});
+		menu.appendChild(menuList);
+
+		function positionMenu() {
+			const triggerBounds = trigger.getBoundingClientRect();
+			const menuWidth = Math.min(360, Math.max(240, window.innerWidth - 24));
+			const left = Math.max(12, Math.min(triggerBounds.right - menuWidth, window.innerWidth - menuWidth - 12));
+			menu.style.left = `${Math.round(left)}px`;
+			menu.style.top = `${Math.round(triggerBounds.bottom + 8)}px`;
+		}
 
 		trigger.addEventListener("click", (event) => {
 			event.preventDefault();
@@ -517,13 +630,17 @@
 			closeMoreMenus(wrapper);
 			wrapper.classList.toggle("is-open", opening);
 			trigger.setAttribute("aria-expanded", String(opening));
-			if (opening) menu.querySelector("button")?.focus();
+			if (opening) {
+				positionMenu();
+				menu.querySelector("button")?.focus();
+			}
 		});
 		trigger.addEventListener("keydown", (event) => {
 			if (event.key !== "ArrowDown") return;
 			event.preventDefault();
 			wrapper.classList.add("is-open");
 			trigger.setAttribute("aria-expanded", "true");
+			positionMenu();
 			menu.querySelector("button")?.focus();
 		});
 		menu.addEventListener("keydown", (event) => {
@@ -580,13 +697,17 @@
 		[
 			{ label: "个人资料", action: "profile" },
 			{ label: "修改密码", action: "change-password" },
-			{ label: "设置中心", action: "settings" },
-			{ label: "用户与权限", action: "user-permissions" },
-			{ label: "用户管理", action: "users" },
-			{ label: "角色管理", action: "roles" },
-			{ label: "用户权限", action: "user-permission-list" },
+			{ label: "设置中心", action: "settings", roles: HR_SETTINGS_MANAGER_ROLES },
+			{ label: "用户与权限", action: "user-permissions", roles: SYSTEM_ADMIN_ROLES },
+			{ label: "用户管理", action: "users", roles: SYSTEM_ADMIN_ROLES },
+			{ label: "角色管理", action: "roles", roles: SYSTEM_ADMIN_ROLES },
+			{ label: "用户权限", action: "user-permission-list", roles: SYSTEM_ADMIN_ROLES },
+			{ label: "开发工具（开发环境）", action: "developer-tools", roles: SYSTEM_ADMIN_ROLES },
+			{ label: "数据处理中心", action: "data-operations", roles: SYSTEM_ADMIN_ROLES },
 			{ label: "退出登录", action: "logout", danger: true },
-		].forEach((item) => {
+		]
+			.filter((item) => !item.roles?.length || hasAnyRole(item.roles))
+			.forEach((item) => {
 			const menuItem = document.createElement("button");
 			menuItem.type = "button";
 			menuItem.className = `hrms-account-menu__item${item.danger ? " is-danger" : ""}`;
@@ -644,12 +765,55 @@
 	}
 
 	function mountPoint() {
-		return document.querySelector(".page-container") || document.querySelector(".layout-main") || document.body;
+		// Frappe replaces .page-container while switching to native list/form pages.
+		// Mounting on body keeps the fixed top navigation outside that replacement
+		// boundary, so a route refresh cannot make it disappear.
+		return document.body;
+	}
+
+	function contextualPageKey() {
+		const path = window.location.pathname.replace(/^\/desk\/?/, "").split("/").filter(Boolean)[0];
+		if (CONTEXTUAL_ADMIN_PAGES[path]) return path;
+		const slug = routeSlug().split("/")[0];
+		return CONTEXTUAL_ADMIN_PAGES[slug] ? slug : "";
+	}
+
+	function renderContextualAdminBar() {
+		const key = contextualPageKey();
+		const context = CONTEXTUAL_ADMIN_PAGES[key];
+		const existing = document.getElementById("hrms-contextual-admin-bar");
+		if (!context || !isDeskPage()) {
+			existing?.remove();
+			return;
+		}
+
+		const pageHead = document.querySelector(".page-head");
+		if (!pageHead || !pageHead.parentElement) return;
+		const bar = existing || document.createElement("section");
+		bar.id = "hrms-contextual-admin-bar";
+		bar.className = "hrms-contextual-admin-bar";
+		bar.innerHTML = `
+			<div class="hrms-contextual-admin-bar__copy">
+				<strong>${escapeHtml(context.title)}</strong>
+				<span>${escapeHtml(context.description)}</span>
+			</div>
+			<div class="hrms-contextual-admin-bar__actions">
+				<button type="button" class="btn btn-default btn-sm" data-admin-back>${escapeHtml("← 返回上一页")}</button>
+				<button type="button" class="btn btn-default btn-sm" data-admin-parent>${escapeHtml(`返回${context.parent}`)}</button>
+			</div>
+		`;
+		if (!existing) pageHead.parentElement.insertBefore(bar, pageHead.nextSibling);
+		bar.querySelector("[data-admin-back]").onclick = () => {
+			if (window.history.length > 1) window.history.back();
+			else navigate(`/desk/${context.route}`);
+		};
+		bar.querySelector("[data-admin-parent]").onclick = () => navigate(`/desk/${context.route}`);
 	}
 
 	function render() {
 		if (!isDeskPage() || document.body.classList.contains("login")) {
 			document.getElementById(NAV_ID)?.remove();
+			document.getElementById("hrms-contextual-admin-bar")?.remove();
 			return;
 		}
 
@@ -661,6 +825,8 @@
 			nav = document.createElement("nav");
 			nav.id = NAV_ID;
 			nav.className = "hrms-top-module-nav";
+			target.insertBefore(nav, target.firstChild);
+		} else if (nav.parentElement !== target) {
 			target.insertBefore(nav, target.firstChild);
 		}
 
@@ -685,6 +851,7 @@
 		nav.appendChild(moduleList);
 		nav.appendChild(renderCompanyContext());
 		nav.appendChild(renderAccountMenu());
+		renderContextualAdminBar();
 	}
 
 	function scheduleRender() {
@@ -705,6 +872,10 @@
 		scheduleRender();
 		scheduleCompanyFilterSync();
 	});
+	window.addEventListener("focus", scheduleRender);
+	document.addEventListener("visibilitychange", () => {
+		if (!document.hidden) scheduleRender();
+	});
 	window.addEventListener(COMPANY_CONTEXT_EVENT, (event) => {
 		scheduleRender();
 		scheduleCompanyFilterSync(event.detail?.company);
@@ -718,7 +889,8 @@
 	}
 
 	new MutationObserver(() => {
-		if (isDeskPage() && !document.getElementById(NAV_ID)) {
+		if (!isDeskPage()) return;
+		if (!document.getElementById(NAV_ID) || (contextualPageKey() && !document.getElementById("hrms-contextual-admin-bar"))) {
 			scheduleRender();
 		}
 	}).observe(document.documentElement, { childList: true, subtree: true });

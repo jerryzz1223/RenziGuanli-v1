@@ -40,12 +40,24 @@ Commands:
   seed-dry-run [phases]
                  Preview local TEST-HRMS seed without writing.
   seed-payroll   Seed foundation, employees, locked attendance, and payroll demo.
+  seed-full-payroll
+                 Run the complete TEST-HRMS / 2099-03 payroll trial through
+                 attendance Excel import, manual correction, lock, payroll
+                 source/variable imports, settlement generation and confirmation.
+  seed-full-payroll-dry-run
+                 Preview the full payroll trial without writing data.
   seed-attendance
                  Seed only the isolated TEST-HRMS / 2099-02 attendance closure.
   seed-attendance-dry-run
                  Preview the attendance closure seed without writing data.
   seed-status    Show local TEST-HRMS seed status.
   seed-records   List editable TEST-HRMS seed records and Frappe edit routes.
+  seed-full-payroll-status
+                 Show the complete TEST-HRMS / 2099-03 payroll trial status.
+  seed-full-payroll-records
+                 List editable form routes for the full payroll trial.
+  seed-reset-full-payroll
+                 Delete only the isolated TEST-HRMS / 2099-03 full payroll trial.
   seed-reset-payroll
                  Delete only TEST-HRMS local payroll seed records.
   db-shell       Open MariaDB shell for the local site.
@@ -108,6 +120,14 @@ case "${command}" in
 		kwargs='{"phases":"foundation,employees,attendance,payroll","dry_run":0}'
 		bench_exec "bench --site hrms.localhost execute hrms.api.demo_seed.seed_test_hrms_demo --kwargs '${kwargs}'"
 		;;
+	seed-full-payroll)
+		require_docker
+		bench_exec "bench --site hrms.localhost execute hrms.api.demo_seed.seed_test_hrms_full_payroll_demo --kwargs '{\"dry_run\":0}'"
+		;;
+	seed-full-payroll-dry-run)
+		require_docker
+		bench_exec "bench --site hrms.localhost execute hrms.api.demo_seed.seed_test_hrms_full_payroll_demo --kwargs '{\"dry_run\":1}'"
+		;;
 	seed-attendance)
 		require_docker
 		bench_exec "bench --site hrms.localhost execute hrms.api.attendance_import.seed_test_attendance_demo --kwargs '{\"dry_run\":0}'"
@@ -123,6 +143,18 @@ case "${command}" in
 	seed-records)
 		require_docker
 		bench_exec "bench --site hrms.localhost execute hrms.api.demo_seed.get_test_hrms_demo_records"
+		;;
+	seed-full-payroll-status)
+		require_docker
+		bench_exec "bench --site hrms.localhost execute hrms.api.demo_seed.get_test_hrms_full_payroll_demo_status"
+		;;
+	seed-full-payroll-records)
+		require_docker
+		bench_exec "bench --site hrms.localhost execute hrms.api.demo_seed.get_test_hrms_full_payroll_demo_records"
+		;;
+	seed-reset-full-payroll)
+		require_docker
+		bench_exec "bench --site hrms.localhost execute hrms.api.demo_seed.reset_test_hrms_full_payroll_demo --kwargs '{\"confirm\":\"RESET TEST-HRMS FULL PAYROLL\",\"dry_run\":0}'"
 		;;
 	seed-reset-payroll)
 		require_docker

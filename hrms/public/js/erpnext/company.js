@@ -2,6 +2,13 @@
 // For license information, please see license.txt
 
 frappe.ui.form.on("Company", {
+	after_save: function (frm) {
+		// A newly created Company must immediately become available to every HRMS
+		// workbench; the top navigation keeps an in-memory company list.
+		window.hrmsCompanyContext?.reload?.().then(() => {
+			window.hrmsCompanyContext?.setCurrentCompany?.(frm.doc.name);
+		});
+	},
 	refresh: function (frm) {
 		frm.set_query("default_expense_claim_payable_account", function () {
 			return {

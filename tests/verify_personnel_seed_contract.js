@@ -106,6 +106,9 @@ const transfer = readJson("hrms", "hr", "doctype", "employee_transfer", "employe
 assert(transfer.fields.some((field) => field.fieldname === "transfer_details" && field.options === "Employee Property History"), "Employee Transfer 必须把任职变化写入 transfer_details。");
 assert(transfer.fields.some((field) => field.fieldname === "employee"), "Employee Transfer 必须关联员工。");
 assert(transfer.fields.some((field) => field.fieldname === "transfer_date"), "Employee Transfer 必须有异动日期。");
+for (const fieldname of ["transfer_type", "transfer_reason", "approval_reference", "remarks"]) {
+	assert(transfer.fields.some((field) => field.fieldname === fieldname), `Employee Transfer 缺少中文业务字段: ${fieldname}`);
+}
 
 const promotion = readJson("hrms", "hr", "doctype", "employee_promotion", "employee_promotion.json");
 assert(promotion.fields.some((field) => field.fieldname === "promotion_details" && field.options === "Employee Property History"), "Employee Promotion 必须把任职变化写入 promotion_details。");

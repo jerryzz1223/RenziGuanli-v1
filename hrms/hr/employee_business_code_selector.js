@@ -5,6 +5,19 @@
 		return String(value || "").trim();
 	}
 
+	function get_employee_identity(employee) {
+		return [employee?.employee_code, employee?.employee_name].filter(Boolean).join(" · ");
+	}
+
+	function set_employee_identity_hint(frm, employee) {
+		const identity = get_employee_identity(employee);
+		frm.set_df_property(
+			"employee_code_display",
+			"description",
+			identity ? __("已匹配员工：{0}", [identity]) : __("输入公司工号后自动匹配员工"),
+		);
+	}
+
 	function set_employee_code(frm, employee_code) {
 		frm.__hrms_updating_employee_code = true;
 		frm.set_value("employee_code_display", employee_code || "");
@@ -16,12 +29,13 @@
 
 		frm.__hrms_loading_employee_code = true;
 		frappe.db
-			.get_value("Employee", frm.doc.employee, ["custom_employee_code", "employee_number"])
+			.get_value("Employee", frm.doc.employee, ["custom_employee_code", "employee_number", "employee_name"])
 			.then(({ message }) => {
 				const employee_code = message?.custom_employee_code || message?.employee_number || "";
 				if (employee_code) {
 					frm.__hrms_selected_employee_code = employee_code;
 					set_employee_code(frm, employee_code);
+					set_employee_identity_hint(frm, { ...message, employee_code });
 				}
 			})
 			.finally(() => {
@@ -31,7 +45,7 @@
 
 	function setup(frm) {
 		frm.set_df_property("employee_code_display", "label", __("员工工号"));
-		frm.set_df_property("employee_code_display", "description", __("输入公司工号后自动匹配员工"));
+		set_employee_identity_hint(frm);
 		frm.toggle_display("employee", false);
 		frm.toggle_display("employee_code_display", true);
 	}
@@ -55,6 +69,7 @@
 		if (!employee_code) {
 			frm.__hrms_selected_employee_code = "";
 			if (frm.doc.employee) frm.set_value("employee", "");
+			set_employee_identity_hint(frm);
 			return;
 		}
 		if (employee_code === frm.__hrms_selected_employee_code && frm.doc.employee) return;
@@ -76,6 +91,7 @@
 				frm.__hrms_selected_employee_code = employee.employee_code;
 				frm.set_value("employee", employee.name);
 				set_employee_code(frm, employee.employee_code);
+				set_employee_identity_hint(frm, employee);
 			},
 		});
 	}

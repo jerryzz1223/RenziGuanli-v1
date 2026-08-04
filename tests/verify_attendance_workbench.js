@@ -105,7 +105,8 @@ for (const marker of [
 	"苹果树",
 	"7S",
 	"KPI",
-	"data-action=\"add-report\"",
+	"download_attendance_export",
+	"show_attendance_export_dialog",
 	"来源类型",
 	"字段映射",
 	"数据质量告警",
@@ -131,6 +132,18 @@ if (attendancePageJs.includes("render_view_sidebar") || attendancePageJs.include
 
 if (attendancePageJs.includes("${this.render_workflow_tabs()}")) {
 	throw new Error("Attendance workbench must use the unified left sidebar, not render duplicate workflow tabs.");
+}
+
+const toolbarStart = attendancePageJs.indexOf("render_toolbar() {");
+const toolbarEnd = attendancePageJs.indexOf("\n\trender_workflow_tabs()", toolbarStart);
+const toolbarSource = attendancePageJs.slice(toolbarStart, toolbarEnd);
+for (const removedControl of ["选择表头", "添加报表", "邮件订阅", "编辑分组"]) {
+	if (toolbarSource.includes(removedControl)) {
+		throw new Error(`Attendance toolbar must not render ${removedControl}.`);
+	}
+}
+if (attendancePageJs.includes('key: "clock-settings"') || attendancePageJs.includes('"clock-settings": "配置钉钉打卡机')) {
+	throw new Error("Clock settings must not be exposed as a standalone attendance navigation view.");
 }
 
 if (attendancePageJs.includes("forEach((button) => this.open_custom_rule_from_center(button.dataset.editRuleFromCenter))")) {
@@ -160,10 +173,6 @@ for (const marker of ["flex: 0 0 220px", "min-width: 220px", "white-space: nowra
 }
 
 mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260723b", "The sidebar stylesheet cache key must change with its layout.");
-
-if (attendancePageJs.includes("data-upload>${frappe.utils.escape_html(__(\"添加报表\"))}")) {
-	throw new Error("添加报表 must open the report view, not reuse the upload action.");
-}
 
 if (attendancePageJs.includes('this.wrapper.querySelector("[data-company]").addEventListener("change"')) {
 	throw new Error("Attendance company must be controlled by the global company selector, not a local editable field.");
@@ -238,6 +247,16 @@ for (const marker of [
 	"_is_company_attendance_register_v1",
 	"list_attendance_import_templates",
 	"create_attendance_import_template_file",
+	"ATTENDANCE_EXPORT_PROFILES",
+	"download_attendance_export",
+	"company_attendance_workbook",
+	"monthly_draft",
+	"monthly_signed",
+	"monthly_finance",
+	"每日统计",
+	"出勤明细",
+	"出勤异常",
+	"苹果树",
 	"_preview_company_attendance_workbook",
 	"HRMS Attendance Month Lock",
 	"HRMS Attendance Lock Audit",

@@ -16,7 +16,7 @@
    "fieldname": "property",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Property",
+   "label": "变更项目",
    "read_only": 1
   },
   {
@@ -24,7 +24,7 @@
    "fieldname": "current",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Current",
+   "label": "变更前",
    "read_only": 1
   },
   {
@@ -32,14 +32,14 @@
    "fieldname": "new",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "New",
+   "label": "变更后",
    "read_only": 1
   },
   {
    "fieldname": "fieldname",
    "fieldtype": "Data",
    "hidden": 1,
-   "label": "Field Name",
+   "label": "字段标识",
    "read_only": 1
   }
  ],

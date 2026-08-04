@@ -38,9 +38,15 @@ for (const marker of ["/assets/hrms/js/hrms_top_nav.js", "/assets/hrms/css/hrms_
 	}
 }
 
-for (const marker of ["工作台", "人事", "/desk/hrms-workbench", "/desk/personnel", "/desk/department", "/desk/attendance-import-center", "/desk/payroll-input-center", "/desk/form-data-intake", "/desk/hrms-data-operations", "aria-expanded", "bindMoreDocumentEvents", "closeMoreMenus"]) {
+for (const marker of ["工作台", "人事", "/desk/hrms-workbench", "/desk/personnel", "/desk/department", "/desk/attendance-import-center", "/desk/payroll-input-center", "aria-expanded", "bindMoreDocumentEvents", "closeMoreMenus"]) {
 	if (!topNavSource.includes(marker)) {
 		throw new Error(`Top navigation is missing marker: ${marker}`);
+	}
+}
+
+for (const marker of ['label: "社保个税"', 'label: "电子合同（未开放）"', 'action: "data-operations"', 'hrms-top-module-nav__more-caret', 'hrms-top-module-nav__menu-list', 'function positionMenu()']) {
+	if (!topNavSource.includes(marker)) {
+		throw new Error(`More/account navigation is missing marker: ${marker}`);
 	}
 }
 

@@ -41,6 +41,7 @@ function mustInclude(source, marker, message) {
 
 mustInclude(hooks, '"Employee": "public/js/erpnext/employee_list.js"', "Employee list view customization must be registered in hooks.py.");
 mustInclude(hooks, '"Employee": "public/js/erpnext/employee.js"', "Employee form customization must remain registered in hooks.py.");
+mustInclude(topNavCss, "hrms-roster-toolbar-control-hidden", "员工花名册必须隐藏未启用的标准工具栏控件。");
 
 for (const label of ["桌面", "Desktop", "网站", "Website", "编辑侧边栏", "Edit Sidebar", "Delete Demo Data"]) {
 	mustInclude(redirect, label, `Global sidebar dropdown cleanup must handle: ${label}`);
@@ -100,6 +101,8 @@ for (const marker of [
 	"导入",
 	"导出",
 	"设置花名册字段",
+	"hide_unused_roster_toolbar_controls",
+	"hrms-roster-toolbar-control-hidden",
 	"open_roster_field_settings",
 	"sessionStorage.setItem(\"hrms_settings_center_active_module\", \"字段管理中心\")",
 	"sessionStorage.setItem(\"hrms_settings_center_focus\", \"roster_visible\")",
@@ -127,6 +130,10 @@ for (const marker of [
 	"format_roster_department_display",
 	"format_roster_employee_code_display",
 	"normalise_roster_list_cells",
+	"bind_roster_employee_detail_navigation",
+	"resolve_roster_employee_name",
+	"decodeURIComponent(match[1])",
+	"event.stopImmediatePropagation()",
 	"custom_employee_code || doc.employee_number || value",
 	"apply_roster_meta_columns",
 	"ROSTER_ALL_EMPLOYEES_PAGE_LENGTH",
@@ -162,7 +169,9 @@ for (const marker of [
 	"员工对比",
 	"人事异动",
 	"redirect_existing_employee_form_to_detail",
-	"hrms.api.employee_field_template.ensure_personnel_pages",
+	"bind_employee_detail_route_redirect",
+	"openEmployeeFormForEdit",
+	"EMPLOYEE_FORM_EDIT_ACCESS_KEY",
 	"frappe.set_route(\"employee-detail\", frm.doc.name)",
 ]) {
 	mustInclude(employeeForm, marker, `Employee form is missing detail marker: ${marker}`);
@@ -245,6 +254,8 @@ for (const marker of [
 	"toggle_display(\"employee\", false)",
 	"custom_employee_code",
 	"employee_number",
+	"employee_name",
+	"已匹配员工：{0}",
 ]) {
 	mustInclude(employeeCodeSelector, marker, `员工工号选择器缺少：${marker}`);
 }
@@ -287,6 +298,14 @@ for (const marker of [
 
 for (const marker of ["get_department_display(header)", "header.department_display || header.department"]) {
 	mustInclude(employeeDetailJs, marker, `员工档案详情前端必须优先显示 department_display：${marker}`);
+}
+
+for (const marker of ["header.employee_name", '`${__("工号")}：${header.custom_employee_code}`']) {
+	mustInclude(employeeDetailJs, marker, `员工档案详情必须仅使用姓名和公司工号作为可见身份：${marker}`);
+}
+
+if (employeeDetailJs.includes("header.employee_name || header.name")) {
+	throw new Error("Employee detail must not fall back to Frappe internal Employee.name for visible identity.");
 }
 
 for (const marker of [

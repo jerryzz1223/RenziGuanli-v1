@@ -39,7 +39,8 @@ for (const marker of [
 
 for (const marker of [
 	"data-closure",
-	"数据闭环导入",
+	"确认月度来源",
+	"只处理当月考勤终稿",
 	"Excel导入方案",
 	"下载模板",
 	"上传闭环数据",
@@ -49,7 +50,8 @@ for (const marker of [
 	"preview_payroll_data_closure_workbook",
 	"import_payroll_data_closure_workbook",
 	"完整薪资结算表",
-	"员工薪资异动导入",
+	"salary-assignments",
+	"导入员工定薪",
 	"福利扣款来源导入",
 	"月度考勤终稿导入",
 	"薪资结算字段对应",

@@ -162,6 +162,19 @@ if (api.includes("not row.required")) {
 }
 
 for (const marker of [
+	"EMPLOYEE_INTERNAL_FIELDNAMES",
+	"_is_employee_internal_field",
+	"_apply_employee_internal_field_policy",
+	"naming_series",
+]) {
+	mustInclude(api, marker, `Internal Employee document fields must stay out of HR field governance: ${marker}`);
+}
+
+if (!employeeForm.includes('frm.toggle_display("naming_series", false);')) {
+	throw new Error("Employee naming series must stay hidden; the HR-visible identifier is work number plus name.");
+}
+
+for (const marker of [
 	"frappe.pages[\"hr-settings-center\"]",
 	"字段管理中心",
 	"字段别名配置",

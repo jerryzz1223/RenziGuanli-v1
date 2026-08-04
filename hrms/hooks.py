@@ -26,13 +26,13 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260715a",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260723c",
-	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260723a",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260804k",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260804g",
+	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260723b",
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260723b",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260804f",
 ]
 
 # website

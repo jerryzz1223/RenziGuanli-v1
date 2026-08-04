@@ -1,0 +1,32 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-08-04 00:00:00.000000",
+ "description": "公司数据清理审计日志。仅记录成功完成的清理操作，不存储被删除的敏感字段内容。",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["company_code", "company_display_name", "modules", "record_count", "executed_by", "executed_at", "plan_token", "deleted_json"],
+ "fields": [
+  {"fieldname": "company_code", "fieldtype": "Data", "in_list_view": 1, "label": "公司编码", "read_only": 1, "reqd": 1},
+  {"fieldname": "company_display_name", "fieldtype": "Data", "in_list_view": 1, "label": "公司名称", "read_only": 1},
+  {"fieldname": "modules", "fieldtype": "Small Text", "label": "清理模块", "read_only": 1, "reqd": 1},
+  {"fieldname": "record_count", "fieldtype": "Int", "in_list_view": 1, "label": "清理记录数", "read_only": 1},
+  {"fieldname": "executed_by", "fieldtype": "Link", "in_list_view": 1, "label": "执行人", "options": "User", "read_only": 1},
+  {"fieldname": "executed_at", "fieldtype": "Datetime", "in_list_view": 1, "label": "执行时间", "read_only": 1},
+  {"fieldname": "plan_token", "fieldtype": "Data", "hidden": 1, "label": "预览指纹", "read_only": 1},
+  {"fieldname": "deleted_json", "fieldtype": "Code", "label": "各类型清理数量", "options": "JSON", "read_only": 1}
+ ],
+ "links": [],
+ "modified": "2026-08-04 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Data Cleanup Log",
+ "owner": "Administrator",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"}
+ ],
+ "sort_field": "executed_at",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "company_code"
+}

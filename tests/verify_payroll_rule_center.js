@@ -39,14 +39,15 @@ const pageJs = read("hrms/hr/page/payroll_input_center/payroll_input_center.js")
 for (const marker of [
 	"salary-rules",
 	"薪资规则",
-	"规则中心",
-	"刷新默认规则",
-	"新增/修改规则",
+	"计算公式",
+	"校验并保存",
+	"下载公式模板",
+	"初始化公司公式",
 	"list_payroll_rules",
 	"upsert_payroll_rule",
 	"ensure_default_payroll_rules",
 	"can_edit_payroll_rules",
-	"公式/规则",
+	"规则说明",
 	"来源资料",
 ]) {
 	mustInclude(pageJs, marker, `Payroll page is missing rule center marker: ${marker}`);
@@ -63,6 +64,7 @@ const rulePy = read("hrms/hr/doctype/hrms_payroll_rule/hrms_payroll_rule.py");
 for (const marker of [
 	"HRMS Payroll Rule",
 	"薪资规则",
+	"company",
 	"rule_code",
 	"rule_name",
 	"rule_category",
@@ -73,9 +75,17 @@ for (const marker of [
 	"source_sheet",
 	"status",
 	"editable",
+	"track_changes",
 ]) {
 	mustInclude(ruleJson, marker, `Payroll rule DocType is missing marker: ${marker}`);
 }
 mustInclude(rulePy, "Document", "Payroll rule controller must extend Document.");
+mustInclude(rulePy, '"company": self.company', "Payroll rules must be unique inside one company.");
+mustInclude(api, "def list_payroll_rules(company: str", "Payroll rule reads must require company scope.");
+mustInclude(api, "def ensure_default_payroll_rules(company: str", "Default rule creation must require company scope.");
+mustInclude(api, '{"company": company, "rule_code": rule["rule_code"]}', "Default rules must be idempotent per company.");
+mustInclude(api, '"rule_origin": "内置默认（未保存）"', "Uninitialized companies must still see built-in rule definitions.");
+mustInclude(pageJs, "args: { company: this.company }", "Payroll rule page must pass the selected company.");
+mustInclude(pageJs, "规则来源", "Payroll rule page must identify built-in and company rules.");
 
 console.log("Payroll rule center contract passed.");

@@ -10,11 +10,21 @@ DEFAULT_COUNTRY_FIELDS = ("countryCode", "country", "regionName", "city")
 IP_API_TIMEOUT_IN_SECONDS = 5
 
 
+def _normalize_country_fields(fields: list[str] | tuple[str, ...] | str | None) -> tuple[str, ...]:
+	if fields is None:
+		return DEFAULT_COUNTRY_FIELDS
+
+	raw_fields = fields.split(",") if isinstance(fields, str) else fields
+	normalized_fields = tuple(dict.fromkeys(field.strip() for field in raw_fields if field and field.strip()))
+
+	return normalized_fields or DEFAULT_COUNTRY_FIELDS
+
+
 @frappe.whitelist(allow_guest=True)
-def get_country(fields: list | None = None) -> dict:
+def get_country(fields: list[str] | tuple[str, ...] | str | None = None) -> dict:
 	global country_info
 	ip = frappe.local.request_ip
-	requested_fields = tuple(fields or DEFAULT_COUNTRY_FIELDS)
+	requested_fields = _normalize_country_fields(fields)
 	cache_key = (ip, requested_fields)
 
 	if cache_key not in country_info:

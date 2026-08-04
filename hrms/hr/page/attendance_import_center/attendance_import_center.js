@@ -67,7 +67,6 @@ class AttendanceImportCenter {
 					{ key: "groups", label: "考勤分组" },
 					{ key: "schedule", label: "排班管理" },
 					{ key: "rules", label: "考勤规则" },
-					{ key: "clock-settings", label: "打卡方式" },
 					{ key: "settings", label: "考勤设置" },
 					{ key: "dingtalk", label: "钉钉打卡对接" },
 					{ key: "sync-logs", label: "钉钉同步记录" },
@@ -252,14 +251,8 @@ class AttendanceImportCenter {
 			<div class="hrms-attendance-toolbar">
 				<div>
 					<button class="btn btn-default btn-sm" data-action="refresh">${this.escape(__("刷新"))}</button>
-					<button class="btn btn-default btn-sm" data-view="field-rules">${this.escape(__("选择表头"))}</button>
 					<button class="btn btn-default btn-sm" data-action="export">${this.escape(__("导出"))}</button>
 					<button class="btn btn-default btn-sm" data-action="sort-department">${this.escape(__("按部门排序"))}</button>
-				</div>
-				<div>
-					<button class="btn btn-primary btn-sm" data-action="add-report">${this.escape(__("添加报表"))}</button>
-					<button class="btn btn-default btn-sm" data-action="subscribe">${this.escape(__("邮件订阅"))}</button>
-					<button class="btn btn-default btn-sm" data-view="groups">${this.escape(__("编辑分组"))}</button>
 				</div>
 			</div>
 		`;
@@ -333,15 +326,68 @@ class AttendanceImportCenter {
 			this.load_active_view();
 			return;
 		}
-		if (action === "add-report") {
-			this.set_view("reports");
-			return;
-		}
-		if (action === "subscribe") {
-			frappe.show_alert({ message: __("邮件订阅将在报表权限完善后开放"), indicator: "blue" });
+		if (action === "export") {
+			this.show_attendance_export_dialog();
 			return;
 		}
 		frappe.show_alert({ message: __("该操作会随当前视图的数据能力逐步开放"), indicator: "gray" });
+	}
+
+	show_attendance_export_dialog() {
+		if (!this.ensure_company()) return;
+		const profiles = [
+			["company_attendance_workbook", "完整考勤工作簿（明细、请假、忘打卡、苹果树、月度三表）"],
+			["daily_statistics", "每日统计"],
+			["attendance_detail", "出勤明细（部门日报）"],
+			["leave_evidence", "请假单"],
+			["attendance_exception", "出勤异常处理表"],
+			["missing_card", "忘打卡"],
+			["apple_reward", "苹果树奖惩表"],
+			["monthly_draft", "考勤初稿"],
+			["monthly_signed", "考勤终稿（签字版）"],
+			["monthly_finance", "考勤终稿（财务版）"],
+		];
+		const defaults = {
+			daily: "daily_statistics",
+			exceptions: "attendance_exception",
+			"department-confirmations": "attendance_detail",
+			"apple-rules": "apple_reward",
+			monthly: "monthly_finance",
+		};
+		const defaultProfile = defaults[this.active_view] || "company_attendance_workbook";
+		const labelForProfile = (profile) => profiles.find(([value]) => value === profile)?.[1] || profiles[0][1];
+		const profileForLabel = (label) => profiles.find(([_value, optionLabel]) => optionLabel === label)?.[0] || "company_attendance_workbook";
+		const dialog = new frappe.ui.Dialog({
+			title: __("导出考勤"),
+			fields: [
+				{
+					fieldname: "export_profile",
+					fieldtype: "Select",
+					label: __("导出表单"),
+					options: profiles.map(([_value, label]) => label).join("\n"),
+					default: labelForProfile(defaultProfile),
+					reqd: 1,
+				},
+			],
+			primary_action_label: __("生成并下载"),
+			primary_action: (values) => {
+				frappe.call({
+					method: "hrms.api.attendance_import.download_attendance_export",
+					args: {
+						company: this.company,
+						attendance_month: this.attendance_month,
+						export_profile: profileForLabel(values.export_profile),
+					},
+					callback: (response) => {
+						const result = response.message || {};
+						if (result.file_url) window.open(result.file_url, "_blank");
+						dialog.hide();
+						frappe.show_alert({ message: __("已生成 {0}", [result.file_name || __("考勤导出文件")]), indicator: "green" });
+					},
+				});
+			},
+		});
+		dialog.show();
 	}
 
 	body() {
@@ -369,7 +415,7 @@ class AttendanceImportCenter {
 		if (this.active_view === "dingtalk") return this.render_dingtalk_integration();
 		if (this.active_view === "sync-logs") return this.load_dingtalk_sync_logs();
 		if (["clock-records", "makeup-records", "outing-records", "trip-records", "overtime-records"].includes(this.active_view)) return this.render_detail_record_view();
-		if (["groups", "schedule", "clock-settings", "settings", "apple-rules", "seven-s-rules", "kpi-rules"].includes(this.active_view)) return this.render_settings_view();
+		if (["groups", "schedule", "settings", "apple-rules", "seven-s-rules", "kpi-rules"].includes(this.active_view)) return this.render_settings_view();
 		return this.render_summary();
 	}
 
@@ -1264,7 +1310,6 @@ class AttendanceImportCenter {
 			groups: "按部门/班制设置考勤组，关联出勤日、休息日、排班和适用人员。",
 			schedule: "承接排班管理，后续与班次计划和钉钉班次同步。",
 			rules: "维护迟到、早退、旷工、缺卡、未申请加班等判定规则。",
-			"clock-settings": "配置钉钉打卡机、移动打卡、地点范围和设备来源。",
 			settings: "配置考勤月份、审批过滤、导入模板、月度确认流程。",
 			"apple-rules": "展示 4.2苹果树 中绿苹果、红苹果和钉钉苹果树导出的规则来源。",
 			"seven-s-rules": "展示 4.3 7S 稽核、整改、得分汇总与奖惩来源。",

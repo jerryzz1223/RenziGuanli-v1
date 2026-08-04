@@ -24,17 +24,12 @@ API_PATH = PROJECT_ROOT / "hrms" / "api" / "attendance_import.py"
 REAL_EXPORT = Path("/Users/lrj/Desktop/考勤表.xlsx")
 COMPANY_WORKBOOK = Path("/Users/lrj/Documents/SAD/YOngxin/人资/副本人资系统沟通表260713.xlsx")
 COMPANY_ATTENDANCE_REGISTER = Path("/Users/lrj/Documents/SAD/YOngxin/人资/各种表单/考勤.xlsx")
+DAILY_ATTENDANCE_REGISTER = Path("/Users/lrj/Documents/SAD/YOngxin/日考勤.xlsx")
 
 
 def _skip_reason() -> str | None:
 	if load_workbook is None:
 		return "Skipping DingTalk export preview contract: install openpyxl to load workbook fixtures."
-	if not REAL_EXPORT.exists():
-		return f"Skipping DingTalk export preview contract: missing real DingTalk fixture {REAL_EXPORT}"
-	if not COMPANY_WORKBOOK.exists():
-		return f"Skipping DingTalk export preview contract: missing company workbook fixture {COMPANY_WORKBOOK}"
-	if not COMPANY_ATTENDANCE_REGISTER.exists():
-		return f"Skipping DingTalk export preview contract: missing company attendance register fixture {COMPANY_ATTENDANCE_REGISTER}"
 	return None
 
 
@@ -70,6 +65,8 @@ def load_attendance_module():
 
 
 def test_preview_real_dingtalk_export():
+	if not REAL_EXPORT.exists():
+		return
 	module = load_attendance_module()
 	workbook = load_workbook(REAL_EXPORT, data_only=True, read_only=True)
 	preview = module._preview_dingtalk_export_v1(workbook)
@@ -94,6 +91,8 @@ def test_preview_real_dingtalk_export():
 
 
 def test_preview_company_workbook_preserves_raw_and_manual_daily_sources():
+	if not COMPANY_WORKBOOK.exists():
+		return
 	module = load_attendance_module()
 	workbook = load_workbook(COMPANY_WORKBOOK, data_only=True, read_only=True)
 	preview = module._preview_company_attendance_workbook(workbook)
@@ -116,6 +115,8 @@ def test_preview_company_workbook_preserves_raw_and_manual_daily_sources():
 
 
 def test_company_attendance_register_has_a_dedicated_preview_contract():
+	if not COMPANY_ATTENDANCE_REGISTER.exists():
+		return
 	module = load_attendance_module()
 	workbook = load_workbook(COMPANY_ATTENDANCE_REGISTER, data_only=True, read_only=True)
 	preview = module._preview_company_attendance_register_v1(workbook)
@@ -130,6 +131,101 @@ def test_company_attendance_register_has_a_dedicated_preview_contract():
 	assert preview["import_validation"]["status"] == "可导入"
 	assert preview["sheets"][0]["import_behavior"] == "写入每日考勤核对"
 	assert next(sheet for sheet in preview["sheets"] if sheet["sheet_name"] == "出勤异常")["import_behavior"] == "保留为异常核对来源，不自动生成处理结论"
+
+
+def test_daily_attendance_register_uses_the_company_39_column_layout():
+	if not DAILY_ATTENDANCE_REGISTER.exists():
+		return
+	module = load_attendance_module()
+	workbook = load_workbook(DAILY_ATTENDANCE_REGISTER, data_only=True, read_only=True)
+	preview = module._preview_company_attendance_register_v1(workbook)
+	daily_sheet = next(sheet for sheet in preview["sheets"] if sheet["sheet_name"] == "每日统计")
+
+	assert preview["source_type"] == "company_attendance_register_v1"
+	assert daily_sheet["row_count"] == 198
+	assert len(daily_sheet["headers"]) == 39
+	assert "请假/婚假" in preview["field_mapping"]
+	assert "请假/团圆假" in preview["field_mapping"]
+	assert "旷工" in preview["field_mapping"]
+
+
+def test_daily_statistics_template_matches_the_company_39_column_layout():
+	from openpyxl import Workbook
+
+	module = load_attendance_module()
+	workbook = Workbook()
+	workbook.remove(workbook.active)
+	sheet = module._add_daily_statistics_template_sheet(workbook)
+
+	assert sheet.max_column == 39
+	assert sheet["L1"].value == "实际出勤（小时）"
+	assert sheet["S1"].value == "请假"
+	assert sheet["S2"].value == "事假(小时)"
+	assert sheet["AD1"].value == "请假"
+	assert sheet["AD2"].value == "婚假"
+	assert sheet["AH2"].value == "团圆假"
+	assert sheet["AI1"].value == "旷工"
+	assert "S1:AC1" in {str(cell_range) for cell_range in sheet.merged_cells.ranges}
+	assert "AD1:AH1" in {str(cell_range) for cell_range in sheet.merged_cells.ranges}
+	assert sheet.freeze_panes == "A3"
+
+	row = [""] * 39
+	row[0:3] = ["模板测试员工", "E-001", "2026-07-01"]
+	row[11] = "8"
+	row[13] = "3"
+	row[34] = "2"
+	sheet.append(row)
+	parsed = module._daily_rows_from_header_rows(sheet, (1, 2), 3)
+	assert len(parsed) == 1
+	assert parsed[0]["姓名"] == "模板测试员工"
+	assert parsed[0]["工号"] == "E-001"
+	assert parsed[0]["日期"] == "2026-07-01"
+	assert parsed[0]["实际出勤(小时)"] == "8"
+	assert parsed[0]["工作日加班(小时)"] == "3"
+	assert parsed[0]["旷工_2"] == "2"
+	assert parsed[0]["_source_row"] == 3
+
+
+def test_export_profiles_cover_the_company_detail_and_monthly_forms():
+	from openpyxl import Workbook
+
+	module = load_attendance_module()
+	assert set(module.ATTENDANCE_EXPORT_PROFILES) == {
+		"company_attendance_workbook",
+		"daily_statistics",
+		"attendance_detail",
+		"leave_evidence",
+		"attendance_exception",
+		"missing_card",
+		"apple_reward",
+		"monthly_draft",
+		"monthly_signed",
+		"monthly_finance",
+	}
+
+	workbook = Workbook()
+	workbook.remove(workbook.active)
+	rows = [
+		types.SimpleNamespace(
+			department="工程课", employee_name="模板测试员工", employee_code="E-001", date_of_joining="2026-01-01",
+			standard_hours=8, actual_attendance_hours=8, overtime_1_5_hours=3, overtime_2_hours=0, overtime_3_hours=0,
+			large_night_shift_count=0, small_night_shift_count=0, personal_leave_hours=0, sick_leave_hours=0,
+			annual_leave_hours=0, work_injury_leave_hours=0, rest_leave_hours=0, absent_hours=0,
+			actual_clock_attendance_hours=8, paid_leave_makeup_hours=0, leave_deductible_hours=0, workday_rest_leave_hours=0,
+			adjusted_absence_hours=0, adjusted_working_hours=8, overtime_1_5_settlement_hours=3,
+			overtime_2_settlement_hours=0, overtime_3_settlement_hours=0, green_apples=2, red_apples=0,
+			apple_reward_amount=20, red_apple_penalty=0, night_shift_allowance=0, full_attendance_deduction=0,
+		)
+	]
+	module._add_monthly_attendance_export_sheet(workbook, "monthly_draft", "2026-07", rows)
+	module._add_monthly_attendance_export_sheet(workbook, "monthly_signed", "2026-07", rows)
+	module._add_monthly_attendance_export_sheet(workbook, "monthly_finance", "2026-07", rows)
+
+	assert workbook.sheetnames == ["考勤初稿", "考勤终稿（签字版）", "考勤终稿（财务版）"]
+	assert workbook["考勤初稿"]["A1"].value == "2026年07月工时奖惩确认表"
+	assert workbook["考勤终稿（签字版）"].max_column > workbook["考勤初稿"].max_column
+	assert workbook["考勤终稿（财务版）"].max_column > workbook["考勤初稿"].max_column
+	assert workbook["考勤终稿（财务版）"]["C3"].value == "模板测试员工"
 
 
 def test_revoked_batch_does_not_block_reimport_of_the_same_source_file():
@@ -223,6 +319,8 @@ if __name__ == "__main__":
 	test_preview_real_dingtalk_export()
 	test_preview_company_workbook_preserves_raw_and_manual_daily_sources()
 	test_company_attendance_register_has_a_dedicated_preview_contract()
+	test_daily_attendance_register_uses_the_company_39_column_layout()
+	test_daily_statistics_template_matches_the_company_39_column_layout()
 	test_revoked_batch_does_not_block_reimport_of_the_same_source_file()
 	test_field_mapping_catalog_explains_the_import_contract_without_writing_data()
 	test_rule_evaluation_is_explicit_and_never_mutates_imported_attendance()

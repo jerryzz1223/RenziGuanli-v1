@@ -5,13 +5,20 @@
  "doctype": "Page",
  "icon": "settings",
  "idx": 0,
- "modified": "2026-07-05 21:44:35.834565",
+ "modified": "2026-08-04 10:11:56.591622",
  "modified_by": "Administrator",
  "module": "HR",
  "name": "hr-settings-center",
  "owner": "Administrator",
  "page_name": "hr-settings-center",
- "roles": [],
+ "roles": [
+  {
+   "role": "HR Manager"
+  },
+  {
+   "role": "System Manager"
+  }
+ ],
  "script": null,
  "standard": "Yes",
  "style": null,

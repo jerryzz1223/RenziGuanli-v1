@@ -1,19 +1,27 @@
 {
  "content": null,
- "creation": "2026-06-30 00:00:00.000000",
+ "creation": "2026-06-30 00:00:00",
  "docstatus": 0,
  "doctype": "Page",
+ "icon": "settings",
  "idx": 0,
- "modified": "2026-06-30 00:00:00.000000",
+ "modified": "2026-08-04 10:11:56.529513",
  "modified_by": "Administrator",
  "module": "HR",
  "name": "staff-attribute-settings",
  "owner": "Administrator",
  "page_name": "staff-attribute-settings",
- "roles": [],
+ "roles": [
+  {
+   "role": "HR Manager"
+  },
+  {
+   "role": "System Manager"
+  }
+ ],
  "script": null,
  "standard": "Yes",
  "style": null,
  "system_page": 0,
- "title": "员工属性设置"
+ "title": "\u5458\u5de5\u5c5e\u6027\u8bbe\u7f6e"
 }

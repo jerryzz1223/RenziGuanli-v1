@@ -8,7 +8,7 @@ import frappe
 from frappe import _
 from frappe.utils import cstr
 
-from hrms.overrides.department_identity import get_business_department_name, validate_department_name_available
+from hrms.overrides.department_identity import get_department_document_name, validate_department_name_available
 
 
 CONFIRMATION_TEXT = "确认规范部门名称"
@@ -40,7 +40,7 @@ def _get_normalisation_plan(company: str) -> dict:
 	changes = []
 	target_sources = defaultdict(list)
 	for department in departments:
-		target_name = get_business_department_name(department.department_name)
+		target_name = get_department_document_name(department.department_name, company)
 		if department.name == target_name:
 			continue
 		row = {

@@ -179,7 +179,7 @@ class HybridOrganizationChart {
 		if (action === "add-department") this.add_department();
 		if (action === "edit-department") this.edit_department();
 		if (action === "delete-department") this.delete_department();
-		if (action === "open-employee") this.open_employee(element?.dataset.employee);
+		if (action === "open-employee") this.open_employee(element?.dataset.employeeRoute || element?.dataset.employee);
 		if (action === "open-person") this.show_person_detail(this.read_person_payload(element));
 	}
 
@@ -307,11 +307,13 @@ class HybridOrganizationChart {
 		const list = options.limit ? people.slice(0, options.limit) : people;
 		return list
 			.map((person) => {
-				const matched = Boolean(person.employee || person.matched_employee);
+				const employee_route = this.resolve_employee_route_value(person);
+				const matched = Boolean(employee_route && person.matched_employee !== false);
 				const meta = [person.role, person.designation, person.department_label || person.department]
 					.filter(Boolean)
 					.join(" · ");
 				const label = [person.role, person.employee_name || person.name].filter(Boolean).join("：");
+				const payload = this.person_payload({ ...person, employee_route });
 				return `
 					<button
 						type="button"
@@ -319,7 +321,8 @@ class HybridOrganizationChart {
 						data-action="open-person"
 						data-person-name="${frappe.utils.escape_html(person.name || person.employee_name || "")}"
 						data-employee="${frappe.utils.escape_html(person.employee || "")}"
-						data-person-payload="${frappe.utils.escape_html(this.person_payload(person))}"
+						data-employee-route="${frappe.utils.escape_html(employee_route)}"
+						data-person-payload="${frappe.utils.escape_html(payload)}"
 						title="${frappe.utils.escape_html([person.match_status, meta].filter(Boolean).join(" · "))}"
 					>
 						<span>${frappe.utils.escape_html(label || "")}</span>
@@ -436,10 +439,12 @@ class HybridOrganizationChart {
 				${employees
 					.map(
 						(employee) => {
-							const matched = Boolean(employee.name && employee.matched_employee !== false);
+							const employee_route = this.resolve_employee_route_value(employee);
+							const matched = Boolean(employee_route && employee.matched_employee !== false);
 							const person_payload = this.person_payload({
 								name: employee.employee_name || employee.name,
-								employee: matched ? employee.name : "",
+								employee: employee.name,
+								employee_route,
 								employee_name: employee.employee_name || employee.name,
 								employee_code: employee.employee_code,
 								department: employee.department,
@@ -452,7 +457,7 @@ class HybridOrganizationChart {
 								match_status: employee.match_status || (matched ? __("已匹配员工档案") : __("待匹配员工档案")),
 							});
 							return `
-							<div class="hrms-org-employee-row" data-employee="${frappe.utils.escape_html(employee.name || "")}">
+							<div class="hrms-org-employee-row" data-employee="${frappe.utils.escape_html(employee.name || "")}" data-employee-route="${frappe.utils.escape_html(employee_route)}">
 								<div class="hrms-org-avatar">${frappe.utils.escape_html((employee.employee_name || employee.name || "?").slice(0, 1))}</div>
 								<div>
 									<strong>${frappe.utils.escape_html(employee.employee_name || employee.name || "")}</strong>
@@ -461,7 +466,7 @@ class HybridOrganizationChart {
 								</div>
 								${
 									matched
-										? `<button class="btn btn-xs btn-link" data-action="open-employee" data-employee="${frappe.utils.escape_html(employee.name || "")}">${__("资料")}</button>`
+										? `<button class="btn btn-xs btn-link" data-action="open-employee" data-employee="${frappe.utils.escape_html(employee.name || "")}" data-employee-route="${frappe.utils.escape_html(employee_route)}">${__("资料")}</button>`
 										: `<button class="btn btn-xs btn-link" data-action="open-person" data-person-name="${frappe.utils.escape_html(employee.employee_name || "")}" data-person-payload="${frappe.utils.escape_html(person_payload)}">${__("详情")}</button>`
 								}
 							</div>`;
@@ -671,14 +676,32 @@ class HybridOrganizationChart {
 	}
 
 	open_employee(employee) {
-		if (employee) {
-			frappe.set_route("Form", "Employee", employee);
+		const route_value = this.normalize_employee_route_value(employee);
+		if (route_value) {
+			frappe.set_route("Form", "Employee", route_value);
+			return;
 		}
+		frappe.msgprint(__("请先在右侧确认员工详情，当前人员没有匹配到有效员工档案。"));
+	}
+
+	resolve_employee_route_value(person) {
+		if (typeof person === "string") {
+			return this.normalize_employee_route_value(person);
+		}
+		return this.normalize_employee_route_value(person?.employee_route || person?.employee || person?.name);
+	}
+
+	normalize_employee_route_value(employee) {
+		const value = String(employee || "").trim();
+		if (/^HR-EMP-\d+$/i.test(value)) {
+			return value;
+		}
+		return "";
 	}
 
 	show_person_detail(person) {
 		if (!person || !(person.employee_name || person.name)) return;
-		const employee = person.employee || "";
+		const employee = this.resolve_employee_route_value(person);
 		const fields = [
 			[__("匹配状态"), person.match_status || (employee ? __("已匹配员工档案") : __("待匹配员工档案"))],
 			[__("员工编号"), person.employee_code],
@@ -696,7 +719,7 @@ class HybridOrganizationChart {
 					<p>${frappe.utils.escape_html([person.role, person.match_status].filter(Boolean).join(" · "))}</p>
 				</div>
 				<div class="hrms-org-detail-actions">
-					${employee ? `<button class="btn btn-xs btn-default" data-action="open-employee" data-employee="${frappe.utils.escape_html(employee)}">${__("打开员工档案")}</button>` : ""}
+					${employee ? `<button class="btn btn-xs btn-default" data-action="open-employee" data-employee="${frappe.utils.escape_html(person.employee || "")}" data-employee-route="${frappe.utils.escape_html(employee)}">${__("打开员工档案")}</button>` : ""}
 				</div>
 			</div>
 			<div class="hrms-org-person-detail">

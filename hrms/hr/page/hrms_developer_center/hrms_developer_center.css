@@ -1,0 +1,215 @@
+.hrms-developer-center {
+	max-width: 1120px;
+	padding: 12px 0 36px;
+}
+
+.hrms-developer-center__hero,
+.hrms-developer-center__card,
+.hrms-developer-center__checklist,
+.hrms-developer-center__map,
+.hrms-developer-center__boundary {
+	background: var(--card-bg, #fff);
+	border: 1px solid var(--border-color, #dfe3e8);
+	border-radius: 8px;
+}
+
+.hrms-developer-center__boundary {
+	display: grid;
+	gap: 0;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	margin-top: 16px;
+	overflow: hidden;
+}
+
+.hrms-developer-center__boundary div {
+	padding: 14px 18px;
+}
+
+.hrms-developer-center__boundary div:first-child {
+	background: #f4fbf6;
+	border-right: 1px solid var(--border-color, #dfe3e8);
+}
+
+.hrms-developer-center__boundary div:last-child {
+	background: #fffaf1;
+}
+
+.hrms-developer-center__boundary p {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	line-height: 1.5;
+	margin: 5px 0 0;
+}
+
+.hrms-developer-center__hero {
+	align-items: flex-start;
+	display: flex;
+	gap: 16px;
+	justify-content: space-between;
+	padding: 20px;
+}
+
+.hrms-developer-center__hero h3,
+.hrms-developer-center__checklist h4,
+.hrms-developer-center__card h4 {
+	margin: 0 0 8px;
+}
+
+.hrms-developer-center__hero p,
+.hrms-developer-center__card p {
+	color: var(--text-muted, #6b7280);
+	margin: 0;
+}
+
+.hrms-developer-center__role {
+	background: var(--subtle-fg, #f5f7fa);
+	border-radius: 6px;
+	padding: 8px 12px;
+	white-space: nowrap;
+}
+
+.hrms-developer-center__role strong,
+.hrms-developer-center__role span {
+	display: block;
+}
+
+.hrms-developer-center__role span {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	margin-top: 3px;
+}
+
+.hrms-developer-center__grid {
+	display: grid;
+	gap: 12px;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	margin-top: 16px;
+}
+
+.hrms-developer-center__card {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	min-height: 180px;
+	padding: 16px;
+}
+
+.hrms-developer-center__card .btn {
+	align-self: flex-start;
+	margin-top: auto;
+}
+
+.hrms-developer-center__checklist {
+	margin-top: 16px;
+	padding: 18px 22px;
+}
+
+.hrms-developer-center__map {
+	margin-top: 16px;
+	padding: 18px 20px 8px;
+}
+
+.hrms-developer-center__map-head {
+	align-items: flex-start;
+	display: flex;
+	gap: 14px;
+	justify-content: space-between;
+	margin-bottom: 14px;
+}
+
+.hrms-developer-center__map-head h4,
+.hrms-developer-center__map-head p {
+	margin: 0;
+}
+
+.hrms-developer-center__map-head p {
+	color: var(--text-muted, #6b7280);
+	font-size: 13px;
+	margin-top: 5px;
+}
+
+.hrms-developer-center__map-table {
+	margin-bottom: 0;
+}
+
+.hrms-developer-center__map-table th,
+.hrms-developer-center__map-table td {
+	vertical-align: top;
+}
+
+.hrms-developer-center__map-table td:first-child {
+	min-width: 210px;
+}
+
+.hrms-developer-center__map-table td:nth-child(2) {
+	min-width: 320px;
+}
+
+.hrms-developer-center__map-table strong,
+.hrms-developer-center__map-table code,
+.hrms-developer-center__map-table small {
+	display: block;
+}
+
+.hrms-developer-center__map-table code {
+	background: transparent;
+	color: var(--text-muted, #6b7280);
+	font-size: 11px;
+	margin-top: 5px;
+	padding: 0;
+}
+
+.hrms-developer-center__map-table p {
+	margin: 0 0 5px;
+}
+
+.hrms-developer-center__map-table small {
+	color: var(--text-muted, #6b7280);
+	line-height: 1.45;
+	margin-top: 5px;
+}
+
+.hrms-developer-center__category {
+	background: #edf5ff;
+	border-radius: 999px;
+	color: #2b70ad;
+	display: inline-block;
+	font-size: 11px;
+	margin-bottom: 6px;
+	padding: 2px 7px;
+}
+
+.hrms-developer-center__map-actions {
+	min-width: 155px;
+}
+
+.hrms-developer-center__map-actions .btn {
+	display: block;
+	margin-bottom: 5px;
+	text-align: left;
+}
+
+.hrms-developer-center__checklist ol {
+	margin: 0;
+	padding-left: 20px;
+}
+
+.hrms-developer-center__checklist li {
+	margin: 8px 0;
+}
+
+@media (max-width: 640px) {
+	.hrms-developer-center__hero,
+	.hrms-developer-center__map-head {
+		flex-direction: column;
+	}
+
+	.hrms-developer-center__boundary {
+		grid-template-columns: 1fr;
+	}
+
+	.hrms-developer-center__boundary div:first-child {
+		border-bottom: 1px solid var(--border-color, #dfe3e8);
+		border-right: 0;
+	}
+}

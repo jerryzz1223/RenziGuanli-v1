@@ -34,10 +34,9 @@ frappe.ui.form.on("Employee", {
 		}
 		frm.set_df_property("holiday_list", "hidden", 1);
 
-		// hide naming series field based on hr settings
-		frappe.db.get_single_value("HR Settings", "emp_created_by").then((value) => {
-			frm.toggle_display("naming_series", value === "Naming Series");
-		});
+		// Naming Series creates Frappe's internal document name. The HR-facing
+		// identifier is always the company work number plus employee name.
+		frm.toggle_display("naming_series", false);
 	},
 
 	date_of_birth(frm) {
@@ -65,20 +64,89 @@ function redirect_existing_employee_form_to_detail(frm) {
 	if (frm.__hrms_return_to_employee_roster) return false;
 	const route = frappe.get_route();
 	if (route[0] !== "Form" || route[1] !== "Employee" || route[2] !== frm.doc.name) return false;
-	if (frappe.route_options && frappe.route_options.hrms_allow_employee_form) return false;
+	if (consume_employee_form_edit_access(frm.doc.name)) return false;
 	if (frm.__hrms_employee_detail_redirecting) return true;
 	frm.__hrms_employee_detail_redirecting = true;
-	frappe
-		.call("hrms.api.employee_field_template.ensure_personnel_pages")
-		.then(() => {
-			frappe.set_route("employee-detail", frm.doc.name);
-		})
-		.catch(() => {
-			frm.__hrms_employee_detail_redirecting = false;
-			frappe.msgprint(__("员工档案详情页还未初始化，请先执行 bench migrate 或刷新后重试。"));
-		});
+	// The page is created by migration. Do not wait for a server round-trip
+	// here: doing so lets the native form render first and caused the old
+	// "refresh once to enter employee detail" behaviour.
+	frappe.set_route("employee-detail", frm.doc.name);
 	return true;
 }
+
+const EMPLOYEE_FORM_EDIT_ACCESS_KEY = "hrms_allow_employee_form_name";
+
+function mark_employee_form_edit_access(employee) {
+	const name = String(employee || "");
+	if (!name) return;
+	window.__hrms_employee_form_edit_name = name;
+	try {
+		sessionStorage.setItem(EMPLOYEE_FORM_EDIT_ACCESS_KEY, name);
+	} catch (error) {
+		// Private browsing can block session storage; the in-memory marker still
+		// covers the current Desk navigation.
+	}
+}
+
+function is_employee_form_edit_access_allowed(employee) {
+	const name = String(employee || "");
+	if (!name) return false;
+	if (window.__hrms_employee_form_edit_name === name) return true;
+	try {
+		return sessionStorage.getItem(EMPLOYEE_FORM_EDIT_ACCESS_KEY) === name;
+	} catch (error) {
+		return false;
+	}
+}
+
+function consume_employee_form_edit_access(employee) {
+	if (frappe.route_options && frappe.route_options.hrms_allow_employee_form) {
+		frappe.route_options = null;
+		return true;
+	}
+	if (!is_employee_form_edit_access_allowed(employee)) return false;
+
+	window.__hrms_employee_form_edit_name = null;
+	try {
+		sessionStorage.removeItem(EMPLOYEE_FORM_EDIT_ACCESS_KEY);
+	} catch (error) {
+		// No action needed when session storage is unavailable.
+	}
+	return true;
+}
+
+function redirect_employee_form_route_to_detail() {
+	const route = frappe.get_route();
+	if (route[0] !== "Form" || route[1] !== "Employee" || !route[2]) return;
+	if (is_employee_form_edit_access_allowed(route[2])) return;
+	if (frappe.route_options && frappe.route_options.hrms_allow_employee_form) return;
+	frappe.set_route("employee-detail", route[2]);
+}
+
+function bind_employee_detail_route_redirect() {
+	if (window.__hrms_employee_detail_route_redirect_bound || !frappe.router || typeof frappe.router.on !== "function") return;
+	window.__hrms_employee_detail_route_redirect_bound = true;
+
+	let timer;
+	const schedule_redirect = () => {
+		window.clearTimeout(timer);
+		timer = window.setTimeout(redirect_employee_form_route_to_detail, 0);
+	};
+
+	frappe.router.on("change", schedule_redirect);
+	window.addEventListener("hashchange", schedule_redirect);
+	window.addEventListener("popstate", schedule_redirect);
+}
+
+window.hrmsEmployeeNavigation = window.hrmsEmployeeNavigation || {};
+window.hrmsEmployeeNavigation.openEmployeeFormForEdit = function (employee) {
+	mark_employee_form_edit_access(employee);
+	frappe.set_route("Form", "Employee", employee);
+};
+
+// This is a fallback for direct native-form URLs and third-party links. The
+// roster itself intercepts its click before the native form is opened.
+bind_employee_detail_route_redirect();
 
 function remember_employee_list_return(frm) {
 	if (!frm.is_new()) return;

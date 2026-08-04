@@ -10,6 +10,17 @@ import frappe
 from frappe import _
 from frappe.utils import flt, getdate, now_datetime
 
+from hrms.payroll.payroll_formula import (
+	FIELD_BY_NAME,
+	FIELD_DEFINITIONS,
+	FORMULA_TEMPLATES,
+	FUNCTIONS,
+	FormulaError,
+	compile_formula,
+	evaluate_formula,
+	evaluate_formula_set,
+)
+
 
 PAYROLL_VARIABLE_SHEETS = [
 	"奖惩提报单（提交财务）",
@@ -32,6 +43,7 @@ VARIABLE_BATCH_DOCTYPE = "HRMS Payroll Variable Import Batch"
 VARIABLE_RECORD_DOCTYPE = "HRMS Payroll Variable Record"
 PAYROLL_INPUT_DOCTYPE = "HRMS Payroll Input Record"
 PAYROLL_SETTLEMENT_DOCTYPE = "HRMS Payroll Settlement Record"
+LOCAL_PAYROLL_TEST_COMPANY = "TEST-HRMS"
 SALARY_STRUCTURE_VERSION_DOCTYPE = "HRMS Salary Structure Version"
 SALARY_GRADE_DOCTYPE = "HRMS Salary Grade"
 EMPLOYEE_SALARY_CHANGE_DOCTYPE = "HRMS Employee Salary Change"
@@ -357,6 +369,18 @@ DEFAULT_PAYROLL_RULES = [
 		"source_cell": "AH:AV",
 	},
 	{
+		"rule_code": "PERFORMANCE_APPLE_REWARD",
+		"rule_name": "苹果树奖惩金额",
+		"rule_category": "奖金福利",
+		"rule_scope": "审批通过并纳入考勤锁定版本的苹果树记录",
+		"formula_expression": "苹果树金额 = (绿苹果颗数 - 红苹果颗数) * 5",
+		"parameters_json": {"amount_per_apple": 5, "locked_attendance_required": True},
+		"rule_text": "部门主管审批通过后，月初随考勤给员工签字确认；薪资不读取草稿或未锁定的苹果树记录。",
+		"source_file": "4.2苹果树.xlsx / 5.2人资考勤.xlsx",
+		"source_sheet": "苹果树管理办法 / 1.12考勤终稿",
+		"source_cell": "苹果树管理办法 row 6；考勤终稿苹果树金额列",
+	},
+	{
 		"rule_code": "PAYROLL_SETTLEMENT_ABSENCE_DEDUCTION",
 		"rule_name": "缺勤扣除金额",
 		"rule_category": "薪资结算",
@@ -488,7 +512,92 @@ DEFAULT_PAYROLL_RULES = [
 		"source_cell": "row 27",
 		"missing_rule_note": "专项扣除、累计预扣、年终奖税等完整个税计算参数未在公司资料中结构化提供。",
 	},
+	{
+		"rule_code": "WELFARE_CONTINUING_SERVICE_BONUS",
+		"rule_name": "继续服务奖",
+		"rule_category": "奖金福利",
+		"rule_scope": "符合年度公告且仍在职的员工",
+		"formula_expression": "已确认继续服务奖金额作为月度变量进入实发工资和公司实际负担",
+		"parameters_json": {"confirmed_source_required": True},
+		"rule_text": "缺勤区间和年度公告决定是否享受；系统只读取同公司、同月份、同考勤锁定版本的已确认来源记录。",
+		"source_file": "5.1薪资福利.xlsx",
+		"source_sheet": "薪资福利作业规范",
+		"missing_rule_note": "各年度基准金额、发放月份及特殊假别是否计入缺勤尚未形成稳定参数表，暂不自动计算。",
+	},
+	{
+		"rule_code": "WELFARE_HIGH_TEMPERATURE_SUBSIDY",
+		"rule_name": "高温补贴",
+		"rule_category": "福利补贴",
+		"rule_scope": "符合当年公告和出勤条件的员工",
+		"formula_expression": "当月高温补贴 = 当年有效公告单价或金额 × 已确认资格/天数",
+		"parameters_json": {"confirmed_source_required": True},
+		"rule_text": "离职人员不享受；实际发放月份、岗位范围和标准以当年公司公告及确认明细为准。",
+		"source_file": "5.1薪资福利.xlsx",
+		"source_sheet": "薪资福利作业规范",
+		"missing_rule_note": "当前资料未提供长期有效的年度单价、月份和岗位资格参数，必须按年度来源记录导入。",
+	},
+	{
+		"rule_code": "PAYROLL_PART_MONTH_PRORATION",
+		"rule_name": "入离职及未满月工资折算",
+		"rule_category": "薪资结算",
+		"rule_scope": "当月入职、离职、转正或调薪员工",
+		"formula_expression": "按薪资异动生效日期、锁定考勤工时和经确认的未满月口径计算",
+		"parameters_json": {"confirmed_policy_required": True},
+		"rule_text": "薪资异动按生效日期取值；入离职未上班时间会影响全勤和缺勤，但固定薪资是否按工时、天数或分段薪资折算需单独确认。",
+		"source_file": "5.1薪资福利.xlsx / 5.2人资考勤.xlsx",
+		"source_sheet": "人事组薪资异动表 / 薪资结算表",
+		"missing_rule_note": "未满月固定薪资折算、月中调薪分段、离职结算截止日尚未形成唯一可执行规则，当前系统阻止将说明文本当作公式执行。",
+	},
+	{
+		"rule_code": "PAYROLL_TERMINATION_SETTLEMENT",
+		"rule_name": "离职薪资结算",
+		"rule_category": "薪资结算",
+		"rule_scope": "当月离职、异常离职或开除员工",
+		"formula_expression": "试用期未满7天按符合8小时的工作日100元/天，工作1天离职无薪；其他扣款按已批准离职申请单确认",
+		"parameters_json": {"trial_under_seven_days_daily_amount": 100, "one_day_departure_amount": 0, "approved_source_required": True},
+		"rule_text": "试用期未提前3个工作日申请、正式员工未提前30日申请、旷工或开除涉及特殊扣款，必须由离职申请单和考勤终稿共同确认。",
+		"source_file": "6.9离职.xlsx",
+		"source_sheet": "离职作业规范 / 人事组员工辞职申请单",
+		"source_cell": "离职作业规范 rows 29-31；辞职申请单 rows 9-16",
+		"missing_rule_note": "此规则涉及劳动关系和审批结论，当前仅作为离职薪资结算来源记录，不自动从员工状态推导扣款。",
+	},
+	{
+		"rule_code": "PAYROLL_MINIMUM_WAGE_CHECK",
+		"rule_name": "最低工资差异检查",
+		"rule_category": "薪资结算",
+		"rule_scope": "按员工工作地和规则生效区间",
+		"formula_expression": "将适用口径工资与员工工作地、生效期间的已确认最低工资标准比较",
+		"parameters_json": {"confirmed_legal_source_required": True, "enforcement": "warning"},
+		"rule_text": "成熟系统页面提供最低工资配置入口；本项目只把它作为差异检查，不用未经确认的金额自动改写工资。",
+		"source_file": "成熟系统参考截图",
+		"source_sheet": "薪酬设置 / 最低工资",
+		"missing_rule_note": "公司资料未提供工作地、标准金额、生效区间和比较口径，需人事/法务按现行政策确认后才能启用阻断。",
+	},
 ]
+
+# Formula text is deliberately not evaluated as Python/JavaScript.  Payroll is
+# a high-risk financial domain: only registered calculation drivers may run.
+# The editable JSON below is the executable part of a rule and is validated
+# before a payroll month can be generated.
+EXECUTABLE_PAYROLL_RULES = {
+	"SALARY_STRUCTURE_SUBTOTAL": {"parameters": ()},
+	"ATTENDANCE_FULL_ATTENDANCE_BONUS": {"parameters": ("thresholds",)},
+	"PAYROLL_SETTLEMENT_ABSENCE_DEDUCTION": {"parameters": ("standard_hours_divisor",)},
+	"PAYROLL_SETTLEMENT_OVERTIME_PAY": {"parameters": ("standard_hours_divisor", "weekday", "weekend", "holiday")},
+	"PAYROLL_SETTLEMENT_NIGHT_SHIFT": {"parameters": ("large_night_shift", "small_night_shift")},
+	"WELFARE_SOCIAL_SECURITY_COMPANY": {"parameters": ("ranges",)},
+	"WELFARE_HOUSING_FUND_COMPANY": {"parameters": ("default_company_equals_personal",)},
+}
+
+# These formulas are calculated by the settlement pipeline itself.  They are
+# intentionally visible in the rule centre for audit, but their expression is
+# not editable JSON: changing their structure requires a reviewed code change,
+# rather than evaluating arbitrary text in a payroll run.
+FIXED_PAYROLL_CALCULATION_RULES = {
+	"ATTENDANCE_OVERTIME_HOURS",
+	"PAYROLL_SETTLEMENT_GROSS_PAY",
+	"PAYROLL_SETTLEMENT_NET_PAY",
+}
 
 PAYROLL_SETTLEMENT_FIELD_MAPPINGS = [
 	{"mapping_code": "EXCEL_B_DEPARTMENT", "display_order": 2, "excel_column": "B", "excel_label": "部门", "system_field": "department", "source_module": "员工档案", "source_detail": "Employee.department 或考勤/变量来源部门"},
@@ -546,6 +655,28 @@ PAYROLL_SETTLEMENT_FIELD_MAPPINGS = [
 	{"mapping_code": "EXCEL_BC_EXPORT_HOUSING_FUND_COMPANY", "display_order": 55, "excel_column": "BC", "excel_label": "公司承担公积金", "system_field": "housing_fund_company", "source_module": "导出辅助", "formula_expression": "AU"},
 	{"mapping_code": "EXCEL_BD_EXPORT_NET_PAY", "display_order": 56, "excel_column": "BD", "excel_label": "实发工资", "system_field": "net_pay", "source_module": "导出辅助", "formula_expression": "AS"},
 	{"mapping_code": "EXCEL_BE_EXPORT_TAX_ADJUSTED_NET", "display_order": 57, "excel_column": "BE", "excel_label": "导出校验工资", "system_field": "export_tax_adjusted_net_pay", "source_module": "导出辅助", "formula_expression": "AM+AN-AR-AP-AL-AQ", "remarks": "Excel 原表 BE 列无表头，保留为导出校验口径。"},
+]
+
+# Atomic options that are combined into one historical Excel column.  They stay
+# separate in the configuration centre and are aggregated only when the legacy
+# settlement layout is produced.
+PAYROLL_ATOMIC_CONFIGURATION_ITEMS = [
+	{"item_code": "SALARY_DUTY_ALLOWANCE", "item_name": "职务津贴", "category": "固定薪资", "data_type": "金额", "direction": "应发", "source_module": "薪资主数据", "result_field": "function_allowance", "aggregate_target": "职能津贴"},
+	{"item_code": "SALARY_CERTIFICATE_ALLOWANCE", "item_name": "证书津贴", "category": "固定薪资", "data_type": "金额", "direction": "应发", "source_module": "薪资主数据", "result_field": "certificate_skill_allowance", "aggregate_target": "证书及多能工津贴"},
+	{"item_code": "SALARY_MULTI_SKILL_ALLOWANCE", "item_name": "多能工津贴", "category": "固定薪资", "data_type": "金额", "direction": "应发", "source_module": "薪资主数据", "result_field": "certificate_skill_allowance", "aggregate_target": "证书及多能工津贴"},
+	{"item_code": "BONUS_FULL_ATTENDANCE", "item_name": "全勤奖", "category": "奖金补贴", "data_type": "金额", "direction": "应发", "source_module": "考勤终稿/福利扣款", "result_field": "subsidy_bonus_total", "aggregate_target": "全勤奖、住房及学历补贴", "rule_code": "ATTENDANCE_FULL_ATTENDANCE_BONUS"},
+	{"item_code": "BONUS_HOUSING_SUBSIDY", "item_name": "住房补贴", "category": "奖金补贴", "data_type": "金额", "direction": "应发", "source_module": "福利扣款", "result_field": "subsidy_bonus_total", "aggregate_target": "全勤奖、住房及学历补贴", "rule_code": "WELFARE_RENTAL_SUBSIDY"},
+	{"item_code": "BONUS_EDUCATION_SUBSIDY", "item_name": "学历补贴", "category": "奖金补贴", "data_type": "金额", "direction": "应发", "source_module": "福利扣款", "result_field": "subsidy_bonus_total", "aggregate_target": "全勤奖、住房及学历补贴", "rule_code": "WELFARE_EDUCATION_SUBSIDY"},
+	{"item_code": "BONUS_HIGH_TEMPERATURE", "item_name": "高温补贴", "category": "奖金补贴", "data_type": "金额", "direction": "应发", "source_module": "福利扣款", "result_field": "subsidy_bonus_total", "aggregate_target": "其他奖金"},
+	{"item_code": "BONUS_PHONE", "item_name": "手机话费补贴", "category": "奖金补贴", "data_type": "金额", "direction": "应发", "source_module": "福利扣款", "result_field": "subsidy_bonus_total", "aggregate_target": "其他奖金"},
+	{"item_code": "BONUS_FUEL", "item_name": "油费补贴", "category": "奖金补贴", "data_type": "金额", "direction": "应发", "source_module": "福利扣款", "result_field": "subsidy_bonus_total", "aggregate_target": "其他奖金"},
+	{"item_code": "DEDUCTION_LATE", "item_name": "迟到扣款", "category": "扣款税费", "data_type": "金额", "direction": "应扣", "source_module": "考勤终稿/薪资变量", "result_field": "late_full_attendance_deduction", "aggregate_target": "迟到金额及全勤奖扣款"},
+	{"item_code": "DEDUCTION_FULL_ATTENDANCE", "item_name": "全勤奖扣款", "category": "扣款税费", "data_type": "金额", "direction": "应扣", "source_module": "考勤终稿", "result_field": "late_full_attendance_deduction", "aggregate_target": "迟到金额及全勤奖扣款", "rule_code": "ATTENDANCE_FULL_ATTENDANCE_BONUS"},
+	{"item_code": "DEDUCTION_DORMITORY", "item_name": "宿舍住宿费", "category": "扣款税费", "data_type": "金额", "direction": "应扣", "source_module": "福利扣款", "result_field": "utilities_deduction", "aggregate_target": "水电费及扣款", "rule_code": "WELFARE_DORMITORY_FEE"},
+	{"item_code": "DEDUCTION_DORM_WATER", "item_name": "宿舍水费", "category": "扣款税费", "data_type": "金额", "direction": "应扣", "source_module": "福利扣款", "result_field": "utilities_deduction", "aggregate_target": "水电费及扣款", "rule_code": "WELFARE_DORMITORY_FEE"},
+	{"item_code": "DEDUCTION_DORM_ELECTRICITY", "item_name": "宿舍电费", "category": "扣款税费", "data_type": "金额", "direction": "应扣", "source_module": "福利扣款", "result_field": "utilities_deduction", "aggregate_target": "水电费及扣款", "rule_code": "WELFARE_DORMITORY_FEE"},
+	{"item_code": "BONUS_OTHER", "item_name": "其他奖金", "category": "奖金补贴", "data_type": "金额", "direction": "应发", "source_module": "已确认月度变量", "result_field": "subsidy_bonus_total", "aggregate_target": "奖金小计"},
+	{"item_code": "DEDUCTION_OTHER", "item_name": "其他扣款", "category": "扣款税费", "data_type": "金额", "direction": "应扣", "source_module": "已确认月度变量", "result_field": "punishment_total", "aggregate_target": "惩处小计"},
 ]
 
 
@@ -866,8 +997,415 @@ def _can_manage_payroll_rules():
 	return bool({"System Manager", "HR Manager"} & roles)
 
 
-def _rule_doc_values(rule):
+def _require_payroll_master_manager():
+	if not _can_manage_payroll_rules():
+		frappe.throw(_("仅系统管理员或人事管理员可以维护薪资架构和员工定薪。"))
+
+
+def _default_rule(rule_code):
+	return next((rule for rule in DEFAULT_PAYROLL_RULES if rule["rule_code"] == rule_code), {})
+
+
+def _rule_parameters(value):
+	if isinstance(value, dict):
+		return dict(value)
+	if not value:
+		return {}
+	try:
+		decoded = json.loads(value)
+	except (TypeError, ValueError) as exc:
+		frappe.throw(_("薪资规则参数 JSON 格式错误：{0}").format(exc))
+	if not isinstance(decoded, dict):
+		frappe.throw(_("薪资规则参数必须是 JSON 对象。"))
+	return decoded
+
+
+def _rule_parameter_errors(rule_code, parameters):
+	if rule_code not in EXECUTABLE_PAYROLL_RULES:
+		return []
+	errors = []
+	for key in EXECUTABLE_PAYROLL_RULES[rule_code]["parameters"]:
+		if key not in parameters:
+			errors.append(f"缺少参数 {key}")
+	for key in ("standard_hours_divisor", "weekday", "weekend", "holiday", "large_night_shift", "small_night_shift"):
+		if key in parameters and flt(parameters[key]) <= 0:
+			errors.append(f"参数 {key} 必须大于 0")
+	if "thresholds" in parameters:
+		thresholds = parameters["thresholds"]
+		if not isinstance(thresholds, list) or not thresholds:
+			errors.append("参数 thresholds 必须是非空数组")
+		else:
+			for item in thresholds:
+				if not isinstance(item, (list, tuple)) or len(item) != 2:
+					errors.append("thresholds 每项必须为 [缺勤上限, 全勤奖金额]")
+					break
+	if "ranges" in parameters and not isinstance(parameters["ranges"], list):
+		errors.append("参数 ranges 必须是数组")
+	return errors
+
+
+def _rule_is_effective(rule, payroll_month):
+	if not payroll_month:
+		return True
+	month_end = getdate(_month_end(payroll_month))
+	if rule.effective_from and getdate(rule.effective_from) > month_end:
+		return False
+	if rule.effective_to and getdate(rule.effective_to) < month_end:
+		return False
+	return True
+
+
+def _effective_rule_config(rule_code, payroll_month="", company=""):
+	"""Return one validated executable rule and its immutable calculation snapshot."""
+	company = _require_company(company)
+	default = _default_rule(rule_code)
+	if not default:
+		frappe.throw(_("未注册的薪资执行规则：{0}").format(rule_code))
+	default_parameters = _rule_parameters(default.get("parameters_json"))
+	rule_name = frappe.db.get_value(PAYROLL_RULE_DOCTYPE, {"company": company, "rule_code": rule_code}, "name")
+	if not rule_name:
+		# Temporary compatibility for rules created before company isolation. New
+		# writes are always company-scoped and never update this legacy fallback.
+		rule_name = frappe.db.get_value(PAYROLL_RULE_DOCTYPE, {"company": ["is", "not set"], "rule_code": rule_code}, "name")
+	if not rule_name:
+		return {
+			"rule_code": rule_code,
+			"rule_name": default.get("rule_name"),
+			"formula_expression": default.get("formula_expression"),
+			"parameters": default_parameters,
+			"source": f"{company} / 内置默认规则",
+		}
+	rule = frappe.get_doc(PAYROLL_RULE_DOCTYPE, rule_name)
+	if rule.status != "已启用":
+		frappe.throw(_("执行规则 {0} 当前不是已启用状态，不能生成薪资结算。").format(rule_code))
+	if not _rule_is_effective(rule, payroll_month):
+		frappe.throw(_("执行规则 {0} 不在薪资月份 {1} 的生效区间内。").format(rule_code, payroll_month))
+	parameters = {**default_parameters, **_rule_parameters(rule.parameters_json)}
+	errors = _rule_parameter_errors(rule_code, parameters)
+	if errors:
+		frappe.throw(_("执行规则 {0} 参数无效：{1}").format(rule_code, "；".join(errors)))
+	return {
+		"name": rule.name,
+		"rule_code": rule_code,
+		"rule_name": rule.rule_name,
+		"formula_expression": rule.formula_expression or default.get("formula_expression"),
+		"parameters": parameters,
+		"company": company,
+		"source": f"{company} / 规则中心" if rule.company else "历史全局规则（待迁移）",
+	}
+
+
+def _payroll_calculation_rules(company, payroll_month):
+	return {
+		rule_code: _effective_rule_config(rule_code, payroll_month, company)
+		for rule_code in EXECUTABLE_PAYROLL_RULES
+	}
+
+
+def _formula_rule_code(output_field):
+	return f"FORMULA_{str(output_field or '').upper()}"
+
+
+def _effective_payroll_formulas(company, payroll_month=""):
+	"""Return the ordered built-in formula set with company overrides applied."""
+	company = _require_company(company)
+	rows = frappe.get_all(
+		PAYROLL_RULE_DOCTYPE,
+		filters={"company": company, "rule_code": ["like", "FORMULA_%"], "status": "已启用"},
+		fields=["name", "rule_code", "output_field", "formula_expression", "formula_version", "effective_from", "effective_to", "modified"],
+		order_by="modified desc",
+		limit_page_length=500,
+	)
+	overrides = {}
+	for row in rows:
+		if not row.output_field or row.output_field in overrides or not _rule_is_effective(row, payroll_month):
+			continue
+		overrides[row.output_field] = row
+	formulas = []
+	for index, template in enumerate(FORMULA_TEMPLATES, start=1):
+		formula = dict(template)
+		formula["order"] = index
+		formula["version"] = 1
+		formula["source"] = f"{company} / 内置公式模板"
+		override = overrides.get(template["output_field"])
+		if override:
+			formula.update(
+				{
+					"expression": override.formula_expression,
+					"version": int(override.formula_version or 1),
+					"source": f"{company} / {override.name}",
+					"rule_name": override.name,
+				}
+			)
+		compile_formula(formula["expression"])
+		formulas.append(formula)
+	return formulas
+
+
+def _formula_catalog_row(formula, company, order):
+	field = FIELD_BY_NAME[formula["output_field"]]
+	_, dependencies = compile_formula(formula["expression"])
+	return {
+		**formula,
+		"company": company,
+		"order": order,
+		"rule_code": _formula_rule_code(formula["output_field"]),
+		"output_label": field["label"],
+		"dependencies": [FIELD_BY_NAME[name]["label"] for name in dependencies],
+		"status": "已启用",
+	}
+
+
+@frappe.whitelist()
+def get_payroll_formula_catalog(company: str, payroll_month: str = ""):
+	company = _require_company(company)
+	formulas = _effective_payroll_formulas(company, payroll_month)
+	return {
+		"company": company,
+		"payroll_month": payroll_month,
+		"fields": FIELD_DEFINITIONS,
+		"functions": FUNCTIONS,
+		"formulas": [_formula_catalog_row(formula, company, index) for index, formula in enumerate(formulas, start=1)],
+		"groups": ["薪资字段", "考勤字段", "月度变量", "计算结果"],
+	}
+
+
+@frappe.whitelist()
+def validate_payroll_formula(company: str, output_field: str, expression: str, sample_values: str = ""):
+	company = _require_company(company)
+	if output_field not in FIELD_BY_NAME or FIELD_BY_NAME[output_field]["group"] != "计算结果":
+		frappe.throw(_("请选择系统允许的计算结果项目"))
+	try:
+		_, dependencies = compile_formula(expression)
+		if output_field in dependencies:
+			raise FormulaError("结果项目不能引用自身")
+		if isinstance(sample_values, str):
+			sample_values = json.loads(sample_values or "{}")
+		value, _ = evaluate_formula(expression, sample_values or {})
+	except (FormulaError, ValueError, TypeError) as exc:
+		return {"valid": 0, "message": str(exc), "result": None, "dependencies": []}
+	return {
+		"valid": 1,
+		"message": "公式校验通过，可参与薪资试算",
+		"result": _money(value),
+		"dependencies": [{"fieldname": name, "label": FIELD_BY_NAME[name]["label"]} for name in dependencies],
+	}
+
+
+@frappe.whitelist()
+def upsert_payroll_formula(**kwargs: object):
+	if not _can_manage_payroll_rules():
+		frappe.throw(_("您没有维护薪资公式的权限"))
+	data = dict(kwargs)
+	company = _require_company(data.get("company"))
+	output_field = data.get("output_field")
+	expression = data.get("formula_expression") or data.get("expression")
+	validation = validate_payroll_formula(company, output_field, expression)
+	if not validation.get("valid"):
+		frappe.throw(_("公式无效：{0}").format(validation.get("message")))
+	field = FIELD_BY_NAME[output_field]
+	rule_code = _formula_rule_code(output_field)
+	name = frappe.db.get_value(PAYROLL_RULE_DOCTYPE, {"company": company, "rule_code": rule_code}, "name")
+	current_version = int(frappe.db.get_value(PAYROLL_RULE_DOCTYPE, name, "formula_version") or 0) if name else 0
+	values = {
+		"company": company,
+		"rule_code": rule_code,
+		"rule_name": field["label"],
+		"rule_category": data.get("rule_category") or "薪资结算",
+		"rule_scope": data.get("rule_scope") or "薪资结算表",
+		"status": data.get("status") or "已启用",
+		"editable": 1,
+		"effective_from": data.get("effective_from"),
+		"effective_to": data.get("effective_to"),
+		"calculation_mode": "公式",
+		"output_field": output_field,
+		"formula_expression": expression,
+		"formula_version": current_version + 1,
+		"parameters_json": "{}",
+		"rule_text": data.get("rule_text") or data.get("description"),
+		"source_file": data.get("source_file") or "公司薪资公式模板",
+		"source_sheet": data.get("source_sheet"),
+		"source_cell": data.get("source_cell"),
+		"last_reviewed_by": frappe.session.user,
+		"last_reviewed_on": now_datetime(),
+	}
+	if name:
+		doc = frappe.get_doc(PAYROLL_RULE_DOCTYPE, name)
+		if doc.company != company:
+			frappe.throw(_("不能跨公司修改薪资公式"))
+		doc.update(values)
+		doc.save(ignore_permissions=True)
+	else:
+		doc = frappe.get_doc({"doctype": PAYROLL_RULE_DOCTYPE, **values})
+		doc.insert(ignore_permissions=True)
+	frappe.db.commit()
+	return {"name": doc.name, "formula_version": doc.formula_version, "validation": validation}
+
+
+@frappe.whitelist()
+def ensure_default_payroll_formulas(company: str, force: int = 0):
+	if not _can_manage_payroll_rules():
+		frappe.throw(_("您没有维护薪资公式的权限"))
+	company = _require_company(company)
+	created, updated = 0, 0
+	for template in FORMULA_TEMPLATES:
+		name = frappe.db.get_value(PAYROLL_RULE_DOCTYPE, {"company": company, "rule_code": _formula_rule_code(template["output_field"])}, "name")
+		if name and not flt(force):
+			continue
+		upsert_payroll_formula(
+			company=company,
+			output_field=template["output_field"],
+			formula_expression=template["expression"],
+			rule_category="薪资结算",
+			description=template["description"],
+			source_file="5.2人资考勤.xlsx",
+			source_sheet="薪资结算表",
+		)
+		updated += 1 if name else 0
+		created += 0 if name else 1
+	return {"company": company, "created": created, "updated": updated}
+
+
+@frappe.whitelist()
+def create_payroll_formula_template_file(company: str):
+	from openpyxl import Workbook
+	from openpyxl.styles import Alignment, Font, PatternFill
+	from frappe.utils.file_manager import save_file
+
+	company = _require_company(company)
+	workbook = Workbook()
+	sheet = workbook.active
+	sheet.title = "计薪公式"
+	headers = ["结果项目", "计算公式", "规则说明", "适用范围", "生效开始", "生效结束", "状态"]
+	sheet.append(headers)
+	for formula in _effective_payroll_formulas(company):
+		sheet.append([FIELD_BY_NAME[formula["output_field"]]["label"], formula["expression"], formula.get("description"), "薪资结算表", "", "", "已启用"])
+	fill = PatternFill("solid", fgColor="D9EAF7")
+	for cell in sheet[1]:
+		cell.fill = fill
+		cell.font = Font(bold=True)
+		cell.alignment = Alignment(horizontal="center")
+	for index, width in enumerate([24, 92, 56, 22, 16, 16, 12], start=1):
+		sheet.column_dimensions[sheet.cell(1, index).column_letter].width = width
+	fields = workbook.create_sheet("可用字段")
+	fields.append(["分组", "显示名称", "系统字段", "唯一来源", "公式写法"])
+	for item in FIELD_DEFINITIONS:
+		fields.append([item["group"], item["label"], item["fieldname"], item["source"], f'[{item["label"]}]'])
+	for cell in fields[1]:
+		cell.fill = fill
+		cell.font = Font(bold=True)
+	functions = workbook.create_sheet("可用函数")
+	functions.append(["函数", "用途", "写法"])
+	for item in FUNCTIONS:
+		functions.append([item["name"], item["label"], item["signature"]])
+	for cell in functions[1]:
+		cell.fill = fill
+		cell.font = Font(bold=True)
+	output = BytesIO()
+	workbook.save(output)
+	file_doc = save_file(f"{company}-计薪公式导入模板-{datetime.today().strftime('%Y%m%d%H%M%S')}.xlsx", output.getvalue(), None, None, is_private=1)
+	return {"file_url": file_doc.file_url, "file_name": file_doc.file_name}
+
+
+def _formula_workbook_rows(file_url):
+	workbook = _load_workbook(file_url)
+	sheet = _matching_sheet(workbook, "计薪公式")
+	if not sheet:
+		frappe.throw(_("未找到“计薪公式”工作表"))
+	rows = list(sheet.iter_rows(values_only=True))
+	if not rows:
+		return []
+	headers = [_text(value) for value in rows[0]]
+	result = []
+	for values in rows[1:]:
+		row = {headers[index]: _text(value) for index, value in enumerate(values) if index < len(headers) and headers[index]}
+		if row.get("结果项目") or row.get("计算公式"):
+			result.append(row)
+	return result
+
+
+@frappe.whitelist()
+def preview_payroll_formula_workbook(file_url: str, company: str):
+	company = _require_company(company)
+	rows = []
+	for row in _formula_workbook_rows(file_url):
+		field = next((item for item in FIELD_DEFINITIONS if item["label"] == row.get("结果项目") and item["group"] == "计算结果"), None)
+		validation = validate_payroll_formula(company, field["fieldname"] if field else "", row.get("计算公式"))
+		rows.append({**row, "output_field": field["fieldname"] if field else "", **validation})
+	return {"company": company, "row_count": len(rows), "valid_count": sum(1 for row in rows if row.get("valid")), "rows": rows}
+
+
+@frappe.whitelist()
+def import_payroll_formula_workbook(file_url: str, company: str):
+	if not _can_manage_payroll_rules():
+		frappe.throw(_("您没有导入薪资公式的权限"))
+	preview = preview_payroll_formula_workbook(file_url, company)
+	invalid = [row for row in preview["rows"] if not row.get("valid")]
+	if invalid:
+		frappe.throw(_("公式导入存在 {0} 行错误，请先修正预览结果。首个错误：{1}").format(len(invalid), invalid[0].get("message")))
+	for row in preview["rows"]:
+		upsert_payroll_formula(
+			company=company,
+			output_field=row["output_field"],
+			formula_expression=row.get("计算公式"),
+			description=row.get("规则说明"),
+			rule_scope=row.get("适用范围"),
+			effective_from=row.get("生效开始"),
+			effective_to=row.get("生效结束"),
+			status=row.get("状态") or "已启用",
+			source_file=file_url,
+			source_sheet="计薪公式",
+		)
+	return {"imported": len(preview["rows"]), "company": company}
+
+
+def _rule_number(rule, key, fallback=0):
+	return flt((rule or {}).get("parameters", {}).get(key, fallback)) or flt(fallback)
+
+
+def _full_attendance_bonus(attendance, rule):
+	"""Apply the confirmed threshold table unless a monthly variable overrides it."""
+	parameters = rule.get("parameters", {})
+	absence_basis = max(
+		flt(getattr(attendance, "standard_hours", 0))
+		- flt(getattr(attendance, "actual_attendance_hours", 0))
+		- flt(getattr(attendance, "rest_leave_hours", 0))
+		+ flt(getattr(attendance, "sick_leave_hours", 0)) * 0.5,
+		0,
+	)
+	thresholds = sorted(parameters.get("thresholds") or [], key=lambda item: flt(item[0]))
+	for maximum, amount in thresholds:
+		if absence_basis <= flt(maximum):
+			return flt(amount), absence_basis
+	return 0, absence_basis
+
+
+def _company_social_security_from_rule(personal_amount, rule):
+	amount = flt(personal_amount)
+	if amount <= 0:
+		return 0
+	ranges = list((rule or {}).get("parameters", {}).get("ranges") or [])
+	# Existing data uses [minimum, maximum, company_amount]. Resolve exact and
+	# narrow ranges before broad historical fallback ranges.
+	def width(item):
+		if not isinstance(item, (list, tuple)) or len(item) < 3:
+			return float("inf")
+		lower, upper = item[0], item[1]
+		if upper in (None, ""):
+			return float("inf")
+		return max(flt(upper) - flt(lower), 0)
+	for item in sorted(ranges, key=width):
+		if not isinstance(item, (list, tuple)) or len(item) < 3:
+			continue
+		lower, upper, company_amount = item[0], item[1], item[2]
+		if amount >= flt(lower) and (upper in (None, "") or amount <= flt(upper)):
+			return flt(company_amount)
+	return 0
+
+
+def _rule_doc_values(rule, company):
 	values = dict(rule)
+	values["company"] = _require_company(company)
 	values["parameters_json"] = json.dumps(values.get("parameters_json") or {}, ensure_ascii=False, default=str)
 	values.setdefault("status", "已启用")
 	values.setdefault("editable", 1)
@@ -882,14 +1420,15 @@ def can_edit_payroll_rules():
 
 
 @frappe.whitelist()
-def ensure_default_payroll_rules(force: int = 0):
+def ensure_default_payroll_rules(company: str, force: int = 0):
 	if not _can_manage_payroll_rules():
 		frappe.throw(_("您没有维护薪资规则的权限"))
+	company = _require_company(company)
 	created = []
 	updated = []
 	for rule in DEFAULT_PAYROLL_RULES:
-		existing = frappe.db.get_value(PAYROLL_RULE_DOCTYPE, {"rule_code": rule["rule_code"]}, "name")
-		values = _rule_doc_values(rule)
+		existing = frappe.db.get_value(PAYROLL_RULE_DOCTYPE, {"company": company, "rule_code": rule["rule_code"]}, "name")
+		values = _rule_doc_values(rule, company)
 		if existing:
 			if not flt(force):
 				continue
@@ -902,23 +1441,61 @@ def ensure_default_payroll_rules(force: int = 0):
 		doc.insert(ignore_permissions=True)
 		created.append(doc.name)
 	frappe.db.commit()
-	return {"created": len(created), "updated": len(updated)}
+	return {"company": company, "created": len(created), "updated": len(updated)}
 
 
 @frappe.whitelist()
-def list_payroll_rules(rule_category: str = "", status: str = "", page_length: int = 200):
-	filters = {}
+def list_payroll_rules(company: str, rule_category: str = "", status: str = "", page_length: int = 200):
+	company = _require_company(company)
+	filters = {"company": company}
 	if rule_category:
 		filters["rule_category"] = rule_category
 	if status:
 		filters["status"] = status
-	return frappe.get_all(
+	rows = frappe.get_all(
 		PAYROLL_RULE_DOCTYPE,
 		filters=filters,
 		fields=["*"],
 		order_by="rule_category asc, rule_code asc",
 		limit_page_length=int(page_length or 200),
 	)
+	persisted_codes = {row.rule_code for row in rows}
+	for default in DEFAULT_PAYROLL_RULES:
+		if default["rule_code"] in persisted_codes:
+			continue
+		rows.append(frappe._dict({**_rule_doc_values(default, company), "rule_origin": "内置默认（未保存）"}))
+	for row in rows:
+		row["rule_origin"] = row.get("rule_origin") or "公司规则"
+		try:
+			parameters = _rule_parameters(row.parameters_json)
+			errors = _rule_parameter_errors(row.rule_code, parameters)
+		except Exception as exc:
+			parameters, errors = {}, [str(exc)]
+		if row.rule_code in EXECUTABLE_PAYROLL_RULES:
+			row["execution_mode"] = "参数化公式"
+			row["execution_status"] = "参数有效，可参与结算" if row.status == "已启用" and not errors else ("参数无效：" + "；".join(errors) if errors else "不参与结算")
+		elif row.rule_code in FIXED_PAYROLL_CALCULATION_RULES:
+			row["execution_mode"] = "固定计算器公式"
+			row["execution_status"] = "由结算计算器执行，结构变更需受控发布"
+		else:
+			row["execution_mode"] = "来源/说明规则"
+			row["execution_status"] = "作为导入、确认或审计依据，不直接计算"
+		row["parameters"] = parameters
+	return sorted(rows, key=lambda row: (row.get("rule_category") or "", row.get("rule_code") or ""))
+
+
+@frappe.whitelist()
+def validate_payroll_rule_execution(company: str, payroll_month: str = ""):
+	"""Expose which formula drivers will be used by a monthly calculation."""
+	company = _require_company(company)
+	results = []
+	for rule_code in EXECUTABLE_PAYROLL_RULES:
+		try:
+			config = _effective_rule_config(rule_code, payroll_month, company)
+			results.append({**config, "valid": 1, "message": "参数有效，可参与结算"})
+		except Exception as exc:
+			results.append({"rule_code": rule_code, "valid": 0, "message": str(exc)})
+	return {"company": company, "payroll_month": payroll_month, "rules": results, "valid": all(row["valid"] for row in results)}
 
 
 @frappe.whitelist()
@@ -926,12 +1503,18 @@ def upsert_payroll_rule(**kwargs):
 	if not _can_manage_payroll_rules():
 		frappe.throw(_("您没有维护薪资规则的权限"))
 	data = dict(kwargs)
+	company = _require_company(data.get("company"))
 	if not data.get("rule_code"):
 		frappe.throw(_("请填写规则编码"))
 	if not data.get("rule_name"):
 		frappe.throw(_("请填写规则名称"))
+	parameters = _rule_parameters(data.get("parameters_json") or "{}")
+	errors = _rule_parameter_errors(data["rule_code"], parameters)
+	if errors:
+		frappe.throw(_("规则参数无效：{0}").format("；".join(errors)))
 	values = {
 		"doctype": PAYROLL_RULE_DOCTYPE,
+		"company": company,
 		"rule_code": data.get("rule_code"),
 		"rule_name": data.get("rule_name"),
 		"rule_category": data.get("rule_category") or "其他",
@@ -941,7 +1524,7 @@ def upsert_payroll_rule(**kwargs):
 		"effective_from": data.get("effective_from"),
 		"effective_to": data.get("effective_to"),
 		"formula_expression": data.get("formula_expression"),
-		"parameters_json": data.get("parameters_json") or "{}",
+		"parameters_json": json.dumps(parameters, ensure_ascii=False, sort_keys=True),
 		"rule_text": data.get("rule_text"),
 		"source_file": data.get("source_file"),
 		"source_sheet": data.get("source_sheet"),
@@ -950,9 +1533,11 @@ def upsert_payroll_rule(**kwargs):
 		"last_reviewed_by": frappe.session.user,
 		"last_reviewed_on": now_datetime(),
 	}
-	name = data.get("name") or frappe.db.get_value(PAYROLL_RULE_DOCTYPE, {"rule_code": values["rule_code"]}, "name")
+	name = data.get("name") or frappe.db.get_value(PAYROLL_RULE_DOCTYPE, {"company": company, "rule_code": values["rule_code"]}, "name")
 	if name:
 		doc = frappe.get_doc(PAYROLL_RULE_DOCTYPE, name)
+		if doc.company and doc.company != company:
+			frappe.throw(_("不能跨公司修改薪资规则"))
 		if not flt(doc.editable):
 			frappe.throw(_("该薪资规则不允许修改"))
 		doc.update(values)
@@ -1022,6 +1607,118 @@ def list_payroll_field_mappings(status: str = "", page_length: int = 200):
 	)
 
 
+def _payroll_configuration_category(mapping):
+	order = int(mapping.get("display_order") or 0)
+	if order <= 4:
+		return "员工资料"
+	if order <= 8:
+		return "固定薪资"
+	if order <= 25:
+		return "考勤结算"
+	if order <= 30:
+		return "奖金补贴"
+	if order <= 34:
+		return "扣款税费"
+	if order <= 45:
+		return "应付与实发"
+	if order <= 48:
+		return "公司成本"
+	return "导出辅助"
+
+
+def _payroll_configuration_data_type(fieldname, label):
+	value = f"{fieldname or ''} {label or ''}".lower()
+	if "hours" in value or "工时" in value or "时数" in value:
+		return "工时"
+	if "count" in value or "次数" in value:
+		return "次数"
+	if fieldname in ("department", "employee_code", "employee_name"):
+		return "文本"
+	return "金额"
+
+
+@frappe.whitelist()
+def list_payroll_configuration_items(company: str):
+	"""Return the configurable salary-item catalogue used by the setup guide.
+
+	The catalogue exposes every effective settlement field plus atomic options
+	that are combined in the legacy Excel layout.  It does not create a second
+	calculation engine: each option points to an existing controlled rule,
+	monthly source type or settlement mapping.
+	"""
+	company = _require_company(company)
+	persisted_mappings = {
+		row.mapping_code: row
+		for row in frappe.get_all(PAYROLL_FIELD_MAPPING_DOCTYPE, fields=["*"], limit_page_length=500)
+	}
+	persisted_rules = {
+		row.rule_code: row
+		for row in frappe.get_all(
+			PAYROLL_RULE_DOCTYPE,
+			filters={"company": company},
+			fields=["name", "rule_code", "rule_name", "status", "editable"],
+			limit_page_length=500,
+		)
+	}
+	items = []
+	for default_mapping in PAYROLL_SETTLEMENT_FIELD_MAPPINGS:
+		if default_mapping.get("source_module") == "导出辅助":
+			continue
+		mapping = dict(default_mapping)
+		if default_mapping["mapping_code"] in persisted_mappings:
+			mapping.update(dict(persisted_mappings[default_mapping["mapping_code"]]))
+		rule_code = mapping.get("rule_code") or ""
+		rule = persisted_rules.get(rule_code)
+		if rule_code in EXECUTABLE_PAYROLL_RULES:
+			calculation_mode = "参数化规则"
+		elif mapping.get("formula_expression"):
+			calculation_mode = "固定计算器"
+		else:
+			calculation_mode = "来源字段"
+		items.append(
+			{
+				"item_code": mapping.get("mapping_code"),
+				"item_name": mapping.get("excel_label"),
+				"category": _payroll_configuration_category(mapping),
+				"data_type": _payroll_configuration_data_type(mapping.get("system_field"), mapping.get("excel_label")),
+				"direction": "参考" if int(mapping.get("display_order") or 0) <= 4 else ("公司承担" if int(mapping.get("display_order") or 0) >= 46 else "参与结算"),
+				"source_module": mapping.get("source_module") or "未设置",
+				"result_field": mapping.get("system_field") or "",
+				"aggregate_target": "",
+				"mapping_code": mapping.get("mapping_code"),
+				"rule_code": rule_code,
+				"calculation_mode": calculation_mode,
+				"configuration_status": "已映射" if mapping.get("system_field") else "待映射",
+				"rule_status": rule.status if rule else ("使用内置规则" if rule_code else "无需规则"),
+			}
+		)
+	for atomic in PAYROLL_ATOMIC_CONFIGURATION_ITEMS:
+		item = dict(atomic)
+		rule_code = item.get("rule_code") or ""
+		rule = persisted_rules.get(rule_code)
+		item.update(
+			{
+				"mapping_code": "",
+				"calculation_mode": "参数化规则" if rule_code in EXECUTABLE_PAYROLL_RULES else "月度来源汇总",
+				"configuration_status": "已连接汇总字段" if item.get("result_field") else "待映射",
+				"rule_status": rule.status if rule else ("使用内置规则" if rule_code else "来源确认后参与"),
+			}
+		)
+		items.append(item)
+	category_order = ["员工资料", "固定薪资", "考勤结算", "奖金补贴", "扣款税费", "应付与实发", "公司成本"]
+	items.sort(key=lambda row: (category_order.index(row["category"]) if row["category"] in category_order else 99, row["item_name"] or ""))
+	return {
+		"company": company,
+		"categories": category_order,
+		"items": items,
+		"summary": {
+			"item_count": len(items),
+			"mapped_count": sum(1 for row in items if row["configuration_status"] != "待映射"),
+			"rule_count": len({row.get("rule_code") for row in items if row.get("rule_code")}),
+		},
+	}
+
+
 @frappe.whitelist()
 def upsert_payroll_field_mapping(**kwargs):
 	if not _can_manage_payroll_rules():
@@ -1070,6 +1767,57 @@ def _require_payroll_scope(company, payroll_month, attendance_lock_version=""):
 	if not attendance_lock_version:
 		frappe.throw(_("薪资试算必须传入考勤锁定版本。"))
 	return company, payroll_month, attendance_lock_version
+
+
+@frappe.whitelist()
+def list_available_payroll_attendance_locks(company: str, payroll_month: str):
+	"""List only immutable attendance versions that payroll may consume.
+
+	A reopened attendance month creates a new version.  Older locked summaries
+	remain available for audit/reconciliation, while the current version is
+	marked for the UI to select by default.  Draft and cross-company summaries
+	are deliberately excluded.
+	"""
+	company = _require_company(company)
+	payroll_month = (payroll_month or "").strip()
+	if not re.match(r"^\d{4}-\d{2}$", payroll_month):
+		frappe.throw(_("薪资月份必须为 YYYY-MM"))
+
+	rows = frappe.get_all(
+		MONTHLY_ATTENDANCE_DOCTYPE,
+		filters={"company": company, "attendance_month": payroll_month, "lock_status": "已锁定"},
+		fields=["attendance_lock_version", "locked_on"],
+		limit_page_length=100000,
+	)
+	by_version = {}
+	for row in rows:
+		version = str(row.get("attendance_lock_version") or "").strip()
+		if not version:
+			continue
+		item = by_version.setdefault(version, {"attendance_lock_version": version, "summary_count": 0, "locked_on": None})
+		item["summary_count"] += 1
+		if row.get("locked_on") and (not item["locked_on"] or row.get("locked_on") > item["locked_on"]):
+			item["locked_on"] = row.get("locked_on")
+
+	month_lock = frappe.db.get_value(
+		"HRMS Attendance Month Lock",
+		{"company": company, "attendance_month": payroll_month, "status": "已锁定"},
+		["name", "active_version", "locked_on"],
+		as_dict=True,
+	)
+	active_version = str((month_lock or {}).get("active_version") or "")
+
+	def version_sort_key(item):
+		value = item["attendance_lock_version"]
+		return (0, int(value)) if value.isdigit() else (1, value)
+
+	locks = []
+	for item in sorted(by_version.values(), key=version_sort_key, reverse=True):
+		item["is_current"] = bool(month_lock and item["attendance_lock_version"] == active_version)
+		item["month_lock"] = (month_lock or {}).get("name") or ""
+		item["status"] = "当前已锁定版本" if item["is_current"] else "历史已锁定版本"
+		locks.append(item)
+	return {"company": company, "payroll_month": payroll_month, "locks": locks}
 
 
 def _payroll_scope_filters(company, payroll_month, attendance_lock_version=""):
@@ -1185,6 +1933,7 @@ def preview_salary_structure_workbook(file_url: str):
 
 @frappe.whitelist()
 def import_salary_structure_workbook(file_url: str, structure_version: str, effective_from: str, effective_to: str = ""):
+	_require_payroll_master_manager()
 	if not structure_version:
 		frappe.throw(_("请填写薪资架构版本"))
 	if not effective_from:
@@ -1281,9 +2030,19 @@ def _grade_context(salary_grade):
 
 @frappe.whitelist()
 def create_employee_salary_change(**kwargs):
+	_require_payroll_master_manager()
 	data = dict(kwargs)
 	company = _require_company(data.get("company"))
+	status = data.get("status") or "草稿"
+	if status not in {"草稿", "待审核"}:
+		frappe.throw(_("新增员工定薪只能保存为草稿或待审核；请在人事审核通过后再生效。"))
 	employee = data.get("employee")
+	if not employee:
+		frappe.throw(_("请先选择员工。"))
+	if not data.get("effective_date"):
+		frappe.throw(_("请填写生效日期。"))
+	if not data.get("change_reason"):
+		frappe.throw(_("请填写薪资异动原因。"))
 	employee_context = _employee_context(employee)
 	if employee_context.get("company") and employee_context.get("company") != company:
 		frappe.throw(_("员工 {0} 不属于公司 {1}").format(employee, company))
@@ -1322,7 +2081,7 @@ def create_employee_salary_change(**kwargs):
 			"prepared_by": data.get("prepared_by"),
 			"reviewed_by": data.get("reviewed_by"),
 			"approved_by": data.get("approved_by"),
-			"status": data.get("status") or "草稿",
+			"status": status,
 			"source_file": data.get("source_file"),
 			"remarks": data.get("remarks"),
 		}
@@ -1618,6 +2377,58 @@ def create_payroll_data_closure_template_file():
 	workbook.save(output)
 	file_doc = save_file(
 		f"薪资数据闭环导入模板-{datetime.today().strftime('%Y%m%d%H%M%S')}.xlsx",
+		output.getvalue(),
+		None,
+		None,
+		is_private=1,
+	)
+	return {"file_url": file_doc.file_url, "file_name": file_doc.file_name}
+
+
+@frappe.whitelist()
+def create_employee_salary_change_template_file():
+	"""Create the focused template used for employee salary master-data changes.
+
+	The combined data-closure workbook remains useful for a monthly payroll run.
+	This smaller file is deliberately kept next to the salary architecture workflow so
+	HR can maintain joiner, confirmation, promotion and adjustment records without
+	accidentally importing monthly attendance or welfare data.
+	"""
+	from openpyxl import Workbook
+	from openpyxl.styles import Alignment, Font, PatternFill
+	from frappe.utils.file_manager import save_file
+
+	workbook = Workbook()
+	sheet = workbook.active
+	sheet.title = "员工薪资异动导入"
+	template = next(item for item in PAYROLL_IMPORT_TEMPLATES if item["template_key"] == "employee_salary_change")
+	headers = [column[0] for column in template["columns"]]
+	sheet.append(headers)
+	header_fill = PatternFill("solid", fgColor="D9EAF7")
+	for cell in sheet[1]:
+		cell.fill = header_fill
+		cell.font = Font(bold=True)
+		cell.alignment = Alignment(horizontal="center", vertical="center")
+	for index, column in enumerate(headers, start=1):
+		sheet.column_dimensions[sheet.cell(1, index).column_letter].width = min(max(len(column) + 8, 14), 28)
+
+	notes = workbook.create_sheet("填写说明")
+	notes.append(["字段", "填写规则"])
+	for cell in notes[1]:
+		cell.fill = header_fill
+		cell.font = Font(bold=True)
+	for column in template["columns"]:
+		notes.append([column[0], column[2]])
+	notes.append(["状态", "建议先导入“草稿”或“待审核”；只有“已批准”且生效日期不晚于算薪月份的记录会进入正式薪资试算。"])
+	notes.append(["薪资小计", "可留空，系统会按底薪 + 职能津贴 + 证书津贴 + 多能工津贴计算。"])
+	notes.append(["公司", "模板不填写公司；导入时以页面顶部当前公司为准，跨公司数据会被阻断。"])
+	notes.column_dimensions["A"].width = 22
+	notes.column_dimensions["B"].width = 88
+
+	output = BytesIO()
+	workbook.save(output)
+	file_doc = save_file(
+		f"员工薪资异动导入模板-{datetime.today().strftime('%Y%m%d%H%M%S')}.xlsx",
 		output.getvalue(),
 		None,
 		None,
@@ -2276,6 +3087,7 @@ def _variable_totals(company, payroll_month, attendance_lock_version=""):
 		filters["attendance_lock_version"] = attendance_lock_version
 	totals = defaultdict(lambda: defaultdict(float))
 	identity = {}
+	sources = defaultdict(list)
 	for row in frappe.get_all(VARIABLE_RECORD_DOCTYPE, filters=filters, fields=["*"]):
 		_assert_row_company(row, company, _("薪资变量"))
 		key = _employee_identity_key(row)
@@ -2283,17 +3095,24 @@ def _variable_totals(company, payroll_month, attendance_lock_version=""):
 			continue
 		identity.setdefault(key, row)
 		totals[key][row.variable_type] += flt(row.amount)
-	return totals, identity
+		sources[key].append(
+			{
+				"name": row.name,
+				"variable_type": row.variable_type,
+				"amount": flt(row.amount),
+				"source_sheet": row.source_sheet,
+				"source_hash": row.source_hash,
+			}
+		)
+	return totals, identity, sources
 
 
 @frappe.whitelist()
 def generate_payroll_input_records(company: str, payroll_month: str, attendance_lock_version: str):
 	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	calculation_rules = _payroll_calculation_rules(company, payroll_month)
 	input_filters = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
-	for name in frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters=input_filters, pluck="name"):
-		frappe.delete_doc(PAYROLL_INPUT_DOCTYPE, name, ignore_permissions=True, force=True)
-
-	variables, variable_identity = _variable_totals(company, payroll_month, attendance_lock_version)
+	variables, variable_identity, variable_sources = _variable_totals(company, payroll_month, attendance_lock_version)
 	summary_rows = frappe.get_all(MONTHLY_ATTENDANCE_DOCTYPE, filters=_attendance_scope_filters(company, payroll_month, attendance_lock_version), fields=["*"])
 	if not summary_rows:
 		frappe.throw(_("未找到公司 {0}、月份 {1}、锁定版本 {2} 的已锁定月度考勤终稿。").format(company, payroll_month, attendance_lock_version))
@@ -2312,15 +3131,42 @@ def generate_payroll_input_records(company: str, payroll_month: str, attendance_
 	if extra_variable_keys:
 		frappe.throw(_("薪资变量存在未匹配已锁定考勤终稿的员工：{0}").format(", ".join(extra_variable_keys[:10])))
 
+	active_salary_changes = _active_salary_changes_for_month(company, payroll_month)
+	missing_salary_profiles = []
+	trial_salary_profiles = []
+	for key, attendance in attendance_by_key.items():
+		profile = (
+			active_salary_changes.get(getattr(attendance, "employee", None))
+			or active_salary_changes.get(getattr(attendance, "employee_code", None))
+			or active_salary_changes.get(getattr(attendance, "employee_name", None))
+		)
+		label = getattr(attendance, "employee_code", None) or getattr(attendance, "employee_name", None) or key
+		if not profile:
+			missing_salary_profiles.append(label)
+		elif _is_trial_salary_change(profile):
+			trial_salary_profiles.append(label)
+	if missing_salary_profiles:
+		frappe.throw(_("无法生成薪资输入表：以下员工缺少本月有效且已批准的薪资异动：{0}").format(", ".join(missing_salary_profiles[:10])))
+	if trial_salary_profiles and company != LOCAL_PAYROLL_TEST_COMPANY:
+		frappe.throw(_("无法生成薪资输入表：以下员工仍使用本地试运营/测试薪资数据，请先导入并批准正式薪资异动：{0}").format(", ".join(trial_salary_profiles[:10])))
+
+	for name in frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters=input_filters, pluck="name"):
+		frappe.delete_doc(PAYROLL_INPUT_DOCTYPE, name, ignore_permissions=True, force=True)
+
 	created = []
 	for key in sorted(k for k in attendance_by_key if k):
 		attendance = attendance_by_key.get(key)
 		source = attendance
 		values = defaultdict(float, variables.get(key, {}))
+		calculated_full_attendance_bonus, full_attendance_absence_basis = _full_attendance_bonus(
+			attendance, calculation_rules["ATTENDANCE_FULL_ATTENDANCE_BONUS"]
+		)
+		manual_full_attendance_bonus = "全勤奖" in values
+		full_attendance_bonus = values["全勤奖"] if manual_full_attendance_bonus else calculated_full_attendance_bonus
 		apple_reward_amount = flt(getattr(attendance, "apple_reward_amount", 0)) + values["苹果树"]
 		earnings = (
 			apple_reward_amount
-			+ values["全勤奖"]
+			+ full_attendance_bonus
 			+ values["住房补贴"]
 			+ values["学历补贴"]
 			+ values["其他奖金"]
@@ -2331,7 +3177,10 @@ def generate_payroll_input_records(company: str, payroll_month: str, attendance_
 			"payroll_month": payroll_month,
 			"attendance_lock_version": attendance_lock_version,
 			"attendance_summary": getattr(attendance, "name", ""),
-			"variable_record": getattr(variable_identity.get(key), "name", ""),
+			"variable_records": variable_sources.get(key, []),
+			"calculation_rules": calculation_rules,
+			"full_attendance_bonus_source": "确认变量" if manual_full_attendance_bonus else "考勤规则自动计算",
+			"full_attendance_absence_basis": full_attendance_absence_basis,
 		})
 		doc = frappe.get_doc(
 			{
@@ -2355,7 +3204,8 @@ def generate_payroll_input_records(company: str, payroll_month: str, attendance_
 				"large_night_shift_count": flt(getattr(attendance, "large_night_shift_count", 0)),
 				"small_night_shift_count": flt(getattr(attendance, "small_night_shift_count", 0)),
 				"apple_reward_amount": apple_reward_amount,
-				"full_attendance_bonus": values["全勤奖"],
+				"attendance_full_deduction": flt(getattr(attendance, "full_attendance_deduction", 0)),
+				"full_attendance_bonus": full_attendance_bonus,
 				"housing_subsidy": values["住房补贴"],
 				"education_subsidy": values["学历补贴"],
 				"dormitory_deduction": values["宿舍扣款"],
@@ -2401,11 +3251,17 @@ def list_payroll_input_records(company: str, payroll_month: str = "", attendance
 	return frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters=filters, fields=["*"], order_by="modified desc", limit_page_length=int(page_length or 50))
 
 
-def _rate(amount):
-	return flt(amount) / PAYROLL_STANDARD_HOURS_DIVISOR if flt(amount) else 0
+def _rate(amount, divisor=PAYROLL_STANDARD_HOURS_DIVISOR):
+	return flt(amount) / flt(divisor) if flt(amount) and flt(divisor) else 0
 
 
-def _company_social_security(personal_amount):
+def _money(value):
+	return flt(value, 2)
+
+
+def _company_social_security(personal_amount, rule=None):
+	if rule:
+		return _company_social_security_from_rule(personal_amount, rule)
 	amount = flt(personal_amount)
 	if amount <= 0 or amount < 524.96:
 		return 0
@@ -2423,14 +3279,14 @@ def _company_social_security(personal_amount):
 @frappe.whitelist()
 def generate_payroll_settlement_records(company: str, payroll_month: str, attendance_lock_version: str):
 	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	calculation_rules = _payroll_calculation_rules(company, payroll_month)
+	payroll_formulas = _effective_payroll_formulas(company, payroll_month)
 	settlement_filters = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
 	locked = frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters={**settlement_filters, "calculation_status": ["in", ["已确认", "已生成工资单"]]}, pluck="name")
 	if locked:
 		frappe.throw(_("公司 {0} 月份 {1} 锁定版本 {2} 已存在锁定薪资结算，不允许覆盖。").format(company, payroll_month, attendance_lock_version))
-	for name in frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters=settlement_filters, pluck="name"):
-		frappe.delete_doc(PAYROLL_SETTLEMENT_DOCTYPE, name, ignore_permissions=True, force=True)
 
-	variables, variable_identity = _variable_totals(company, payroll_month, attendance_lock_version)
+	variables, variable_identity, variable_sources = _variable_totals(company, payroll_month, attendance_lock_version)
 	input_rows = frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters=_payroll_scope_filters(company, payroll_month, attendance_lock_version), fields=["*"])
 	if not input_rows:
 		frappe.throw(_("未找到公司 {0}、月份 {1}、锁定版本 {2} 的薪资输入表。").format(company, payroll_month, attendance_lock_version))
@@ -2447,6 +3303,30 @@ def generate_payroll_settlement_records(company: str, payroll_month: str, attend
 	extra_variable_keys = sorted(set(variable_identity) - set(input_by_key))
 	if extra_variable_keys:
 		frappe.throw(_("薪资变量存在未匹配薪资输入表的员工：{0}").format(", ".join(extra_variable_keys[:10])))
+	active_salary_changes = _active_salary_changes_for_month(company, payroll_month)
+	missing_salary_profiles = []
+	trial_salary_profiles = []
+	for key, input_row in input_by_key.items():
+		profile = (
+			active_salary_changes.get(getattr(input_row, "employee", None))
+			or active_salary_changes.get(getattr(input_row, "employee_code", None))
+			or active_salary_changes.get(getattr(input_row, "employee_name", None))
+		)
+		if not profile:
+			missing_salary_profiles.append(getattr(input_row, "employee_code", None) or getattr(input_row, "employee_name", None) or key)
+		elif _is_trial_salary_change(profile):
+			trial_salary_profiles.append(getattr(input_row, "employee_code", None) or getattr(input_row, "employee_name", None) or key)
+	if missing_salary_profiles:
+		frappe.throw(_("无法试算：以下员工缺少本月有效且已批准的薪资异动：{0}").format(", ".join(missing_salary_profiles[:10])))
+	if trial_salary_profiles and company != LOCAL_PAYROLL_TEST_COMPANY:
+		frappe.throw(
+			_("无法试算：以下员工仍使用本地试运营/测试薪资数据，请先导入并批准正式薪资异动：{0}").format(
+				", ".join(trial_salary_profiles[:10])
+			)
+		)
+
+	for name in frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters=settlement_filters, pluck="name"):
+		frappe.delete_doc(PAYROLL_SETTLEMENT_DOCTYPE, name, ignore_permissions=True, force=True)
 
 	created = []
 	for key in sorted(k for k in input_by_key if k):
@@ -2462,70 +3342,96 @@ def generate_payroll_settlement_records(company: str, payroll_month: str, attend
 
 		base_salary = values["底薪"] or flt(salary_change.get("base_salary"))
 		function_allowance = values["职能津贴"] or values["职务津贴"] or flt(salary_change.get("function_allowance"))
-		certificate_skill_allowance = values["证书及多能工津贴"] or values["证书津贴"] + values["多能工津贴"] or flt(salary_change.get("certificate_allowance")) + flt(
-			salary_change.get("multi_skill_allowance")
-		)
-		salary_subtotal = values["薪资小计"] or values["全薪"] or flt(salary_change.get("full_salary")) or base_salary + function_allowance + certificate_skill_allowance
-		full_salary_hourly_rate = _rate(salary_subtotal)
-		base_salary_hourly_rate = _rate(base_salary)
-
-		weekday_overtime_hours = flt(getattr(input_row, "overtime_1_5_hours", 0))
-		raw_weekend_overtime_hours = flt(getattr(input_row, "overtime_2_hours", 0))
-		holiday_overtime_hours = flt(getattr(input_row, "overtime_3_hours", 0))
-		standard_hours = flt(getattr(input_row, "standard_hours", 0))
-		basic_attendance_hours = flt(getattr(input_row, "actual_attendance_hours", 0))
-		missing_hours = max(standard_hours - basic_attendance_hours, 0)
-		adjusted_absence_hours = max(missing_hours - raw_weekend_overtime_hours, 0)
-		weekend_overtime_hours = max(raw_weekend_overtime_hours - missing_hours + adjusted_absence_hours, 0)
-		weekday_overtime_pay = base_salary_hourly_rate * weekday_overtime_hours * 1.5
-		weekend_overtime_pay = base_salary_hourly_rate * weekend_overtime_hours * 2
-		holiday_overtime_pay = base_salary_hourly_rate * holiday_overtime_hours * 3
-		overtime_pay_total = weekday_overtime_pay + weekend_overtime_pay + holiday_overtime_pay
-
-		absence_deduction_amount = full_salary_hourly_rate * adjusted_absence_hours
-		large_night_shift_count = flt(getattr(input_row, "large_night_shift_count", 0))
-		small_night_shift_count = flt(getattr(input_row, "small_night_shift_count", 0))
-		night_shift_allowance = values["夜班津贴"] or large_night_shift_count * 45 + small_night_shift_count * 24
-
-		apple_reward_amount = flt(getattr(input_row, "apple_reward_amount", 0))
-		subsidy_bonus_total = (
-			flt(getattr(input_row, "full_attendance_bonus", 0))
-			+ flt(getattr(input_row, "housing_subsidy", 0))
-			+ flt(getattr(input_row, "education_subsidy", 0))
-			+ flt(getattr(input_row, "other_bonus", 0))
-		)
-		proposal_improvement_bonus = values["提案改善奖"]
-		production_bonus = values["生产奖"]
-		bonus_total = proposal_improvement_bonus + apple_reward_amount + subsidy_bonus_total + production_bonus
-
-		late_full_attendance_deduction = values["迟到金额+全勤奖扣款"]
-		absenteeism_hours = flt(getattr(input_row, "absent_hours", 0))
-		absenteeism_deduction = full_salary_hourly_rate * absenteeism_hours * 3
-		punishment_total = absenteeism_deduction + late_full_attendance_deduction + flt(getattr(input_row, "other_deduction", 0))
-		attendance_wage = salary_subtotal - absence_deduction_amount + overtime_pay_total + night_shift_allowance - punishment_total
-		gross_pay = attendance_wage + bonus_total
-
-		social_security_personal = flt(getattr(input_row, "social_security_personal", 0))
-		housing_fund_personal = flt(getattr(input_row, "housing_fund_personal", 0))
-		paid_proposal_birthday_welfare = values["已发福利"]
-		taxable_salary = gross_pay - social_security_personal - housing_fund_personal + paid_proposal_birthday_welfare
-		continuing_service_bonus = values["继续服务奖"]
-		income_tax = values["所得税"]
-		year_end_bonus_tax = values["年终奖所得税"]
-		utilities_deduction = values["水电费及扣款"] + flt(getattr(input_row, "dormitory_deduction", 0))
-		net_pay = taxable_salary - income_tax - year_end_bonus_tax - utilities_deduction + continuing_service_bonus - paid_proposal_birthday_welfare
-
-		social_security_company = values["社保公司"] or _company_social_security(social_security_personal)
-		housing_fund_company = values["公积金公司"] or housing_fund_personal
-		company_cost_total = gross_pay + social_security_company + housing_fund_company + continuing_service_bonus + paid_proposal_birthday_welfare
-		export_tax_adjusted_net_pay = taxable_salary + continuing_service_bonus - utilities_deduction - income_tax - paid_proposal_birthday_welfare - year_end_bonus_tax
+		certificate_skill_allowance = values["证书及多能工津贴"] or values["证书津贴"] + values["多能工津贴"] or flt(salary_change.get("certificate_allowance")) + flt(salary_change.get("multi_skill_allowance"))
+		formula_context = {
+			"base_salary": base_salary,
+			"function_allowance": function_allowance,
+			"certificate_skill_allowance": certificate_skill_allowance,
+			"standard_hours": flt(getattr(input_row, "standard_hours", 0)),
+			"basic_attendance_hours": flt(getattr(input_row, "actual_attendance_hours", 0)),
+			"raw_weekend_overtime_hours": flt(getattr(input_row, "overtime_2_hours", 0)),
+			"weekday_overtime_hours": flt(getattr(input_row, "overtime_1_5_hours", 0)),
+			"holiday_overtime_hours": flt(getattr(input_row, "overtime_3_hours", 0)),
+			"large_night_shift_count": flt(getattr(input_row, "large_night_shift_count", 0)),
+			"small_night_shift_count": flt(getattr(input_row, "small_night_shift_count", 0)),
+			"absenteeism_hours": flt(getattr(input_row, "absent_hours", 0)),
+			"proposal_improvement_bonus": values["提案改善奖"],
+			"apple_reward_amount": flt(getattr(input_row, "apple_reward_amount", 0)),
+			"full_attendance_bonus": flt(getattr(input_row, "full_attendance_bonus", 0)),
+			"housing_subsidy": flt(getattr(input_row, "housing_subsidy", 0)),
+			"education_subsidy": flt(getattr(input_row, "education_subsidy", 0)),
+			"other_bonus": flt(getattr(input_row, "other_bonus", 0)),
+			"production_bonus": values["生产奖"],
+			"late_full_attendance_deduction": values["迟到金额+全勤奖扣款"] or flt(getattr(input_row, "attendance_full_deduction", 0)),
+			"other_deduction": flt(getattr(input_row, "other_deduction", 0)),
+			"social_security_personal": flt(getattr(input_row, "social_security_personal", 0)),
+			"housing_fund_personal": flt(getattr(input_row, "housing_fund_personal", 0)),
+			"paid_proposal_birthday_welfare": values["已发福利"],
+			"continuing_service_bonus": values["继续服务奖"],
+			"income_tax": values["所得税"],
+			"year_end_bonus_tax": values["年终奖所得税"],
+			"utilities_deduction": _money(values["水电费及扣款"] + flt(getattr(input_row, "dormitory_deduction", 0))),
+			"manual_social_security_company": values["社保公司"],
+			"manual_housing_fund_company": values["公积金公司"],
+		}
+		try:
+			calculated, formula_trace = evaluate_formula_set(payroll_formulas, formula_context)
+		except FormulaError as exc:
+			frappe.throw(_("员工 {0} 薪资公式执行失败：{1}").format(getattr(source, "employee_name", key), exc))
+		# Explicit local names keep the settlement document construction readable.
+		salary_subtotal = calculated["salary_subtotal"]
+		standard_hours = formula_context["standard_hours"]
+		basic_attendance_hours = formula_context["basic_attendance_hours"]
+		raw_weekend_overtime_hours = formula_context["raw_weekend_overtime_hours"]
+		weekday_overtime_hours = formula_context["weekday_overtime_hours"]
+		holiday_overtime_hours = formula_context["holiday_overtime_hours"]
+		large_night_shift_count = formula_context["large_night_shift_count"]
+		small_night_shift_count = formula_context["small_night_shift_count"]
+		absenteeism_hours = formula_context["absenteeism_hours"]
+		proposal_improvement_bonus = formula_context["proposal_improvement_bonus"]
+		apple_reward_amount = formula_context["apple_reward_amount"]
+		production_bonus = formula_context["production_bonus"]
+		late_full_attendance_deduction = formula_context["late_full_attendance_deduction"]
+		social_security_personal = formula_context["social_security_personal"]
+		housing_fund_personal = formula_context["housing_fund_personal"]
+		paid_proposal_birthday_welfare = formula_context["paid_proposal_birthday_welfare"]
+		continuing_service_bonus = formula_context["continuing_service_bonus"]
+		income_tax = formula_context["income_tax"]
+		year_end_bonus_tax = formula_context["year_end_bonus_tax"]
+		utilities_deduction = formula_context["utilities_deduction"]
+		missing_hours = calculated["missing_hours"]
+		adjusted_absence_hours = calculated["adjusted_absence_hours"]
+		weekend_overtime_hours = calculated["weekend_overtime_hours"]
+		full_salary_hourly_rate = calculated["full_salary_hourly_rate"]
+		base_salary_hourly_rate = calculated["base_salary_hourly_rate"]
+		absence_deduction_amount = calculated["absence_deduction_amount"]
+		weekday_overtime_pay = calculated["weekday_overtime_pay"]
+		weekend_overtime_pay = calculated["weekend_overtime_pay"]
+		holiday_overtime_pay = calculated["holiday_overtime_pay"]
+		overtime_pay_total = calculated["overtime_pay_total"]
+		night_shift_allowance = calculated["night_shift_allowance"]
+		subsidy_bonus_total = calculated["subsidy_bonus_total"]
+		bonus_total = calculated["bonus_total"]
+		absenteeism_deduction = calculated["absenteeism_deduction"]
+		punishment_total = calculated["punishment_total"]
+		attendance_wage = calculated["attendance_wage"]
+		gross_pay = calculated["gross_pay"]
+		taxable_salary = calculated["taxable_salary"]
+		net_pay = calculated["net_pay"]
+		social_security_company = calculated["social_security_company"]
+		housing_fund_company = calculated["housing_fund_company"]
+		company_cost_total = calculated["company_cost_total"]
+		export_tax_adjusted_net_pay = calculated["export_tax_adjusted_net_pay"]
 		trace, source_hash = _source_trace_hash({
 			"company": company,
 			"payroll_month": payroll_month,
 			"attendance_lock_version": attendance_lock_version,
 			"payroll_input_record": getattr(input_row, "name", ""),
-			"variable_record": getattr(variable_identity.get(key), "name", ""),
+			"variable_records": variable_sources.get(key, []),
 			"salary_change": salary_change.get("name") if salary_change else "",
+			"calculation_rules": calculation_rules,
+			"formula_trace": formula_trace,
+			"salary_subtotal_source": "公司公式：底薪、职能津贴、证书及多能工津贴",
 		})
 
 		doc = frappe.get_doc(
@@ -2609,7 +3515,9 @@ def list_payroll_settlement_records(company: str, payroll_month: str = "", atten
 
 def _latest_salary_change_map(payroll_month="", company=""):
 	company = _require_company(company)
-	filters = {"company": company}
+	# A draft or a rejected adjustment must never become the payroll source simply
+	# because it is newer than the last approved one.
+	filters = {"company": company, "status": "已批准"}
 	month_end = _month_end(payroll_month)
 	if month_end:
 		filters["effective_date"] = ["<=", month_end]
@@ -2626,6 +3534,180 @@ def _latest_salary_change_map(payroll_month="", company=""):
 			if key and key not in by_key:
 				by_key[key] = row
 	return by_key
+
+
+def _is_trial_salary_change(row):
+	"""Return true for the deliberately seeded/local trial salary values.
+
+	This is a guardrail, not a financial rule.  Trial values are allowed in local
+	testing, but a payroll operator must replace them with an approved real salary
+	change before a formal run.
+	"""
+	text = " ".join(
+		[
+			_text(row.get("change_reason")),
+			_text(row.get("remarks")),
+			_text(row.get("source_file")),
+		]
+	).upper()
+	return any(marker in text for marker in ("TEST", "试运营", "本地试运行", "本地试运营", "DEMO", "SEED"))
+
+
+def _active_salary_structure_versions(payroll_month=""):
+	"""Return enabled versions that cover the selected payroll month."""
+	month_end = _month_end(payroll_month)
+	versions = frappe.get_all(
+		SALARY_STRUCTURE_VERSION_DOCTYPE,
+		filters={"status": "已启用"},
+		fields=["name", "structure_version", "effective_from", "effective_to", "source_file"],
+		order_by="effective_from desc, modified desc",
+		limit_page_length=1000,
+	)
+	if not month_end:
+		return versions
+	return [
+		version
+		for version in versions
+		if (not version.effective_from or str(version.effective_from) <= month_end)
+		and (not version.effective_to or str(version.effective_to) >= month_end)
+	]
+
+
+@frappe.whitelist()
+def get_salary_architecture_workbench(company: str, payroll_month: str = ""):
+	"""Return the operational readiness view for the salary architecture tab.
+
+	The page uses this to show the exact gap between imported salary structures,
+	employee salary decisions and the payroll calculation, instead of implying that
+	a visible "salary" value is automatically eligible for payment.
+	"""
+	company = _require_company(company)
+	month_end = _month_end(payroll_month)
+	employee_filters = {"company": company} if _doctype_has_field("Employee", "company") else {}
+	if _doctype_has_field("Employee", "status"):
+		employee_filters["status"] = "Active"
+	employee_fields = _safe_fields("Employee", ["name", "employee_name", "employee_number", "custom_employee_code", "department", "designation"])
+	employees = _safe_get_all("Employee", filters=employee_filters, fields=employee_fields, order_by="employee_name asc", limit_page_length=100000)
+	approved_changes = _latest_salary_change_map(payroll_month, company)
+	all_changes = frappe.get_all(
+		EMPLOYEE_SALARY_CHANGE_DOCTYPE,
+		filters={"company": company},
+		fields=["name", "employee", "employee_code", "employee_name", "effective_date", "status", "change_reason", "remarks", "source_file"],
+		order_by="effective_date desc, modified desc",
+		limit_page_length=100000,
+	)
+
+	missing_profiles = []
+	trial_profiles = []
+	for employee in employees:
+		code = _employee_code(employee)
+		change = approved_changes.get(employee.name) or approved_changes.get(code) or approved_changes.get(employee.get("employee_name"))
+		profile = {
+			"employee": employee.name,
+			"employee_name": employee.get("employee_name") or employee.name,
+			"employee_code": code,
+			"department": employee.get("department"),
+			"designation": employee.get("designation"),
+		}
+		if not change:
+			missing_profiles.append(profile)
+		elif _is_trial_salary_change(change):
+			profile.update({"salary_change": change.get("name"), "effective_date": change.get("effective_date")})
+			trial_profiles.append(profile)
+
+	pending_changes = [row for row in all_changes if row.get("status") in ("草稿", "待审核")]
+	versions = _active_salary_structure_versions(payroll_month)
+	version_names = [row.name for row in versions]
+	grade_count = _safe_count(SALARY_GRADE_DOCTYPE, {"salary_structure_version": ["in", version_names]}) if version_names else 0
+	enabled_rule_count = _safe_count(PAYROLL_RULE_DOCTYPE, {"company": company, "status": "已启用"})
+	formula_count = _safe_count(PAYROLL_RULE_DOCTYPE, {"company": company, "rule_code": ["like", "FORMULA_%"], "status": "已启用"})
+	mapping_count = _safe_count(PAYROLL_FIELD_MAPPING_DOCTYPE, {"status": "已启用"})
+	standard_template_filters = {}
+	if _doctype_has_field("Salary Structure", "company"):
+		standard_template_filters["company"] = company
+	if _doctype_has_field("Salary Structure", "is_active"):
+		standard_template_filters["is_active"] = 1
+	standard_template_count = _safe_count("Salary Structure", standard_template_filters)
+	standard_assignment_filters = {}
+	if _doctype_has_field("Salary Structure Assignment", "company"):
+		standard_assignment_filters["company"] = company
+	if _doctype_has_field("Salary Structure Assignment", "docstatus"):
+		standard_assignment_filters["docstatus"] = 1
+	month_end = _month_end(payroll_month)
+	if month_end and _doctype_has_field("Salary Structure Assignment", "from_date"):
+		standard_assignment_filters["from_date"] = ["<=", month_end]
+	standard_assignment_count = _safe_count("Salary Structure Assignment", standard_assignment_filters)
+	approved_count = len(employees) - len(missing_profiles)
+	coverage_percent = round((approved_count / len(employees) * 100), 1) if employees else 0
+
+	stages = [
+		{
+			"key": "employee",
+			"title": "员工基础资料",
+			"status": "已就绪" if employees else "待维护",
+			"tone": "ready" if employees else "blocked",
+			"count": len(employees),
+			"unit": "人",
+			"detail": "员工花名册必须包含公司、工号、姓名、部门、岗位、在职状态和入职/转正信息。",
+		},
+		{
+			"key": "structure",
+			"title": "薪资架构版本",
+			"status": "已就绪" if versions and grade_count else "待配置",
+			"tone": "ready" if versions and grade_count else "warning",
+			"count": grade_count,
+			"unit": "个薪资档位",
+			"detail": "已启用且适用于当前月份的薪资架构版本。" if versions else "请先导入并启用薪资架构表。",
+		},
+		{
+			"key": "rules",
+			"title": "薪资规则与字段",
+			"status": "已连接" if enabled_rule_count and formula_count and mapping_count else "待配置",
+			"tone": "ready" if enabled_rule_count and formula_count and mapping_count else "warning",
+			"count": formula_count,
+			"unit": "个公式",
+			"detail": "结算字段映射、加班/扣款规则和公式必须启用；否则只能展示数据，不能形成可信结算。",
+		},
+		{
+			"key": "profile",
+			"title": "员工定薪覆盖",
+			"status": "已覆盖" if not missing_profiles else "待补齐",
+			"tone": "ready" if not missing_profiles else "warning",
+			"count": approved_count,
+			"unit": f" / {len(employees)} 人",
+			"detail": "仅统计已批准且生效日期不晚于当前算薪月份的薪资异动。",
+		},
+		{
+			"key": "approval",
+			"title": "待审核异动",
+			"status": "无待审" if not pending_changes else "待处理",
+			"tone": "ready" if not pending_changes else "pending",
+			"count": len(pending_changes),
+			"unit": "条",
+			"detail": "草稿或待审核记录不会进入正式薪资试算。",
+		},
+		{
+			"key": "trial",
+			"title": "试运营值检查",
+			"status": "可用于正式算薪" if not trial_profiles else "需要替换",
+			"tone": "ready" if not trial_profiles else "blocked",
+			"count": len(trial_profiles),
+			"unit": "人",
+			"detail": "本地试运营或测试工资值不能作为正式发薪依据。",
+		},
+	]
+	return {
+		"company": company,
+		"payroll_month": payroll_month,
+		"coverage": {"active_employee_count": len(employees), "approved_profile_count": approved_count, "missing_profile_count": len(missing_profiles), "coverage_percent": coverage_percent},
+		"rules": {"enabled_rule_count": enabled_rule_count, "formula_count": formula_count, "mapping_count": mapping_count},
+		"standard_payroll": {"template_count": standard_template_count, "assignment_count": standard_assignment_count},
+		"stages": stages,
+		"active_versions": versions,
+		"missing_profiles": missing_profiles[:100],
+		"trial_profiles": trial_profiles[:100],
+		"pending_changes": pending_changes[:100],
+	}
 
 
 def _settlement_map(payroll_month="", company="", attendance_lock_version=""):
@@ -2720,6 +3802,12 @@ def list_employee_salary_profiles(company: str, payroll_month: str = "", attenda
 		status_label = _status_label(employee)
 		stage = _employment_stage(employee, month_end)
 
+		salary_risk = ""
+		if status_label == "在职" and not change:
+			salary_risk = "缺少已批准的薪资异动"
+		elif change and _is_trial_salary_change(change):
+			salary_risk = "当前为试运营测试值，不可用于正式发薪"
+
 		rows.append(
 			{
 				"employee": employee.name,
@@ -2735,6 +3823,9 @@ def list_employee_salary_profiles(company: str, payroll_month: str = "", attenda
 				"confirmation_date": employee.get("final_confirmation_date") or employee.get("confirmation_date"),
 				"latest_adjustment_date": change.get("effective_date"),
 				"adjustment_reason": change.get("change_reason"),
+				"salary_grade": change.get("salary_grade"),
+				"salary_change_status": change.get("status") or ("已批准" if change else "未维护"),
+				"salary_risk": salary_risk,
 				"salary_source": change.get("name") or settlement.get("name") or "",
 				"settlement_status": settlement.get("calculation_status") or "未结算",
 			}
@@ -2763,6 +3854,7 @@ def list_monthly_payroll_overview(company: str, payroll_month: str = "", attenda
 		welfare_filters["payroll_month"] = payroll_month
 	if attendance_lock_version:
 		attendance_filters["attendance_lock_version"] = attendance_lock_version
+		attendance_filters["lock_status"] = "已锁定"
 		input_filters["attendance_lock_version"] = attendance_lock_version
 		settlement_filters["attendance_lock_version"] = attendance_lock_version
 		variable_filters["attendance_lock_version"] = attendance_lock_version
@@ -2792,6 +3884,290 @@ def list_monthly_payroll_overview(company: str, payroll_month: str = "", attenda
 	}
 
 
+def _active_salary_changes_for_month(company, payroll_month):
+	filters = {"company": _require_company(company), "status": "已批准"}
+	month_end = _month_end(payroll_month)
+	if month_end:
+		filters["effective_date"] = ["<=", month_end]
+	rows = frappe.get_all(
+		EMPLOYEE_SALARY_CHANGE_DOCTYPE,
+		filters=filters,
+		fields=[
+			"name",
+			"employee",
+			"employee_code",
+			"employee_name",
+			"effective_date",
+			"full_salary",
+			"change_reason",
+			"remarks",
+			"source_file",
+		],
+		order_by="effective_date desc, modified desc",
+		limit_page_length=100000,
+	)
+	by_key = {}
+	for row in rows:
+		for key in (row.employee, row.employee_code, row.employee_name):
+			if key and key not in by_key:
+				by_key[key] = row
+	return by_key
+
+
+@frappe.whitelist()
+def get_payroll_month_runbook(company: str, payroll_month: str, attendance_lock_version: str):
+	"""Return the controlled monthly payroll checklist for one company/month/attendance lock."""
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	attendance_rows = frappe.get_all(
+		MONTHLY_ATTENDANCE_DOCTYPE,
+		filters=_attendance_scope_filters(company, payroll_month, attendance_lock_version),
+		fields=["name", "employee", "employee_code", "employee_name"],
+		limit_page_length=100000,
+	)
+	active_changes = _active_salary_changes_for_month(company, payroll_month)
+	missing_salary_profiles = []
+	trial_salary_profiles = []
+	for row in attendance_rows:
+		keys = (row.employee, row.employee_code, row.employee_name)
+		profile = next((active_changes[key] for key in keys if key and key in active_changes), None)
+		if not profile:
+			missing_salary_profiles.append(row.employee_code or row.employee_name or row.name)
+		elif _is_trial_salary_change(profile):
+			trial_salary_profiles.append(row.employee_code or row.employee_name or row.name)
+
+	scope_filters = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
+	input_count = _safe_count(PAYROLL_INPUT_DOCTYPE, scope_filters)
+	settlement_count = _safe_count(PAYROLL_SETTLEMENT_DOCTYPE, scope_filters)
+	confirmed_settlement_count = _safe_count(PAYROLL_SETTLEMENT_DOCTYPE, {**scope_filters, "calculation_status": "已确认"})
+	variable_count = _safe_count(VARIABLE_RECORD_DOCTYPE, scope_filters)
+	confirmed_welfare_count = _safe_count(WELFARE_SOURCE_DOCTYPE, {**scope_filters, "confirmation_status": "已确认", "eligibility_status": "符合"})
+	pending_welfare_count = _safe_count(WELFARE_SOURCE_DOCTYPE, {**scope_filters, "confirmation_status": ["in", ["草稿", "待确认"]]})
+	employee_filters = {"company": company} if _doctype_has_field("Employee", "company") else {}
+	if _doctype_has_field("Employee", "status"):
+		employee_filters["status"] = "Active"
+	employee_count = _safe_count("Employee", employee_filters)
+	enabled_rule_count = _safe_count(PAYROLL_RULE_DOCTYPE, {"company": company, "status": "已启用"})
+	formula_count = _safe_count(PAYROLL_RULE_DOCTYPE, {"company": company, "rule_code": ["like", "FORMULA_%"], "status": "已启用"})
+	mapping_count = _safe_count(PAYROLL_FIELD_MAPPING_DOCTYPE, {"status": "已启用"})
+	standard_template_filters = {}
+	if _doctype_has_field("Salary Structure", "company"):
+		standard_template_filters["company"] = company
+	if _doctype_has_field("Salary Structure", "is_active"):
+		standard_template_filters["is_active"] = 1
+	standard_template_count = _safe_count("Salary Structure", standard_template_filters)
+	standard_assignment_filters = {}
+	if _doctype_has_field("Salary Structure Assignment", "company"):
+		standard_assignment_filters["company"] = company
+	if _doctype_has_field("Salary Structure Assignment", "docstatus"):
+		standard_assignment_filters["docstatus"] = 1
+	month_end = _month_end(payroll_month)
+	if month_end and _doctype_has_field("Salary Structure Assignment", "from_date"):
+		standard_assignment_filters["from_date"] = ["<=", month_end]
+	standard_assignment_count = _safe_count("Salary Structure Assignment", standard_assignment_filters)
+
+	def stage(title, summary, count, status, tone, route, action_label, detail=""):
+		return {
+			"title": title,
+			"summary": summary,
+			"count": count,
+			"unit": " 条",
+			"status": status,
+			"tone": tone,
+			"route": route,
+			"action_label": action_label,
+			"detail": detail,
+		}
+
+	attendance_count = len(attendance_rows)
+	master_ready = attendance_count > 0 and not missing_salary_profiles and not trial_salary_profiles
+	input_ready = attendance_count > 0 and master_ready and input_count == attendance_count
+	settlement_ready = input_count > 0 and settlement_count == input_count
+	stages = [
+		stage(
+			"薪资档案与异动",
+			"每位进入考勤终稿的员工必须有当月有效的已批准薪资异动。",
+			attendance_count - len(missing_salary_profiles) - len(trial_salary_profiles),
+			"已就绪" if master_ready else "待补齐",
+			"ready" if master_ready else "blocked",
+			"salary-assignments",
+			"处理员工分配",
+			(
+				"缺少 {0} 位员工的有效薪资异动；另有 {1} 位员工仍使用试运营/测试薪资。".format(
+					len(missing_salary_profiles), len(trial_salary_profiles)
+				)
+				if missing_salary_profiles or trial_salary_profiles
+				else "底薪、职能、证书/多能工与全薪从异动记录读取。"
+			),
+		),
+		stage(
+			"已锁定月度考勤终稿",
+			"仅读取同公司、同月份、同锁定版本且状态为已锁定的考勤终稿。",
+			attendance_count,
+			"已就绪" if attendance_count else "待锁定",
+			"ready" if attendance_count else "blocked",
+			"data-closure",
+			"查看考勤来源",
+			"无锁定考勤时系统不能生成薪资输入表。",
+		),
+		stage(
+			"月度变量与福利扣款",
+			"奖金、补贴、宿舍水电、社保公积金、个税和离职结算按已确认来源进入变量。",
+			variable_count + confirmed_welfare_count,
+			"待复核" if pending_welfare_count else "已就绪",
+			"warning" if pending_welfare_count else "ready",
+			"welfare-sources",
+			"维护月度变量",
+			"已确认来源 {0} 条，待确认来源 {1} 条。".format(confirmed_welfare_count, pending_welfare_count),
+		),
+		stage(
+			"生成薪资输入表",
+			"将锁定考勤与月度变量按员工汇总，先核对工时、加班、苹果树和扣款。",
+			input_count,
+			"已生成" if input_ready else "待生成",
+			"ready" if input_ready else "pending",
+			"inputs",
+			"查看输入表",
+			"输入表需与锁定考勤人数一致。",
+		),
+		stage(
+			"试算与差异复核",
+			"按公司结算公式生成所有细项、应付工资、实发工资及公司实际负担。",
+			settlement_count,
+			"已试算" if settlement_ready else "待试算",
+			"ready" if settlement_ready else "pending",
+			"settlements",
+			"查看结算表",
+			"结算表必须与输入表人数一致；可展开显示全部字段及来源。",
+		),
+		stage(
+			"确认与发放",
+			"复核无差异后确认本次试算；确认后不得被重新生成覆盖。",
+			confirmed_settlement_count,
+			"已确认" if settlement_count and confirmed_settlement_count == settlement_count else "待确认",
+			"ready" if settlement_count and confirmed_settlement_count == settlement_count else "pending",
+			"payroll-disbursement",
+			"复核与发放",
+			"工资条和发放仅消费已确认的结算结果。",
+		),
+	]
+	warnings = []
+	if missing_salary_profiles:
+		warnings.append("待补薪资异动：{0}".format("、".join(missing_salary_profiles[:10])))
+	if trial_salary_profiles:
+		warnings.append("待替换试运营/测试薪资：{0}".format("、".join(trial_salary_profiles[:10])))
+	if pending_welfare_count:
+		warnings.append("存在 {0} 条待确认福利/扣款来源".format(pending_welfare_count))
+	if attendance_count and input_count and input_count != attendance_count:
+		warnings.append("薪资输入表人数与锁定考勤不一致")
+	if input_count and settlement_count and settlement_count != input_count:
+		warnings.append("薪资结算表人数与薪资输入表不一致")
+	process_steps = [
+		{
+			"key": "master",
+			"title": "基础资料",
+			"summary": "员工花名册必须有公司、工号、姓名、部门、岗位、状态和入职/转正信息。",
+			"status": "已满足" if employee_count else "待维护",
+			"tone": "ready" if employee_count else "blocked",
+			"count": employee_count,
+			"detail": "员工基础资料是薪资档案、考勤和变量匹配的主键来源。",
+		},
+		{
+			"key": "items",
+			"title": "薪酬项目",
+			"summary": "底薪、津贴、考勤、奖金、扣款和公司成本需要有启用的规则或来源映射。",
+			"status": "已满足" if enabled_rule_count and formula_count and mapping_count else "待配置",
+			"tone": "ready" if enabled_rule_count and formula_count and mapping_count else "blocked",
+			"count": enabled_rule_count,
+			"detail": "缺规则时只能展示导入数据，不能形成可信试算。",
+		},
+		{
+			"key": "templates",
+			"title": "工资表模板",
+			"summary": "必须建立当前公司已启用的标准 HRMS 工资表模板。",
+			"status": "已满足" if standard_template_count else "待配置",
+			"tone": "ready" if standard_template_count else "blocked",
+			"count": standard_template_count,
+			"detail": "模板组合应发、应扣和公司承担项，不保存员工实际金额。",
+		},
+		{
+			"key": "assignments",
+			"title": "员工分配",
+			"summary": "进入考勤终稿的员工必须同时有有效模板分配和已批准定薪。",
+			"status": "已满足" if master_ready and standard_assignment_count >= attendance_count else "待补齐",
+			"tone": "ready" if master_ready and standard_assignment_count >= attendance_count else "blocked",
+			"count": min(standard_assignment_count, attendance_count - len(missing_salary_profiles) - len(trial_salary_profiles)),
+			"detail": "缺少模板分配、已批准定薪或仍使用试运营值时，系统拒绝生成薪资输入表。",
+		},
+		{
+			"key": "sources",
+			"title": "月度来源",
+			"summary": "只读取同公司、同月份、同锁定版本的考勤终稿和已确认变量。",
+			"status": "已满足" if attendance_count and not pending_welfare_count else ("待复核" if attendance_count else "缺考勤锁定"),
+			"tone": "ready" if attendance_count and not pending_welfare_count else ("warning" if attendance_count else "blocked"),
+			"count": attendance_count + variable_count + confirmed_welfare_count,
+			"detail": "考勤未锁定或福利扣款待确认时，不能进入正式试算。",
+		},
+		{
+			"key": "calculation",
+			"title": "试算复核",
+			"summary": "先生成薪资输入表，再生成薪资结算表并做差异复核。",
+			"status": "已满足" if settlement_ready else ("已生成输入" if input_ready else "待生成"),
+			"tone": "ready" if settlement_ready else ("warning" if input_ready else "pending"),
+			"count": settlement_count or input_count,
+			"detail": "输入表与结算表人数必须分别匹配锁定考勤和输入表。",
+		},
+		{
+			"key": "delivery",
+			"title": "报表发放",
+			"summary": "复核确认后再进入工资发放、工资条和报表导出。",
+			"status": "已满足" if settlement_count and confirmed_settlement_count == settlement_count else "待确认",
+			"tone": "ready" if settlement_count and confirmed_settlement_count == settlement_count else "pending",
+			"count": confirmed_settlement_count,
+			"detail": "未确认结算结果不作为发放依据。",
+		},
+	]
+	return {
+		"scope": {"company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version},
+		"cards": [
+			{"label": "锁定考勤", "value": attendance_count},
+			{"label": "有效薪资档案", "value": attendance_count - len(missing_salary_profiles) - len(trial_salary_profiles)},
+			{"label": "确认变量来源", "value": variable_count + confirmed_welfare_count},
+			{"label": "薪资输入表", "value": input_count},
+			{"label": "薪资结算表", "value": settlement_count},
+			{"label": "已确认结算", "value": confirmed_settlement_count},
+		],
+		"process_steps": process_steps,
+		"stages": stages,
+		"warning": "；".join(warnings),
+	}
+
+
+@frappe.whitelist()
+def confirm_payroll_settlement_records(company: str, payroll_month: str, attendance_lock_version: str):
+	"""Lock a reviewed payroll trial so later recalculation cannot overwrite it."""
+	if not _can_manage_payroll_rules():
+		frappe.throw(_("您没有确认薪资结算的权限"))
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	scope_filters = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
+	attendance_count = _safe_count(MONTHLY_ATTENDANCE_DOCTYPE, _attendance_scope_filters(company, payroll_month, attendance_lock_version))
+	input_count = _safe_count(PAYROLL_INPUT_DOCTYPE, scope_filters)
+	settlement_count = _safe_count(PAYROLL_SETTLEMENT_DOCTYPE, scope_filters)
+	pending_welfare_count = _safe_count(WELFARE_SOURCE_DOCTYPE, {**scope_filters, "confirmation_status": ["in", ["草稿", "待确认"]]})
+	if not attendance_count:
+		frappe.throw(_("未找到已锁定月度考勤终稿，不能确认薪资结算。"))
+	if input_count != attendance_count or settlement_count != input_count:
+		frappe.throw(_("薪资确认前，锁定考勤、薪资输入表和薪资结算表人数必须一致。"))
+	if pending_welfare_count:
+		frappe.throw(_("仍有 {0} 条福利/扣款来源待确认，不能确认薪资结算。").format(pending_welfare_count))
+	for name in frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters=scope_filters, pluck="name"):
+		doc = frappe.get_doc(PAYROLL_SETTLEMENT_DOCTYPE, name)
+		if doc.calculation_status not in ("已确认", "已生成工资单"):
+			doc.calculation_status = "已确认"
+			doc.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {"confirmed": settlement_count, "company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version}
+
+
 @frappe.whitelist()
 def list_payroll_disbursement_records(company: str, payroll_month: str = "", attendance_lock_version: str = "", page_length: int = 100):
 	company = _require_company(company)
@@ -2808,8 +4184,8 @@ def list_payroll_disbursement_records(company: str, payroll_month: str = "", att
 		limit_page_length=int(page_length or 100),
 	)
 	for row in rows:
-		row["payment_status"] = "待发放" if row.get("calculation_status") == "已生成" else "待结算"
-		row["confirmation_status"] = "待确认"
+		row["payment_status"] = "待发放" if row.get("calculation_status") in ("已确认", "已生成工资单") else "待结算"
+		row["confirmation_status"] = "已确认" if row.get("calculation_status") in ("已确认", "已生成工资单") else "待确认"
 	return rows
 
 

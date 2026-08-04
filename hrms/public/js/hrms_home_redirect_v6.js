@@ -1,6 +1,52 @@
 (function () {
 	var text_replacements = {
 		"Begin typing for results.": "输入以搜索结果。",
+		"Core": "系统管理",
+		"Frappe Framework": "人资管理系统",
+		"User": "账户",
+		"Role": "角色",
+		"User Permission": "用户数据范围",
+		"Permission Manager": "角色权限配置",
+		"User Activity Log": "用户操作日志",
+		"Activity Log": "操作日志",
+		"Access Log": "访问日志",
+		"System User": "系统用户",
+		"Employee Self Service": "员工自助",
+		"System Manager": "系统管理员",
+		"HR Manager": "人资管理员",
+		"HR User": "人事专员",
+		"Expense Approver": "费用审批人",
+		"Leave Approver": "请假审批人",
+		"Interviewer": "面试官",
+		"Guest": "访客",
+		"DocType": "单据类型",
+		"Page": "页面",
+		"Pages": "页面",
+		"Workspace": "工作区",
+		"Custom Field": "自定义字段",
+		"Property Setter": "属性覆盖",
+		"Client Script": "客户端脚本",
+		"Workflow": "工作流",
+		"Account": "会计科目",
+		"Activity Type": "活动类型",
+		"Additional Salary": "附加薪资",
+		"Appointment": "预约",
+		"Appraisal": "绩效考核",
+		"Appraisal Cycle": "考核周期",
+		"Appraisal Template": "考核模板",
+		"Expense Claim": "费用报销",
+		"Employee Advance": "员工预支",
+		"Interview Feedback": "面试反馈",
+		"Interview Type": "面试类型",
+		"Leave Application": "请假申请",
+		"Only If Creator": "仅限创建者",
+		"Meaning of Different Permission Types:": "不同权限类型的含义：",
+		"HRMS Employee Field Template": "员工字段模板",
+		"HRMS Form Approval Matrix": "人资表单审批矩阵",
+		"HRMS Attendance Custom Rule": "考勤自定义规则",
+		"HRMS Payroll Rule": "薪资计算规则",
+		"HRMS Payroll Field Mapping": "薪资字段映射",
+		"HRMS DingTalk Settings": "钉钉连接设置",
 		"Personnel": "人事",
 		"Employee": "员工",
 		"人资设置": "工作台",
@@ -118,6 +164,15 @@
 			"可维护身高、体重、过敏史、健康状况等信息",
 	};
 
+	// Native list filters sometimes expose database field names instead of
+	// labels. Keep these exact-only so a short key such as "allow" is never
+	// replaced inside an unrelated sentence.
+	var technical_field_labels = {
+		allow: "允许对象",
+		for_value: "允许值",
+		route_name: "路由标识",
+	};
+
 	var sidebar_section_labels = new Set([
 		"快捷入口",
 		"常用报表",
@@ -147,12 +202,118 @@
 		"personnel-reports",
 		"staff-attribute-settings",
 		"hr-settings-center",
+		"hrms-developer-center",
+		"hrms-model-center",
+		"hrms-access-center",
 		"employee-property-history",
 		"attendance-import-center",
 		"payroll-input-center",
 	]);
 
 	var HRMS_SIDEBAR_MODULES = [
+		{
+			label: "账户与权限",
+			route: "/desk/hrms-access-center",
+			icon: "权",
+			contextual: true,
+			keys: [
+				"hrms-access-center",
+				"user",
+				"role",
+				"user-permission",
+				"permission-manager",
+				"activity-log",
+				"user-activity-log",
+				"access-log",
+			],
+			items: [
+				{ type: "link", label: "账户与权限总览", route: "/desk/hrms-access-center", slug: "hrms-access-center" },
+				{
+					type: "section",
+					label: "账户管理",
+					children: [
+						{ label: "全部账户", route: "/desk/user", slug: "user" },
+						{ label: "用户数据范围", route: "/desk/user-permission", slug: "user-permission" },
+						{ label: "测试实际权限", route: "/desk/hrms-access-center", slug: "hrms-access-center" },
+					],
+				},
+				{
+					type: "section",
+					label: "角色与业务权限",
+					children: [
+						{ label: "角色资料", route: "/desk/role", slug: "role" },
+						{ label: "角色权限配置", route: "/desk/permission-manager", slug: "permission-manager" },
+					],
+				},
+				{
+					type: "section",
+					label: "安全审计",
+					children: [
+						{ label: "用户操作日志", route: "/desk/activity-log", slug: "activity-log" },
+						{ label: "访问日志", route: "/desk/access-log", slug: "access-log" },
+					],
+				},
+			],
+		},
+		{
+			label: "开发与配置",
+			route: "/desk/hrms-developer-center",
+			icon: "开",
+			contextual: true,
+			keys: [
+				"hrms-developer-center",
+				"hrms-model-center",
+				"doctype",
+				"page",
+				"workspace",
+				"custom-field",
+				"property-setter",
+				"client-script",
+				"hrms-employee-field-template",
+				"hrms-form-approval-matrix",
+				"hrms-attendance-custom-rule",
+				"hrms-payroll-rule",
+				"hrms-payroll-field-mapping",
+				"hrms-dingtalk-settings",
+				"hrms-data-operations",
+			],
+			items: [
+				{ type: "link", label: "开发与配置总览", route: "/desk/hrms-developer-center", slug: "hrms-developer-center" },
+				{
+					type: "section",
+					label: "业务配置",
+					children: [
+						{ label: "员工字段与导入导出", route: "/desk/hr-settings-center", slug: "hr-settings-center" },
+						{ label: "人资表单审批矩阵", route: "/desk/hrms-form-approval-matrix", slug: "hrms-form-approval-matrix" },
+						{ label: "考勤自定义规则", route: "/desk/hrms-attendance-custom-rule", slug: "hrms-attendance-custom-rule" },
+						{ label: "薪资计算规则", route: "/desk/hrms-payroll-rule", slug: "hrms-payroll-rule" },
+						{ label: "薪资字段映射", route: "/desk/hrms-payroll-field-mapping", slug: "hrms-payroll-field-mapping" },
+						{ label: "钉钉连接设置", route: "/desk/hrms-dingtalk-settings", slug: "hrms-dingtalk-settings" },
+					],
+				},
+				{
+					type: "section",
+					label: "结构与页面（高级）",
+					children: [
+						{ label: "基础模型管理", route: "/desk/hrms-model-center", slug: "hrms-model-center" },
+						{ label: "全部底层模型（谨慎）", route: "/desk/doctype", slug: "doctype" },
+						{ label: "自定义字段", route: "/desk/custom-field", slug: "custom-field" },
+						{ label: "属性覆盖", route: "/desk/property-setter", slug: "property-setter" },
+						{ label: "页面", route: "/desk/page", slug: "page" },
+						{ label: "工作区", route: "/desk/workspace", slug: "workspace" },
+						{ label: "客户端脚本", route: "/desk/client-script", slug: "client-script" },
+					],
+				},
+				{
+					type: "section",
+					label: "运行与发布",
+					children: [
+						{ label: "数据处理中心", route: "/desk/hrms-data-operations", slug: "hrms-data-operations" },
+						{ label: "账户与权限", route: "/desk/hrms-access-center", slug: "hrms-access-center" },
+					],
+				},
+			],
+		},
 		{
 			label: "工作台",
 			route: "/desk/hrms-workbench",
@@ -447,39 +608,6 @@
 				},
 			],
 		},
-		{
-			label: "更多",
-			route: "/desk/hr-settings-center",
-			icon: "M",
-			keys: ["hr-settings-center", "expenses", "tax-&-benefits", "hr-settings", "form-data-intake", "hrms-data-operations"],
-			items: [
-				{ type: "link", label: "主页", route: "/desk/hr-settings-center", slug: "hr-settings-center" },
-				{
-					type: "section",
-					label: "数据导入",
-					children: [
-						{ label: "人资表单导入中心", route: "/desk/form-data-intake", slug: "form-data-intake", roles: ["HR Manager", "System Manager"] },
-					],
-				},
-				{
-					type: "section",
-					label: "设置",
-					children: [
-						{ label: "设置中心", route: "/desk/hr-settings-center", slug: "hr-settings-center" },
-						{ label: "费用", route: "/desk/expenses", slug: "expenses" },
-						{ label: "社保个税", route: "/desk/tax-&-benefits", slug: "tax-&-benefits" },
-						{ label: "HR 设置", route: "/desk/hr-settings", slug: "hr-settings" },
-					],
-				},
-				{
-					type: "section",
-					label: "系统管理",
-					children: [
-						{ label: "数据处理中心", route: "/desk/hrms-data-operations", slug: "hrms-data-operations", roles: ["System Manager"] },
-					],
-				},
-			],
-		},
 	];
 
 	function redirect_to_hrms_home() {
@@ -656,7 +784,11 @@
 			hrms_expected_route_slug = "";
 			return current_slug;
 		}
-		return hrms_expected_route_slug;
+		// Standard Frappe lists can be opened outside our custom navigation.  In
+		// that case, discard the old custom-page slug so an unrelated sidebar item
+		// (for example 数据处理中心) is not kept highlighted.
+		hrms_expected_route_slug = "";
+		return current_slug;
 	}
 
 	function route_key_matches(slug, key) {
@@ -707,7 +839,12 @@
 	}
 
 	function hrms_sidebar_link_html(item, active_slug) {
-		var active = item.slug === active_slug || route_to_slug(item.route) === active_slug;
+		var active =
+			item.slug === active_slug ||
+			route_to_slug(item.route) === active_slug ||
+			(item.active_slugs || []).some(function (slug) {
+				return slug === active_slug || route_key_matches(active_slug, slug);
+			});
 		return [
 			'<button type="button" class="hrms-unified-sidebar-link sidebar-item-container standard-sidebar-item',
 			active ? " selected active" : "",
@@ -756,10 +893,14 @@
 			'<span class="hrms-unified-sidebar-app__chevron">⌄</span>',
 			"</button>",
 			'<div class="hrms-unified-sidebar-list">',
-			'<button type="button" class="hrms-unified-sidebar-link sidebar-item-container standard-sidebar-item" data-hrms-route="/desk/notifications">',
-			'<span class="hrms-unified-sidebar-link__icon">♢</span><span class="sidebar-item-label">通知</span>',
-			"</button>",
 		];
+		if (!module.contextual) {
+			body.push(
+				'<button type="button" class="hrms-unified-sidebar-link sidebar-item-container standard-sidebar-item" data-hrms-route="/desk/notifications">',
+				'<span class="hrms-unified-sidebar-link__icon">♢</span><span class="sidebar-item-label">通知</span>',
+				"</button>",
+			);
+		}
 
 		(module.items || []).forEach(function (item) {
 			if (!can_access_hrms_item(item)) {
@@ -992,24 +1133,46 @@
 	}
 
 	function localize_dynamic_text() {
+		function translate_known_text(value) {
+			var translated = value || "";
+			Object.keys(text_replacements).forEach(function (source) {
+				if (source && translated.indexOf(source) !== -1) {
+					translated = translated.split(source).join(text_replacements[source]);
+				}
+			});
+			return translated;
+		}
+
 		if (document.title && text_replacements[document.title]) {
 			document.title = text_replacements[document.title];
 		}
 
 		document.querySelectorAll("input, textarea").forEach(function (field) {
 			var placeholder = field.getAttribute("placeholder");
-			if (placeholder && text_replacements[placeholder]) {
-				field.setAttribute("placeholder", text_replacements[placeholder]);
+			if (placeholder && (technical_field_labels[placeholder] || text_replacements[placeholder])) {
+				field.setAttribute("placeholder", technical_field_labels[placeholder] || text_replacements[placeholder]);
 			}
 		});
 
-		document.querySelectorAll("[title], [data-original-title]").forEach(function (field) {
-			["title", "data-original-title"].forEach(function (attribute) {
+		document.querySelectorAll("[title], [data-original-title], [data-label], [aria-label]").forEach(function (field) {
+			["title", "data-original-title", "data-label", "aria-label"].forEach(function (attribute) {
 				var value = field.getAttribute(attribute);
-				if (value && text_replacements[value]) {
-					field.setAttribute(attribute, text_replacements[value]);
+				var translated = translate_known_text(value);
+				if (value && translated !== value) {
+					field.setAttribute(attribute, translated);
 				}
 			});
+		});
+
+		// List views keep a second copy of the primary action label as visible
+		// button text. Keep it aligned with the translated data-label; changing
+		// textContent does not replace the button itself or its click handler.
+		document.querySelectorAll(".primary-action[data-label]").forEach(function (button) {
+			var visible_label = button.textContent || "";
+			var translated_label = translate_known_text(visible_label);
+			if (translated_label !== visible_label) {
+				button.textContent = translated_label;
+			}
 		});
 
 		var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -1158,5 +1321,11 @@
 	}).observe(document.documentElement, {
 		childList: true,
 		subtree: true,
+		// Frappe often creates a list-view button first and fills its label later by
+		// replacing the text node. Observe that update as well so custom DocType
+		// names do not fall back to English after the page has already rendered.
+		characterData: true,
+		attributes: true,
+		attributeFilter: ["data-label", "title", "data-original-title", "aria-label"],
 	});
 })();

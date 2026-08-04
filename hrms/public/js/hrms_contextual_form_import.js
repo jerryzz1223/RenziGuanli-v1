@@ -10,6 +10,13 @@
 		return frappe.utils.escape_html(String(value ?? ""));
 	}
 
+	function reset_action_button(button) {
+		if (!button || !window.$) return;
+		const target = button.jquery ? button : window.$(button);
+		if (!target?.length) return;
+		target.prop("disabled", false).removeAttr("disabled").removeClass("disabled").attr("aria-disabled", "false");
+	}
+
 	function get_template(template_key) {
 		return frappe.call({ method: `${API}.list_form_import_templates` }).then((response) => {
 			const template = (response.message || []).find((item) => item.key === template_key);
@@ -83,6 +90,9 @@
 						}).then((response) => {
 							preview = response.message || {};
 							render_dialog();
+						}).catch(() => {
+							preview = null;
+							render_dialog();
 						});
 					},
 				});
@@ -134,7 +144,25 @@
 		const marker = `__hrms_form_import_${template_key}`;
 		if (page[marker]) return;
 		page[marker] = true;
-		page.add_inner_button(__(button_label), () => open_import_dialog(template_key, { title: `${label || "表单"}${__("导入")}` }));
+		let button;
+		const reset_when_focus_returns = () => {
+			const reset = () => reset_action_button(button);
+			setTimeout(reset, 0);
+			setTimeout(reset, 250);
+			setTimeout(reset, 1000);
+		};
+		button = page.add_inner_button(__(button_label), () => {
+			reset_when_focus_returns();
+			const import_window = open_import_dialog(template_key, { title: `${label || "表单"}${__("导入")}` });
+			Promise.resolve(import_window)
+				.catch((error) => {
+					console.error(error);
+					frappe.msgprint(error?.message || __("导入窗口打开失败，请稍后重试。"));
+				})
+				.finally(reset_when_focus_returns);
+			window.addEventListener("focus", reset_when_focus_returns, { once: true });
+		});
+		reset_action_button(button);
 	}
 
 	window.hrmsFormImport = { open: open_import_dialog, download(template_key) { return get_template(template_key).then(download_template); }, addPageActions: add_page_import_actions };

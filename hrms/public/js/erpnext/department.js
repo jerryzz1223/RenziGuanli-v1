@@ -24,8 +24,8 @@ frappe.ui.form.on("Department", {
 			});
 		});
 
-		if (!frm.is_new() && frm.doc.department_name?.trim() && frm.doc.name !== frm.doc.department_name.trim()) {
-			frm.add_custom_button(__("规范正式部门名称"), function () {
+		if (!frm.is_new() && frm.doc.department_name?.trim() && frm.doc.name === frm.doc.department_name.trim()) {
+			frm.add_custom_button(__("补全公司部门编码"), function () {
 				frappe.prompt(
 					[
 						{

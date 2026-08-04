@@ -11990,3 +11990,39 @@ msgstr "{0}天"
 msgid "{} {} open for this position."
 msgstr "该职位有{}个{}空缺"
 
+#. Human Resources custom administration labels
+msgid "HRMS Employee Field Template"
+msgstr "员工字段模板"
+
+msgid "HRMS Form Approval Matrix"
+msgstr "人资表单审批矩阵"
+
+msgid "HRMS Attendance Custom Rule"
+msgstr "考勤自定义规则"
+
+msgid "HRMS Payroll Rule"
+msgstr "薪资计算规则"
+
+msgid "HRMS Payroll Field Mapping"
+msgstr "薪资字段映射"
+
+msgid "HRMS DingTalk Settings"
+msgstr "钉钉连接设置"
+
+msgid "Employee Self Service"
+msgstr "员工自助"
+
+msgid "System Manager"
+msgstr "系统管理员"
+
+msgid "HR Manager"
+msgstr "人资管理员"
+
+msgid "HR User"
+msgstr "人事专员"
+
+msgid "Guest"
+msgstr "访客"
+
+msgid "System User"
+msgstr "系统用户"

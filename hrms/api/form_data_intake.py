@@ -164,7 +164,8 @@ FORM_IMPORT_PROFILES = [
 			_column("employee_code", "工号", True), _column("employee_name", "姓名", True), _column("transfer_date", "调动日期", True),
 			_column("from_department", "调出部门", True), _column("from_designation", "原职务"),
 			_column("to_department", "调入部门", True), _column("to_designation", "调动后职务", True),
-			_column("reason", "调动理由", True, ["理由"]), _column("remarks", "备注"),
+			_column("transfer_type", "异动类型", False, ["调动类型"]),
+			_column("reason", "调动理由", True, ["理由", "异动原因"]), _column("approval_reference", "关联审批单"), _column("remarks", "备注"),
 		],
 	},
 	{
@@ -1313,6 +1314,10 @@ def _insert_target(row, data, payroll_month="", attendance_lock_version="", appr
 				"employee_name": context.employee_name,
 				"company": row.company,
 				"department": context.department,
+				"transfer_type": data.get("transfer_type") or _("调岗"),
+				"transfer_reason": data.get("reason"),
+				"approval_reference": data.get("approval_reference"),
+				"remarks": data.get("remarks"),
 				"transfer_date": _date_from(data.get("transfer_date"), _("调动日期")),
 				"transfer_details": transfer_details,
 			}
@@ -1335,6 +1340,13 @@ def _insert_target(row, data, payroll_month="", attendance_lock_version="", appr
 		).insert(ignore_permissions=True)
 
 	if target == "Employee Separation":
+		existing_name = frappe.db.get_value(
+			"Employee Separation",
+			{"employee": row.employee, "docstatus": ["!=", 2]},
+			"name",
+		)
+		if existing_name:
+			return frappe.get_doc("Employee Separation", existing_name)
 		return frappe.get_doc(
 			{
 				"doctype": target,
@@ -1371,10 +1383,20 @@ def _insert_target(row, data, payroll_month="", attendance_lock_version="", appr
 		hours = max(flt(data.get("hours")), 1)
 		end_hour = min(23, 9 + int(hours))
 		end_time = f"{training_date} {end_hour:02d}:00:00"
+		event_name = (data.get("training_content") or "").strip()
+		if not event_name:
+			frappe.throw(_("培训内容不能为空。"))
+		existing_name = frappe.db.get_value("Training Event", {"event_name": event_name, "company": row.company}, "name")
+		if existing_name:
+			doc = frappe.get_doc("Training Event", existing_name)
+			if row.employee and not any(item.employee == row.employee for item in doc.employees):
+				doc.append("employees", {"employee": row.employee, "department": context.department, "status": "Invited"})
+				doc.save(ignore_permissions=True)
+			return doc
 		return frappe.get_doc(
 			{
 				"doctype": target,
-				"event_name": data.get("training_content"),
+				"event_name": event_name,
 				"event_status": "Scheduled",
 				"type": "Theory",
 				"company": row.company,
@@ -1398,6 +1420,9 @@ def _insert_target(row, data, payroll_month="", attendance_lock_version="", appr
 		cycle = appraisal_cycle or frappe.db.get_value("Appraisal Cycle", {"status": "In Progress"}, "name", order_by="start_date desc")
 		if not cycle:
 			frappe.throw(_("请先维护进行中的绩效周期，或在生成草稿时选择绩效周期。"))
+		existing_name = frappe.db.get_value("Appraisal", {"employee": row.employee, "appraisal_cycle": cycle}, "name")
+		if existing_name:
+			return frappe.get_doc("Appraisal", existing_name)
 		return frappe.get_doc(
 			{
 				"doctype": target,

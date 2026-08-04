@@ -1,4 +1,16 @@
 frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
+	const SYSTEM_SETTINGS_MODULES = new Set(["钉钉集成", "用户与权限"]);
+	const BUSINESS_SETTINGS_MODULES = [
+		"字段管理中心",
+		"员工属性设置",
+		"字段别名配置",
+		"导入映射设置",
+		"详情资料块设置",
+		"导出模板设置",
+		"基础资料设置",
+		"多行记录类型",
+	];
+
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
 		title: __("设置中心"),
@@ -15,6 +27,7 @@ frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
 		active_module: requested_module || (route.includes("dingtalk-integration") ? "钉钉集成" : "字段管理中心"),
 		focus: requested_focus || "",
 		data: null,
+		error: "",
 		loading: true,
 	};
 
@@ -23,6 +36,7 @@ frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
 
 	function load() {
 		state.loading = true;
+		state.error = "";
 		render();
 		return frappe
 			.call("hrms.api.employee_field_template.get_hr_settings_center")
@@ -30,22 +44,32 @@ frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
 				state.data = r.message || {};
 				state.loading = false;
 				render();
+			})
+			.catch(() => {
+				state.loading = false;
+				state.error = __("无法读取设置数据。请确认当前账号具有人资管理员或系统管理员角色。");
+				render();
 			});
 	}
 
+	function user_roles() {
+		const roles = window.frappe?.user_roles || window.frappe?.boot?.user?.roles || [];
+		return Array.isArray(roles) ? roles : [];
+	}
+
+	function is_system_manager() {
+		return user_roles().includes("System Manager");
+	}
+
 	function modules() {
-		return [
-			"字段管理中心",
-			"员工属性设置",
-			"字段别名配置",
-			"导入映射设置",
-			"详情资料块设置",
-			"导出模板设置",
-			"基础资料设置",
-			"钉钉集成",
-			"多行记录类型",
-			"用户与权限",
-		];
+		return is_system_manager() ? [...BUSINESS_SETTINGS_MODULES, "钉钉集成", "用户与权限"] : BUSINESS_SETTINGS_MODULES;
+	}
+
+	function normalize_active_module() {
+		if (!modules().includes(state.active_module)) {
+			state.active_module = "字段管理中心";
+			state.focus = "";
+		}
 	}
 
 	function fields() {
@@ -65,8 +89,17 @@ frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
 			$(page.body).html(`<div class="text-muted">${__("正在加载设置中心...")}</div>`);
 			return;
 		}
+		if (state.error) {
+			$(page.body).html(`<div class="alert alert-danger">${escape(state.error)}</div>`);
+			return;
+		}
+
+		normalize_active_module();
 
 		$(page.body).html(`
+			<div class="hrms-settings-access-note alert alert-info">
+				<strong>${__("人资配置通道")}</strong>：${is_system_manager() ? __("当前账号可维护业务设置及系统级集成、用户权限。") : __("当前账号可维护业务配置；用户权限、钉钉密钥和底层开发工具仅对系统管理员开放。")}
+			</div>
 			<div class="hrms-settings-shell">
 				<aside class="hrms-settings-nav">${render_module_nav()}</aside>
 				<section class="hrms-settings-main">${render_active_module()}</section>
@@ -94,6 +127,9 @@ frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
 	}
 
 	function render_active_module() {
+		if (SYSTEM_SETTINGS_MODULES.has(state.active_module) && !is_system_manager()) {
+			return `<div class="alert alert-warning">${__("该项为系统级设置，仅系统管理员可维护。")}</div>`;
+		}
 		if (state.active_module === "字段别名配置") return render_aliases();
 		if (state.active_module === "导入映射设置") return render_import_mapping();
 		if (state.active_module === "详情资料块设置") return render_detail_blocks();
@@ -230,8 +266,10 @@ frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
 	function render_base_data() {
 		return `
 			<div class="hrms-settings-panel">
-				<h3>${__("基础资料设置")}</h3>
-				<p>${__("统一维护公司、分支机构、部门、岗位、职级、工作性质等基础字典。")}</p>
+				<div class="hrms-settings-panel-head">
+					<div><h3>${__("基础资料设置")}</h3><p>${__("统一维护公司、分支机构、部门、岗位、职级、工作性质等基础字典。")}</p></div>
+					${is_system_manager() ? `<button class="btn btn-primary btn-sm" data-route="hrms-data-operations">${__("公司与数据空间管理")}</button>` : ""}
+				</div>
 				<div class="hrms-settings-card-grid">
 					${(state.data?.field_center?.base_data_modules || [])
 						.map((item) => `<button class="hrms-settings-card" data-doctype="${escape(item.doctype)}">${escape(item.label)}<small>${escape(item.doctype)}</small></button>`)
@@ -304,15 +342,16 @@ preview_sync_payload
 			<div class="hrms-settings-panel">
 				<div class="hrms-settings-panel-head">
 					<div>
-						<h3>${__("用户与权限")}</h3>
-						<p>${__("统一管理登录账号、角色、用户权限和角色权限。系统继续使用 Frappe 原生 User、Role 和 User Permission，保证登录、审计和权限校验一致。")}</p>
+						<h3>${__("账户与权限")}</h3>
+						<p>${__("先进入账户与权限中心查看现有账户与角色，再按账号、角色、数据范围和权限矩阵分别维护。这样不会把“用户权限限制”误认为账户列表。")}</p>
 					</div>
 				</div>
 				<div class="hrms-settings-card-grid">
+					<button class="hrms-settings-card hrms-settings-card--primary" data-route="hrms-access-center">${__("打开账户与权限中心")}<small>${__("账户摘要、角色说明和操作步骤")}</small></button>
 					<button class="hrms-settings-card" data-new-doctype="User">${__("创建用户")}<small>${__("为办公人员创建登录账号")}</small></button>
 					<button class="hrms-settings-card" data-doctype="User">${__("用户管理")}<small>User</small></button>
 					<button class="hrms-settings-card" data-doctype="Role">${__("角色管理")}<small>Role</small></button>
-					<button class="hrms-settings-card" data-doctype="User Permission">${__("用户权限")}<small>User Permission</small></button>
+					<button class="hrms-settings-card" data-doctype="User Permission">${__("数据范围限制")}<small>${__("User Permission：按公司、员工等限制可见数据")}</small></button>
 					<button class="hrms-settings-card" data-route="permission-manager">${__("角色权限管理")}<small>${__("维护 DocType 级权限矩阵")}</small></button>
 				</div>
 				<div class="alert alert-info mt-3">

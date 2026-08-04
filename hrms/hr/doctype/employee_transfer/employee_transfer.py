@@ -7,7 +7,10 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import getdate
 
-from hrms.hr.utils import update_employee_work_history
+from hrms.hr.utils import update_employee_work_history, validate_active_employee
+
+
+CROSS_COMPANY_TRANSFER_TYPE = "跨公司调动"
 
 
 class EmployeeTransfer(Document):
@@ -31,20 +34,46 @@ class EmployeeTransfer(Document):
 		employee_name: DF.Data | None
 		new_company: DF.Link | None
 		new_employee_id: DF.Link | None
+		approval_reference: DF.Data | None
+		remarks: DF.SmallText | None
 		reallocate_leaves: DF.Check
 		transfer_date: DF.Date
 		transfer_details: DF.Table[EmployeePropertyHistory]
+		transfer_reason: DF.Data | None
+		transfer_type: DF.Literal["调岗", "晋升", "降级", "转全职", "跨公司调动", "其他"]
 	# end: auto-generated types
+
+	def validate(self):
+		validate_active_employee(self.employee)
+		self.validate_company_change()
+		if not self.transfer_details:
+			frappe.throw(_("请至少添加一项实际发生变化的异动明细。"))
+
+	def validate_company_change(self):
+		is_cross_company_transfer = self.transfer_type == CROSS_COMPANY_TRANSFER_TYPE
+
+		if is_cross_company_transfer:
+			if not self.new_company:
+				frappe.throw(_("跨公司调动请选择新公司。"))
+			if self.new_company == self.company:
+				frappe.throw(_("跨公司调动的新公司不能与原公司相同。"))
+			return
+
+		if self.new_company:
+			frappe.throw(_("普通人事异动不能填写新公司，请选择“跨公司调动”。"))
+		if self.create_new_employee_id:
+			frappe.throw(_("只有跨公司调动可以新建员工档案。"))
 
 	def before_submit(self):
 		if getdate(self.transfer_date) > getdate():
 			frappe.throw(
-				_("Employee Transfer cannot be submitted before Transfer Date"),
+				_("生效日期未到，不能提交人事异动。"),
 				frappe.DocstatusTransitionError,
 			)
 
 	def on_submit(self):
 		employee = frappe.get_doc("Employee", self.employee)
+		is_cross_company_transfer = self.transfer_type == CROSS_COMPANY_TRANSFER_TYPE
 		if self.create_new_employee_id:
 			new_employee = frappe.copy_doc(employee)
 			new_employee.name = None
@@ -52,7 +81,7 @@ class EmployeeTransfer(Document):
 			new_employee = update_employee_work_history(
 				new_employee, self.transfer_details, date=self.transfer_date
 			)
-			if self.new_company and self.company != self.new_company:
+			if is_cross_company_transfer:
 				new_employee.internal_work_history = []
 				new_employee.date_of_joining = self.transfer_date
 				new_employee.company = self.new_company
@@ -67,7 +96,7 @@ class EmployeeTransfer(Document):
 			employee.db_set("status", "Left")
 		else:
 			employee = update_employee_work_history(employee, self.transfer_details, date=self.transfer_date)
-			if self.new_company and self.company != self.new_company:
+			if is_cross_company_transfer:
 				employee.company = self.new_company
 				employee.date_of_joining = self.transfer_date
 			employee.save()
@@ -88,7 +117,7 @@ class EmployeeTransfer(Document):
 			employee = update_employee_work_history(
 				employee, self.transfer_details, date=self.transfer_date, cancel=True
 			)
-		if self.new_company != self.company:
+		if self.transfer_type == CROSS_COMPANY_TRANSFER_TYPE:
 			employee.company = self.company
 		employee.save()
 

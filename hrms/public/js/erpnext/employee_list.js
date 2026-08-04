@@ -20,13 +20,13 @@
 
 	const roster_cards = [
 		{ label: "在职", filters: { status: "Active" } },
-		{ label: "全职", filters: { employment_type: "Full-time" } },
-		{ label: "实习生", filters: { employment_type: "Intern" } },
-		{ label: "外包", filters: { employment_type: "Contract" } },
-		{ label: "退休返聘", filters: { employment_type: "Retainer" } },
-		{ label: "试用期", filters: { status: "Active", employment_type: "Probation" } },
+		{ label: "全职", filters: { status: "Active", employment_type: "Full-time" } },
+		{ label: "实习生", filters: { status: "Active", employment_type: "Intern" } },
+		{ label: "外包", filters: { status: "Active", employment_type: "Contract" } },
+		{ label: "退休返聘", filters: { status: "Active", employment_type: "Retainer" } },
+		{ label: "试用期", filters: { status: "Active", custom_is_confirmed: "否" } },
 		{ label: "待离职", filters: { status: "Inactive" } },
-		{ label: "正式", filters: { status: "Active" } },
+		{ label: "正式", filters: { status: "Active", custom_is_confirmed: "是" } },
 		{ label: "已离职", filters: { status: "Left" } },
 	];
 
@@ -57,6 +57,7 @@
 			"department",
 			"designation",
 			"employment_type",
+			"custom_is_confirmed",
 			"status",
 			"date_of_joining",
 			"custom_id_type",
@@ -98,24 +99,74 @@
 
 	function setup_roster_page(listview) {
 		if (!listview || !listview.page) return;
+		bind_natural_employee_code_sorting(listview);
 		if (configure_roster_page_length(listview)) return;
 
 		mark_employee_roster_view();
+		bind_roster_employee_detail_navigation(listview);
 		configure_roster_list_columns(listview);
 		listview.page.set_title(__("员工花名册"));
 		set_search_placeholder();
 		hide_native_filter_controls();
+		hide_unused_roster_toolbar_controls(listview);
 		hide_roster_page_length_controls();
 		setup_roster_actions(listview);
 		setup_roster_summary(listview);
 		sync_active_roster_card(listview);
 		setTimeout(function () {
 			hide_native_filter_controls();
+			hide_unused_roster_toolbar_controls(listview);
 			hide_roster_page_length_controls();
 			sync_active_roster_card(listview);
 			normalise_roster_list_cells(listview);
 		}, 300);
 		normalise_roster_list_cells(listview);
+	}
+
+	function bind_natural_employee_code_sorting(listview) {
+		if (listview.__hrmsNaturalEmployeeCodeSortingBound) return;
+
+		listview.__hrmsNaturalEmployeeCodeSortingBound = true;
+		const original_before_render = listview.before_render;
+		listview.before_render = function () {
+			original_before_render.call(this);
+			sort_roster_by_employee_code(this);
+		};
+	}
+
+	function sort_roster_by_employee_code(listview) {
+		const sort_by = listview.sort_selector?.sort_by || listview.sort_by;
+		if (sort_by !== "custom_employee_code" || !Array.isArray(listview.data)) return;
+
+		const sort_order = (listview.sort_selector?.sort_order || listview.sort_order) === "asc" ? "asc" : "desc";
+		const populated = [];
+		const blank = [];
+
+		listview.data.forEach((employee, original_index) => {
+			const value = get_employee_business_code(employee);
+			(value ? populated : blank).push({ employee, original_index, value });
+		});
+
+		populated.sort((left, right) => {
+			const comparison = compare_employee_business_codes(left.value, right.value);
+			if (comparison) return sort_order === "asc" ? comparison : -comparison;
+			return left.original_index - right.original_index;
+		});
+
+		// Missing work numbers are data-quality exceptions, so keep them at the
+		// bottom in both directions instead of making them look like top-ranked rows.
+		listview.data = populated.concat(blank).map((item) => item.employee);
+	}
+
+	function get_employee_business_code(employee) {
+		return String(employee?.custom_employee_code || employee?.employee_number || "").trim();
+	}
+
+	function compare_employee_business_codes(left, right) {
+		return String(left || "").localeCompare(String(right || ""), "zh-CN", {
+			numeric: true,
+			sensitivity: "base",
+		});
 	}
 
 	function configure_roster_page_length(listview) {
@@ -175,9 +226,6 @@
 			open_roster_field_settings();
 		});
 
-		listview.page.add_inner_button(__("更多功能"), function () {
-			frappe.set_route("Workspaces", "人事");
-		});
 	}
 
 	function open_roster_field_settings() {
@@ -291,13 +339,25 @@
 
 	function apply_single_roster_filter(card, search) {
 		sessionStorage.setItem("hrms_roster_active_card", card.label || "");
-		const query = build_roster_query(card.filters, search);
-		const target = `/desk/employee${query ? `?${query}` : ""}`;
-		if (window.location.pathname + window.location.search === target) {
-			window.location.reload();
-			return;
+		// Frappe ListView consumes route_options when it creates or refreshes a
+		// list. Directly writing URL parameters bypasses that lifecycle and left
+		// the card count and the displayed rows using different filters.
+		frappe.route_options = build_roster_route_options(card.filters, search);
+		frappe.set_route("List", EMPLOYEE_DOCTYPE);
+	}
+
+	function build_roster_route_options(filters, search) {
+		const route_options = {};
+		Object.keys(filters || {}).forEach((fieldname) => {
+			if (has_employee_field(fieldname)) {
+				route_options[fieldname] = filters[fieldname];
+			}
+		});
+
+		if (search && search.value && has_employee_field(search.fieldname)) {
+			route_options[search.fieldname] = ["like", `%${search.value}%`];
 		}
-		window.location.href = target;
+		return route_options;
 	}
 
 	function build_roster_query(filters, search) {
@@ -319,18 +379,13 @@
 		const wrapper = get_list_wrapper(listview);
 		if (!wrapper) return;
 
-		const params = new URLSearchParams(window.location.search);
 		const preferred_label = sessionStorage.getItem("hrms_roster_active_card") || "";
 		let active_label = "";
 		if (preferred_label) {
 			const preferred_card = roster_cards.find((card) => card.label === preferred_label);
-			if (preferred_card && does_query_match_filters(params, preferred_card.filters)) {
+			if (preferred_card) {
 				active_label = preferred_label;
 			}
-		}
-		if (!active_label) {
-			const first_match = roster_cards.find((card) => does_query_match_filters(params, card.filters));
-			active_label = first_match ? first_match.label : "";
 		}
 
 		roster_cards.forEach((card) => {
@@ -340,13 +395,34 @@
 		});
 	}
 
-	function does_query_match_filters(params, filters) {
-		return Object.keys(filters || {}).every((fieldname) => params.get(fieldname) === filters[fieldname]);
-	}
-
 	function hide_native_filter_controls() {
 		document.querySelectorAll(".filter-button, .filter-x-button, .filter-popover").forEach((element) => {
 			element.style.display = "none";
+		});
+	}
+
+	function hide_unused_roster_toolbar_controls(listview) {
+		const page_wrapper = listview?.page?.wrapper?.[0] || listview?.page?.wrapper?.get?.(0);
+		if (!page_wrapper) return;
+
+		const unused_labels = ["列表视图", "List View", "已保存的筛选器", "Saved Filters"];
+		const toolbar = page_wrapper.querySelector(".page-actions, .list-view-actions, .list-actions") || page_wrapper;
+
+		toolbar.querySelectorAll("button, [role='button'], .btn").forEach((control) => {
+			const control_text = [
+				control.textContent,
+				control.getAttribute("title"),
+				control.getAttribute("aria-label"),
+			]
+				.filter(Boolean)
+				.join(" ")
+				.replace(/\s+/g, " ")
+				.trim();
+
+			if (unused_labels.some((label) => control_text === label || control_text.startsWith(`${label} `))) {
+				control.classList.add("hrms-roster-toolbar-control-hidden");
+				control.setAttribute("aria-hidden", "true");
+			}
 		});
 	}
 
@@ -409,6 +485,62 @@
 				}
 			});
 		});
+	}
+
+	// Frappe's default ListView opens the native Employee form when a row is
+	// selected. Employee records are read through the dedicated archive page;
+	// intercept the row action before ListView handles it so the first click
+	// reaches the archive page instead of requiring a browser refresh.
+	function bind_roster_employee_detail_navigation(listview) {
+		const wrapper = get_list_wrapper(listview);
+		if (!wrapper || wrapper.__hrmsRosterEmployeeDetailNavigationBound) return;
+
+		wrapper.__hrmsRosterEmployeeDetailNavigationBound = true;
+		wrapper.addEventListener(
+			"click",
+			(event) => {
+				if (
+					event.defaultPrevented ||
+					event.button !== 0 ||
+					event.metaKey ||
+					event.ctrlKey ||
+					event.shiftKey ||
+					event.altKey
+				) {
+					return;
+				}
+
+				const interactive = event.target.closest(
+					"button, input, select, textarea, .btn, .dropdown-menu, .list-row-checkbox, [data-action]",
+				);
+				if (interactive) return;
+
+				const employee = resolve_roster_employee_name(listview, event.target);
+				if (!employee) return;
+
+				event.preventDefault();
+				event.stopImmediatePropagation();
+				frappe.set_route("employee-detail", employee);
+			},
+			true,
+		);
+	}
+
+	function resolve_roster_employee_name(listview, target) {
+		const row = target.closest(".list-row");
+		const named_element = target.closest("[data-name]");
+		const direct_name = (row && row.getAttribute("data-name")) || (named_element && named_element.getAttribute("data-name"));
+		if (direct_name) return direct_name;
+
+		const link = target.closest("a[href]");
+		const href = link && link.getAttribute("href");
+		const match = href && href.match(/(?:employee|Employee)\/([^/?#]+)/);
+		if (match && match[1]) return decodeURIComponent(match[1]);
+
+		if (!row || !Array.isArray(listview.data)) return "";
+		const rows = Array.from(get_list_wrapper(listview).querySelectorAll(".list-row"));
+		const row_index = rows.indexOf(row);
+		return row_index >= 0 ? listview.data[row_index]?.name || "" : "";
 	}
 
 	function mark_employee_roster_view() {
