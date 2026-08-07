@@ -13,6 +13,8 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 		export_scope: "all",
 		current_filters: {},
 		export_records: [],
+		schema_request_id: 0,
+		records_request_id: 0,
 	};
 
 	$(page.body).addClass("hrms-roster-export-page");
@@ -24,7 +26,11 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 		} catch (e) {
 			state.current_filters = {};
 		}
+		const company = window.hrmsCompanyContext?.getCurrentCompany?.() || frappe.defaults?.get_user_default?.("Company") || "";
+		if (company) state.current_filters.company = company;
+		const request_id = ++state.schema_request_id;
 		return frappe.call("hrms.api.employee_field_template.get_employee_import_export_schema").then((r) => {
+			if (request_id !== state.schema_request_id) return;
 			state.schema = r.message;
 			state.active_category = state.schema.categories?.[0]?.label || "";
 			(state.schema.fields || []).forEach((field) => {
@@ -36,7 +42,12 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 	}
 
 	function load_export_records() {
-		return frappe.call("hrms.api.employee_field_template.get_employee_export_records").then((r) => {
+		const request_id = ++state.records_request_id;
+		return frappe.call({
+			method: "hrms.api.employee_field_template.get_employee_export_records",
+			args: { current_filters: JSON.stringify(state.current_filters) },
+		}).then((r) => {
+			if (request_id !== state.records_request_id) return;
 			state.export_records = r.message || [];
 		});
 	}
@@ -272,5 +283,14 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 	$(page.body).on("click", "[data-action='export']", export_selected);
 	$(page.body).on("click", "[data-action='save-report']", save_report);
 
+	wrapper.employee_roster_export = {
+		refresh() {
+			return load_schema();
+		},
+	};
 	load_schema();
+};
+
+frappe.pages["employee-roster-export"].on_page_show = function (wrapper) {
+	wrapper.employee_roster_export?.refresh();
 };

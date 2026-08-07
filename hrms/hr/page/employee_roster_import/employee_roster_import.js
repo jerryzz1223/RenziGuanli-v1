@@ -14,6 +14,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		import_result: null,
 		manual_mappings: {},
 		file: null,
+		request_id: 0,
 	};
 
 	$(page.body).addClass("hrms-roster-import-page");
@@ -95,6 +96,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 				});
 				return;
 			}
+			const request_id = ++state.request_id;
 			frappe
 				.call({
 					method: "hrms.api.employee_field_template.preview_employee_roster_import",
@@ -108,6 +110,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 					freeze_message: __("正在预览导入结果..."),
 				})
 				.then((r) => {
+					if (request_id !== state.request_id) return;
 					state.step = 3;
 					state.preview_result = r.message || {};
 					render_preview();
@@ -345,11 +348,13 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			restrictions: { allowed_file_types: [".xlsx"] },
 			on_success(file) {
 				state.file = file;
+				const request_id = ++state.request_id;
 				frappe
 					.call("hrms.api.employee_field_template.parse_employee_roster_file", {
 						file_url: file.file_url,
 					})
 					.then((r) => {
+						if (request_id !== state.request_id || state.file?.file_url !== file.file_url) return;
 						state.step = 2;
 						state.parse_result = r.message;
 						render_match();
@@ -394,5 +399,18 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		frappe.set_route(this.dataset.route);
 	});
 
-	render_landing();
+	function refresh() {
+		if (state.step === 2 && state.parse_result) return render_match();
+		if (state.step === 3 && state.preview_result) return render_preview();
+		if (state.step === 4 && state.import_result) return render_result();
+		if (state.mode) return render_upload();
+		render_landing();
+	}
+
+	wrapper.employee_roster_import = { refresh };
+	refresh();
+};
+
+frappe.pages["employee-roster-import"].on_page_show = function (wrapper) {
+	wrapper.employee_roster_import?.refresh();
 };

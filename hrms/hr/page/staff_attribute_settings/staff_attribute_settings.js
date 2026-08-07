@@ -46,9 +46,7 @@ frappe.pages["staff-attribute-settings"].on_page_load = function (wrapper) {
 		`<div class="alert alert-info">${__("员工属性设置已迁移到设置中心，请在“设置中心 / 员工属性设置”中统一维护。")}</div>`,
 	);
 	setTimeout(() => {
-		frappe
-			.call("hrms.api.employee_field_template.ensure_personnel_pages")
-			.always(() => frappe.set_route("hr-settings-center"));
+		frappe.set_route("hr-settings-center");
 	}, 50);
 
 	function load_template() {

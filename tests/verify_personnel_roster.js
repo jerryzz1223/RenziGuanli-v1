@@ -42,6 +42,7 @@ function mustInclude(source, marker, message) {
 mustInclude(hooks, '"Employee": "public/js/erpnext/employee_list.js"', "Employee list view customization must be registered in hooks.py.");
 mustInclude(hooks, '"Employee": "public/js/erpnext/employee.js"', "Employee form customization must remain registered in hooks.py.");
 mustInclude(topNavCss, "hrms-roster-toolbar-control-hidden", "员工花名册必须隐藏未启用的标准工具栏控件。");
+mustInclude(topNavCss, "margin-top: 14px", "员工档案库筛选栏必须与状态卡片保持清晰的垂直间距。");
 
 for (const label of ["桌面", "Desktop", "网站", "Website", "编辑侧边栏", "Edit Sidebar", "Delete Demo Data"]) {
 	mustInclude(redirect, label, `Global sidebar dropdown cleanup must handle: ${label}`);
@@ -63,7 +64,7 @@ for (const marker of [
 	'"custom_employee_code": "工号"',
 	'"department": "部门"',
 	'"designation": "岗位"',
-	'"employment_type": "工作性质"',
+	'"custom_personnel_status": "工作性质"',
 	'"date_of_joining": "入职日期"',
 	'"custom_id_type": "证件类型"',
 	'"passport_number": "证件号码"',
@@ -73,7 +74,7 @@ for (const marker of [
 	"sort_options",
 	"page_length",
 	"dynamic_columns",
-	"frappe.get_all(EMPLOYEE_DOCTYPE",
+	"_count_employee_rows",
 	"_build_employee_roster_filters",
 	"_hydrate_employee_roster_display_values",
 	"_department_display_name",
@@ -85,17 +86,12 @@ for (const marker of [
 }
 
 for (const marker of [
-	"姓名/手机号",
-	"姓名、手机号、工号",
+	"表头联想筛选",
 	"员工花名册",
 	"在职",
-	"全职",
-	"实习生",
-	"外包",
 	"退休返聘",
 	"试用期",
 	"待离职",
-	"正式",
 	"已离职",
 	"添加员工",
 	"导入",
@@ -140,8 +136,21 @@ for (const marker of [
 	"page_length: ROSTER_ALL_EMPLOYEES_PAGE_LENGTH",
 	"configure_roster_page_length",
 	"hide_roster_page_length_controls",
+	"hide_native_roster_field_filters",
+	"enhance_roster_column_headers",
+	"hrms-roster-column-filter-hotspot",
+	"hrms-roster-column-filter-input",
+	"get_roster_filter_suggestions",
+	"apply_roster_column_filter",
+	"ROSTER_COLUMN_FILTER_STORAGE_KEY",
 ]) {
 	mustInclude(employeeList, marker, `Employee list view is missing roster behavior marker: ${marker}`);
+}
+
+for (const obsoleteMarker of ["hrms-roster-search-control", "hrms-roster-search-button"]) {
+	if (employeeList.includes(obsoleteMarker)) {
+		throw new Error(`Employee roster must not retain the redundant top search control: ${obsoleteMarker}`);
+	}
 }
 
 const bootstrapMetaIndex = employeeList.indexOf("apply_roster_meta_columns();");
@@ -157,6 +166,9 @@ if (employeeList.includes("listview.filter_area.add([[EMPLOYEE_DOCTYPE, fieldnam
 mustInclude(topNavCss, "body.hrms-employee-roster-view .filter-button", "Employee roster must hide the native filter button.");
 mustInclude(topNavCss, ".hrms-roster-card.is-active", "Employee roster must show a single active status card.");
 mustInclude(topNavCss, ".hrms-roster-page-length-hidden", "Employee roster must hide only the page-size choices, not its data.");
+mustInclude(topNavCss, ".hrms-roster-native-filters-hidden", "Employee roster must remove its redundant top field filters.");
+mustInclude(topNavCss, ".hrms-roster-column-filter-hotspot", "Employee roster headers must expose a blank-space filter target.");
+mustInclude(topNavCss, ".hrms-roster-column-filter-editor", "Employee roster headers must provide an inline suggestion editor.");
 
 for (const marker of [
 	"在职信息",
@@ -192,6 +204,7 @@ for (const [label, linkTo] of [
 	["入职管理", "Employee Onboarding"],
 	["转正管理", "Employee Promotion"],
 	["离职管理", "Employee Separation"],
+	["离职记录", "employee-separation-records"],
 	["人事异动", "Employee Transfer"],
 ]) {
 	if (!personnel.links.some((link) => link.type === "Link" && link.label === label && link.link_to === linkTo)) {
@@ -236,7 +249,7 @@ for (const marker of [
 	"设置花名册字段",
 	"frappe.set_route(\"employee-detail\"",
 	"当前没有真实员工档案",
-	"this.page_length = 500",
+	"this.page_length = 100",
 	"hrms-employee-archive-view",
 	"render_pagination",
 ]) {
@@ -268,8 +281,13 @@ for (const [doctype, jsPath, jsonPath] of [
 	const source = fs.readFileSync(jsPath, "utf8");
 	const json = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
 	const employeeCodeDisplayField = json.fields.find((field) => field.fieldname === "employee_code_display");
-	if (!employeeCodeDisplayField || employeeCodeDisplayField.fieldtype !== "Data" || employeeCodeDisplayField.read_only) {
-		throw new Error(`${doctype} 必须提供可输入的员工工号字段。`);
+	const shouldBeReadOnly = doctype === "Employee Transfer";
+	if (
+		!employeeCodeDisplayField ||
+		employeeCodeDisplayField.fieldtype !== "Data" ||
+		Boolean(employeeCodeDisplayField.read_only) !== shouldBeReadOnly
+	) {
+		throw new Error(`${doctype} 的员工工号读写规则不符合业务入口约定。`);
 	}
 	mustInclude(source, "employee_business_code_selector.js", `${doctype} 必须接入统一员工工号选择器。`);
 	mustInclude(source, "employee_code_display", `${doctype} 必须由公司工号选择员工。`);
@@ -310,6 +328,12 @@ if (employeeDetailJs.includes("header.employee_name || header.name")) {
 
 for (const marker of [
 	"frappe.pages[\"employee-detail\"]",
+	"on_page_show",
+	"refresh_from_route",
+	"load_request_id",
+	"loading_employee",
+	"Promise.all([detail_request, navigation_request])",
+	"is_current_request(request_id, employee)",
 	"get_employee_detail",
 	"get_employee_detail_navigation",
 	"ensure_personnel_pages",
@@ -343,9 +367,7 @@ for (const marker of [
 	"can_edit_employee_detail",
 	"data-action=\"edit-employee\"",
 	"frappe.set_route(\"Form\", \"Employee\", this.employee)",
-	"修改部门、岗位、职务、职级等信息建议通过人事异动完成",
 	"添加更多员工档案字段",
-	"hrms-employee-detail-readonly-notice",
 	"hrms-employee-detail-info-grid",
 	"hrms-employee-detail-growth-timeline",
 	"hrms-employee-detail-side-panel",

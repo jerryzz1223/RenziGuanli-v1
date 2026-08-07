@@ -1,0 +1,53 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "description": "按公司和薪资月份保存薪酬流程各步的人工锁定与校验快照。",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "payroll_month",
+  "step_key",
+  "step_label",
+  "lock_status",
+  "attendance_lock_version",
+  "validation_hash",
+  "validation_summary",
+  "blocker_count",
+  "warning_count",
+  "locked_by",
+  "locked_on",
+  "invalidated_by",
+  "invalidated_on",
+  "invalidation_reason",
+  "snapshot_json"
+ ],
+ "fields": [
+  {"fieldname": "company", "fieldtype": "Link", "in_list_view": 1, "label": "公司", "options": "Company", "reqd": 1},
+  {"fieldname": "payroll_month", "fieldtype": "Data", "in_list_view": 1, "label": "薪资月份", "reqd": 1},
+  {"fieldname": "step_key", "fieldtype": "Data", "in_list_view": 1, "label": "步骤编码", "reqd": 1},
+  {"fieldname": "step_label", "fieldtype": "Data", "in_list_view": 1, "label": "步骤名称", "reqd": 1},
+  {"default": "待锁定", "fieldname": "lock_status", "fieldtype": "Select", "in_list_view": 1, "label": "锁定状态", "options": "待锁定\n已锁定\n已失效", "reqd": 1},
+  {"fieldname": "attendance_lock_version", "fieldtype": "Data", "label": "考勤锁定版本"},
+  {"fieldname": "validation_hash", "fieldtype": "Data", "label": "校验快照码"},
+  {"fieldname": "validation_summary", "fieldtype": "Small Text", "label": "校验摘要"},
+  {"default": "0", "fieldname": "blocker_count", "fieldtype": "Int", "label": "阻断项数"},
+  {"default": "0", "fieldname": "warning_count", "fieldtype": "Int", "label": "提醒项数"},
+  {"fieldname": "locked_by", "fieldtype": "Link", "label": "锁定人", "options": "User"},
+  {"fieldname": "locked_on", "fieldtype": "Datetime", "label": "锁定时间"},
+  {"fieldname": "invalidated_by", "fieldtype": "Link", "label": "失效操作人", "options": "User"},
+  {"fieldname": "invalidated_on", "fieldtype": "Datetime", "label": "失效时间"},
+  {"fieldname": "invalidation_reason", "fieldtype": "Small Text", "label": "解锁/失效原因"},
+  {"fieldname": "snapshot_json", "fieldtype": "Code", "label": "锁定快照", "options": "JSON"}
+ ],
+ "module": "HR",
+ "name": "HRMS Payroll Step Lock",
+ "permissions": [
+  {"create": 1, "delete": 1, "export": 1, "read": 1, "report": 1, "write": 1, "role": "System Manager"},
+  {"create": 1, "export": 1, "read": 1, "report": 1, "write": 1, "role": "HR Manager"}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1,
+ "title_field": "step_label"
+}

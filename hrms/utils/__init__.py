@@ -20,10 +20,24 @@ def _normalize_country_fields(fields: list[str] | tuple[str, ...] | str | None) 
 	return normalized_fields or DEFAULT_COUNTRY_FIELDS
 
 
+def _get_request_ip() -> str | None:
+	request_context = getattr(frappe, "local", None)
+	request_ip = getattr(request_context, "request_ip", None)
+
+	if not isinstance(request_ip, str):
+		return None
+
+	request_ip = request_ip.strip()
+	return request_ip or None
+
+
 @frappe.whitelist(allow_guest=True)
 def get_country(fields: list[str] | tuple[str, ...] | str | None = None) -> dict:
 	global country_info
-	ip = frappe.local.request_ip
+	ip = _get_request_ip()
+	if not ip:
+		return {}
+
 	requested_fields = _normalize_country_fields(fields)
 	cache_key = (ip, requested_fields)
 

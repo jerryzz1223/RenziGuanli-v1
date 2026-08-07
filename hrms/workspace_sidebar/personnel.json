@@ -42,17 +42,6 @@
    "type": "Link"
   },
   {
-   "child": 1,
-   "collapsible": 0,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "员工档案库",
-   "link_to": "employee-archive",
-   "link_type": "Page",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
    "child": 0,
    "collapsible": 1,
    "icon": "git-branch",
@@ -104,6 +93,17 @@
    "label": "离职管理",
    "link_to": "Employee Separation",
    "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 1,
+   "collapsible": 0,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "离职记录",
+   "link_to": "employee-separation-records",
+   "link_type": "Page",
    "show_arrow": 0,
    "type": "Link"
   },

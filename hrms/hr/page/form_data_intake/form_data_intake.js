@@ -5,7 +5,11 @@ frappe.pages["form-data-intake"].on_page_load = function (wrapper) {
 };
 
 frappe.pages["form-data-intake"].on_page_show = function (wrapper) {
-	wrapper.form_data_intake?.refresh();
+	wrapper.form_data_intake?.activate();
+};
+
+frappe.pages["form-data-intake"].on_page_hide = function (wrapper) {
+	wrapper.form_data_intake?.deactivate();
 };
 
 class FormDataIntake {
@@ -18,12 +22,32 @@ class FormDataIntake {
 		this.selected = null;
 		this.file_url = "";
 		this.preview = null;
+		this.refresh_request_id = 0;
+		this.batch_request_id = 0;
+		this.company_context_bound = false;
+		this.last_refresh_at = 0;
+		this.cache_ttl = 30_000;
 	}
 
 	show() {
 		this.page.set_primary_action(__("上传表单"), () => this.open_uploader());
+		this.activate(true);
+	}
+
+	is_active() {
+		const container = this.wrapper.closest(".page-container");
+		return !container || container.classList.contains("active");
+	}
+
+	activate(initial = false) {
 		this.bind_company_context();
-		this.refresh();
+		if (initial || Date.now() - this.last_refresh_at > this.cache_ttl) this.refresh();
+	}
+
+	deactivate() {
+		if (!this.company_context_bound) return;
+		window.removeEventListener("hrms:company-context-changed", this.handle_company_context_change);
+		this.company_context_bound = false;
 	}
 
 	get_context_company() {
@@ -33,14 +57,17 @@ class FormDataIntake {
 	bind_company_context() {
 		if (this.company_context_bound) return;
 		this.company_context_bound = true;
-		window.addEventListener("hrms:company-context-changed", (event) => {
+		this.handle_company_context_change = (event) => {
+			if (!this.is_active()) return;
 			const next = event?.detail?.company || this.get_context_company();
 			if (!next || next === this.company) return;
 			this.company = next;
 			this.preview = null;
 			this.refresh();
-		});
+		};
+		window.addEventListener("hrms:company-context-changed", this.handle_company_context_change);
 		window.hrmsCompanyContext?.ready?.().then((company) => {
+			if (!this.is_active()) return;
 			if (company && company !== this.company) {
 				this.company = company;
 				this.refresh();
@@ -49,7 +76,10 @@ class FormDataIntake {
 	}
 
 	refresh() {
+		const request_id = ++this.refresh_request_id;
+		this.last_refresh_at = Date.now();
 		frappe.call({ method: "hrms.api.form_data_intake.list_form_import_templates", args: { module_name: this.module } }).then((response) => {
+			if (request_id !== this.refresh_request_id) return;
 			this.templates = response.message || [];
 			if (this.selected && !this.templates.some((item) => item.key === this.selected.key)) this.selected = null;
 			this.render();
@@ -156,7 +186,9 @@ class FormDataIntake {
 	load_batches() {
 		const target = this.wrapper.querySelector("[data-batches]");
 		if (!target || !this.company) { if (target) target.innerHTML = this.escape(__("请先选择公司。")); return; }
+		const request_id = ++this.batch_request_id;
 		frappe.call({ method: "hrms.api.form_data_intake.list_form_import_batches", args: { company: this.company, module_name: this.module } }).then((response) => {
+			if (request_id !== this.batch_request_id || !this.is_active()) return;
 			const rows = response.message || [];
 			target.innerHTML = rows.length ? `<table class="table table-bordered table-sm"><thead><tr><th>${this.escape(__("批次"))}</th><th>${this.escape(__("表单"))}</th><th>${this.escape(__("状态"))}</th><th>${this.escape(__("有效/失败"))}</th><th>${this.escape(__("时间"))}</th></tr></thead><tbody>${rows.map((row) => `<tr><td><a href="/app/hrms-form-import-batch/${encodeURIComponent(row.name)}">${this.escape(row.name)}</a></td><td>${this.escape(row.template_name)}</td><td>${this.escape(row.status)}</td><td>${this.escape(row.valid_rows)}/${this.escape(row.failed_rows)}</td><td>${this.escape(frappe.datetime.str_to_user(row.imported_on || ""))}</td></tr>`).join("")}</tbody></table>` : `<div class="text-muted">${this.escape(__("当前公司尚无导入批次。"))}</div>`;
 		});

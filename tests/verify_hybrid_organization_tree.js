@@ -51,6 +51,8 @@ for (const marker of [
 	"def get_hybrid_node_detail(",
 	"def get_employee_roster_field_map(",
 	"def get_yongxin_q2_org_template_preview(",
+	"def preview_yongxin_department_hierarchy(",
+	"def preview_yongxin_position_hierarchy(",
 	"def preview_yongxin_q3_organization_snapshot(",
 	"def import_yongxin_q2_org_structure(",
 	"def update_department_fields(",
@@ -66,6 +68,7 @@ for (const marker of [
 	"write_mode",
 	"preview_only",
 	"_company_has_imported_org_template",
+	"_is_yongxin_company",
 	"_get_yongxin_template_tree",
 	"_build_template_tree_node",
 	"_build_template_people",
@@ -80,11 +83,40 @@ for (const marker of [
 	"_ensure_designation",
 	"_is_management_designation",
 	"_get_department_staffing",
+	"def get_organization_report",
+	'"columns": ["部门/课别", "编制人数", "现有人数", "空缺人数", "岗位满足率", "备注"]',
+	"_get_department_relationships",
+	"_is_all_departments_name",
 	"_build_department_node",
+	"_build_live_management_hierarchy",
+	"_build_live_division_nodes",
+	"_collect_template_department_units",
+	"_position_hierarchy_level",
+	"_position_hierarchy_message",
+	"_matches_template_designation",
+	"课与组同名",
+	"同一课下存在同名组",
+	"_suggest_template_team_name",
+	"_classify_management_role",
 	"_build_management_node",
 	"_build_employee_group_node",
+	"_build_work_level_nodes",
+	"_build_position_group_nodes",
+	'"node_type": "work_level"',
+	'"node_type": "position_group"',
+	'if node_type not in TEMPLATE_DEPARTMENT_NODE_TYPES',
+	"group_people =",
+	'"people": group_people',
+	'"employee_route": employee.get("name")',
+	'"employee_number": _employee_business_number(employee)',
+	"def resolve_employee_number",
+	"_employee_business_number",
+	"_resolve_yongxin_company_candidates",
+	"_company_business_weight",
 	"_get_node_employees",
 	"_validate_department_delete",
+	"def update_employee_group",
+	"fieldname not in {\"grade\", \"designation\"}",
 	"planned_headcount",
 	"current_headcount",
 	"vacancy_count",
@@ -100,6 +132,24 @@ for (const marker of [
 ]) {
 	mustInclude(py, marker, `Hybrid organization backend missing marker: ${marker}`);
 }
+
+mustMatch(
+	py,
+	/def get_hybrid_tree\([\s\S]*?root_node\["connections"\][\s\S]*?return \{[\s\S]*?"root": root_node[\s\S]*?@frappe\.whitelist\(\)\s*def get_organization_report/,
+	"get_hybrid_tree must return the live tree before the organization report definition",
+);
+
+mustMatch(
+	py,
+	/root_node = _build_live_management_hierarchy\([\s\S]*?department_nodes=/,
+	"Live charts must keep the Excel management line above Department nodes",
+);
+
+mustMatch(
+	js,
+	/const roots = root\.node_type === "company" \? root\.children \|\| \[\] : \[root\];/,
+	"The chart must only hide a technical Company root, never the management hierarchy",
+);
 
 for (const marker of [
 	'"source_document": "1.2组织架构.xlsx"',
@@ -143,15 +193,22 @@ for (const marker of [
 	"frappe.listview_settings[\"Department\"]",
 	"setup_department_list_actions",
 	"show_department_quick_edit_dialog",
+	"show_department_hierarchy_preview_dialog",
+	"render_department_hierarchy_preview",
+	"show_position_hierarchy_preview_dialog",
+	"render_position_hierarchy_preview",
 	"show_department_bulk_delete_dialog",
+	"preview_yongxin_department_hierarchy",
+	"preview_yongxin_position_hierarchy",
+	"预检部门层级",
+	"核对职位层级",
 	"get_selected_departments",
 	"hrms.hr.page.organizational_chart.organizational_chart.update_department_fields",
 	"hrms.hr.page.organizational_chart.organizational_chart.delete_departments",
 	"快速编辑",
 	"批量删除部门",
-	"hrms_org_manager",
-	"hrms_planned_headcount",
-	"hrms_recruitment_plan",
+	"parent_department",
+	"上级部门",
 	"frappe.set_route(\"List\", \"Department\")",
 	"listview.refresh()",
 ]) {
@@ -160,35 +217,22 @@ for (const marker of [
 
 for (const marker of [
 	"localize_department_form_labels",
+	"configure_focused_department_form",
+	"sync_company_root_parent_display",
+	"is_technical_department_root",
+	"get_company_root_label",
+	"公司根节点",
+	"hide_department_sidebar",
+	"render_department_relationships",
+	"FOCUSED_DEPARTMENT_FIELDS",
+	"HIDDEN_DEPARTMENT_FIELDS",
 	"frm.set_df_property",
 	"parent_department",
 	"上级部门",
-	"is_group",
-	"是否分组",
-	"disabled",
-	"已停用",
-	"leave_block_list",
-	"假期封存列表",
-	"hrms_org_section",
-	"组织管理",
-	"hrms_org_level",
-	"组织层级",
-	"hrms_org_role",
-	"组织角色",
-	"hrms_org_manager",
-	"组织负责人",
-	"hrms_org_proxy",
-	"代理负责人",
-	"hrms_planned_headcount",
-	"编制人数",
-	"hrms_actual_headcount",
-	"现有人数",
-	"hrms_vacancy_count",
-	"空缺人数",
-	"hrms_recruitment_plan",
-	"招聘计划",
-	"approvers",
-	"审批人",
+	"下级部门",
+	"当前部门员工",
+	"frappe.db.get_list(\"Department\"",
+	"frappe.db.get_list(\"Employee\"",
 ]) {
 	mustInclude(departmentFormJs, marker, `Department form localization missing marker: ${marker}`);
 }
@@ -219,17 +263,14 @@ for (const marker of [
 for (const marker of [
 	"frappe.pages[\"organizational-chart\"]",
 	"HybridOrganizationChart",
+	"getClientRects().length",
 	"YONGXIN_COMPANY",
 	"get_hybrid_tree",
 	"get_hybrid_node_detail",
 	"get_employee_roster_field_map",
-	"组织管理",
+	"部门管理",
 	"架构图",
-	"组织报表",
-	"data-company-field",
-	"选择公司",
-	"data-action=\"change-company\"",
-	"setup_company_field",
+	"部门报表",
 	"set_company",
 	"导入架构模板",
 	"新增部门",
@@ -241,23 +282,43 @@ for (const marker of [
 	"get_yongxin_q2_org_template_preview",
 	"import_yongxin_q2_org_structure",
 	"show_department_edit_dialog",
-	"hrms_org_manager",
-	"hrms_planned_headcount",
+	"quick_edit_node",
+	"get_node_department",
+	"data-action=\"quick-edit-node\"",
+	"data-action=\"fit-view\"",
+	"data-tree-stage",
+	"fit_to_view",
+	"apply_tree_scale",
+	"MIN_ORG_CHART_ZOOM",
+	"render_load_error",
 	"frappe.new_doc(\"Department\"",
 	"delete_departments",
 	"render_tree_node",
 	"render_person_tokens",
+	"this.search_term",
+	"matching_people",
 	"show_person_detail",
 	"render_detail_panel",
+	"render_department_relationships",
 	"render_employee_list",
+	"get_route_mode",
+	"render_report_shell",
+	"load_organization_report",
+	"export_report_table",
+	"edit_employee_group",
+	"update_employee_group",
 	"data-action=\"open-person\"",
 	"data-person-name",
 	"data-employee",
 	"data-employee-route",
+	"data-employee-number",
+	"data-action=\"select-node\"",
 	"normalize_employee_route_value",
+	"normalize_employee_number_value",
 	"resolve_employee_route_value",
-	"HR-EMP-",
-	"请先在右侧确认员工详情",
+	"resolve_employee_number",
+	"node.employee_route || node.employee",
+	"当前人员没有可用于匹配档案的员工编号",
 	"expand_all",
 	"collapse_all",
 	"export_chart",
@@ -276,7 +337,11 @@ for (const marker of [
 	".hrms-org-node--department",
 	".hrms-org-node--manager",
 	".hrms-org-node--employee_group",
+	".hrms-org-node--work_level",
+	".hrms-org-node--position_group",
+	".hrms-org-tree-stage",
 	".hrms-org-node-lines",
+	".hrms-org-node-edit",
 	".hrms-org-person-token",
 	".hrms-org-person-token.is-unmatched",
 	".hrms-org-person-detail",
@@ -289,14 +354,30 @@ for (const marker of [
 	"overflow-wrap: anywhere",
 	"white-space: normal",
 	"width: 100%",
-	"height: 22px",
+	"height: 8px",
 	"padding: 10px 12px 11px",
 	"top: 2px",
+	"pointer-events: none",
+	"z-index: 2",
 	".hrms-org-employee-row",
 	".hrms-org-toolbar",
+	".hrms-org-vacancy-marker",
 ]) {
 	mustInclude(css, marker, `Hybrid organization CSS missing marker: ${marker}`);
 }
+
+for (const marker of ["get_organization_report", "导出表格", "批准：", "text/csv;charset=utf-8"]) {
+	mustInclude(js, marker, `Embedded organization report frontend missing marker: ${marker}`);
+}
+for (const marker of [".hrms-org-report", "border-collapse: collapse", "border: 1px solid #1f2933"]) {
+	mustInclude(css, marker, `Embedded organization report CSS missing marker: ${marker}`);
+}
+
+mustMatch(
+	css,
+	/\.hrms-org-node\s*\{[^}]*border:\s*1px solid #1f2933;[^}]*border-radius:\s*0;[^}]*box-shadow:\s*none;/s,
+	"Organization cards must use the Excel-style black line visual language",
+);
 
 mustMatch(
 	css,
@@ -306,14 +387,44 @@ mustMatch(
 
 mustMatch(
 	css,
+	/\.hrms-org-tree li::before,[^}]*\.hrms-org-tree li::after\s*\{[^}]*pointer-events:\s*none;/s,
+	"Organization tree connector lines must not intercept nested node actions",
+);
+
+mustMatch(
+	js,
+	/normalize_employee_route_value\(employee\)\s*\{[^}]*value\.length\s*>\s*140[^}]*return value;/s,
+	"Employee navigation must accept trusted numeric and configured Employee document names",
+);
+
+mustMatch(
+	js,
+	/load_tree\(\)\s*\{[\s\S]*?\.catch\(\(error\)\s*=>[\s\S]*?render_load_error\(error,/,
+	"Organization tree loading must recover from request failures instead of remaining blank",
+);
+
+mustMatch(
+	py,
+	/if source_mode == \"quarterly_template\":\s*return _get_yongxin_template_tree\(company\)/,
+	"The quarterly workbook must be an explicit reference view; the default chart must use live Department relationships",
+);
+
+mustMatch(
+	py,
+	/children\.extend\(_build_work_level_nodes\(department, employees, managers\)\)/,
+	"Live department trees must retain work-level nodes before position and employee nodes",
+);
+
+mustMatch(
+	css,
 	/\.hrms-org-detail\s*\{[^}]*\balign-self:\s*stretch;[^}]*\bheight:\s*100%;[^}]*\boverflow-y:\s*auto;/s,
 	"Hybrid organization detail panel must remain fixed in its grid column and scroll independently",
 );
 
 for (const marker of [
-	'{ type: "link", label: "组织管理", route: "/desk/department", slug: "department" }',
+	'{ type: "link", label: "部门管理", route: "/desk/department", slug: "department" }',
 	'{ type: "link", label: "架构图", route: "/desk/organizational-chart", slug: "organizational-chart" }',
-	'{ type: "link", label: "组织报表", route: "/desk/staffing-plan", slug: "staffing-plan" }',
+	'{ type: "link", label: "部门报表", route: "/desk/organizational-chart/report", slug: "organization-report" }',
 ]) {
 	mustInclude(nav, marker, `Organization shell nav missing marker: ${marker}`);
 }
@@ -321,16 +432,23 @@ for (const marker of [
 mustInclude(topNav, '"organizational-chart"', "Top nav must keep organizational chart as an organization route key.");
 
 for (const forbidden of [
+	'{ type: "link", label: "公司管理", route: "/desk/company-management"',
+	"data-company-field",
+	"shift_request_approver: \"班次申请审批人\"",
+	"leave_approvers: \"请假审批人\"",
+	"expense_approvers: \"费用审批人\"",
 	'{ label: "公司", route: "/desk/company", slug: "company" }',
 	'{ label: "分支机构", route: "/desk/branch", slug: "branch" }',
 	'{ label: "岗位", route: "/desk/designation", slug: "designation" }',
 	'{ label: "职级", route: "/desk/employee-grade", slug: "employee-grade" }',
-	'keys: ["company", "branch", "department", "designation", "employee-grade", "organizational-chart", "staffing-plan"]',
+	'keys: ["company", "branch", "department", "designation", "employee-grade", "organizational-chart", "organization-report"]',
+	"matching_people.slice(0, 8)",
 ]) {
 	for (const [source, name] of [
 		[nav, "global organization navigation"],
 		[topNav, "top organization navigation"],
 		[js, "organization chart page"],
+		[departmentFormJs, "department form"],
 	]) {
 		if (source.includes(forbidden)) {
 			throw new Error(`${name} must not expose company/branch/job-grade organization entries: ${forbidden}`);

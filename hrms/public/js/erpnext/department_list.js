@@ -23,6 +23,14 @@
 			});
 		}
 
+		listview.page.add_inner_button(__("预检部门层级"), function () {
+			show_department_hierarchy_preview_dialog(listview);
+		});
+
+		listview.page.add_inner_button(__("核对职位层级"), function () {
+			show_position_hierarchy_preview_dialog(listview);
+		});
+
 		listview.page.add_inner_button(__("快速编辑"), function () {
 			const selected = get_selected_departments(listview);
 			if (selected.length !== 1) {
@@ -64,14 +72,153 @@
 		const companyFilter = filters.find((filter) => filter?.[1] === "company" && filter?.[2] === "=");
 		if (companyFilter?.[3]) return companyFilter[3];
 
-		try {
-			const context = JSON.parse(localStorage.getItem("hrms_company_context") || "{}");
-			if (context.current) return context.current;
-		} catch (error) {
-			// The dialog still lets the administrator select a company manually.
-		}
+		const contextCompany = window.hrmsCompanyContext?.getCurrentCompany?.();
+		if (contextCompany) return contextCompany;
 
-		return frappe.defaults.get_default("company") || YONGXIN_COMPANY;
+		return frappe.defaults.get_user_default?.("Company") || frappe.defaults.get_default("company") || YONGXIN_COMPANY;
+	}
+
+	function show_department_hierarchy_preview_dialog(listview) {
+		const dialog = new frappe.ui.Dialog({
+			title: __("部门层级预检"),
+			fields: [
+				{
+					fieldname: "company",
+					fieldtype: "Link",
+					options: "Company",
+					label: __("公司"),
+					reqd: 1,
+					default: get_list_company(listview),
+				},
+				{ fieldname: "preview", fieldtype: "HTML" },
+			],
+		});
+
+		const renderPreview = () => {
+			const company = dialog.get_value("company");
+			const wrapper = dialog.fields_dict.preview.$wrapper;
+			if (!company) {
+				wrapper.html(`<p class="text-muted">${__("请选择公司后进行预检。")}</p>`);
+				return;
+			}
+			wrapper.html(`<p class="text-muted">${__("正在按组织架构表核对部门上下级关系，不会修改数据...")}</p>`);
+			frappe
+				.call({
+					method: "hrms.hr.page.organizational_chart.organizational_chart.preview_yongxin_department_hierarchy",
+					args: { company },
+				})
+				.then((r) => wrapper.html(render_department_hierarchy_preview(r.message || {})))
+				.catch(() => wrapper.html(`<p class="text-danger">${__("部门层级预检失败，请刷新后重试。")}</p>`));
+		};
+
+		dialog.fields_dict.company.df.change = renderPreview;
+		dialog.show();
+		dialog.set_value("company", get_list_company(listview));
+		renderPreview();
+	}
+
+	function render_department_hierarchy_preview(preview) {
+		const summary = preview.summary || {};
+		const rows = (preview.rows || []).map((row) => `
+			<tr>
+				<td>${frappe.utils.escape_html(row.node_type === "team" ? __("组") : __("部门"))}</td>
+				<td><strong>${frappe.utils.escape_html(row.department_name || "")}</strong>${row.management_path ? `<small class="d-block text-muted">${frappe.utils.escape_html(row.management_path)}</small>` : ""}</td>
+				<td>${frappe.utils.escape_html(row.current_parent || "-")}</td>
+				<td>${frappe.utils.escape_html(row.expected_parent || "-")}</td>
+				<td>${frappe.utils.escape_html(row.status_label || "")}</td>
+				<td>${frappe.utils.escape_html(row.message || "")}</td>
+			</tr>`);
+		return `
+			<div class="alert alert-info">${frappe.utils.escape_html(
+				__("预检模式：仅比较当前部门与 Q2 组织架构表，不会创建部门、修改上级部门或迁移员工。"),
+			)}</div>
+			<div class="mb-2"><strong>${frappe.utils.escape_html(preview.root_label || "永新（公司根节点）")}</strong></div>
+			<div class="mb-3 text-muted">${__("已匹配 {0} 项；待调整 {1} 项；待创建 {2} 项；需确认 {3} 项；未纳入架构表 {4} 项。", [
+				summary.aligned_count || 0,
+				summary.needs_update_count || 0,
+				summary.needs_create_count || 0,
+				summary.ambiguous_count || 0,
+				summary.unmapped_count || 0,
+			])}</div>
+			<div style="max-height: 480px; overflow: auto;">
+				<table class="table table-bordered table-sm">
+					<thead><tr><th>${__("类型")}</th><th>${__("架构节点")}</th><th>${__("当前上级")}</th><th>${__("建议上级")}</th><th>${__("结果")}</th><th>${__("说明")}</th></tr></thead>
+					<tbody>${rows.join("") || `<tr><td colspan="6" class="text-muted">${__("未找到可预检的部门。")}</td></tr>`}</tbody>
+				</table>
+			</div>`;
+	}
+
+	function show_position_hierarchy_preview_dialog(listview) {
+		const dialog = new frappe.ui.Dialog({
+			title: __("职位层级核对"),
+			fields: [
+				{
+					fieldname: "company",
+					fieldtype: "Link",
+					options: "Company",
+					label: __("公司"),
+					reqd: 1,
+					default: get_list_company(listview),
+				},
+				{ fieldname: "preview", fieldtype: "HTML" },
+			],
+		});
+
+		const renderPreview = () => {
+			const company = dialog.get_value("company");
+			const wrapper = dialog.fields_dict.preview.$wrapper;
+			if (!company) {
+				wrapper.html(`<p class="text-muted">${__("请选择公司后进行核对。")}</p>`);
+				return;
+			}
+			wrapper.html(`<p class="text-muted">${__("正在按组织架构表核对岗位与职级关系，不会修改数据...")}</p>`);
+			frappe
+				.call({
+					method: "hrms.hr.page.organizational_chart.organizational_chart.preview_yongxin_position_hierarchy",
+					args: { company },
+				})
+				.then((r) => wrapper.html(render_position_hierarchy_preview(r.message || {})))
+				.catch(() => wrapper.html(`<p class="text-danger">${__("职位层级核对失败，请刷新后重试。")}</p>`));
+		};
+
+		dialog.fields_dict.company.df.change = renderPreview;
+		dialog.show();
+		dialog.set_value("company", get_list_company(listview));
+		renderPreview();
+	}
+
+	function render_position_hierarchy_preview(preview) {
+		const summary = preview.summary || {};
+		const rows = (preview.rows || []).map((row) => {
+			const matchedPeople = (row.matched_employees || [])
+				.map((person) => `${frappe.utils.escape_html(person.name || "")} · ${frappe.utils.escape_html(person.designation || __("未设置岗位"))} · ${frappe.utils.escape_html(person.grade || __("未设置职级"))}`)
+				.join("<br>");
+			return `<tr>
+				<td><strong>${frappe.utils.escape_html(row.department || "")}</strong></td>
+				<td>${frappe.utils.escape_html(row.expected_designation || row.expected_level || "")}</td>
+				<td>${frappe.utils.escape_html(row.parent_designation || "-")}</td>
+				<td>${matchedPeople || `<span class="text-muted">${__("未匹配")}</span>`}</td>
+				<td>${frappe.utils.escape_html(row.status_label || "")}</td>
+				<td>${frappe.utils.escape_html(row.message || "")}</td>
+			</tr>`;
+		});
+		return `
+			<div class="alert alert-info">${frappe.utils.escape_html(
+				__("核对模式：仅比较 Q2 组织架构表、当前部门、岗位与职级，不会修改部门、员工、职级或岗位。"),
+			)}</div>
+			<div class="mb-3 text-muted">${__("岗位名称已匹配 {0} 项；仅职位层级匹配 {1} 项；缺少职位层级 {2} 项；缺少或待确认部门 {3} 项；未设置职级员工 {4} 人。", [
+				summary.aligned_count || 0,
+				summary.level_only_count || 0,
+				summary.missing_position_count || 0,
+				summary.missing_department_count || 0,
+				summary.missing_grade_count || 0,
+			])}</div>
+			<div style="max-height: 480px; overflow: auto;">
+				<table class="table table-bordered table-sm">
+					<thead><tr><th>${__("部门")}</th><th>${__("组织图职位")}</th><th>${__("上级职位")}</th><th>${__("当前匹配员工 · 岗位 · 职级")}</th><th>${__("结果")}</th><th>${__("说明")}</th></tr></thead>
+					<tbody>${rows.join("") || `<tr><td colspan="6" class="text-muted">${__("未找到可核对的职位。")}</td></tr>`}</tbody>
+				</table>
+			</div>`;
 	}
 
 	function show_department_name_normalisation_dialog(listview) {
@@ -214,76 +361,9 @@
 									company: dialog.get_value("company") || doc.company || YONGXIN_COMPANY,
 								},
 							};
+							},
 						},
-					},
-					{
-						fieldname: "is_group",
-						fieldtype: "Check",
-						label: __("是否分组"),
-						default: doc.is_group,
-					},
-					{
-						fieldname: "disabled",
-						fieldtype: "Check",
-						label: __("停用"),
-						default: doc.disabled,
-					},
-					{
-						fieldtype: "Section Break",
-						label: __("组织属性"),
-					},
-					{
-						fieldname: "hrms_org_level",
-						fieldtype: "Int",
-						label: __("层级"),
-						default: doc.hrms_org_level,
-					},
-					{
-						fieldname: "hrms_org_role",
-						fieldtype: "Data",
-						label: __("管理角色"),
-						default: doc.hrms_org_role,
-					},
-					{
-						fieldname: "hrms_org_manager",
-						fieldtype: "Data",
-						label: __("负责人"),
-						default: doc.hrms_org_manager,
-					},
-					{
-						fieldname: "hrms_org_proxy",
-						fieldtype: "Data",
-						label: __("代理人"),
-						default: doc.hrms_org_proxy,
-					},
-					{
-						fieldtype: "Column Break",
-					},
-					{
-						fieldname: "hrms_planned_headcount",
-						fieldtype: "Int",
-						label: __("编制人数"),
-						default: doc.hrms_planned_headcount,
-					},
-					{
-						fieldname: "hrms_actual_headcount",
-						fieldtype: "Int",
-						label: __("现有人数"),
-						default: doc.hrms_actual_headcount,
-					},
-					{
-						fieldname: "hrms_vacancy_count",
-						fieldtype: "Int",
-						label: __("空缺人数"),
-						default: doc.hrms_vacancy_count,
-					},
-					{
-						fieldname: "hrms_recruitment_plan",
-						fieldtype: "Small Text",
-						label: __("招聘需求"),
-						default: doc.hrms_recruitment_plan,
-					},
-				],
+					],
 				primary_action_label: __("保存"),
 				primary_action(values) {
 					frappe

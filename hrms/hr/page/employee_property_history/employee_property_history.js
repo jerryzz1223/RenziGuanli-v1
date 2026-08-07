@@ -5,8 +5,16 @@ frappe.pages["employee-property-history"].on_page_load = function (wrapper) {
 		single_column: true,
 	});
 
-	const view = new EmployeePropertyHistoryPage(page);
-	view.show();
+	wrapper.employee_property_history = new EmployeePropertyHistoryPage(page);
+	wrapper.employee_property_history.show();
+};
+
+frappe.pages["employee-property-history"].on_page_show = function (wrapper) {
+	wrapper.employee_property_history?.activate();
+};
+
+frappe.pages["employee-property-history"].on_page_hide = function (wrapper) {
+	wrapper.employee_property_history?.deactivate();
 };
 
 class EmployeePropertyHistoryPage {
@@ -17,6 +25,16 @@ class EmployeePropertyHistoryPage {
 		this.limit_page_length = 20;
 		this.total = 0;
 		this.rows = [];
+		this.company = this.current_company();
+		this.load_request_id = 0;
+		this.context_bound = false;
+		this.last_refresh_at = 0;
+		this.cache_ttl = 30_000;
+		this.company_context_handler = () => {
+			if (!this.is_active()) return;
+			this.limit_start = 0;
+			this.refresh();
+		};
 	}
 
 	show() {
@@ -24,6 +42,37 @@ class EmployeePropertyHistoryPage {
 		this.page.add_inner_button(__("办理转正"), () => frappe.set_route("Form", "Employee Promotion", "new-employee-promotion"));
 		this.page.add_inner_button(__("打开人事异动列表"), () => frappe.set_route("List", "Employee Transfer"));
 		this.render();
+		this.activate(true);
+	}
+
+	current_company() {
+		return window.hrmsCompanyContext?.getCurrentCompany?.() || frappe.defaults?.get_user_default?.("Company") || "";
+	}
+
+	is_active() {
+		const container = this.wrapper.closest(".page-container");
+		return !container || container.classList.contains("active");
+	}
+
+	activate(initial = false) {
+		if (!this.context_bound) {
+			window.addEventListener("hrms:company-context-changed", this.company_context_handler);
+			this.context_bound = true;
+		}
+		if (initial || Date.now() - this.last_refresh_at > this.cache_ttl) {
+			this.refresh();
+		}
+	}
+
+	deactivate() {
+		if (!this.context_bound) return;
+		window.removeEventListener("hrms:company-context-changed", this.company_context_handler);
+		this.context_bound = false;
+	}
+
+	refresh() {
+		this.company = this.current_company();
+		this.last_refresh_at = Date.now();
 		this.load();
 	}
 
@@ -161,6 +210,7 @@ class EmployeePropertyHistoryPage {
 	}
 
 	load() {
+		const request_id = ++this.load_request_id;
 		this.set_loading(true);
 		frappe.call({
 			method: "hrms.api.employee_field_template.get_employee_property_history",
@@ -168,10 +218,12 @@ class EmployeePropertyHistoryPage {
 				search: this.filter_value("search"),
 				employee: this.filter_value("employee"),
 				department: this.filter_value("department"),
+				company: this.company,
 				limit_start: this.limit_start,
 				limit_page_length: this.limit_page_length,
 			},
 			callback: (response) => {
+				if (request_id !== this.load_request_id) return;
 				this.set_loading(false);
 				const data = response.message || {};
 				this.rows = data.rows || [];
@@ -181,6 +233,7 @@ class EmployeePropertyHistoryPage {
 				this.render_pagination();
 			},
 			error: () => {
+				if (request_id !== this.load_request_id) return;
 				this.set_loading(false);
 				frappe.msgprint(__("任职记录读取失败，请检查 Employee Transfer / Employee Promotion 权限。"));
 			},

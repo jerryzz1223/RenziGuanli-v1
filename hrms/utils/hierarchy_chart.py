@@ -6,6 +6,12 @@ import frappe
 from frappe import _
 
 
+def _get_node_value(node, key: str):
+	if isinstance(node, dict):
+		return node.get(key)
+	return getattr(node, key, None)
+
+
 @frappe.whitelist()
 def get_all_nodes(method: str, company: str):
 	"""Recursively gets all data from nodes"""
@@ -31,11 +37,13 @@ def get_all_nodes(method: str, company: str):
 			queued_ids.add(node_id)
 
 	for root in root_nodes:
-		if getattr(root, "id", None) in expanded_ids:
+		root_id = _get_node_value(root, "id")
+		root_name = _get_node_value(root, "name")
+		if not root_id or root_id in expanded_ids:
 			continue
-		data = method(root.id, company)
-		result.append(dict(parent=root.id, parent_name=root.name, data=data))
-		expanded_ids.add(root.id)
+		data = method(root_id, company)
+		result.append(dict(parent=root_id, parent_name=root_name, data=data))
+		expanded_ids.add(root_id)
 		queue_expandable_nodes(data)
 
 	while nodes_to_expand:

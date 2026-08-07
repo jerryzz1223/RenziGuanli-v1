@@ -73,11 +73,10 @@ for (const marker of [
 	"schedule_hrms_ui_rules(120)",
 	"hrms:route-change",
 	"frappe.router.on(\"change\"",
-	"HRMS_ENSURED_PAGE_SLUGS",
-	'label: "组织"',
+	'label: "部门"',
 	'label: "考勤假期"',
 	'label: "薪酬"',
-	'keys: ["department", "organizational-chart", "staffing-plan"]',
+	'keys: ["department", "organizational-chart"]',
 	'"attendance-import-center"',
 	'"payroll-input-center"',
 ]) {
@@ -91,16 +90,15 @@ for (const forbidden of [
 	'{ label: "分支机构", route: "/desk/branch", slug: "branch" }',
 	'{ label: "岗位", route: "/desk/designation", slug: "designation" }',
 	'{ label: "职级", route: "/desk/employee-grade", slug: "employee-grade" }',
-	'keys: ["company", "branch", "department", "designation", "employee-grade", "organizational-chart", "staffing-plan"]',
+	'keys: ["company", "branch", "department", "designation", "employee-grade", "organizational-chart", "organization-report"]',
 ]) {
 	if (redirectSource.includes(forbidden) || topNavSource.includes(forbidden)) {
 		throw new Error(`Organization module must be customized to Yongxin-only organization management: ${forbidden}`);
 	}
 }
 
-const ensuredPagesMatch = redirectSource.match(/HRMS_ENSURED_PAGE_SLUGS\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
-if (!ensuredPagesMatch || !ensuredPagesMatch[1].includes('"attendance-import-center"')) {
-	throw new Error("Attendance import center must be ensured before sidebar navigation.");
+if (redirectSource.includes("ensure_personnel_pages") || topNavSource.includes("ensure_personnel_pages")) {
+	throw new Error("Navigation must not run database page registration; deployment migrations own that work.");
 }
 
 if (redirectSource.includes("apply_personnel_sidebar_shell()")) {
@@ -161,6 +159,7 @@ for (const [label, linkTo, linkType] of [
 	["入职管理", "Employee Onboarding", "DocType"],
 	["转正管理", "Employee Promotion", "DocType"],
 	["离职管理", "Employee Separation", "DocType"],
+	["离职记录", "employee-separation-records", "Page"],
 	["人事异动", "Employee Transfer", "DocType"],
 ]) {
 	if (!personnel.links.some((link) => link.type === "Link" && link.label === label && link.link_to === linkTo && link.link_type === linkType)) {

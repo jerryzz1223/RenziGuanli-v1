@@ -4,6 +4,7 @@ app_publisher = "Frappe Technologies Pvt. Ltd."
 app_description = "Modern HR and Payroll Software"
 app_email = "contact@frappe.io"
 app_license = "GNU General Public License (v3)"
+before_request = ["hrms.branding.serve_blank_for_undefined_image"]
 required_apps = ["frappe/erpnext"]
 source_link = "http://github.com/frappe/hrms"
 app_logo_url = "/assets/hrms/images/frappe-hr-logo.svg"
@@ -26,20 +27,20 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260804k",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260804g",
-	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260723b",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260807a",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260805c",
+	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260805a",
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260804f",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260807b",
 ]
 
 # website
 
 # include js, css files in header of web template
-# web_include_css = "/assets/hrms/css/hrms.css"
-# web_include_js = "/assets/hrms/js/hrms.js"
+web_include_css = "/assets/hrms/css/hrms_login.css?v=20260805a"
+web_include_js = "/assets/hrms/js/hrms_login.js?v=20260805a"
 
 # include custom scss in every website theme (without file extension ".scss")
 # website_theme_scss = "hrms/public/scss/website"
@@ -228,7 +229,10 @@ doc_events = {
 	},
 	"Loan": {"validate": "hrms.hr.utils.validate_loan_repay_from_salary"},
 	"Employee": {
-		"validate": "hrms.overrides.employee_master.validate_onboarding_process",
+		"validate": [
+			"hrms.overrides.employee_master.validate_onboarding_process",
+			"hrms.hr.employee_personnel_status.sync_employee_personnel_status",
+		],
 		"on_update": [
 			"hrms.overrides.employee_master.update_approver_role",
 			"hrms.overrides.employee_master.publish_update",
@@ -236,6 +240,10 @@ doc_events = {
 		"after_insert": "hrms.overrides.employee_master.update_job_applicant_and_offer",
 		"on_trash": "hrms.overrides.employee_master.update_employee_transfer",
 		"after_delete": "hrms.overrides.employee_master.publish_update",
+	},
+	"Employee Separation": {
+		"on_submit": "hrms.hr.employee_personnel_status.sync_employee_separation_status",
+		"on_cancel": "hrms.hr.employee_personnel_status.cancel_employee_separation_status",
 	},
 	"Project": {"validate": "hrms.controllers.employee_boarding_controller.update_employee_boarding_status"},
 	"Task": {"on_update": "hrms.controllers.employee_boarding_controller.update_task"},
@@ -266,6 +274,7 @@ scheduler_events = {
 		"hrms.hr.doctype.interview.interview.send_daily_feedback_reminder",
 		"hrms.hr.doctype.shift_assignment.shift_assignment.mark_expired_shift_assignments_as_inactive",
 		"hrms.hr.doctype.job_opening.job_opening.close_expired_job_openings",
+		"hrms.hr.employee_personnel_status.sync_due_employee_personnel_statuses",
 	],
 	"daily_long": [
 		"hrms.hr.doctype.leave_ledger_entry.leave_ledger_entry.process_expired_allocation",

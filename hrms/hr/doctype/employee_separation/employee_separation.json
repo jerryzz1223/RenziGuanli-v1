@@ -6,8 +6,8 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "employee",
   "employee_code_display",
+  "employee",
   "employee_name",
   "department",
   "designation",
@@ -30,21 +30,24 @@
   {
    "fieldname": "employee",
    "fieldtype": "Link",
-   "label": "Employee",
+   "hidden": 1,
+   "label": "系统员工关联",
    "options": "Employee",
    "reqd": 1
   },
   {
    "fieldname": "employee_code_display",
    "fieldtype": "Data",
-   "label": "员工工号"
+   "in_list_view": 1,
+   "label": "员工工号",
+   "reqd": 1
   },
   {
    "fetch_from": "employee.employee_name",
    "fieldname": "employee_name",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Employee Name",
+   "label": "员工姓名",
    "read_only": 1
   },
   {
@@ -52,7 +55,7 @@
    "fieldname": "resignation_letter_date",
    "fieldtype": "Date",
    "in_list_view": 1,
-   "label": "Resignation Letter Date",
+   "label": "离职申请日期",
    "read_only": 1
   },
   {
@@ -60,7 +63,7 @@
    "default": "Pending",
    "fieldname": "boarding_status",
    "fieldtype": "Select",
-   "label": "Status",
+   "label": "状态",
    "options": "Pending\nIn Process\nCompleted",
    "read_only": 1
   },
@@ -69,6 +72,7 @@
    "default": "0",
    "fieldname": "notify_users_by_email",
    "fieldtype": "Check",
+   "hidden": 1,
    "label": "Notify users by email"
   },
   {
@@ -78,6 +82,7 @@
   {
    "fieldname": "employee_separation_template",
    "fieldtype": "Link",
+   "hidden": 1,
    "label": "Employee Separation Template",
    "options": "Employee Separation Template"
   },
@@ -85,13 +90,14 @@
    "fetch_from": "employee.company",
    "fieldname": "company",
    "fieldtype": "Link",
-   "label": "Company",
+   "label": "公司",
    "options": "Company",
    "reqd": 1
   },
   {
    "fieldname": "project",
    "fieldtype": "Link",
+   "hidden": 1,
    "label": "Project",
    "options": "Project",
    "read_only": 1
@@ -101,7 +107,7 @@
    "fieldname": "department",
    "fieldtype": "Link",
    "in_list_view": 1,
-   "label": "Department",
+   "label": "部门",
    "options": "Department",
    "read_only": 1
   },
@@ -110,7 +116,7 @@
    "fieldname": "designation",
    "fieldtype": "Link",
    "in_list_view": 1,
-   "label": "Designation",
+   "label": "岗位",
    "options": "Designation",
    "read_only": 1
   },
@@ -118,19 +124,21 @@
    "fetch_from": "employee.grade",
    "fieldname": "employee_grade",
    "fieldtype": "Link",
-   "label": "Employee Grade",
+   "label": "职级",
    "options": "Employee Grade",
    "read_only": 1
   },
   {
    "fieldname": "table_for_activity",
    "fieldtype": "Section Break",
+   "hidden": 1,
    "label": "Separation Activities"
   },
   {
    "allow_on_submit": 1,
    "fieldname": "activities",
    "fieldtype": "Table",
+   "hidden": 1,
    "label": "Activities",
    "options": "Employee Boarding Activity"
   },
@@ -141,12 +149,12 @@
   {
    "fieldname": "exit_interview",
    "fieldtype": "Text Editor",
-   "label": "Exit Interview Summary"
+   "label": "离职面谈"
   },
   {
    "fieldname": "amended_from",
    "fieldtype": "Link",
-   "label": "Amended From",
+   "label": "修订自",
    "no_copy": 1,
    "options": "Employee Separation",
    "print_hide": 1,
@@ -155,7 +163,7 @@
   {
    "fieldname": "boarding_begins_on",
    "fieldtype": "Date",
-   "label": "Separation Begins On",
+   "label": "离职日期",
    "reqd": 1
   }
  ],
@@ -196,7 +204,7 @@
    "write": 1
   }
  ],
- "quick_entry": 1,
+ "quick_entry": 0,
  "row_format": "Dynamic",
  "sort_field": "creation",
  "sort_order": "DESC",

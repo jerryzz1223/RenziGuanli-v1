@@ -9,6 +9,7 @@ frappe.pages["personnel-reports"].on_page_load = function (wrapper) {
 		groups: [],
 		search: "",
 		collapsed: new Set(),
+		load_request_id: 0,
 	};
 
 	$(page.body).addClass("hrms-report-center");
@@ -26,10 +27,12 @@ frappe.pages["personnel-reports"].on_page_load = function (wrapper) {
 	add_page_menu_item(__("编辑分组"), () => frappe.set_route("List", "HRMS Employee Report"));
 
 	function load() {
+		const request_id = ++state.load_request_id;
 		$(page.body).html(`<div class="text-muted">${__("正在加载人事报表...")}</div>`);
 		return frappe
 			.call("hrms.api.employee_field_template.get_employee_report_center")
 			.then((r) => {
+				if (request_id !== state.load_request_id) return;
 				state.groups = r.message?.groups || [];
 				render();
 			});
@@ -223,5 +226,10 @@ frappe.pages["personnel-reports"].on_page_load = function (wrapper) {
 		download_report(this.dataset.reportId);
 	});
 
+	wrapper.personnel_reports = { refresh: load };
 	load();
+};
+
+frappe.pages["personnel-reports"].on_page_show = function (wrapper) {
+	wrapper.personnel_reports?.refresh();
 };

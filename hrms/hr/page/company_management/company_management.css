@@ -1,0 +1,88 @@
+.hrms-company-management {
+	margin: 0 auto;
+	max-width: 1180px;
+	padding: 12px;
+}
+
+.hrms-company-management h3 {
+	font-size: 18px;
+	margin: 20px 0 10px;
+}
+
+.hrms-company-management__legacy > div > p {
+	color: #667085;
+	margin-bottom: 12px;
+}
+
+.hrms-company-management__list {
+	display: grid;
+	gap: 12px;
+	grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+}
+
+.hrms-company-management__company {
+	background: #fff;
+	border: 1px solid #e4e7ec;
+	border-radius: 10px;
+	padding: 16px;
+}
+
+.hrms-company-management__company.is-primary {
+	border-color: #12b76a;
+	box-shadow: 0 0 0 3px #ecfdf3;
+}
+
+.hrms-company-management__heading {
+	align-items: flex-start;
+	display: flex;
+	gap: 12px;
+	justify-content: space-between;
+}
+
+.hrms-company-management__heading h4 {
+	font-size: 16px;
+	margin: 0 0 3px;
+}
+
+.hrms-company-management__heading p {
+	color: #667085;
+	font-size: 12px;
+	margin: 0;
+}
+
+.hrms-company-management__counts {
+	display: grid;
+	gap: 8px;
+	grid-template-columns: repeat(5, minmax(0, 1fr));
+	margin: 14px 0;
+}
+
+.hrms-company-management__count {
+	background: #f8fafc;
+	border-radius: 6px;
+	padding: 8px;
+}
+
+.hrms-company-management__count small,
+.hrms-company-management__count strong {
+	display: block;
+}
+
+.hrms-company-management__count small {
+	color: #667085;
+	font-size: 11px;
+}
+
+.hrms-company-management__count strong {
+	font-size: 17px;
+	margin-top: 2px;
+}
+
+.hrms-company-management__actions {
+	display: flex;
+	gap: 8px;
+}
+
+@media (max-width: 700px) {
+	.hrms-company-management__counts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

@@ -54,6 +54,102 @@ for (const marker of [
 	"refresh_from_route",
 	"bind_route_events",
 	"hrms:route-change",
+	"考勤汇总",
+	"加工结果",
+	"异常处理",
+	"数据台账",
+	"导入批次",
+	"人工调整记录",
+	"规则设置",
+	"字段映射",
+	"部门映射",
+	"处理规则",
+	"考勤初稿",
+	"苹果树",
+	"忘打卡",
+	"未上传",
+	"待加工",
+	"format_processing_value(resultValue)",
+	"processing_field_label",
+	"exception_label_text",
+	"exception_detail",
+	"处理方案",
+	"仅记录处理决定（不改数值）",
+	"待处理异常",
+	"待确认",
+	"已确认",
+	"source_file",
+	"source_sheet",
+	"source_row",
+	"source_id",
+	"approval_no",
+	"get_processing_batch",
+	"register_source_file",
+	"register_monthly_support_file",
+	"process_monthly_support_file",
+	"confirm_monthly_support_file",
+	"precheck_source_slot",
+	"process_source_slot",
+	"list_processing_results",
+	"export_processing_result",
+	"processed_rows",
+	"processed_result",
+	"考勤初稿加工结果（完整汇总）",
+	"忘打卡加工结果（完整明细）",
+	"missed_punch_columns()",
+	"补卡时间",
+	"红苹果金额",
+	"下载最新加工结果",
+	"加工数据",
+	"update_processing_record",
+	"bulk_update_processing_records",
+	"本类结果已确认",
+	"查看/更正记录",
+	"该记录已处理；如需更正",
+	"confirm_source_result",
+	"list_processing_exceptions",
+	"list_processing_batches",
+	"list_manual_adjustments",
+	"generate_monthly_final_files",
+	"get_monthly_final_preview",
+	"员工签字版",
+	"财务版",
+	"同一已锁定数据",
+	"住房补贴",
+	"全勤奖",
+	"特殊工时",
+	"monthly_support_sources",
+	"render_monthly_support_imports",
+	"data-monthly-support-upload",
+	"data-monthly-support-process",
+	"data-monthly-support-exceptions",
+	"data-monthly-support-confirm",
+	"data-monthly-support-results",
+	"data-preview-final",
+	"open_monthly_final_preview",
+	"monthly_support_columns",
+	"特殊工时明细",
+	"selected_exception_record_ids",
+	"data-exception-record-select",
+	"data-select-exception-all",
+	"data-bulk-exception-process",
+	"请选择一个来源后，可勾选并批量处理异常。",
+	"show_bulk_processing_dialog(this.exception_source_filter)",
+	"hrms-attendance-monthly-support-grid",
+	"来源完备性",
+	"锁定快照",
+	"exception_codes",
+	"exception_message",
+	"review_status",
+	"proposed_value",
+	"confirmed_value",
+	"reviewer",
+	"reviewed_on",
+	"review_note",
+	"无需审核",
+	"待审核",
+	"已通过",
+	"已驳回",
 	"preview_attendance_workbook",
 	"list_attendance_import_templates",
 	"create_attendance_import_template_file",
@@ -111,8 +207,12 @@ for (const marker of [
 	"字段映射",
 	"数据质量告警",
 	"确认导入每日统计",
-	"data-company",
-	"data-company-context",
+	"hrms-attendance-company-context",
+	"render_month_control",
+	"open_month_picker",
+	"data-month-shift",
+	"data-open-month-picker",
+	"选择处理月份",
 	"get_context_company",
 	"bind_company_context",
 	"refresh_company_context_when_ready",
@@ -126,12 +226,51 @@ for (const marker of [
 	mustInclude(attendancePageJs, marker, `Attendance import center is missing marker: ${marker}`);
 }
 
+for (const forbiddenMarker of ["download_exception_workbook", "download_exception_result", "异常结果工作簿"]) {
+	if (attendancePageJs.includes(forbiddenMarker)) {
+		throw new Error(`Attendance processing must not create a separate exception deliverable: ${forbiddenMarker}`);
+	}
+}
+
+const attendanceViewGroupsStart = attendancePageJs.indexOf("this.view_groups = [");
+const attendanceViewGroupsEnd = attendancePageJs.indexOf("this.view_map =", attendanceViewGroupsStart);
+const attendanceViewGroups = attendancePageJs.slice(attendanceViewGroupsStart, attendanceViewGroupsEnd);
+for (const [earlier, later] of [["考勤汇总", "异常处理"], ["异常处理", "加工结果"]]) {
+	if (attendanceViewGroups.indexOf(earlier) >= attendanceViewGroups.indexOf(later)) {
+		throw new Error(`Attendance workflow order must be ${earlier} → ${later}.`);
+	}
+}
+if (attendanceViewGroups.includes("月度终稿")) {
+	throw new Error("Monthly finalization must be integrated into 考勤汇总, not exposed as a duplicate sidebar view.");
+}
+if (attendancePageJs.includes("data-monthly-support-precheck")) {
+	throw new Error("Monthly support sources must check structure during processing, without a separate precheck button.");
+}
+for (const hiddenMarker of ["钉钉打卡对接", "统计首页", "打卡记录", "请假记录", "外出记录", "出差记录", "加班记录", "7S", "KPI"]) {
+	if (attendanceViewGroups.includes(hiddenMarker)) {
+		throw new Error(`Attendance sidebar must hide legacy marker: ${hiddenMarker}`);
+	}
+}
+
+for (const legacyRoute of ["summary", "import", "daily", "monthly", "reports", "dingtalk", "sync-logs", "clock-records", "clock-settings", "leave-records", "apple-rules", "seven-s-rules", "kpi-rules"]) {
+	mustInclude(attendancePageJs, `\"${legacyRoute}\":`, `Attendance route compatibility is missing for: ${legacyRoute}`);
+}
+
 if (attendancePageJs.includes("render_view_sidebar") || attendancePageJs.includes("hrms-attendance-side")) {
 	throw new Error("Attendance workbench must use the unified left sidebar, not render a nested sidebar.");
 }
 
 if (attendancePageJs.includes("${this.render_workflow_tabs()}")) {
 	throw new Error("Attendance workbench must use the unified left sidebar, not render duplicate workflow tabs.");
+}
+
+const processingResultsStart = attendancePageJs.indexOf("render_processing_results(rows");
+const processingResultsEnd = attendancePageJs.indexOf("\n\trender_processing_selection_cell", processingResultsStart);
+const processingResults = attendancePageJs.slice(processingResultsStart, processingResultsEnd);
+for (const queueControl of ["data-bulk-process", "data-processing-record-select", "data-edit-processing-record", "data-exception-only"]) {
+	if (processingResults.includes(queueControl)) {
+		throw new Error(`Processing results must remain read-only; move ${queueControl} to the exception queue.`);
+	}
 }
 
 const toolbarStart = attendancePageJs.indexOf("render_toolbar() {");
@@ -164,15 +303,15 @@ if (attendancePageJs.includes("dingtalk_export_v1 当前仅支持预览")) {
 	throw new Error("DingTalk four-sheet exports must offer a controlled daily-statistics import after preview.");
 }
 
-if (!homeRedirectJs.includes('label: "考勤导入中心", route: "/desk/attendance-import-center/import"')) {
-	throw new Error("The global attendance sidebar must provide an import-center route.");
+if (!homeRedirectJs.includes('label: "每日导入", route: "/desk/attendance-import-center/daily-import"')) {
+	throw new Error("The global attendance sidebar must provide the daily-import route.");
 }
 
 for (const marker of ["flex: 0 0 220px", "min-width: 220px", "white-space: nowrap", "text-overflow: ellipsis"]) {
 	mustInclude(topNavCss, marker, `Attendance sidebar header layout is missing ${marker}.`);
 }
 
-mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260723b", "The sidebar stylesheet cache key must change with its layout.");
+mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260807b", "The sidebar stylesheet cache key must change with its layout.");
 
 if (attendancePageJs.includes('this.wrapper.querySelector("[data-company]").addEventListener("change"')) {
 	throw new Error("Attendance company must be controlled by the global company selector, not a local editable field.");
@@ -312,37 +451,41 @@ for (const [folder, titleMarkers] of [
 for (const marker of [
 	"hrms-attendance-kpi-grid",
 	"hrms-attendance-toolbar",
-	"attendance-people",
+	"processing-batch-status",
 	"待确认异常",
-	"打卡记录",
-	"补卡记录",
-	"请假记录",
-	"外出记录",
-	"出差记录",
-	"加班记录",
-	"汇总统计表",
-	"异常考勤汇总表",
-	"补卡统计表",
-	"字段管理",
-	"考勤分组",
-	"排班管理",
+	"hrms-attendance-source-grid",
+	"hrms-attendance-source-card",
+	"hrms-attendance-final-grid",
+	"hrms-attendance-trace",
 ]) {
 	mustInclude(attendancePageJs, marker, `Attendance import center layout is missing marker: ${marker}`);
 }
 
 const shellJs = read("hrms/public/js/hrms_home_redirect_v6.js");
 for (const marker of [
-	"attendance-import-center/summary",
-	"attendance-import-center/daily",
-	"attendance-import-center/monthly",
-	"attendance-import-center/reports",
-	"attendance-import-center/custom-rules",
-	"attendance-import-center/dingtalk",
-	"绩效奖惩关联",
-	"钉钉打卡对接",
-	"query-report/Monthly Attendance Sheet",
+	"attendance-import-center/daily-import",
+	"attendance-import-center/processing-results",
+	"attendance-import-center/exceptions",
+	"attendance-import-center/monthly-final",
+	"attendance-import-center/import-batches",
+	"attendance-import-center/manual-adjustments",
+	"attendance-import-center/field-mapping",
+	"attendance-import-center/department-mapping",
+	"attendance-import-center/processing-rules",
+	"考勤处理",
+	"数据台账",
+	"规则设置",
 ]) {
 	mustInclude(shellJs, marker, `Unified attendance sidebar is missing marker: ${marker}`);
+}
+
+const attendanceModuleStart = shellJs.indexOf('label: "考勤"');
+const payrollModuleStart = shellJs.indexOf('label: "薪酬"', attendanceModuleStart);
+const attendanceModule = shellJs.slice(attendanceModuleStart, payrollModuleStart);
+for (const hiddenMarker of ["钉钉打卡对接", "统计首页", "打卡记录", "请假记录", "外出记录", "出差记录", "加班记录", "7S", "KPI"]) {
+	if (attendanceModule.includes(hiddenMarker)) {
+		throw new Error(`Unified attendance sidebar must hide legacy marker: ${hiddenMarker}`);
+	}
 }
 
 console.log("Attendance workbench contract passed.");

@@ -29,23 +29,27 @@ frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
 		data: null,
 		error: "",
 		loading: true,
+		load_request_id: 0,
 	};
 
 	$(page.body).addClass("hrms-settings-center-page");
 	page.set_primary_action(__("新增自定义字段"), () => open_custom_field_dialog(), "add");
 
 	function load() {
+		const request_id = ++state.load_request_id;
 		state.loading = true;
 		state.error = "";
 		render();
 		return frappe
 			.call("hrms.api.employee_field_template.get_hr_settings_center")
 			.then((r) => {
+				if (request_id !== state.load_request_id) return;
 				state.data = r.message || {};
 				state.loading = false;
 				render();
 			})
 			.catch(() => {
+				if (request_id !== state.load_request_id) return;
 				state.loading = false;
 				state.error = __("无法读取设置数据。请确认当前账号具有人资管理员或系统管理员角色。");
 				render();
@@ -464,5 +468,20 @@ preview_sync_payload
 		});
 	}
 
+	wrapper.hrms_settings_center = {
+		refresh() {
+			const requested_module = sessionStorage.getItem("hrms_settings_center_active_module");
+			const requested_focus = sessionStorage.getItem("hrms_settings_center_focus");
+			if (requested_module) state.active_module = requested_module;
+			if (requested_focus) state.focus = requested_focus;
+			sessionStorage.removeItem("hrms_settings_center_active_module");
+			sessionStorage.removeItem("hrms_settings_center_focus");
+			return load();
+		},
+	};
 	load();
+};
+
+frappe.pages["hr-settings-center"].on_page_show = function (wrapper) {
+	wrapper.hrms_settings_center?.refresh();
 };

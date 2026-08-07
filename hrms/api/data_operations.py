@@ -115,6 +115,25 @@ LINKED_COMPANY_FIELDS = {
 	"Interview Feedback": ("interview", "Interview"),
 }
 
+# The current product is deliberately operated as a single-company system.
+# ``Company`` remains a required ERPNext data-isolation key, but all legacy
+# fixture companies can be removed through the guarded routine below.
+PRIMARY_COMPANY_DISPLAY_NAME = "永新"
+PRIMARY_COMPANY_CLEANUP_CONFIRMATION = "仅保留永新"
+COMPANY_DELETE_EXCLUDED_DOCTYPES = {
+	"Company",
+	"Employee",
+	"Department",
+	"Account",
+	"Cost Center",
+	"Budget",
+	"Party Account",
+	"Warehouse",
+	"BOM",
+	"Mode of Payment Account",
+	"Item Default",
+}
+
 
 def _require_system_manager():
 	if "System Manager" not in frappe.get_roles(frappe.session.user):
@@ -126,6 +145,49 @@ def _require_company(company):
 	if not company or not frappe.db.exists("Company", company):
 		frappe.throw(_("请选择有效的公司。"))
 	return company
+
+
+def _primary_company():
+	"""Return the one company permitted to remain in Yongxin single-company mode."""
+	matches = frappe.get_all(
+		"Company",
+		filters={"company_name": PRIMARY_COMPANY_DISPLAY_NAME},
+		pluck="name",
+	)
+	if not matches and frappe.db.exists("Company", PRIMARY_COMPANY_DISPLAY_NAME):
+		matches = [PRIMARY_COMPANY_DISPLAY_NAME]
+	if len(matches) != 1:
+		frappe.throw(
+			_("必须且只能存在一个显示名称为“{0}”的公司，当前找到 {1} 个。请先停止清理并检查公司档案。").format(
+				PRIMARY_COMPANY_DISPLAY_NAME, len(matches)
+			)
+		)
+	return matches[0]
+
+
+def _company_scope(row):
+	"""Classify records for an admin-only overview; never changes data."""
+	name = str(row.get("name") or "")
+	display_name = str(row.get("company_name") or name)
+	if name == PRIMARY_COMPANY_DISPLAY_NAME or display_name == PRIMARY_COMPANY_DISPLAY_NAME:
+		return "primary"
+	text = f"{name} {display_name}".lower()
+	if "test" in text or "测试" in text:
+		return "test"
+	return "legacy"
+
+
+def _company_transaction_counts(company):
+	"""Compact count cards for the company-management page."""
+	result = {"attendance_count": 0, "payroll_count": 0, "form_import_count": 0}
+	for key, doctype in (
+		("attendance_count", "HRMS Attendance Day Check"),
+		("payroll_count", "HRMS Payroll Settlement Record"),
+		("form_import_count", "HRMS Form Import Batch"),
+	):
+		if frappe.db.exists("DocType", doctype) and frappe.get_meta(doctype).has_field("company"):
+			result[key] = frappe.db.count(doctype, {"company": company})
+	return result
 
 
 def _parse_module_keys(modules):
@@ -383,6 +445,8 @@ def get_company_data_management_context(company: str = ""):
 	for row in companies:
 		row["employee_count"] = frappe.db.count("Employee", {"company": row.name})
 		row["department_count"] = frappe.db.count("Department", {"company": row.name})
+		row["scope"] = _company_scope(row)
+		row.update(_company_transaction_counts(row.name))
 	return {
 		"companies": companies,
 		"company": company,
@@ -494,4 +558,277 @@ def execute_company_data_cleanup(
 		"count": sum(deleted.values()),
 		"deleted": deleted,
 		"message": _("{0}：已清除 {1} 条已选业务数据，公司与配置数据已保留。").format(company, sum(deleted.values())),
+	}
+
+
+def _link_fields_to(doctype_name, include_child_tables=False):
+	"""Return live Link fields that point to a given DocType."""
+	fields = []
+	for source in ("DocField", "Custom Field"):
+		if not frappe.db.exists("DocType", source):
+			continue
+		parent_key = "parent" if source == "DocField" else "dt"
+		for row in frappe.get_all(
+			source,
+			filters={"fieldtype": "Link", "options": doctype_name},
+			fields=[parent_key, "fieldname"],
+		):
+			doctype = row.get(parent_key)
+			if not doctype or not frappe.db.exists("DocType", doctype):
+				continue
+			meta = frappe.get_meta(doctype)
+			if (meta.istable and not include_child_tables) or not meta.has_field(row.fieldname):
+				continue
+			fields.append((doctype, row.fieldname))
+	return sorted(set(fields))
+
+
+def _delete_child_link_rows(link_fields, target_value):
+	"""Remove rows in shared master child tables for a deleted company.
+
+	Example: ERPNext's Asset Category is a global master but stores an account row
+	per company in ``Asset Category Account``. Deleting that child row preserves
+	the shared category while removing the obsolete company reference.
+	"""
+	deleted = OrderedDict()
+	for doctype, fieldname in link_fields:
+		if not frappe.db.exists("DocType", doctype) or not frappe.get_meta(doctype).istable:
+			continue
+		try:
+			count = frappe.db.count(doctype, {fieldname: target_value})
+			if count:
+				frappe.db.delete(doctype, {fieldname: target_value})
+				deleted[doctype] = count
+		except frappe.db.TableMissingError:
+			continue
+	return deleted
+
+
+def _delete_doc_safely(doctype, name):
+	"""Cancel submitted business docs before deleting them with ordinary link checks."""
+	doc = frappe.get_doc(doctype, name)
+	if doc.docstatus == 1:
+		doc.flags.ignore_permissions = True
+		doc.cancel()
+	frappe.delete_doc(doctype, name, ignore_permissions=True, delete_permanently=True)
+
+
+def _delete_linked_records_in_passes(link_fields, target_value, excluded_doctypes):
+	"""Delete records pointing at one target without bypassing link validation.
+
+	Dependent records are intentionally retried in passes: a child that is still
+	linked in the first pass becomes removable once its own dependent document has
+	been removed.  If no progress is possible we surface the exact remaining
+	records and roll the complete operation back.
+	"""
+	deleted = OrderedDict()
+	last_errors = []
+	for _attempt in range(12):
+		progress = False
+		last_errors = []
+		for doctype, fieldname in link_fields:
+			if doctype in excluded_doctypes or not frappe.db.exists("DocType", doctype):
+				continue
+			try:
+				names = frappe.get_all(doctype, filters={fieldname: target_value}, pluck="name") or []
+			except frappe.db.TableMissingError:
+				# Some ERPNext tools expose fields through a virtual DocType but do
+				# not own a SQL table. They cannot contain company-scoped records.
+				continue
+			for name in names:
+				try:
+					_delete_doc_safely(doctype, name)
+					deleted[doctype] = deleted.get(doctype, 0) + 1
+					progress = True
+				except Exception as error:
+					last_errors.append(f"{doctype} {name}: {error}")
+		if not last_errors:
+			return deleted
+		if not progress:
+			break
+	if last_errors:
+		frappe.throw(
+			_("仍有公司关联记录无法安全删除：{0}").format("；".join(last_errors[:5]))
+		)
+	return deleted
+
+
+def _delete_company_business_records(company):
+	"""Remove only records explicitly scoped to this company before Company deletion.
+
+	Older local seeds can have a Yongxin form row pointing at a test candidate.
+	Records that are merely *indirectly* associated (such as Job Applicant) are
+	not deleted here, because their deletion could damage the Yongxin audit trail.
+	All company-owned and employee-owned records are subsequently handled through
+	the direct link passes in ``keep_only_yongxin_company``.
+	"""
+	records = OrderedDict()
+	for module_key in ("form_intake", "dingtalk", "personnel_changes", "recruitment", "payroll", "attendance"):
+		for doctype in DATA_CLEANUP_MODULES[module_key]["doctypes"]:
+			if not frappe.db.exists("DocType", doctype):
+				continue
+			meta = frappe.get_meta(doctype)
+			if meta.istable or not meta.has_field("company"):
+				continue
+			records[doctype] = frappe.get_all(doctype, filters={"company": company}, pluck="name")
+	deleted = OrderedDict()
+	last_errors = []
+	for _attempt in range(12):
+		progress = False
+		last_errors = []
+		for doctype, names in records.items():
+			for name in names:
+				if not frappe.db.exists(doctype, name):
+					continue
+				try:
+					_delete_doc_safely(doctype, name)
+					deleted[doctype] = deleted.get(doctype, 0) + 1
+					progress = True
+				except Exception as error:
+					last_errors.append(f"{doctype} {name}: {error}")
+		if not last_errors:
+			return deleted
+		if not progress:
+			break
+	if last_errors:
+		frappe.throw(_("仍有业务测试记录无法安全删除：{0}").format("；".join(last_errors[:5])))
+	return deleted
+
+
+def _raw_delete_parent_and_children(doctype, fieldname, company):
+	"""Delete one non-Yongxin company scope without DocType hooks.
+
+	This is used only by the one-off local fixture purge. ERPNext's own test
+	fixtures create circular links among Accounts, Assets and Company, so normal
+	per-document deletion cannot remove them. Every operation still uses an exact
+	``Company`` link value and removes children together with their parent rows.
+	"""
+	if doctype == "Company" or not frappe.db.exists("DocType", doctype):
+		return 0
+	meta = frappe.get_meta(doctype)
+	if meta.istable or meta.issingle or not meta.has_field(fieldname):
+		return 0
+	try:
+		names = frappe.get_all(doctype, filters={fieldname: company}, pluck="name") or []
+	except frappe.db.TableMissingError:
+		return 0
+	if not names:
+		return 0
+	for table_field in meta.get_table_fields():
+		if frappe.db.exists("DocType", table_field.options):
+			frappe.db.delete(table_field.options, {"parent": ["in", names]})
+	frappe.db.delete(doctype, {fieldname: company})
+	return len(names)
+
+
+def _purge_company_fixture_rows(company, company_link_fields, company_child_link_fields):
+	"""Remove all rows directly owned by one company; never touches Yongxin."""
+	deleted = OrderedDict()
+	for doctype, fieldname in company_link_fields:
+		count = _raw_delete_parent_and_children(doctype, fieldname, company)
+		if count:
+			deleted[doctype] = deleted.get(doctype, 0) + count
+	for doctype, fieldname in company_child_link_fields:
+		if not frappe.db.exists("DocType", doctype) or not frappe.get_meta(doctype).istable:
+			continue
+		try:
+			count = frappe.db.count(doctype, {fieldname: company})
+			if count:
+				frappe.db.delete(doctype, {fieldname: company})
+				deleted[doctype] = deleted.get(doctype, 0) + count
+		except frappe.db.TableMissingError:
+			continue
+	# This audit log stores a company code as Data rather than Link; it is safe to
+	# remove only for the retired company after its owned rows are purged.
+	if frappe.db.exists("DocType", "HRMS Data Cleanup Log"):
+		frappe.db.delete("HRMS Data Cleanup Log", {"company_code": company})
+	return deleted
+
+
+@frappe.whitelist()
+def preview_single_company_cleanup():
+	"""Read-only audit before deleting every company except Yongxin."""
+	_require_system_manager()
+	primary = _primary_company()
+	targets = frappe.get_all(
+		"Company",
+		filters={"name": ["!=", primary]},
+		fields=["name", "company_name", "abbr", "lft", "rgt"],
+		order_by="lft desc, name asc",
+	)
+	return {
+		"primary_company": primary,
+		"primary_display_name": PRIMARY_COMPANY_DISPLAY_NAME,
+		"targets": [
+			{
+				"name": row.name,
+				"company_name": row.company_name,
+				"employee_count": frappe.db.count("Employee", {"company": row.name}),
+				"department_count": frappe.db.count("Department", {"company": row.name}),
+				**_company_transaction_counts(row.name),
+			}
+			for row in targets
+		],
+		"confirmation_text": PRIMARY_COMPANY_CLEANUP_CONFIRMATION,
+	}
+
+
+@frappe.whitelist()
+def keep_only_yongxin_company(confirm: str = ""):
+	"""Permanently remove every non-Yongxin company and its scoped data.
+
+	This is deliberately one-way and requires an explicit phrase.  It never uses
+	``force=True``: any unexpected live link aborts and rolls back the full cleanup
+	so the operator can inspect the remaining data instead of creating orphans.
+	"""
+	_require_system_manager()
+	if confirm != PRIMARY_COMPANY_CLEANUP_CONFIRMATION:
+		frappe.throw(_("请输入完整确认文本：{0}").format(PRIMARY_COMPANY_CLEANUP_CONFIRMATION))
+
+	primary = _primary_company()
+	targets = frappe.get_all(
+		"Company",
+		filters={"name": ["!=", primary]},
+		fields=["name", "lft"],
+		order_by="lft desc, name asc",
+	)
+	if not targets:
+		frappe.defaults.set_global_default("company", primary)
+		frappe.defaults.set_user_default("Company", primary, frappe.session.user)
+		frappe.clear_cache()
+		return {"primary_company": primary, "deleted_companies": [], "message": _("当前已只保留永新。")}
+
+	savepoint = "hrms_keep_only_yongxin"
+	frappe.db.savepoint(savepoint)
+	deleted_records = OrderedDict()
+	try:
+		company_link_fields = _link_fields_to("Company")
+		company_child_link_fields = _link_fields_to("Company", include_child_tables=True)
+		for target in targets:
+			company = target.name
+			for doctype, count in _purge_company_fixture_rows(
+				company, company_link_fields, company_child_link_fields
+			).items():
+				deleted_records[doctype] = deleted_records.get(doctype, 0) + count
+
+		# All records directly owned by a retired company are gone at this point.
+		# Delete the company rows together to avoid parent/child fixture ordering.
+		frappe.db.delete("Company", {"name": ["in", [row.name for row in targets]]})
+
+		# Remove stale explicit company defaults and make every new Desk request land
+		# in the sole business company.
+		frappe.db.delete("DefaultValue", {"defvalue": ["!=", primary], "defkey": ["in", ["Company", "company"]]})
+		frappe.defaults.set_global_default("company", primary)
+		frappe.defaults.set_user_default("Company", primary, frappe.session.user)
+		frappe.db.commit()
+	except Exception:
+		frappe.db.rollback(save_point=savepoint)
+		raise
+
+	frappe.clear_cache()
+	return {
+		"primary_company": primary,
+		"deleted_companies": [row.name for row in targets],
+		"deleted_records": deleted_records,
+		"message": _("已删除 {0} 家非永新公司；日常系统现仅保留“永新”。").format(len(targets)),
 	}

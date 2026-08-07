@@ -1,0 +1,13 @@
+/* System login page: keep the entry focused on username and password. */
+body.hrms-login-page .page-card-head > .app-logo {
+	display: none !important;
+}
+
+body.hrms-login-page .page-card-head {
+	gap: 0 !important;
+}
+
+body.hrms-login-page .btn-login-with-email-link,
+body.hrms-login-page section.for-login-with-email-link {
+	display: none !important;
+}

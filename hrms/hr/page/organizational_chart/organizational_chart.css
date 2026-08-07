@@ -2,6 +2,7 @@
 	background: #f6f8fa;
 	box-sizing: border-box;
 	color: #1f2933;
+	font-family: DengXian, "Microsoft YaHei", sans-serif;
 	display: grid;
 	gap: 12px;
 	grid-template-columns: 196px minmax(0, 1fr) 320px;
@@ -10,6 +11,88 @@
 	min-height: 0;
 	overflow: hidden;
 	padding: 12px;
+}
+
+.hrms-org-page--report {
+	grid-template-columns: 190px minmax(0, 1fr);
+}
+
+.hrms-org-report-host {
+	background: #fff;
+	min-height: 0;
+	overflow: auto;
+}
+
+.hrms-org-report {
+	background: #fff;
+	color: #1f2933;
+	font-family: DengXian, "Microsoft YaHei", sans-serif;
+	min-height: 100%;
+	padding: 20px;
+}
+
+.hrms-org-report header {
+	align-items: baseline;
+	display: flex;
+	gap: 16px;
+	justify-content: space-between;
+	margin-bottom: 16px;
+}
+
+.hrms-org-report h2 {
+	font-size: 20px;
+	margin: 0;
+}
+
+.hrms-org-report-table-wrap {
+	overflow: auto;
+}
+
+.hrms-org-report table {
+	border-collapse: collapse;
+	font-size: 13px;
+	width: 100%;
+}
+
+.hrms-org-report th,
+.hrms-org-report td {
+	border: 1px solid #1f2933;
+	padding: 8px 10px;
+	text-align: center;
+}
+
+.hrms-org-report th:first-child,
+.hrms-org-report td:first-child,
+.hrms-org-report th:last-child,
+.hrms-org-report td:last-child {
+	text-align: left;
+}
+
+.hrms-org-report td small {
+	color: #667085;
+	display: block;
+	font-size: 11px;
+}
+
+.hrms-org-report-total {
+	font-weight: 700;
+}
+
+.hrms-org-report-total td:nth-child(2) {
+	color: #c94f24;
+}
+
+.hrms-org-report-approval {
+	font-weight: 700;
+	margin-top: 18px;
+}
+
+.hrms-org-report-empty {
+	align-items: center;
+	color: #667085;
+	display: flex;
+	justify-content: center;
+	min-height: 320px;
 }
 
 .hrms-org-sidebar,
@@ -71,8 +154,14 @@
 	border-bottom: 1px solid #edf0f2;
 	display: grid;
 	gap: 12px;
-	grid-template-columns: minmax(220px, 1fr) auto;
+	grid-template-columns: auto minmax(220px, 1fr) auto;
 	padding: 12px;
+}
+
+.hrms-org-toolbar-title {
+	align-self: center;
+	font-size: 14px;
+	white-space: nowrap;
 }
 
 .hrms-org-filter label {
@@ -120,8 +209,17 @@
 	padding: 18px 18px 40px;
 }
 
+.hrms-org-tree-stage {
+	min-height: 100%;
+	min-width: 100%;
+	position: relative;
+}
+
 .hrms-org-tree-scale {
 	min-width: max-content;
+	position: absolute;
+	top: 0;
+	left: 0;
 	transform-origin: top left;
 }
 
@@ -149,16 +247,17 @@
 
 .hrms-org-tree li::before,
 .hrms-org-tree li::after {
-	border-top: 1px solid #cfd6df;
+	border-top: 1px solid #1f2933;
 	content: "";
 	height: 30px;
+	pointer-events: none;
 	position: absolute;
 	top: 0;
 	width: 50%;
 }
 
 .hrms-org-tree li::before {
-	border-right: 1px solid #cfd6df;
+	border-right: 1px solid #1f2933;
 	right: 50%;
 }
 
@@ -179,30 +278,32 @@
 }
 
 .hrms-org-tree ul::before {
-	border-left: 1px solid #cfd6df;
+	border-left: 1px solid #1f2933;
 	content: "";
 	height: 30px;
 	left: 50%;
+	pointer-events: none;
 	position: absolute;
 	top: 0;
 }
 
 .hrms-org-node {
 	background: #fff;
-	border: 1px solid #d9e0e7;
-	border-radius: 6px;
+	border: 1px solid #1f2933;
+	border-radius: 0;
 	box-sizing: border-box;
-	box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+	box-shadow: none;
 	cursor: pointer;
 	min-width: 150px;
 	overflow: hidden;
 	position: relative;
 	text-align: center;
 	width: 180px;
+	z-index: 1;
 }
 
 .hrms-org-node.active {
-	box-shadow: 0 0 0 3px rgba(8, 122, 74, 0.16);
+	box-shadow: 0 0 0 2px rgba(201, 79, 36, 0.28);
 }
 
 .hrms-org-node.is-filtered-out {
@@ -210,8 +311,9 @@
 }
 
 .hrms-org-node-bar {
-	background: #33b889;
-	height: 22px;
+	background: #fff;
+	border-bottom: 1px solid #1f2933;
+	height: 8px;
 }
 
 .hrms-org-node--company {
@@ -247,9 +349,25 @@
 	background: #65a4ff;
 }
 
+.hrms-org-node--grade_group .hrms-org-node-bar {
+	background: #f5b544;
+}
+
 .hrms-org-node--work_level .hrms-org-node-bar,
 .hrms-org-node--position_group .hrms-org-node-bar {
 	background: #f5b544;
+}
+
+.hrms-org-node--company .hrms-org-node-bar,
+.hrms-org-node--company_leadership .hrms-org-node-bar,
+.hrms-org-node--director .hrms-org-node-bar,
+.hrms-org-node--manager .hrms-org-node-bar,
+.hrms-org-node--department .hrms-org-node-bar,
+.hrms-org-node--employee_group .hrms-org-node-bar,
+.hrms-org-node--grade_group .hrms-org-node-bar,
+.hrms-org-node--work_level .hrms-org-node-bar,
+.hrms-org-node--position_group .hrms-org-node-bar {
+	background: #fff;
 }
 
 .hrms-org-node-body {
@@ -264,9 +382,41 @@
 	white-space: normal;
 }
 
+.hrms-org-vacancy-marker {
+	color: #0a9f4f;
+	font-size: 12px !important;
+	font-weight: 700;
+	margin-top: 5px;
+}
+
+.hrms-org-node--company .hrms-org-node-body small,
+.hrms-org-summary-card:first-child strong {
+	color: #c94f24;
+	font-weight: 700;
+}
+
 .hrms-org-node-body strong {
 	font-size: 14px;
 	line-height: 1.35;
+}
+
+.hrms-org-node-person-link {
+	background: transparent;
+	border: 0;
+	color: #1f2933;
+	display: block;
+	font-size: 14px;
+	font-weight: 700;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+	padding: 0;
+	white-space: normal;
+	width: 100%;
+}
+
+.hrms-org-node-person-link:hover {
+	color: #087a4a;
+	text-decoration: underline;
 }
 
 .hrms-org-node-body span {
@@ -317,8 +467,9 @@
 }
 
 .hrms-org-person-token:hover {
-	background: #e8f7ef;
-	color: #087a4a;
+	background: #f4f4f4;
+	color: #1f2933;
+	text-decoration: underline;
 }
 
 .hrms-org-person-token.is-unmatched {
@@ -339,17 +490,36 @@
 	margin-top: 2px;
 }
 
-.hrms-org-node-toggle {
+.hrms-org-node-toggle,
+.hrms-org-node-edit {
 	background: #fff;
 	border: 1px solid #d9e0e7;
 	border-radius: 9px;
+	color: #475467;
 	font-size: 11px;
 	height: 18px;
 	line-height: 16px;
 	position: absolute;
-	right: 5px;
 	top: 2px;
 	width: 18px;
+	z-index: 2;
+}
+
+.hrms-org-node-toggle {
+	right: 5px;
+}
+
+.hrms-org-node-edit {
+	align-items: center;
+	display: inline-flex;
+	justify-content: center;
+	left: 5px;
+	padding: 0;
+}
+
+.hrms-org-node-edit .icon {
+	height: 12px;
+	width: 12px;
 }
 
 .hrms-org-detail {
@@ -418,6 +588,48 @@
 	font-size: 14px;
 	font-weight: 700;
 	margin: 16px 0 8px;
+}
+
+.hrms-org-relations {
+	display: grid;
+	gap: 10px;
+	margin-top: 14px;
+}
+
+.hrms-org-relations section {
+	border-top: 1px solid #1f2933;
+	display: grid;
+	gap: 6px;
+	padding-top: 9px;
+}
+
+.hrms-org-relations section > strong {
+	font-size: 13px;
+}
+
+.hrms-org-relations section span {
+	color: #667085;
+	font-size: 12px;
+}
+
+.hrms-org-relation-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.hrms-org-relation-button {
+	background: #fff;
+	border: 1px solid #1f2933;
+	color: #1f2933;
+	font-size: 12px;
+	padding: 5px 7px;
+	text-align: left;
+}
+
+.hrms-org-relation-button:hover {
+	background: #f4f4f4;
+	text-decoration: underline;
 }
 
 .hrms-org-person-grid {
@@ -509,6 +721,29 @@
 	justify-content: center;
 	min-height: 140px;
 	text-align: center;
+}
+
+.hrms-org-load-error {
+	align-items: center;
+	color: #667085;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	justify-content: center;
+	min-height: 240px;
+	min-width: 360px;
+	padding: 24px;
+	text-align: center;
+}
+
+.hrms-org-load-error strong {
+	color: #1f2933;
+	font-size: 16px;
+}
+
+.hrms-org-load-error span {
+	max-width: 520px;
+	overflow-wrap: anywhere;
 }
 
 @media (max-width: 1180px) {

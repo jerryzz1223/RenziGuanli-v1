@@ -5,8 +5,12 @@
 	const COMPANY_CONTEXT_EVENT = "hrms:company-context-changed";
 	const COMPANY_CONTEXT_STORAGE_PREFIX = "hrms_company_context";
 	const PREFERRED_COMPANY = "永新";
+	// 永新当前按单公司模式运行。Company 仍是 Frappe/ERPNext 的数据隔离
+	// 主键，不能删除；这里只隐藏历史/测试公司，避免日常操作误切数据空间。
+	const SINGLE_COMPANY_OPERATION_MODE = true;
 	const HR_SETTINGS_MANAGER_ROLES = ["HR Manager", "System Manager"];
 	const SYSTEM_ADMIN_ROLES = ["System Manager"];
+	let renderFrame = null;
 	const CONTEXTUAL_ADMIN_PAGES = {
 		doctype: {
 			title: "数据模型管理",
@@ -55,7 +59,6 @@
 				"personnel",
 				"employee",
 				"employee-detail",
-				"employee-archive",
 				"employee-roster-import",
 				"employee-roster-export",
 				"personnel-reports",
@@ -63,6 +66,7 @@
 				"employee-onboarding",
 				"employee-promotion",
 				"employee-separation",
+				"employee-separation-records",
 				"employee-transfer",
 				"employee-property-history",
 				"employee-skill-map",
@@ -71,9 +75,9 @@
 			],
 		},
 		{
-			label: "组织",
+			label: "部门",
 			route: "/desk/department",
-			keys: ["department", "organizational-chart", "staffing-plan"],
+			keys: ["department", "organizational-chart"],
 		},
 		{
 			label: "招聘",
@@ -157,6 +161,7 @@
 	const WORKSPACE_ROUTE_SLUGS = {
 		"工作台": "hrms-workbench",
 		"人事": "personnel",
+		"部门": "department",
 		"组织": "department",
 		"招聘": "recruitment",
 		"考勤假期": "attendance-import-center",
@@ -203,11 +208,28 @@
 		);
 	}
 
+	function isPreferredCompany(company) {
+		return company?.name === PREFERRED_COMPANY || company?.company_name === PREFERRED_COMPANY;
+	}
+
+	function preferredCompany(companies) {
+		return (companies || []).find(isPreferredCompany) || null;
+	}
+
+	function companiesForDailyOperation(companies) {
+		const primary = preferredCompany(companies);
+		// Keep a clean fallback for a brand-new developer site that has not yet
+		// created 永新. Once 永新 exists, no legacy/test company is selectable.
+		return SINGLE_COMPANY_OPERATION_MODE && primary ? [primary] : companies;
+	}
+
 	function resolveInitialCompany(companies) {
+		const primary = preferredCompany(companies);
+		if (SINGLE_COMPANY_OPERATION_MODE && primary) return primary.name;
 		const available = new Set(companies.map((company) => company.name));
 		const stored = readStoredCompany();
 		if (stored && available.has(stored)) return stored;
-		if (available.has(PREFERRED_COMPANY)) return PREFERRED_COMPANY;
+		if (primary) return primary.name;
 		const userDefault = userDefaultCompany();
 		if (userDefault && available.has(userDefault)) return userDefault;
 		return companies[0] || "";
@@ -220,14 +242,16 @@
 			: Promise.resolve([]);
 		companyContextPromise = Promise.resolve(getCompanies)
 			.then((rows) => {
-				companyContext.companies = (rows || [])
+				const allCompanies = (rows || [])
 					.map((row) => ({
 						name: String(row.name || "").trim(),
 						company_name: String(row.company_name || row.name || "").trim(),
 						abbr: String(row.abbr || "").trim(),
 					}))
 					.filter((row) => row.name);
+				companyContext.companies = companiesForDailyOperation(allCompanies);
 				companyContext.current = resolveInitialCompany(companyContext.companies);
+				if (companyContext.current) storeCompany(companyContext.current);
 				return companyContext.current;
 			})
 			.catch(() => {
@@ -407,13 +431,6 @@
 		if (window.frappe && frappe.set_route && route.indexOf("/desk/") === 0) {
 			window.dispatchEvent(new CustomEvent("hrms:route-change", { detail: { route } }));
 			const routeParts = route.replace(/^\/desk\/?/, "").split("/").filter(Boolean);
-			const deskRoute = routeParts.join("/");
-			if (["hr-settings-center", "employee-detail", "employee-archive", "employee-roster-import", "employee-roster-export", "personnel-reports", "employee-property-history", "attendance-import-center", "payroll-input-center", "form-data-intake"].includes(deskRoute)) {
-				frappe
-					.call("hrms.api.employee_field_template.ensure_personnel_pages")
-					.always(() => frappe.set_route(...routeParts));
-				return;
-			}
 			frappe.set_route(...routeParts);
 			return;
 		}
@@ -426,7 +443,9 @@
 	}
 
 	function currentUserId() {
-		return accountInfo?.name || window.frappe?.session?.user || "";
+		// The session is the authority for profile navigation. accountInfo is
+		// loaded asynchronously and can briefly belong to an earlier Desk session.
+		return window.frappe?.session?.user || "";
 	}
 
 	function bootUserInfo() {
@@ -442,9 +461,15 @@
 	}
 
 	function loadCurrentUser() {
-		if (accountInfo || accountInfoLoading || !window.frappe || !frappe.session || frappe.session.user === "Guest") {
+		if (!window.frappe || !frappe.session || frappe.session.user === "Guest") {
 			return;
 		}
+		const requestedUser = frappe.session.user;
+		if (accountInfo?.name && accountInfo.name !== requestedUser) {
+			accountInfo = null;
+		}
+		if (accountInfo || accountInfoLoading) return;
+
 		accountInfo = bootUserInfo();
 		if (!frappe.call) {
 			return;
@@ -453,7 +478,8 @@
 		frappe
 			.call("hrms.api.get_current_user_info")
 			.then((r) => {
-				accountInfo = Object.assign({}, accountInfo || {}, r.message || {});
+				if (frappe.session.user !== requestedUser) return;
+				accountInfo = Object.assign({}, accountInfo || {}, r.message || {}, { name: requestedUser });
 			})
 			.always(() => {
 				accountInfoLoading = false;
@@ -493,7 +519,7 @@
 			showAccessDenied();
 			return;
 		}
-		if (action === "profile" && user && window.frappe?.set_route) {
+		if (action === "profile" && user && user !== "Guest" && window.frappe?.set_route) {
 			frappe.set_route("Form", "User", user);
 			return;
 		}
@@ -744,7 +770,12 @@
 		} else {
 			companies.forEach((company) => selector.add(new Option(companyOptionLabel(company), company.name, false, company.name === current)));
 			selector.value = current;
-			selector.addEventListener("change", () => setCurrentCompany(selector.value));
+			if (companies.length === 1) {
+				selector.disabled = true;
+				selector.title = __("当前系统按永新单公司运行；公司管理仅系统管理员可用。");
+			} else {
+				selector.addEventListener("change", () => setCurrentCompany(selector.value));
+			}
 		}
 		wrapper.appendChild(selector);
 
@@ -752,12 +783,12 @@
 			const editButton = document.createElement("button");
 			editButton.type = "button";
 			editButton.className = "hrms-top-company-context__edit";
-			editButton.textContent = __("编辑");
-			editButton.title = __("管理当前公司显示名称");
-			editButton.setAttribute("aria-label", __("管理当前公司显示名称"));
+			editButton.textContent = __("管理");
+			editButton.title = __("打开公司管理");
+			editButton.setAttribute("aria-label", __("打开公司管理"));
 			editButton.addEventListener("click", (event) => {
 				event.preventDefault();
-				openCompanyIdentityDialog();
+				window.frappe?.set_route?.("company-management");
 			});
 			wrapper.appendChild(editButton);
 		}
@@ -855,7 +886,11 @@
 	}
 
 	function scheduleRender() {
-		window.requestAnimationFrame(render);
+		if (renderFrame) return;
+		renderFrame = window.requestAnimationFrame(() => {
+			renderFrame = null;
+			render();
+		});
 	}
 
 	if (document.readyState === "loading") {

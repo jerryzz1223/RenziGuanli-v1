@@ -5,17 +5,26 @@ frappe.pages["employee-detail"].on_page_load = function (wrapper) {
 		single_column: true,
 	});
 
-	const view = new EmployeeDetailPage(page);
-	view.show();
+	wrapper.employee_detail = new EmployeeDetailPage(page);
+	wrapper.employee_detail.show();
+};
+
+frappe.pages["employee-detail"].on_page_show = function (wrapper) {
+	wrapper.employee_detail?.refresh_from_route();
 };
 
 class EmployeeDetailPage {
 	constructor(page) {
 		this.page = page;
 		this.wrapper = page.main[0];
-		this.employee = frappe.get_route()[1];
+		this.employee = "";
 		this.detail = null;
 		this.navigation = {};
+		this.load_request_id = 0;
+		this.loading_employee = "";
+		this.load_promise = null;
+		this.last_loaded_at = 0;
+		this.cache_ttl = 30_000;
 		this.active_tab = "概览";
 		this.expanded_related = {};
 		this.tabs = ["概览", "在职信息", "个人信息", "联系信息", "工资社保", "合同信息", "材料附件", "背景调查"];
@@ -32,31 +41,111 @@ class EmployeeDetailPage {
 
 	show() {
 		document.body.classList.add("hrms-employee-detail-view");
-		this.page.set_secondary_action(__("返回花名册"), () => frappe.set_route("employee-archive"));
-		this.load();
+		this.page.set_secondary_action(__("返回花名册"), () => frappe.set_route("List", "Employee"));
+		this.bind_personnel_status_updates();
+		this.refresh_from_route();
 	}
 
-	load() {
-		if (!this.employee) {
-			this.wrapper.innerHTML = `<div class="text-muted">${__("请选择员工")}</div>`;
-			return;
+	bind_personnel_status_updates() {
+		if (this.personnel_status_updates_bound || !frappe.realtime?.on) return;
+		this.personnel_status_updates_bound = true;
+		frappe.realtime.on("hrms_employee_personnel_status_updated", (payload = {}) => {
+			if (!payload.employee || payload.employee !== this.employee) return;
+			this.last_loaded_at = 0;
+			this.load(this.employee);
+		});
+	}
+
+	refresh_from_route() {
+		const route_employee = String(frappe.get_route()[1] || "").trim();
+		const invalid_route_employee = /^(undefined|null)$/i.test(route_employee);
+		if (invalid_route_employee) {
+			frappe.set_route("List", "Employee");
+			return Promise.resolve();
 		}
-		frappe
-			.call({
-				method: "hrms.api.employee_field_template.get_employee_detail",
-				args: { employee: this.employee },
-			})
-			.then((response) => {
-				this.detail = response.message || {};
-				return frappe.call({
-					method: "hrms.api.employee_field_template.get_employee_detail_navigation",
-					args: { employee: this.employee },
-				});
-			})
-			.then((response) => {
-				this.navigation = response.message || {};
+		const employee = route_employee;
+		const employee_changed = employee !== this.employee;
+		if (employee_changed) {
+			this.employee = employee;
+			this.detail = null;
+			this.navigation = {};
+			this.last_loaded_at = 0;
+			this.active_tab = "概览";
+			this.expanded_related = {};
+		}
+
+		// on_page_load and on_page_show can run back-to-back. Reuse the active
+		// request and keep a recently loaded cached page responsive.
+		if (this.loading_employee === employee && this.load_promise) {
+			return this.load_promise;
+		}
+		if (!employee_changed && this.detail && Date.now() - this.last_loaded_at < this.cache_ttl) {
+			return Promise.resolve(this.detail);
+		}
+
+		return this.load(employee);
+	}
+
+	load(employee = this.employee) {
+		const request_id = ++this.load_request_id;
+		if (!employee) {
+			this.loading_employee = "";
+			this.load_promise = null;
+			this.detail = null;
+			this.navigation = {};
+			this.page.set_title(__("员工档案详情"));
+			this.wrapper.innerHTML = `<div class="text-muted">${__("请选择员工")}</div>`;
+			return Promise.resolve();
+		}
+
+		this.loading_employee = employee;
+		this.page.set_title(__("员工档案详情"));
+		this.wrapper.innerHTML = `<div class="text-muted hrms-employee-detail-loading">${__("正在加载员工档案...")}</div>`;
+
+		const detail_request = frappe.call({
+			method: "hrms.api.employee_field_template.get_employee_detail",
+			args: { employee },
+		});
+		const navigation_request = frappe.call({
+			method: "hrms.api.employee_field_template.get_employee_detail_navigation",
+			args: {
+				employee,
+				filters: JSON.stringify({
+					company:
+						window.hrmsCompanyContext?.getCurrentCompany?.() ||
+						frappe.defaults?.get_user_default?.("Company") ||
+						"",
+				}),
+			},
+		});
+
+		this.load_promise = Promise.all([detail_request, navigation_request])
+			.then(([detail_response, navigation_response]) => {
+				if (!this.is_current_request(request_id, employee)) return;
+				this.detail = detail_response.message || {};
+				this.navigation = navigation_response.message || {};
+				this.last_loaded_at = Date.now();
 				this.render();
+			})
+			.catch(() => {
+				if (!this.is_current_request(request_id, employee)) return;
+				this.detail = null;
+				this.navigation = {};
+				this.last_loaded_at = 0;
+				this.page.set_title(__("员工档案详情"));
+				this.wrapper.innerHTML = `<div class="text-muted">${__("员工档案加载失败，请重试。")}</div>`;
+			})
+			.finally(() => {
+				if (!this.is_current_request(request_id, employee)) return;
+				this.loading_employee = "";
+				this.load_promise = null;
 			});
+
+		return this.load_promise;
+	}
+
+	is_current_request(request_id, employee) {
+		return request_id === this.load_request_id && employee === this.employee;
 	}
 
 	render() {
@@ -95,8 +184,7 @@ class EmployeeDetailPage {
 				}
 				.hrms-employee-detail-card-panel,
 				.hrms-employee-detail-section,
-				.hrms-employee-detail-side-card,
-				.hrms-employee-detail-readonly-notice {
+				.hrms-employee-detail-side-card {
 					background: #fff;
 					border: 1px solid var(--hrms-border);
 					border-radius: 6px;
@@ -173,19 +261,6 @@ class EmployeeDetailPage {
 				.hrms-employee-detail-action-strip .btn-primary {
 					background-color: var(--hrms-accent);
 					border-color: var(--hrms-accent);
-				}
-				.hrms-employee-detail-readonly-notice {
-					margin-top: 18px;
-					padding: 10px 12px;
-					color: var(--hrms-muted);
-					font-size: 13px;
-					line-height: 1.6;
-					background: #fffaf0;
-					border-color: #fdecc8;
-				}
-				.hrms-employee-detail-readonly-notice strong {
-					color: #d97706;
-					font-weight: 600;
 				}
 				.hrms-employee-detail-tabs {
 					display: flex;
@@ -500,9 +575,9 @@ class EmployeeDetailPage {
 
 	render_header(header) {
 		const department_display = this.get_department_display(header);
+		const personnel_status = header.custom_personnel_status || "";
 		const meta = [
-			header.employment_type,
-			header.status ? __(header.status) : "",
+			personnel_status,
 			header.custom_employee_code ? `${__("工号")}：${header.custom_employee_code}` : "",
 			header.cell_number,
 		].filter(Boolean);
@@ -529,15 +604,10 @@ class EmployeeDetailPage {
 						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="edit-employee">${__("编辑资料")}</button>` : ""}
 						<button class="btn btn-default btn-sm" data-action="compare">${__("员工对比")}</button>
 						<button class="btn btn-primary btn-sm" data-action="transfer">${__("办理人事异动")}</button>
-						<button class="btn btn-default btn-sm" data-action="promotion">${__("转正")}</button>
+						${personnel_status === "试用期" ? `<button class="btn btn-default btn-sm" data-action="promotion">${__("转正")}</button>` : ""}
 						<button class="btn btn-default btn-sm" data-action="separation">${__("离职")}</button>
 						<button class="btn btn-default btn-sm" data-action="contract">${__("合同记录")}</button>
 					</div>
-				</div>
-				<div class="hrms-employee-detail-readonly-notice">
-					<strong>*</strong>
-					${__("员工档案详情为只读资料页。修改部门、岗位、职务、职级等信息建议通过人事异动完成，否则无法生成任职记录和员工成长记录。")}
-					<a href="#" data-action="transfer">${__("办理人事异动")}</a>
 				</div>
 			</div>
 		`;
@@ -583,7 +653,7 @@ class EmployeeDetailPage {
 							${this.render_kpi("部门", department_display || "未设置")}
 							${this.render_kpi("岗位", header.designation || "未设置")}
 							${this.render_kpi("入职日期", header.date_of_joining || "未设置")}
-							${this.render_kpi("状态", header.status ? __(header.status) : "未设置")}
+							${this.render_kpi("工作性质", header.custom_personnel_status || "未设置")}
 						</div>
 					</div>
 					<div class="hrms-employee-detail-section hrms-employee-detail-section-card">
@@ -646,7 +716,7 @@ class EmployeeDetailPage {
 			{
 				date: __("至今"),
 				title: __("当前任职"),
-				description: this.join_values([department_display, header.designation, header.status ? __(header.status) : ""]),
+				description: this.join_values([department_display, header.designation, header.custom_personnel_status]),
 			},
 		];
 		return items
@@ -826,7 +896,15 @@ class EmployeeDetailPage {
 		this.wrapper.querySelectorAll("[data-action='transfer']").forEach((button) => {
 			button.addEventListener("click", (event) => {
 				event.preventDefault();
-				frappe.new_doc("Employee Transfer", { employee: this.employee });
+				const header = this.detail?.header || {};
+				frappe.new_doc("Employee Transfer", {
+					employee: this.employee,
+					employee_code_display: header.custom_employee_code,
+					employee_name: header.employee_name,
+					company: header.company,
+					department: header.department,
+					transfer_date: frappe.datetime.get_today(),
+				});
 			});
 		});
 		this.wrapper.querySelectorAll("[data-action='field-settings']").forEach((button) => {
@@ -851,10 +929,38 @@ class EmployeeDetailPage {
 			});
 		});
 		this.wrapper.querySelectorAll("[data-action='promotion']").forEach((button) => {
-			button.addEventListener("click", () => frappe.new_doc("Employee Promotion", { employee: this.employee }));
+			button.addEventListener("click", () => {
+				if (this.detail?.header?.custom_personnel_status !== "试用期") return;
+				const confirmation_date = frappe.datetime.get_today();
+				frappe.new_doc("Employee Promotion", {
+					employee: this.employee,
+					promotion_date: confirmation_date,
+					promotion_details: [
+						{
+							property: __("是否转正"),
+							fieldname: "custom_is_confirmed",
+							current: this.detail?.header?.custom_is_confirmed || "否",
+							new: "是",
+						},
+						{
+							property: __("转正日期"),
+							fieldname: "final_confirmation_date",
+							current: this.detail?.header?.final_confirmation_date || "",
+							new: confirmation_date,
+						},
+					],
+				});
+			});
 		});
 		this.wrapper.querySelectorAll("[data-action='separation']").forEach((button) => {
-			button.addEventListener("click", () => frappe.new_doc("Employee Separation", { employee: this.employee }));
+			button.addEventListener("click", () => {
+				const header = this.detail?.header || {};
+				frappe.new_doc("Employee Separation", {
+					employee: this.employee,
+					employee_code_display: header.custom_employee_code || header.employee_number || "",
+					employee_name: header.employee_name || "",
+				});
+			});
 		});
 		this.wrapper.querySelectorAll("[data-action='contract']").forEach((button) => {
 			button.addEventListener("click", () => {

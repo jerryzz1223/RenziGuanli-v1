@@ -73,7 +73,7 @@ def update_employee_work_history(employee, details, date=None, cancel=False):
 			},
 		)
 
-	internal_work_history = {}
+	track_work_history = False
 	for item in details:
 		field = frappe.get_meta("Employee").get_field(item.fieldname)
 		if not field:
@@ -84,9 +84,14 @@ def update_employee_work_history(employee, details, date=None, cancel=False):
 		setattr(employee, item.fieldname, new_value)
 
 		if item.fieldname in ["department", "designation", "branch"]:
-			internal_work_history[item.fieldname] = item.new
+			track_work_history = True
 
-	if internal_work_history and not cancel:
+	if track_work_history and not cancel:
+		internal_work_history = {
+			"department": employee.department,
+			"designation": employee.designation,
+			"branch": employee.branch,
+		}
 		internal_work_history["from_date"] = date
 		employee.append("internal_work_history", internal_work_history)
 
@@ -130,13 +135,14 @@ def delete_employee_work_history(details, employee, date):
 	filters = {}
 	for d in details:
 		for history in employee.internal_work_history:
-			if d.property == "Department" and history.department == d.new:
+			# Labels are translated for HR users; fieldname is the stable audit key.
+			if d.fieldname == "department" and history.department == d.new:
 				department = d.new
 				filters["department"] = department
-			if d.property == "Designation" and history.designation == d.new:
+			if d.fieldname == "designation" and history.designation == d.new:
 				designation = d.new
 				filters["designation"] = designation
-			if d.property == "Branch" and history.branch == d.new:
+			if d.fieldname == "branch" and history.branch == d.new:
 				branch = d.new
 				filters["branch"] = branch
 			if date and date == history.from_date:

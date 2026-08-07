@@ -1,15 +1,24 @@
 frappe.pages["organizational-chart"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
-		title: __("组织架构图"),
+		title: __("部门架构图"),
 		single_column: true,
 	});
 
-	const view = new HybridOrganizationChart(page);
-	view.show();
+	wrapper.organizational_chart = new HybridOrganizationChart(page);
+	wrapper.organizational_chart.show();
+};
+
+frappe.pages["organizational-chart"].on_page_show = function (wrapper) {
+	wrapper.organizational_chart?.activate();
+};
+
+frappe.pages["organizational-chart"].on_page_hide = function (wrapper) {
+	wrapper.organizational_chart?.deactivate();
 };
 
 const YONGXIN_COMPANY = "永新";
+const MIN_ORG_CHART_ZOOM = 0.025;
 
 class HybridOrganizationChart {
 	constructor(page) {
@@ -19,21 +28,76 @@ class HybridOrganizationChart {
 		this.tree = null;
 		this.selected_node = null;
 		this.zoom = 1;
+		this.view_mode = "overview";
+		this.layout_frame = null;
 		this.collapsed_nodes = new Set();
 		this.field_map = {};
+		this.search_term = "";
+		this.tree_request_id = 0;
+		this.field_map_request_id = 0;
+		this.company_context_bound = false;
+		this.last_refresh_at = 0;
+		this.cache_ttl = 30_000;
+		this.mode = null;
+		this.report_data = null;
+		this.report_loading = false;
 	}
 
 	show() {
-		this.page.set_title(__("组织架构图"));
+		this.bind_company_context();
+		this.render_current_view(true);
+	}
+
+	is_active() {
+		const container = this.wrapper.closest(".page-container");
+		return !container || container.getClientRects().length > 0;
+	}
+
+	activate(initial = false) {
+		this.bind_company_context();
+		if (this.get_route_mode() !== this.mode) {
+			this.render_current_view(true);
+			return;
+		}
+		if (this.mode === "report") {
+			if (!initial && Date.now() - this.last_refresh_at > this.cache_ttl) this.load_organization_report(true);
+			return;
+		}
+		if (!initial && Date.now() - this.last_refresh_at > this.cache_ttl) {
+			this.load_tree();
+		}
+	}
+
+	get_route_mode() {
+		return frappe.get_route()?.[1] === "report" ? "report" : "chart";
+	}
+
+	render_current_view(force = false) {
+		this.mode = this.get_route_mode();
+		if (this.mode === "report") {
+			this.page.set_title(__("部门报表"));
+			this.setup_report_actions();
+			this.render_report_shell();
+			this.load_organization_report(force);
+			return;
+		}
+
+		this.page.set_title(__("部门架构图"));
 		this.setup_actions();
 		this.render_shell();
-		this.bind_company_context();
 		this.load_field_map();
 		this.load_tree();
 	}
 
+	deactivate() {
+		if (!this.company_context_bound) return;
+		window.removeEventListener("hrms:company-context-changed", this.handle_company_context_change);
+		this.company_context_bound = false;
+	}
+
 	setup_actions() {
 		this.page.clear_inner_toolbar();
+		this.page.add_inner_button(__("一览全局"), () => this.fit_to_view());
 		this.page.add_inner_button(__("展开全部"), () => this.expand_all());
 		this.page.add_inner_button(__("收起全部"), () => this.collapse_all());
 		this.page.add_inner_button(__("导入架构模板"), () => this.import_yongxin_template());
@@ -42,31 +106,37 @@ class HybridOrganizationChart {
 		this.page.set_primary_action(__("新增部门"), () => this.add_department());
 	}
 
+	setup_report_actions() {
+		this.page.clear_inner_toolbar();
+		this.page.add_inner_button(__("刷新"), () => this.load_organization_report(true));
+		this.page.set_primary_action(__("导出表格"), () => this.export_report_table());
+	}
+
 	render_shell() {
 		this.wrapper.innerHTML = `
 			<div class="hrms-org-page">
 				<aside class="hrms-org-sidebar">
-					<div class="hrms-org-sidebar-title">${__("组织")}</div>
+					<div class="hrms-org-sidebar-title">${__("部门")}</div>
 					${this.render_sidebar()}
 				</aside>
 				<section class="hrms-org-main">
 					<div class="hrms-org-toolbar">
-						<div class="hrms-org-company-selector">
-							<label>${__("选择公司")}</label>
-							<div data-company-field data-action="change-company"></div>
-						</div>
+						<strong class="hrms-org-toolbar-title">${__("部门层级与人员归属")}</strong>
 						<div class="hrms-org-search">
 							<input class="form-control" data-search placeholder="${__("搜索部门、员工、岗位")}" />
 						</div>
 						<div class="hrms-org-toolbar-actions">
-							<button class="btn btn-default btn-sm" data-action="zoom-out">-</button>
-							<button class="btn btn-default btn-sm" data-action="zoom-in">+</button>
+							<button class="btn btn-default btn-sm" data-action="fit-view">${__("一览全局")}</button>
+							<button class="btn btn-default btn-sm" data-action="zoom-out" title="${__("缩小")}">-</button>
+							<button class="btn btn-default btn-sm" data-action="zoom-in" title="${__("放大")}">+</button>
 							<button class="btn btn-default btn-sm" data-action="refresh">${__("刷新")}</button>
 						</div>
 					</div>
 					<div class="hrms-org-summary" data-summary></div>
-					<div class="hrms-org-tree-canvas">
-						<div class="hrms-org-tree-scale" data-tree></div>
+					<div class="hrms-org-tree-canvas" data-tree-canvas>
+						<div class="hrms-org-tree-stage" data-tree-stage>
+							<div class="hrms-org-tree-scale" data-tree></div>
+						</div>
 					</div>
 				</section>
 				<aside class="hrms-org-detail" data-detail>
@@ -75,22 +145,139 @@ class HybridOrganizationChart {
 			</div>
 		`;
 
-		this.setup_company_field();
 		this.bind_events();
+	}
+
+	render_report_shell() {
+		this.wrapper.innerHTML = `
+			<div class="hrms-org-page hrms-org-page--report">
+				<aside class="hrms-org-sidebar">
+					<div class="hrms-org-sidebar-title">${__("部门")}</div>
+					${this.render_sidebar()}
+				</aside>
+				<section class="hrms-org-report-host" data-report>
+					<div class="hrms-org-report-empty">${__("正在生成部门报表...")}</div>
+				</section>
+			</div>
+		`;
+		this.bind_events();
+	}
+
+	load_organization_report(force = false) {
+		if (this.report_loading || (!force && this.report_data)) return;
+		this.report_loading = true;
+		this.last_refresh_at = Date.now();
+		const host = this.wrapper.querySelector("[data-report]");
+		if (host) host.innerHTML = `<div class="hrms-org-report-empty">${__("正在生成部门报表...")}</div>`;
+		frappe
+			.call({
+				method: "hrms.hr.page.organizational_chart.organizational_chart.get_organization_report",
+				args: { company: this.company },
+			})
+			.then((response) => {
+				this.report_loading = false;
+				if (this.mode !== "report") return;
+				this.report_data = response.message || {};
+				this.render_organization_report();
+			})
+			.catch((error) => {
+				this.report_loading = false;
+				if (!host || this.mode !== "report") return;
+				host.innerHTML = `<div class="hrms-org-report-empty">${frappe.utils.escape_html(
+					error?.message || __("部门报表生成失败，请刷新后重试。"),
+				)}</div>`;
+			});
+	}
+
+	render_organization_report() {
+		const host = this.wrapper.querySelector("[data-report]");
+		if (!host) return;
+		const rows = this.report_data?.rows || [];
+		const total = this.report_data?.total || {};
+		host.innerHTML = `
+			<div class="hrms-org-report">
+				<header><h2>${frappe.utils.escape_html(this.report_data?.title || __("部门报表"))}</h2></header>
+				<div class="hrms-org-report-table-wrap">
+					<table>
+						<thead><tr>${(this.report_data?.columns || []).map((column) => `<th>${frappe.utils.escape_html(column)}</th>`).join("")}</tr></thead>
+						<tbody>
+							${rows.map((row) => this.render_report_row(row)).join("")}
+							${this.render_report_total(total)}
+						</tbody>
+					</table>
+				</div>
+				<div class="hrms-org-report-approval">${__("批准：")}</div>
+			</div>`;
+	}
+
+	render_report_row(row) {
+		const indent = Math.max(Number(row.level || 1) - 1, 0) * 16;
+		return `<tr>
+			<td style="padding-left:${12 + indent}px"><strong>${frappe.utils.escape_html(row.department || "")}</strong>${row.parent_department ? `<small>${frappe.utils.escape_html(row.parent_department)}</small>` : ""}</td>
+			<td>${frappe.utils.escape_html(String(row.planned_headcount || 0))}</td>
+			<td>${frappe.utils.escape_html(String(row.current_headcount || 0))}</td>
+			<td>${frappe.utils.escape_html(String(row.vacancy_count || 0))}</td>
+			<td>${this.format_report_rate(row.fulfillment_rate)}</td>
+			<td>${frappe.utils.escape_html(row.vacancy_notes || "-")}</td>
+		</tr>`;
+	}
+
+	render_report_total(total) {
+		return `<tr class="hrms-org-report-total">
+			<td>${__("汇总")}</td>
+			<td>${frappe.utils.escape_html(String(total.planned_headcount || 0))}</td>
+			<td>${frappe.utils.escape_html(String(total.current_headcount || 0))}</td>
+			<td>${frappe.utils.escape_html(String(total.vacancy_count || 0))}</td>
+			<td>${this.format_report_rate(total.fulfillment_rate)}</td>
+			<td>-</td>
+		</tr>`;
+	}
+
+	format_report_rate(value) {
+		if (value === null || value === undefined) return "-";
+		return `${Math.round(Number(value || 0) * 100)}%`;
+	}
+
+	export_report_table() {
+		if (!this.report_data) return;
+		const headers = this.report_data.columns || [];
+		const rows = (this.report_data.rows || []).map((row) => [
+			row.department,
+			row.planned_headcount || 0,
+			row.current_headcount || 0,
+			row.vacancy_count || 0,
+			this.format_report_rate(row.fulfillment_rate),
+			row.vacancy_notes || "-",
+		]);
+		const total = this.report_data.total || {};
+		rows.push([__("汇总"), total.planned_headcount || 0, total.current_headcount || 0, total.vacancy_count || 0, this.format_report_rate(total.fulfillment_rate), "-"]);
+		const csv = [headers, ...rows]
+			.map((row) => row.map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`).join(","))
+			.join("\r\n");
+		const link = document.createElement("a");
+		link.href = URL.createObjectURL(new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" }));
+		link.download = `${this.company || YONGXIN_COMPANY}_部门报表.csv`;
+		link.click();
+		URL.revokeObjectURL(link.href);
 	}
 
 	render_sidebar() {
 		const items = [
-			["组织管理", ["List", "Department"]],
+			["部门管理", ["List", "Department"]],
 			["架构图", ["organizational-chart"]],
-			["组织报表", ["List", "Staffing Plan"]],
+			["部门报表", ["organizational-chart", "report"]],
 		];
 		return `
 			<nav>
 				${items
 					.map(
 						([label, route]) => `
-							<button class="hrms-org-sidebar-link ${route[0] === "organizational-chart" ? "active" : ""}" data-route="${frappe.utils.escape_html(JSON.stringify(route))}">
+							<button class="hrms-org-sidebar-link ${
+								(route[1] === "report" && this.mode === "report") ||
+								(route[0] === "organizational-chart" && !route[1] && this.mode === "chart")
+									? "active"
+									: ""
+							}" data-route="${frappe.utils.escape_html(JSON.stringify(route))}">
 								${frappe.utils.escape_html(__(label))}
 							</button>`,
 					)
@@ -99,45 +286,30 @@ class HybridOrganizationChart {
 		`;
 	}
 
-	setup_company_field() {
-		const control = frappe.ui.form.make_control({
-			parent: this.wrapper.querySelector("[data-company-field]"),
-			df: {
-				fieldname: "company",
-				fieldtype: "Link",
-				label: __("选择公司"),
-				options: "Company",
-				default: this.company,
-			},
-			render_input: true,
-		});
-		control.set_value(this.company);
-		control.$input.on("change", () => this.set_company(control.get_value()));
-		this.company_field = control;
-	}
-
 	set_company(company, { publish = true } = {}) {
 		const next_company = (company || "").trim();
 		if (!next_company) return;
 		if (publish && window.hrmsCompanyContext?.setCurrentCompany) {
 			const shared_company = window.hrmsCompanyContext.setCurrentCompany(next_company);
-			if (shared_company !== next_company) {
-				this.company_field?.set_value(shared_company || this.company);
-				return;
-			}
+			if (shared_company !== next_company) return;
 		}
 		if (next_company === this.company) return;
 		this.company = next_company;
-		this.company_field?.set_value(next_company);
-		this.load_tree();
+		if (this.mode === "report") this.load_organization_report(true);
+		else this.load_tree();
 	}
 
 	bind_company_context() {
-		window.addEventListener("hrms:company-context-changed", (event) => {
+		if (this.company_context_bound) return;
+		this.company_context_bound = true;
+		this.handle_company_context_change = (event) => {
+			if (!this.is_active()) return;
 			const detail = event.detail || {};
 			this.set_company(detail.company, { publish: false });
-		});
+		};
+		window.addEventListener("hrms:company-context-changed", this.handle_company_context_change);
 		window.hrmsCompanyContext?.ready?.().then((company) => {
+			if (!this.is_active()) return;
 			this.set_company(company, { publish: false });
 		});
 	}
@@ -152,7 +324,9 @@ class HybridOrganizationChart {
 
 			const route_button = event.target.closest("[data-route]");
 			if (route_button) {
-				const route = JSON.parse(route_button.dataset.route || "[]");
+				const raw_route = (route_button.dataset.route || "").trim();
+				if (!raw_route.startsWith("[")) return;
+				const route = JSON.parse(raw_route);
 				if (route.length) frappe.set_route(...route);
 				return;
 			}
@@ -164,50 +338,106 @@ class HybridOrganizationChart {
 			}
 		});
 
-		this.wrapper.querySelector("[data-search]").addEventListener(
+		this.wrapper.querySelector("[data-search]")?.addEventListener(
 			"input",
 			frappe.utils.debounce((event) => this.filter_tree(event.target.value), 180),
 		);
 	}
 
 	handle_action(action, element) {
+		if (action === "fit-view") this.fit_to_view();
 		if (action === "zoom-in") this.set_zoom(this.zoom + 0.1);
 		if (action === "zoom-out") this.set_zoom(this.zoom - 0.1);
 		if (action === "refresh") this.load_tree();
-		if (action === "change-company") this.set_company(this.company_field?.get_value());
 		if (action === "toggle-node") this.toggle_node(element?.dataset.toggleNode);
+		if (action === "select-node") this.select_node(element?.dataset.nodeId, element?.dataset.nodeType);
 		if (action === "add-department") this.add_department();
 		if (action === "edit-department") this.edit_department();
+		if (action === "quick-edit-node") this.quick_edit_node(element);
 		if (action === "delete-department") this.delete_department();
-		if (action === "open-employee") this.open_employee(element?.dataset.employeeRoute || element?.dataset.employee);
+		if (action === "open-employee") {
+			this.open_employee(
+				element?.dataset.employeeNumber,
+				element?.dataset.employeeRoute || element?.dataset.employee,
+			);
+		}
 		if (action === "open-person") this.show_person_detail(this.read_person_payload(element));
 	}
 
 	load_tree() {
+		const request_id = ++this.tree_request_id;
+		const company = this.company;
+		this.last_refresh_at = Date.now();
+		const tree = this.wrapper.querySelector("[data-tree]");
+		if (tree) tree.innerHTML = `<div class="hrms-org-empty">${__("正在加载组织架构...")}</div>`;
 		frappe
 			.call({
 				method: "hrms.hr.page.organizational_chart.organizational_chart.get_hybrid_tree",
-				args: { company: this.company },
+				args: { company, source_mode: "live" },
 				freeze: true,
 				freeze_message: __("正在生成组织架构图..."),
 			})
 			.then((r) => {
+				if (request_id !== this.tree_request_id || company !== this.company || !this.is_active()) return;
 				this.tree = r.message || {};
 				this.field_map = this.tree.field_map || {};
 				this.collapsed_nodes.clear();
+				this.view_mode = "overview";
 				this.render_summary();
 				this.render_tree();
 				const root = this.tree.root;
-				if (root) this.select_node(root.node_id, root.node_type);
+				const initial_node = this.find_initial_department_node(root);
+				if (initial_node) this.select_node(initial_node.node_id, initial_node.node_type);
+			})
+			.catch((error) => {
+				if (request_id !== this.tree_request_id || company !== this.company || !this.is_active()) return;
+				this.render_load_error(error, company);
 			});
 	}
 
+	find_initial_department_node(node) {
+		if (!node) return null;
+		if (node.node_type === "department") return node;
+		for (const child of node.children || []) {
+			const department = this.find_initial_department_node(child);
+			if (department) return department;
+		}
+		return node;
+	}
+
+	render_load_error(error, company) {
+		this.tree = null;
+		const message = error?.message || error?.exc_type || __("服务端未返回组织数据。");
+		const tree = this.wrapper.querySelector("[data-tree]");
+		const detail = this.wrapper.querySelector("[data-detail]");
+		if (tree) {
+			tree.style.transform = "none";
+			tree.style.left = "0";
+			tree.innerHTML = `
+				<div class="hrms-org-load-error">
+					<strong>${__("组织架构加载失败")}</strong>
+					<span>${frappe.utils.escape_html(message)}</span>
+					<button class="btn btn-default btn-sm" data-action="refresh">${__("重试")}</button>
+				</div>
+			`;
+		}
+		if (detail) {
+			detail.innerHTML = `
+				<div class="hrms-org-empty">
+					<div>${__("未能加载 {0} 的组织架构，请重试或检查公司权限。", [company || __("当前公司")])}</div>
+				</div>
+			`;
+		}
+	}
+
 	load_field_map() {
+		const request_id = ++this.field_map_request_id;
 		frappe
 			.call({
 				method: "hrms.hr.page.organizational_chart.organizational_chart.get_employee_roster_field_map",
 			})
 			.then((r) => {
+				if (request_id !== this.field_map_request_id || !this.is_active()) return;
 				this.field_map = r.message || this.field_map || {};
 			});
 	}
@@ -239,14 +469,29 @@ class HybridOrganizationChart {
 			tree.innerHTML = `<div class="hrms-org-empty">${__("暂无组织数据，请先导入员工花名册或维护部门。")}</div>`;
 			return;
 		}
-		tree.style.transform = `scale(${this.zoom})`;
-		tree.innerHTML = `<ul class="hrms-org-tree">${this.render_tree_node(root)}</ul>`;
+		const roots = root.node_type === "company" ? root.children || [] : [root];
+		if (!roots.length) {
+			tree.innerHTML = `<div class="hrms-org-empty">${__("暂无部门，请先在部门管理中新增一级部门。")}</div>`;
+			return;
+		}
+		tree.innerHTML = `<ul class="hrms-org-tree hrms-org-tree--forest">${roots.map((node) => this.render_tree_node(node)).join("")}</ul>`;
+		if (this.layout_frame) window.cancelAnimationFrame(this.layout_frame);
+		this.layout_frame = window.requestAnimationFrame(() => {
+			this.layout_frame = null;
+			if (this.view_mode === "overview") {
+				this.fit_to_view();
+			} else {
+				this.apply_tree_scale();
+			}
+		});
 	}
 
 	render_tree_node(node) {
-		const collapsed = this.collapsed_nodes.has(node.node_id);
+		const collapsed = !this.search_term && this.collapsed_nodes.has(node.node_id);
 		const children = node.children || [];
 		const has_children = children.length > 0;
+		const department = this.get_node_department(node);
+		const editable = ["department", "work_level", "position_group"].includes(node.node_type);
 		return `
 			<li class="${collapsed ? "is-collapsed" : ""}">
 				<div
@@ -256,10 +501,25 @@ class HybridOrganizationChart {
 					data-search-text="${frappe.utils.escape_html(this.node_search_text(node))}"
 				>
 					<div class="hrms-org-node-bar"></div>
+					${
+						editable
+							? `<button
+								type="button"
+								class="hrms-org-node-edit"
+								data-action="quick-edit-node"
+								data-node-id="${frappe.utils.escape_html(node.node_id)}"
+								data-node-type="${frappe.utils.escape_html(node.node_type || "")}"
+								data-department="${frappe.utils.escape_html(department)}"
+								title="${__("快速编辑此卡片")}"
+								aria-label="${__("快速编辑此卡片")}"
+							>${frappe.utils.icon("edit", "xs")}</button>`
+							: ""
+					}
 					<div class="hrms-org-node-body">
-						<strong>${frappe.utils.escape_html(node.name || "")}</strong>
+						${this.render_node_heading(node)}
 						<span>${frappe.utils.escape_html(node.title || "")}</span>
 						${this.render_node_lines(node)}
+						${this.render_vacancy_marker(node)}
 						<small>${__("编制")} ${frappe.utils.escape_html(String(node.planned_headcount || 0))} · ${__("现有")} ${frappe.utils.escape_html(String(node.current_headcount || 0))} · ${__("空缺")} ${frappe.utils.escape_html(String(node.vacancy_count || 0))}</small>
 					</div>
 					${has_children ? `<button class="hrms-org-node-toggle" data-action="toggle-node" data-toggle-node="${frappe.utils.escape_html(node.node_id)}">${collapsed ? "+" : "-"}</button>` : ""}
@@ -273,32 +533,76 @@ class HybridOrganizationChart {
 		`;
 	}
 
+	render_node_heading(node) {
+		const employee_route = this.normalize_employee_route_value(node.employee_route || node.employee);
+		const employee_number = this.normalize_employee_number_value(node.employee_number || node.employee_code);
+		if (!employee_route) {
+			return `<strong>${frappe.utils.escape_html(node.name || "")}</strong>`;
+		}
+		return `
+			<button
+				type="button"
+				class="hrms-org-node-person-link"
+				data-action="open-employee"
+				data-employee="${frappe.utils.escape_html(node.employee || "")}"
+				data-employee-route="${frappe.utils.escape_html(employee_route)}"
+				data-employee-number="${frappe.utils.escape_html(employee_number)}"
+				title="${__("打开员工档案")}"
+			>${frappe.utils.escape_html(node.name || "")}</button>
+		`;
+	}
+
+	render_vacancy_marker(node) {
+		const vacancy_count = Number(node.vacancy_count || 0);
+		if (!vacancy_count) return "";
+		return `<strong class="hrms-org-vacancy-marker">TBA×${frappe.utils.escape_html(String(vacancy_count))}</strong>`;
+	}
+
 	node_search_text(node) {
 		const people = (node.people || [])
-			.flatMap((person) => [person.name, person.employee_name, person.department, person.designation])
+			.flatMap((person) => [
+				person.name,
+				person.employee_name,
+				person.employee_code,
+				person.department,
+				person.designation,
+				person.grade,
+				person.role,
+			])
 			.filter(Boolean);
-		return [node.name, node.title, node.department, ...people].filter(Boolean).join(" ");
+		return [node.name, node.title, node.department, ...(node.lines || []), ...people].filter(Boolean).join(" ");
 	}
 
 	render_node_lines(node) {
 		if (node.people && node.people.length) {
-			const visible_people = node.people.slice(0, 8);
-			const hidden_count = Math.max(node.people.length - visible_people.length, 0);
+			const matching_people = this.search_term
+				? node.people.filter((person) => {
+						const search_text = [
+							person.name,
+							person.employee_name,
+							person.employee_code,
+							person.department,
+							person.designation,
+							person.grade,
+							person.role,
+						]
+							.filter(Boolean)
+							.join(" ")
+							.toLowerCase();
+						return search_text.includes(this.search_term);
+					})
+				: node.people;
 			return `
 				<div class="hrms-org-node-lines">
-					${this.render_person_tokens(visible_people)}
-					${hidden_count ? `<span class="hrms-org-person-more">${__("+{0} 人", [hidden_count])}</span>` : ""}
+					${this.render_person_tokens(matching_people)}
 				</div>
 			`;
 		}
 		const lines = (node.employee_names && node.employee_names.length ? node.employee_names : node.lines) || [];
 		if (!lines.length) return "";
-		const visible_lines = lines.slice(0, 8);
-		const hidden_count = Math.max(lines.length - visible_lines.length, 0);
 		return `
 			<div class="hrms-org-node-lines">
-				${visible_lines.map((line) => `<em>${frappe.utils.escape_html(line || "")}</em>`).join("")}
-				${hidden_count ? `<em>${__("+{0} 人", [hidden_count])}</em>` : ""}
+				${lines.map((line) => `<em>${frappe.utils.escape_html(line || "")}</em>`).join("")}
 			</div>
 		`;
 	}
@@ -308,20 +612,23 @@ class HybridOrganizationChart {
 		return list
 			.map((person) => {
 				const employee_route = this.resolve_employee_route_value(person);
+				const employee_number = this.resolve_employee_number_value(person);
 				const matched = Boolean(employee_route && person.matched_employee !== false);
 				const meta = [person.role, person.designation, person.department_label || person.department]
 					.filter(Boolean)
 					.join(" · ");
 				const label = [person.role, person.employee_name || person.name].filter(Boolean).join("：");
 				const payload = this.person_payload({ ...person, employee_route });
+				const action = matched ? "open-employee" : "open-person";
 				return `
 					<button
 						type="button"
 						class="hrms-org-person-token ${matched ? "" : "is-unmatched"}"
-						data-action="open-person"
+						data-action="${action}"
 						data-person-name="${frappe.utils.escape_html(person.name || person.employee_name || "")}"
 						data-employee="${frappe.utils.escape_html(person.employee || "")}"
 						data-employee-route="${frappe.utils.escape_html(employee_route)}"
+						data-employee-number="${frappe.utils.escape_html(employee_number)}"
 						data-person-payload="${frappe.utils.escape_html(payload)}"
 						title="${frappe.utils.escape_html([person.match_status, meta].filter(Boolean).join(" · "))}"
 					>
@@ -371,13 +678,12 @@ class HybridOrganizationChart {
 	}
 
 	render_detail_panel(detail) {
-		const metrics = detail.metrics || {};
 		const actions = detail.actions || {};
 		this.wrapper.querySelector("[data-detail]").innerHTML = `
 			<div class="hrms-org-detail-head">
 				<div>
 					<h3>${frappe.utils.escape_html(detail.title || __("组织节点"))}</h3>
-					<p>${frappe.utils.escape_html(detail.subtitle || "")}</p>
+					${detail.subtitle ? `<p>${frappe.utils.escape_html(detail.subtitle)}</p>` : ""}
 				</div>
 				<div class="hrms-org-detail-actions">
 					<button class="btn btn-xs btn-default" data-action="add-department">${__("新增部门")}</button>
@@ -393,19 +699,35 @@ class HybridOrganizationChart {
 					}
 				</div>
 			</div>
-			<div class="hrms-org-detail-metrics">
-				${this.render_metric("编制人数", metrics.planned_headcount)}
-				${this.render_metric("现有人数", metrics.current_headcount || metrics.employee_count)}
-				${this.render_metric("空缺人数", metrics.vacancy_count)}
-				${this.render_metric("直属人数", metrics.direct_report_count)}
-			</div>
-			<div class="hrms-org-field-map">
-				<strong>${__("花名册字段匹配")}</strong>
-				<p>${__("现职务/职位 -> 岗位，部门 -> 部门，上级主管/直接上级 -> 汇报对象，职级 -> 员工等级。")}</p>
-			</div>
-			${this.render_people_list(detail.people || [])}
+			${this.render_department_relationships(detail.relationships || {})}
 			${this.render_employee_list(detail.employees || [])}
 		`;
+	}
+
+	render_department_relationships(relationships) {
+		const parent = relationships.parent;
+		const children = relationships.children || [];
+		const node_button = (department) => `
+			<button
+				type="button"
+				class="hrms-org-relation-button"
+				data-action="select-node"
+				data-node-id="department:${frappe.utils.escape_html(department.name || "")}"
+				data-node-type="department"
+			>${frappe.utils.escape_html(department.label || department.name || "")}</button>`;
+		return `
+			<div class="hrms-org-relations">
+				<section>
+					<strong>${__("上级部门")}</strong>
+					${parent ? node_button(parent) : `<span>${__("无上级部门（一级部门）")}</span>`}
+				</section>
+				<section>
+					<strong>${__("下级部门")}</strong>
+					<div class="hrms-org-relation-list">
+						${children.length ? children.map(node_button).join("") : `<span>${__("暂无下级部门")}</span>`}
+					</div>
+				</section>
+			</div>`;
 	}
 
 	render_metric(label, value) {
@@ -435,16 +757,18 @@ class HybridOrganizationChart {
 		}
 		return `
 			<div class="hrms-org-employees">
-				<div class="hrms-org-section-title">${__("员工清单")}</div>
+				<div class="hrms-org-section-title">${__("当前部门员工")}</div>
 				${employees
 					.map(
 						(employee) => {
 							const employee_route = this.resolve_employee_route_value(employee);
+							const employee_number = this.resolve_employee_number_value(employee);
 							const matched = Boolean(employee_route && employee.matched_employee !== false);
 							const person_payload = this.person_payload({
 								name: employee.employee_name || employee.name,
 								employee: employee.name,
 								employee_route,
+								employee_number,
 								employee_name: employee.employee_name || employee.name,
 								employee_code: employee.employee_code,
 								department: employee.department,
@@ -457,7 +781,7 @@ class HybridOrganizationChart {
 								match_status: employee.match_status || (matched ? __("已匹配员工档案") : __("待匹配员工档案")),
 							});
 							return `
-							<div class="hrms-org-employee-row" data-employee="${frappe.utils.escape_html(employee.name || "")}" data-employee-route="${frappe.utils.escape_html(employee_route)}">
+							<div class="hrms-org-employee-row" data-employee="${frappe.utils.escape_html(employee.name || "")}" data-employee-route="${frappe.utils.escape_html(employee_route)}" data-employee-number="${frappe.utils.escape_html(employee_number)}">
 								<div class="hrms-org-avatar">${frappe.utils.escape_html((employee.employee_name || employee.name || "?").slice(0, 1))}</div>
 								<div>
 									<strong>${frappe.utils.escape_html(employee.employee_name || employee.name || "")}</strong>
@@ -466,7 +790,7 @@ class HybridOrganizationChart {
 								</div>
 								${
 									matched
-										? `<button class="btn btn-xs btn-link" data-action="open-employee" data-employee="${frappe.utils.escape_html(employee.name || "")}" data-employee-route="${frappe.utils.escape_html(employee_route)}">${__("资料")}</button>`
+										? `<button class="btn btn-xs btn-link" data-action="open-employee" data-employee="${frappe.utils.escape_html(employee.name || "")}" data-employee-route="${frappe.utils.escape_html(employee_route)}" data-employee-number="${frappe.utils.escape_html(employee_number)}">${__("资料")}</button>`
 										: `<button class="btn btn-xs btn-link" data-action="open-person" data-person-name="${frappe.utils.escape_html(employee.employee_name || "")}" data-person-payload="${frappe.utils.escape_html(person_payload)}">${__("详情")}</button>`
 								}
 							</div>`;
@@ -479,6 +803,8 @@ class HybridOrganizationChart {
 
 	filter_tree(search) {
 		const term = (search || "").trim().toLowerCase();
+		this.search_term = term;
+		this.render_tree();
 		this.wrapper.querySelectorAll(".hrms-org-node").forEach((node) => {
 			const text = (node.dataset.searchText || "").toLowerCase();
 			node.classList.toggle("is-filtered-out", Boolean(term) && !text.includes(term));
@@ -489,8 +815,47 @@ class HybridOrganizationChart {
 	}
 
 	set_zoom(value) {
-		this.zoom = Math.max(0.6, Math.min(1.4, value));
+		this.view_mode = "manual";
+		this.zoom = Math.max(MIN_ORG_CHART_ZOOM, Math.min(1.6, value));
+		this.apply_tree_scale();
+	}
+
+	fit_to_view() {
+		const canvas = this.wrapper.querySelector("[data-tree-canvas]");
 		const tree = this.wrapper.querySelector("[data-tree]");
+		const chart = tree?.querySelector(".hrms-org-tree");
+		if (!canvas || !tree || !chart) return;
+		tree.style.transform = "none";
+		tree.style.left = "0";
+		const raw_width = Math.max(chart.scrollWidth, Math.ceil(chart.getBoundingClientRect().width), 1);
+		const raw_height = Math.max(chart.scrollHeight, Math.ceil(chart.getBoundingClientRect().height), 1);
+		const available_width = Math.max(canvas.clientWidth - 36, 240);
+		const available_height = Math.max(canvas.clientHeight - 36, 240);
+		this.zoom = Math.max(
+			MIN_ORG_CHART_ZOOM,
+			Math.min(1, available_width / raw_width, available_height / raw_height),
+		);
+		this.view_mode = "overview";
+		this.apply_tree_scale(true);
+		canvas.scrollTo({ left: 0, top: 0 });
+	}
+
+	apply_tree_scale(center = false) {
+		const canvas = this.wrapper.querySelector("[data-tree-canvas]");
+		const stage = this.wrapper.querySelector("[data-tree-stage]");
+		const tree = this.wrapper.querySelector("[data-tree]");
+		const chart = tree?.querySelector(".hrms-org-tree");
+		if (!canvas || !stage || !tree || !chart) return;
+		const raw_width = Math.max(chart.scrollWidth, 1);
+		const raw_height = Math.max(chart.scrollHeight, 1);
+		const scaled_width = Math.ceil(raw_width * this.zoom);
+		const scaled_height = Math.ceil(raw_height * this.zoom);
+		const available_width = Math.max(canvas.clientWidth - 36, 240);
+		const available_height = Math.max(canvas.clientHeight - 36, 240);
+		stage.style.width = `${Math.max(available_width, scaled_width)}px`;
+		stage.style.height = `${Math.max(available_height, scaled_height)}px`;
+		tree.style.left = center && scaled_width < available_width ? `${Math.floor((available_width - scaled_width) / 2)}px` : "0";
+		tree.style.top = "0";
 		tree.style.transform = `scale(${this.zoom})`;
 	}
 
@@ -536,8 +901,81 @@ class HybridOrganizationChart {
 		frappe.new_doc("Department");
 	}
 
-	edit_department() {
-		const department = this.get_selected_department();
+	quick_edit_node(element) {
+		const node_id = element?.dataset.nodeId || "";
+		const node_type = element?.dataset.nodeType || "";
+		if (["work_level", "position_group"].includes(node_type)) {
+			this.edit_employee_group(node_id, node_type);
+			return;
+		}
+		const department = element?.dataset.department || this.get_node_department(node_id, node_type);
+		if (!department) {
+			frappe.msgprint(__("当前卡片不是可编辑部门。"));
+			return;
+		}
+		this.select_node(node_id, node_type);
+		this.edit_department(department);
+	}
+
+	find_node(node_id, node = this.tree?.root) {
+		if (!node) return null;
+		if (node.node_id === node_id) return node;
+		for (const child of node.children || []) {
+			const match = this.find_node(node_id, child);
+			if (match) return match;
+		}
+		return null;
+	}
+
+	edit_employee_group(node_id, node_type) {
+		const node = this.find_node(node_id);
+		if (!node) {
+			frappe.msgprint(__("当前分组已变化，请刷新后重试。"));
+			return;
+		}
+		const is_grade = node_type === "work_level";
+		const fieldname = is_grade ? "grade" : "designation";
+		const label = is_grade ? __("职级") : __("岗位");
+		const options = is_grade ? "Employee Grade" : "Designation";
+		this.select_node(node_id, node_type);
+		const dialog = new frappe.ui.Dialog({
+			title: __("调整{0}分组", [label]),
+			fields: [
+				{
+					fieldname: "summary",
+					fieldtype: "HTML",
+					options: `<p>${__("将 {0} 个员工从“{1}”调整到新{2}。保存后花名册与架构图会同步更新。", [node.current_headcount || 0, frappe.utils.escape_html(node.name || ""), label])}</p>`,
+				},
+				{ fieldname: "new_value", fieldtype: "Link", options, label: __("新{0}", [label]), reqd: 1 },
+			],
+			primary_action_label: __("确认调整"),
+			primary_action: (values) => {
+				frappe.confirm(
+					__("确认调整该分组的 {0} 个员工吗？", [node.current_headcount || 0]),
+					() => {
+						frappe
+							.call({
+								method: "hrms.hr.page.organizational_chart.organizational_chart.update_employee_group",
+								args: { node_id, fieldname, new_value: values.new_value, company: this.company },
+								freeze: true,
+								freeze_message: __("正在同步员工归属..."),
+							})
+							.then((response) => {
+								dialog.hide();
+								frappe.show_alert({
+									message: __("已更新 {0} 个员工", [(response.message?.updated || []).length]),
+									indicator: "green",
+								});
+								this.load_tree();
+							});
+					},
+				);
+			},
+		});
+		dialog.show();
+	}
+
+	edit_department(department = this.get_selected_department()) {
 		if (!department) {
 			frappe.msgprint(__("请先选择部门节点。"));
 			return;
@@ -589,19 +1027,6 @@ class HybridOrganizationChart {
 					return { filters: { name: ["!=", doc.name], company } };
 				},
 			},
-			{ fieldtype: "Section Break", label: __("组织属性") },
-			{ fieldname: "hrms_org_level", fieldtype: "Int", label: __("层级"), default: doc.hrms_org_level },
-			{ fieldname: "hrms_org_role", fieldtype: "Data", label: __("管理角色"), default: doc.hrms_org_role },
-			{ fieldname: "hrms_org_manager", fieldtype: "Data", label: __("负责人"), default: doc.hrms_org_manager },
-			{ fieldname: "hrms_org_proxy", fieldtype: "Data", label: __("代理人"), default: doc.hrms_org_proxy },
-			{ fieldtype: "Column Break" },
-			{ fieldname: "hrms_planned_headcount", fieldtype: "Int", label: __("编制人数"), default: doc.hrms_planned_headcount },
-			{ fieldname: "hrms_actual_headcount", fieldtype: "Int", label: __("现有人数"), default: doc.hrms_actual_headcount },
-			{ fieldname: "hrms_vacancy_count", fieldtype: "Int", label: __("空缺人数"), default: doc.hrms_vacancy_count },
-			{ fieldname: "hrms_recruitment_plan", fieldtype: "Small Text", label: __("招聘需求"), default: doc.hrms_recruitment_plan },
-			{ fieldtype: "Section Break" },
-			{ fieldname: "is_group", fieldtype: "Check", label: __("是否分组"), default: doc.is_group },
-			{ fieldname: "disabled", fieldtype: "Check", label: __("停用"), default: doc.disabled },
 		];
 	}
 
@@ -675,33 +1100,53 @@ class HybridOrganizationChart {
 		});
 	}
 
-	open_employee(employee) {
-		const route_value = this.normalize_employee_route_value(employee);
-		if (route_value) {
-			frappe.set_route("Form", "Employee", route_value);
+	open_employee(employee_number, fallback_route) {
+		const lookup_value =
+			this.normalize_employee_number_value(employee_number) || this.normalize_employee_route_value(fallback_route);
+		if (!lookup_value) {
+			frappe.msgprint(__("当前人员没有可用于匹配档案的员工编号。"));
 			return;
 		}
-		frappe.msgprint(__("请先在右侧确认员工详情，当前人员没有匹配到有效员工档案。"));
+		frappe
+			.call({
+				method: "hrms.hr.page.organizational_chart.organizational_chart.resolve_employee_number",
+				args: { employee_number: lookup_value, company: this.company },
+			})
+			.then((response) => {
+				const employee = this.normalize_employee_route_value(response.message?.name);
+				if (!employee) throw new Error(__("员工编号未匹配到有效员工档案"));
+				frappe.set_route("employee-detail", employee);
+			});
 	}
 
 	resolve_employee_route_value(person) {
 		if (typeof person === "string") {
 			return this.normalize_employee_route_value(person);
 		}
-		return this.normalize_employee_route_value(person?.employee_route || person?.employee || person?.name);
+		return this.normalize_employee_route_value(person?.employee_route || person?.employee);
+	}
+
+	resolve_employee_number_value(person) {
+		if (typeof person === "string") return this.normalize_employee_number_value(person);
+		return this.normalize_employee_number_value(person?.employee_number || person?.employee_code);
+	}
+
+	normalize_employee_number_value(employee_number) {
+		const value = String(employee_number || "").trim();
+		if (!value || value.length > 140 || /[\/?#\u0000-\u001f]/.test(value)) return "";
+		return value;
 	}
 
 	normalize_employee_route_value(employee) {
 		const value = String(employee || "").trim();
-		if (/^HR-EMP-\d+$/i.test(value)) {
-			return value;
-		}
-		return "";
+		if (!value || value.length > 140 || /[\/?#\u0000-\u001f]/.test(value)) return "";
+		return value;
 	}
 
 	show_person_detail(person) {
 		if (!person || !(person.employee_name || person.name)) return;
 		const employee = this.resolve_employee_route_value(person);
+		const employee_number = this.resolve_employee_number_value(person);
 		const fields = [
 			[__("匹配状态"), person.match_status || (employee ? __("已匹配员工档案") : __("待匹配员工档案"))],
 			[__("员工编号"), person.employee_code],
@@ -719,7 +1164,7 @@ class HybridOrganizationChart {
 					<p>${frappe.utils.escape_html([person.role, person.match_status].filter(Boolean).join(" · "))}</p>
 				</div>
 				<div class="hrms-org-detail-actions">
-					${employee ? `<button class="btn btn-xs btn-default" data-action="open-employee" data-employee="${frappe.utils.escape_html(person.employee || "")}" data-employee-route="${frappe.utils.escape_html(employee)}">${__("打开员工档案")}</button>` : ""}
+					${employee ? `<button class="btn btn-xs btn-default" data-action="open-employee" data-employee="${frappe.utils.escape_html(person.employee || "")}" data-employee-route="${frappe.utils.escape_html(employee)}" data-employee-number="${frappe.utils.escape_html(employee_number)}">${__("打开员工档案")}</button>` : ""}
 				</div>
 			</div>
 			<div class="hrms-org-person-detail">
@@ -738,8 +1183,25 @@ class HybridOrganizationChart {
 
 	get_selected_department() {
 		const node_id = this.selected_node?.node_id || "";
-		if (node_id.startsWith("department:")) return node_id.slice("department:".length);
-		if (node_id.startsWith("employee_group:")) return node_id.slice("employee_group:".length);
+		return this.get_node_department(node_id, this.selected_node?.node_type);
+	}
+
+	get_node_department(node_or_id, node_type = "") {
+		if (node_or_id && typeof node_or_id === "object") {
+			const node = node_or_id;
+			node_type = node_or_id.node_type || node_type;
+			node_or_id = node_or_id.node_id || "";
+			if (!["department", "employee_group"].includes(node_type)) return null;
+			if (node.department) return node.department;
+			if (node_type === "employee_group") return null;
+		}
+		const node_id = String(node_or_id || "");
+		if (node_type === "department" || node_id.startsWith("department:")) {
+			return node_id.slice(node_id.indexOf(":") + 1);
+		}
+		if (node_type === "employee_group" || node_id.startsWith("employee_group:")) {
+			return node_id.slice(node_id.indexOf(":") + 1);
+		}
 		return null;
 	}
 }

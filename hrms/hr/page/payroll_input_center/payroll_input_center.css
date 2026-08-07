@@ -211,6 +211,153 @@
 	white-space: nowrap;
 }
 
+.hrms-payroll-lock-panel {
+	align-items: start;
+	background: #fff;
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-left: 4px solid #9aa3ad;
+	border-radius: 6px;
+	display: grid;
+	gap: 14px;
+	grid-template-columns: minmax(220px, 1.2fr) minmax(260px, 1fr) minmax(260px, 1.5fr) auto;
+	margin-bottom: 14px;
+	padding: 14px 16px;
+}
+
+.hrms-payroll-lock-panel.is-loading {
+	display: block;
+	color: var(--text-muted, #6b7280);
+}
+
+.hrms-payroll-lock-panel.is-ready,
+.hrms-payroll-lock-panel.is-locked {
+	border-left-color: #168a5b;
+}
+
+.hrms-payroll-lock-panel.is-stale {
+	border-left-color: #d99013;
+}
+
+.hrms-payroll-lock-panel.is-blocked {
+	border-left-color: #d14343;
+}
+
+.hrms-payroll-lock-copy h4 {
+	font-size: 15px;
+	margin: 0 0 4px;
+}
+
+.hrms-payroll-lock-copy p,
+.hrms-payroll-lock-actions small {
+	color: var(--text-muted, #6b7280);
+	font-size: 11px;
+	line-height: 1.55;
+	margin: 0;
+}
+
+.hrms-payroll-lock-metrics {
+	display: grid;
+	gap: 6px;
+	grid-template-columns: repeat(2, minmax(90px, 1fr));
+}
+
+.hrms-payroll-lock-metrics span {
+	background: #f6f8fa;
+	border-radius: 5px;
+	display: grid;
+	padding: 7px 9px;
+}
+
+.hrms-payroll-lock-metrics small {
+	color: var(--text-muted, #6b7280);
+	font-size: 10px;
+}
+
+.hrms-payroll-lock-metrics strong {
+	font-size: 14px;
+}
+
+.hrms-payroll-lock-messages {
+	font-size: 12px;
+	line-height: 1.6;
+}
+
+.hrms-payroll-lock-messages .is-blocker { color: #b42318; }
+.hrms-payroll-lock-messages .is-warning { color: #9a6700; }
+.hrms-payroll-lock-messages .is-ready { color: #168a5b; }
+
+.hrms-payroll-lock-actions {
+	align-items: flex-end;
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+	min-width: 150px;
+}
+
+.hrms-payroll-rule-summary,
+.hrms-payroll-attendance-rule-grid {
+	display: grid;
+	gap: 10px;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	margin-bottom: 12px;
+}
+
+.hrms-payroll-rule-summary > div,
+.hrms-payroll-attendance-rule-grid article {
+	background: #fff;
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 6px;
+	padding: 14px;
+}
+
+.hrms-payroll-rule-summary > div {
+	display: grid;
+	gap: 5px;
+}
+
+.hrms-payroll-rule-summary span,
+.hrms-payroll-attendance-rule-grid p,
+.hrms-payroll-attendance-rule-grid small {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	line-height: 1.55;
+}
+
+.hrms-payroll-attendance-rule-grid {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hrms-payroll-attendance-rule-grid article {
+	display: grid;
+	gap: 9px;
+}
+
+.hrms-payroll-attendance-rule-grid h4,
+.hrms-payroll-attendance-rule-grid p {
+	margin: 0;
+}
+
+.hrms-payroll-attendance-rule-grid article > div > span {
+	color: #168a5b;
+	font-size: 10px;
+	font-weight: 700;
+}
+
+.hrms-payroll-attendance-rule-grid article > strong {
+	background: #f3f8f5;
+	border-radius: 5px;
+	font-size: 12px;
+	padding: 8px 10px;
+}
+
+.hrms-payroll-attendance-rule-grid .btn {
+	justify-self: start;
+}
+
+.hrms-payroll-rule-verification {
+	padding: 12px 4px 4px;
+}
+
 .hrms-payroll-process-step small {
 	color: var(--text-muted, #6b7280);
 	font-size: 11px;
@@ -731,6 +878,13 @@
 }
 
 @media (max-width: 900px) {
+	.hrms-payroll-lock-panel {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.hrms-payroll-lock-actions {
+		align-items: flex-start;
+	}
 	.hrms-payroll-input-head,
 	.hrms-payroll-input-list-head {
 		align-items: stretch;
@@ -1274,6 +1428,12 @@
 }
 
 @media (max-width: 560px) {
+	.hrms-payroll-lock-panel,
+	.hrms-payroll-rule-summary,
+	.hrms-payroll-attendance-rule-grid {
+		grid-template-columns: 1fr;
+	}
+
 	body:has(.hrms-payroll-input-center) > .body-sidebar-container,
 	body:has(.hrms-payroll-input-center) .body-sidebar-container {
 		display: none !important;

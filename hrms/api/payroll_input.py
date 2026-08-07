@@ -51,10 +51,28 @@ WELFARE_SOURCE_DOCTYPE = "HRMS Payroll Welfare Source Record"
 PAYROLL_RULE_DOCTYPE = "HRMS Payroll Rule"
 PAYROLL_FIELD_MAPPING_DOCTYPE = "HRMS Payroll Field Mapping"
 MONTHLY_ATTENDANCE_DOCTYPE = "HRMS Monthly Attendance Summary"
+PAYROLL_STEP_LOCK_DOCTYPE = "HRMS Payroll Step Lock"
 PAYROLL_STANDARD_HOURS_DIVISOR = 174
 WELFARE_SOURCE_SYNC_SHEET = "福利扣款来源中心"
 PAYROLL_SETTLEMENT_IMPORT_SHEET = "薪资结算表"
 PAYROLL_SETTLEMENT_IMPORT_SOURCE = "完整薪资结算表导入"
+
+PAYROLL_WORKFLOW_STEPS = [
+	("master", "人员基础"),
+	("salary", "员工定薪"),
+	("rules", "核算规则"),
+	("attendance", "考勤计薪规则"),
+	("sources", "月度数据封板"),
+	("calculation", "试算复核"),
+	("delivery", "报表发放"),
+]
+PAYROLL_WORKFLOW_STEP_LABELS = dict(PAYROLL_WORKFLOW_STEPS)
+PAYROLL_ATTENDANCE_RULE_CODES = [
+	"ATTENDANCE_FULL_ATTENDANCE_BONUS",
+	"PAYROLL_SETTLEMENT_ABSENCE_DEDUCTION",
+	"PAYROLL_SETTLEMENT_OVERTIME_PAY",
+	"PAYROLL_SETTLEMENT_NIGHT_SHIFT",
+]
 
 PAYROLL_IMPORT_TEMPLATES = [
 	{
@@ -3107,9 +3125,432 @@ def _variable_totals(company, payroll_month, attendance_lock_version=""):
 	return totals, identity, sources
 
 
+def _workflow_month(payroll_month):
+	payroll_month = (payroll_month or "").strip()
+	if not re.match(r"^\d{4}-\d{2}$", payroll_month):
+		frappe.throw(_("薪资月份必须为 YYYY-MM"))
+	return payroll_month
+
+
+def _workflow_snapshot(step_key, metrics, blockers=None, warnings=None, evidence=None):
+	blockers = [str(item) for item in (blockers or []) if item]
+	warnings = [str(item) for item in (warnings or []) if item]
+	payload = {
+		"step_key": step_key,
+		"metrics": metrics or [],
+		"blockers": blockers,
+		"warnings": warnings,
+		"evidence": evidence or [],
+	}
+	raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+	return {
+		"key": step_key,
+		"label": PAYROLL_WORKFLOW_STEP_LABELS[step_key],
+		"ready": not blockers,
+		"metrics": metrics or [],
+		"blockers": blockers,
+		"warnings": warnings,
+		"validation_hash": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+		"snapshot_json": raw,
+	}
+
+
+def _workflow_rows(doctype, filters, fields):
+	if not _doctype_exists(doctype):
+		return []
+	available = _safe_fields(doctype, list(dict.fromkeys(["name", "modified", *fields])))
+	return [dict(row) for row in frappe.get_all(doctype, filters=filters, fields=available, order_by="name asc", limit_page_length=100000)]
+
+
+def _validate_master_step(company, payroll_month):
+	filters = {"company": company} if _doctype_has_field("Employee", "company") else {}
+	if _doctype_has_field("Employee", "status"):
+		filters["status"] = "Active"
+	fields = ["employee_name", "employee_number", "custom_employee_code", "department", "designation", "status", "date_of_joining", "final_confirmation_date", "confirmation_date"]
+	rows = _workflow_rows("Employee", filters, fields)
+	missing = []
+	for row in rows:
+		missing_fields = []
+		if not _employee_code(row):
+			missing_fields.append("工号")
+		for fieldname, label in (("employee_name", "姓名"), ("department", "部门"), ("designation", "岗位"), ("status", "状态"), ("date_of_joining", "入职日期")):
+			if _doctype_has_field("Employee", fieldname) and not row.get(fieldname):
+				missing_fields.append(label)
+		if missing_fields:
+			missing.append(f"{row.get('employee_name') or row.get('name')}：{'/'.join(missing_fields)}")
+	blockers = []
+	if not rows:
+		blockers.append("当前公司没有在职员工。")
+	if missing:
+		blockers.append("有 {0} 位员工的花名册关键字段不完整：{1}".format(len(missing), "；".join(missing[:8])))
+	return _workflow_snapshot(
+		"master",
+		[{"label": "在职员工", "value": len(rows)}, {"label": "完整资料", "value": len(rows) - len(missing)}, {"label": "待补资料", "value": len(missing)}],
+		blockers,
+		[],
+		rows,
+	)
+
+
+def _validate_salary_step(company, payroll_month):
+	workbench = get_salary_architecture_workbench(company, payroll_month)
+	coverage = workbench.get("coverage") or {}
+	missing = workbench.get("missing_profiles") or []
+	trial = workbench.get("trial_profiles") or []
+	pending = workbench.get("pending_changes") or []
+	blockers = []
+	if not coverage.get("active_employee_count"):
+		blockers.append("没有可用的在职员工。")
+	if missing:
+		blockers.append("有 {0} 位员工缺少当月有效且已批准的定薪。".format(len(missing)))
+	if trial:
+		blockers.append("有 {0} 位员工仍使用试运营/测试定薪。".format(len(trial)))
+	if pending:
+		blockers.append("有 {0} 条薪资异动尚未审批。".format(len(pending)))
+	# Only the approved records that are actually effective for this month belong
+	# to the lock snapshot. A future salary decision must not invalidate a closed
+	# historical month.
+	approved_changes = _latest_salary_change_map(payroll_month, company)
+	evidence_by_name = {}
+	for row in approved_changes.values():
+		if row.get("name"):
+			evidence_by_name[row.get("name")] = dict(row)
+	evidence = list(evidence_by_name.values())
+	month_end = _month_end(payroll_month)
+	pending_filters = {"company": company, "status": ["in", ["草稿", "待审核"]]}
+	if month_end:
+		pending_filters["effective_date"] = ["<=", month_end]
+	evidence.extend(
+		_workflow_rows(
+			EMPLOYEE_SALARY_CHANGE_DOCTYPE,
+			pending_filters,
+			["employee", "employee_code", "effective_date", "status", "base_salary", "function_allowance", "certificate_allowance", "multi_skill_allowance", "full_salary"],
+		)
+	)
+	return _workflow_snapshot(
+		"salary",
+		[
+			{"label": "在职员工", "value": coverage.get("active_employee_count") or 0},
+			{"label": "已批准定薪", "value": coverage.get("approved_profile_count") or 0},
+			{"label": "定薪覆盖率", "value": f"{coverage.get('coverage_percent') or 0}%"},
+			{"label": "待审/测试值", "value": len(pending) + len(trial)},
+		],
+		blockers,
+		[],
+		evidence,
+	)
+
+
+def _validate_rules_step(company, payroll_month):
+	blockers = []
+	warnings = []
+	try:
+		formulas = _effective_payroll_formulas(company, payroll_month)
+	except Exception as exc:
+		formulas = []
+		blockers.append("公司薪资公式无法通过校验：{0}".format(exc))
+	mapping_count = _safe_count(PAYROLL_FIELD_MAPPING_DOCTYPE, {"status": "已启用"})
+	component_count = _safe_count("Salary Component", {"disabled": 0} if _doctype_has_field("Salary Component", "disabled") else {})
+	if not formulas:
+		blockers.append("没有可执行的薪资计算公式。")
+	if not mapping_count:
+		blockers.append("薪资结算字段尚未建立映射。")
+	if not component_count:
+		warnings.append("未检测到启用的标准工资项，请确认是否仅使用本项目公式引擎。")
+	evidence = []
+	for doctype, filters, fields in (
+		(PAYROLL_RULE_DOCTYPE, {"company": company, "status": "已启用", "rule_code": ["like", "FORMULA_%"]}, ["rule_code", "formula_expression", "parameters_json", "effective_from", "effective_to"]),
+		(PAYROLL_FIELD_MAPPING_DOCTYPE, {"status": "已启用"}, ["mapping_code", "system_field", "formula_expression", "rule_code"]),
+	):
+		evidence.extend(_workflow_rows(doctype, filters, fields))
+	return _workflow_snapshot(
+		"rules",
+		[{"label": "核算公式", "value": len(formulas)}, {"label": "字段映射", "value": mapping_count}, {"label": "标准工资项", "value": component_count}],
+		blockers,
+		warnings,
+		evidence,
+	)
+
+
+def _attendance_rule_cards(company, payroll_month):
+	labels = {
+		"ATTENDANCE_FULL_ATTENDANCE_BONUS": ("全勤奖与缺勤门槛", "根据锁定考勤的缺勤小时数匹配全勤奖档位。", "影响全勤奖及全勤扣款"),
+		"PAYROLL_SETTLEMENT_ABSENCE_DEDUCTION": ("缺勤扣款", "工资小计 ÷ 标准计薪工时 × 调整后缺勤工时。", "影响缺勤扣款和出勤工资"),
+		"PAYROLL_SETTLEMENT_OVERTIME_PAY": ("加班工资倍率", "按平日、周末、法定节假日工时分别计算。", "影响加班费小计"),
+		"PAYROLL_SETTLEMENT_NIGHT_SHIFT": ("夜班津贴", "按大夜班和小夜班次数乘以对应津贴标准。", "影响夜班津贴和应发工资"),
+	}
+	cards = []
+	for rule_code in PAYROLL_ATTENDANCE_RULE_CODES:
+		config = _effective_rule_config(rule_code, payroll_month, company)
+		title, description, effect = labels[rule_code]
+		cards.append({
+			"rule_code": rule_code,
+			"title": title,
+			"description": description,
+			"effect": effect,
+			"parameters": config.get("parameters") or {},
+			"source": config.get("source"),
+			"rule_name": config.get("rule_name"),
+		})
+	return cards
+
+
+def _validate_attendance_rule_step(company, payroll_month):
+	blockers = []
+	try:
+		cards = _attendance_rule_cards(company, payroll_month)
+	except Exception as exc:
+		cards = []
+		blockers.append("考勤计薪规则无法执行：{0}".format(exc))
+	if len(cards) != len(PAYROLL_ATTENDANCE_RULE_CODES):
+		blockers.append("考勤计薪规则不完整。")
+	return _workflow_snapshot(
+		"attendance",
+		[{"label": "缺勤规则", "value": 1 if cards else 0}, {"label": "加班规则", "value": 1 if cards else 0}, {"label": "夜班规则", "value": 1 if cards else 0}, {"label": "全勤奖规则", "value": 1 if cards else 0}],
+		blockers,
+		[],
+		cards,
+	)
+
+
+def _validate_sources_step(company, payroll_month, attendance_lock_version):
+	blockers = []
+	warnings = []
+	if not attendance_lock_version:
+		return _workflow_snapshot("sources", [{"label": "考勤终稿", "value": 0}], ["请先选择当前月份的已锁定考勤终稿版本。"])
+	attendance = _workflow_rows(MONTHLY_ATTENDANCE_DOCTYPE, _attendance_scope_filters(company, payroll_month, attendance_lock_version), ["employee", "employee_code", "employee_name", "department", "source_hash", "lock_status", "locked_on"])
+	if not attendance:
+		blockers.append("当前考勤版本不存在已锁定月度终稿。")
+	attendance_keys = [_employee_identity_key(frappe._dict(row)) for row in attendance]
+	if len([key for key in attendance_keys if key]) != len(set(key for key in attendance_keys if key)):
+		blockers.append("考勤终稿存在重复员工。")
+	if any(not key for key in attendance_keys):
+		blockers.append("考勤终稿存在无法识别员工的记录。")
+	pending_welfare = _safe_count(WELFARE_SOURCE_DOCTYPE, {"company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version, "confirmation_status": ["in", ["草稿", "待确认"]]})
+	if pending_welfare:
+		blockers.append("仍有 {0} 条福利/扣款来源待确认。".format(pending_welfare))
+	variables = _workflow_rows(VARIABLE_RECORD_DOCTYPE, _payroll_scope_filters(company, payroll_month, attendance_lock_version), ["employee", "employee_code", "employee_name", "variable_type", "amount", "source_hash"])
+	variable_keys = {_employee_identity_key(frappe._dict(row)) for row in variables if _employee_identity_key(frappe._dict(row))}
+	extra_keys = sorted(variable_keys - set(key for key in attendance_keys if key))
+	if extra_keys:
+		blockers.append("月度变量中有 {0} 位员工无法匹配当前考勤终稿。".format(len(extra_keys)))
+	confirmed_welfare = _safe_count(WELFARE_SOURCE_DOCTYPE, {"company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version, "confirmation_status": "已确认", "eligibility_status": "符合"})
+	if not variables and not confirmed_welfare:
+		warnings.append("当前没有月度奖金、补贴或扣款；如果本月确实为零，可继续锁定。")
+	evidence = attendance + variables + _workflow_rows(WELFARE_SOURCE_DOCTYPE, {"company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version}, ["employee", "employee_code", "source_type", "amount", "eligibility_status", "confirmation_status"])
+	return _workflow_snapshot(
+		"sources",
+		[{"label": "考勤终稿", "value": len(attendance)}, {"label": "已确认变量", "value": len(variables)}, {"label": "福利/扣款", "value": confirmed_welfare}, {"label": "待确认", "value": pending_welfare}],
+		blockers,
+		warnings,
+		evidence,
+	)
+
+
+def _validate_calculation_step(company, payroll_month, attendance_lock_version):
+	if not attendance_lock_version:
+		return _workflow_snapshot("calculation", [{"label": "试算结果", "value": 0}], ["请先选择考勤锁定版本。"])
+	scope = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
+	attendance_count = _safe_count(MONTHLY_ATTENDANCE_DOCTYPE, _attendance_scope_filters(company, payroll_month, attendance_lock_version))
+	input_count = _safe_count(PAYROLL_INPUT_DOCTYPE, scope)
+	settlement_count = _safe_count(PAYROLL_SETTLEMENT_DOCTYPE, scope)
+	blockers = []
+	if not input_count:
+		blockers.append("请先生成薪资输入表。")
+	if input_count != attendance_count:
+		blockers.append("薪资输入表人数与考勤终稿人数不一致。")
+	if not settlement_count:
+		blockers.append("请先完成本月工资试算。")
+	if settlement_count != input_count:
+		blockers.append("薪资结算表人数与输入表人数不一致。")
+	evidence = _workflow_rows(PAYROLL_INPUT_DOCTYPE, scope, ["employee", "employee_code", "source_hash", "settlement_status"]) + _workflow_rows(PAYROLL_SETTLEMENT_DOCTYPE, scope, ["employee", "employee_code", "source_hash", "gross_pay", "net_pay", "company_cost_total", "calculation_status"])
+	return _workflow_snapshot("calculation", [{"label": "考勤人数", "value": attendance_count}, {"label": "输入表", "value": input_count}, {"label": "试算结果", "value": settlement_count}], blockers, [], evidence)
+
+
+def _validate_delivery_step(company, payroll_month, attendance_lock_version):
+	if not attendance_lock_version:
+		return _workflow_snapshot("delivery", [{"label": "已确认结算", "value": 0}], ["请先选择考勤锁定版本。"])
+	scope = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
+	settlements = _workflow_rows(PAYROLL_SETTLEMENT_DOCTYPE, scope, ["employee", "employee_code", "net_pay", "calculation_status", "payment_status", "confirmation_status"])
+	confirmed = [row for row in settlements if row.get("calculation_status") in ("已确认", "已生成工资单")]
+	blockers = []
+	if not settlements:
+		blockers.append("当前没有薪资结算结果。")
+	elif len(confirmed) != len(settlements):
+		blockers.append("仍有 {0} 条结算结果未完成复核确认。".format(len(settlements) - len(confirmed)))
+	return _workflow_snapshot("delivery", [{"label": "结算人数", "value": len(settlements)}, {"label": "已确认结算", "value": len(confirmed)}], blockers, [], settlements)
+
+
+def _validate_payroll_workflow_step(company, payroll_month, step_key, attendance_lock_version=""):
+	company = _require_company(company)
+	payroll_month = _workflow_month(payroll_month)
+	if step_key not in PAYROLL_WORKFLOW_STEP_LABELS:
+		frappe.throw(_("未知的薪酬流程步骤：{0}").format(step_key))
+	validators = {
+		"master": lambda: _validate_master_step(company, payroll_month),
+		"salary": lambda: _validate_salary_step(company, payroll_month),
+		"rules": lambda: _validate_rules_step(company, payroll_month),
+		"attendance": lambda: _validate_attendance_rule_step(company, payroll_month),
+		"sources": lambda: _validate_sources_step(company, payroll_month, attendance_lock_version),
+		"calculation": lambda: _validate_calculation_step(company, payroll_month, attendance_lock_version),
+		"delivery": lambda: _validate_delivery_step(company, payroll_month, attendance_lock_version),
+	}
+	return validators[step_key]()
+
+
+def _step_lock_doc(company, payroll_month, step_key):
+	if not _doctype_exists(PAYROLL_STEP_LOCK_DOCTYPE):
+		return None
+	name = frappe.db.get_value(PAYROLL_STEP_LOCK_DOCTYPE, {"company": company, "payroll_month": payroll_month, "step_key": step_key}, "name")
+	return frappe.get_doc(PAYROLL_STEP_LOCK_DOCTYPE, name) if name else None
+
+
+def _save_step_lock(company, payroll_month, attendance_lock_version, validation):
+	doc = _step_lock_doc(company, payroll_month, validation["key"])
+	if not doc:
+		doc = frappe.get_doc({"doctype": PAYROLL_STEP_LOCK_DOCTYPE, "company": company, "payroll_month": payroll_month, "step_key": validation["key"]})
+	doc.step_label = validation["label"]
+	doc.lock_status = "已锁定"
+	doc.attendance_lock_version = attendance_lock_version if validation["key"] in ("sources", "calculation", "delivery") else ""
+	doc.validation_hash = validation["validation_hash"]
+	doc.validation_summary = "系统校验通过；人工锁定当前快照。"
+	doc.blocker_count = len(validation["blockers"])
+	doc.warning_count = len(validation["warnings"])
+	doc.locked_by = frappe.session.user
+	doc.locked_on = now_datetime()
+	doc.invalidated_by = None
+	doc.invalidated_on = None
+	doc.invalidation_reason = None
+	doc.snapshot_json = validation["snapshot_json"]
+	if doc.is_new():
+		doc.insert(ignore_permissions=True)
+	else:
+		doc.save(ignore_permissions=True)
+	return doc
+
+
+def _workflow_status(company, payroll_month, attendance_lock_version=""):
+	steps = []
+	prior_locked = True
+	for step_key, label in PAYROLL_WORKFLOW_STEPS:
+		validation = _validate_payroll_workflow_step(company, payroll_month, step_key, attendance_lock_version)
+		doc = _step_lock_doc(company, payroll_month, step_key)
+		stored_locked = bool(doc and doc.lock_status == "已锁定")
+		version_matches = not doc or step_key not in ("sources", "calculation", "delivery") or str(doc.attendance_lock_version or "") == str(attendance_lock_version or "")
+		stale = bool(stored_locked and (doc.validation_hash != validation["validation_hash"] or not version_matches))
+		locked = bool(stored_locked and not stale and prior_locked)
+		step = {
+			**{key: value for key, value in validation.items() if key != "snapshot_json"},
+			"label": label,
+			"locked": locked,
+			"stale": stale,
+			"prerequisites_locked": prior_locked,
+			"lock_status": ("已锁定" if locked else ("已失效" if stale or (doc and doc.lock_status == "已失效") else "待锁定")),
+			"locked_by": doc.locked_by if doc else "",
+			"locked_on": doc.locked_on if doc else "",
+			"attendance_lock_version": doc.attendance_lock_version if doc else "",
+		}
+		steps.append(step)
+		prior_locked = locked
+	return steps
+
+
+@frappe.whitelist()
+def get_payroll_workflow_status(company: str, payroll_month: str, attendance_lock_version: str = ""):
+	company = _require_company(company)
+	payroll_month = _workflow_month(payroll_month)
+	return {"company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version or "", "steps": _workflow_status(company, payroll_month, attendance_lock_version)}
+
+
+@frappe.whitelist()
+def get_payroll_attendance_rule_overview(company: str, payroll_month: str):
+	company = _require_company(company)
+	payroll_month = _workflow_month(payroll_month)
+	validation = _validate_attendance_rule_step(company, payroll_month)
+	return {"company": company, "payroll_month": payroll_month, "valid": validation["ready"], "blockers": validation["blockers"], "rules": _attendance_rule_cards(company, payroll_month) if validation["ready"] else []}
+
+
+@frappe.whitelist()
+def lock_payroll_workflow_step(company: str, payroll_month: str, step_key: str, attendance_lock_version: str = ""):
+	if not _can_manage_payroll_rules():
+		frappe.throw(_("仅系统管理员或人事管理员可以锁定薪酬流程。"))
+	company = _require_company(company)
+	payroll_month = _workflow_month(payroll_month)
+	steps = _workflow_status(company, payroll_month, attendance_lock_version)
+	target = next((step for step in steps if step["key"] == step_key), None)
+	if not target:
+		frappe.throw(_("未知的薪酬流程步骤。"))
+	if not target["prerequisites_locked"]:
+		frappe.throw(_("请先锁定上一步，系统不允许跳过前置确认。"))
+	if not target["ready"]:
+		frappe.throw(_("当前步骤校验未通过：{0}").format("；".join(target["blockers"])))
+	if step_key == "calculation":
+		scope = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
+		for name in frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters=scope, pluck="name"):
+			doc = frappe.get_doc(PAYROLL_SETTLEMENT_DOCTYPE, name)
+			if doc.calculation_status not in ("已确认", "已生成工资单"):
+				doc.calculation_status = "已确认"
+				doc.save(ignore_permissions=True)
+		validation = _validate_payroll_workflow_step(company, payroll_month, step_key, attendance_lock_version)
+	else:
+		validation = _validate_payroll_workflow_step(company, payroll_month, step_key, attendance_lock_version)
+	_save_step_lock(company, payroll_month, attendance_lock_version, validation)
+	frappe.db.commit()
+	return get_payroll_workflow_status(company, payroll_month, attendance_lock_version)
+
+
+@frappe.whitelist()
+def unlock_payroll_workflow_step(company: str, payroll_month: str, step_key: str, reason: str, attendance_lock_version: str = ""):
+	if not _can_manage_payroll_rules():
+		frappe.throw(_("仅系统管理员或人事管理员可以解锁薪酬流程。"))
+	company = _require_company(company)
+	payroll_month = _workflow_month(payroll_month)
+	reason = (reason or "").strip()
+	if not reason:
+		frappe.throw(_("解锁必须填写原因。"))
+	keys = [key for key, _label in PAYROLL_WORKFLOW_STEPS]
+	if step_key not in keys:
+		frappe.throw(_("未知的薪酬流程步骤。"))
+	start = keys.index(step_key)
+	if start <= keys.index("calculation") and attendance_lock_version:
+		scope = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
+		generated_slips = _safe_count(PAYROLL_SETTLEMENT_DOCTYPE, {**scope, "calculation_status": "已生成工资单"})
+		if generated_slips:
+			frappe.throw(_("当前结算已生成工资单，不能直接解锁上游流程。请先走工资单撤销流程。"))
+		for name in frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters={**scope, "calculation_status": "已确认"}, pluck="name"):
+			doc = frappe.get_doc(PAYROLL_SETTLEMENT_DOCTYPE, name)
+			doc.calculation_status = "已生成"
+			doc.save(ignore_permissions=True)
+	for key in keys[start:]:
+		doc = _step_lock_doc(company, payroll_month, key)
+		if not doc or doc.lock_status != "已锁定":
+			continue
+		doc.lock_status = "已失效"
+		doc.invalidated_by = frappe.session.user
+		doc.invalidated_on = now_datetime()
+		doc.invalidation_reason = reason if key == step_key else "上游步骤解锁：{0}".format(reason)
+		doc.save(ignore_permissions=True)
+	frappe.db.commit()
+	return get_payroll_workflow_status(company, payroll_month, attendance_lock_version)
+
+
+def _assert_workflow_locked_for_generation(company, payroll_month, attendance_lock_version):
+	# Existing API integrations remain compatible until a company/month explicitly
+	# starts the controlled workflow.  Once the first step is locked, every
+	# generation request must use current, sequential locks through monthly close.
+	if not _doctype_exists(PAYROLL_STEP_LOCK_DOCTYPE) or not _safe_count(PAYROLL_STEP_LOCK_DOCTYPE, {"company": company, "payroll_month": payroll_month}):
+		return
+	steps = _workflow_status(company, payroll_month, attendance_lock_version)
+	required = [step for step in steps if step["key"] in ("master", "salary", "rules", "attendance", "sources")]
+	invalid = [step["label"] for step in required if not step["locked"]]
+	if invalid:
+		frappe.throw(_("请先按顺序完成并锁定：{0}。").format("、".join(invalid)))
+
+
 @frappe.whitelist()
 def generate_payroll_input_records(company: str, payroll_month: str, attendance_lock_version: str):
 	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	_assert_workflow_locked_for_generation(company, payroll_month, attendance_lock_version)
 	calculation_rules = _payroll_calculation_rules(company, payroll_month)
 	input_filters = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
 	variables, variable_identity, variable_sources = _variable_totals(company, payroll_month, attendance_lock_version)
@@ -3279,6 +3720,7 @@ def _company_social_security(personal_amount, rule=None):
 @frappe.whitelist()
 def generate_payroll_settlement_records(company: str, payroll_month: str, attendance_lock_version: str):
 	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	_assert_workflow_locked_for_generation(company, payroll_month, attendance_lock_version)
 	calculation_rules = _payroll_calculation_rules(company, payroll_month)
 	payroll_formulas = _effective_payroll_formulas(company, payroll_month)
 	settlement_filters = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
@@ -3615,7 +4057,12 @@ def get_salary_architecture_workbench(company: str, payroll_month: str = ""):
 			profile.update({"salary_change": change.get("name"), "effective_date": change.get("effective_date")})
 			trial_profiles.append(profile)
 
-	pending_changes = [row for row in all_changes if row.get("status") in ("草稿", "待审核")]
+	pending_changes = [
+		row
+		for row in all_changes
+		if row.get("status") in ("草稿", "待审核")
+		and (not month_end or not row.get("effective_date") or str(row.get("effective_date")) <= month_end)
+	]
 	versions = _active_salary_structure_versions(payroll_month)
 	version_names = [row.name for row in versions]
 	grade_count = _safe_count(SALARY_GRADE_DOCTYPE, {"salary_structure_version": ["in", version_names]}) if version_names else 0
@@ -4061,71 +4508,25 @@ def get_payroll_month_runbook(company: str, payroll_month: str, attendance_lock_
 		warnings.append("薪资输入表人数与锁定考勤不一致")
 	if input_count and settlement_count and settlement_count != input_count:
 		warnings.append("薪资结算表人数与薪资输入表不一致")
-	process_steps = [
-		{
-			"key": "master",
-			"title": "基础资料",
-			"summary": "员工花名册必须有公司、工号、姓名、部门、岗位、状态和入职/转正信息。",
-			"status": "已满足" if employee_count else "待维护",
-			"tone": "ready" if employee_count else "blocked",
-			"count": employee_count,
-			"detail": "员工基础资料是薪资档案、考勤和变量匹配的主键来源。",
-		},
-		{
-			"key": "items",
-			"title": "薪酬项目",
-			"summary": "底薪、津贴、考勤、奖金、扣款和公司成本需要有启用的规则或来源映射。",
-			"status": "已满足" if enabled_rule_count and formula_count and mapping_count else "待配置",
-			"tone": "ready" if enabled_rule_count and formula_count and mapping_count else "blocked",
-			"count": enabled_rule_count,
-			"detail": "缺规则时只能展示导入数据，不能形成可信试算。",
-		},
-		{
-			"key": "templates",
-			"title": "工资表模板",
-			"summary": "必须建立当前公司已启用的标准 HRMS 工资表模板。",
-			"status": "已满足" if standard_template_count else "待配置",
-			"tone": "ready" if standard_template_count else "blocked",
-			"count": standard_template_count,
-			"detail": "模板组合应发、应扣和公司承担项，不保存员工实际金额。",
-		},
-		{
-			"key": "assignments",
-			"title": "员工分配",
-			"summary": "进入考勤终稿的员工必须同时有有效模板分配和已批准定薪。",
-			"status": "已满足" if master_ready and standard_assignment_count >= attendance_count else "待补齐",
-			"tone": "ready" if master_ready and standard_assignment_count >= attendance_count else "blocked",
-			"count": min(standard_assignment_count, attendance_count - len(missing_salary_profiles) - len(trial_salary_profiles)),
-			"detail": "缺少模板分配、已批准定薪或仍使用试运营值时，系统拒绝生成薪资输入表。",
-		},
-		{
-			"key": "sources",
-			"title": "月度来源",
-			"summary": "只读取同公司、同月份、同锁定版本的考勤终稿和已确认变量。",
-			"status": "已满足" if attendance_count and not pending_welfare_count else ("待复核" if attendance_count else "缺考勤锁定"),
-			"tone": "ready" if attendance_count and not pending_welfare_count else ("warning" if attendance_count else "blocked"),
-			"count": attendance_count + variable_count + confirmed_welfare_count,
-			"detail": "考勤未锁定或福利扣款待确认时，不能进入正式试算。",
-		},
-		{
-			"key": "calculation",
-			"title": "试算复核",
-			"summary": "先生成薪资输入表，再生成薪资结算表并做差异复核。",
-			"status": "已满足" if settlement_ready else ("已生成输入" if input_ready else "待生成"),
-			"tone": "ready" if settlement_ready else ("warning" if input_ready else "pending"),
-			"count": settlement_count or input_count,
-			"detail": "输入表与结算表人数必须分别匹配锁定考勤和输入表。",
-		},
-		{
-			"key": "delivery",
-			"title": "报表发放",
-			"summary": "复核确认后再进入工资发放、工资条和报表导出。",
-			"status": "已满足" if settlement_count and confirmed_settlement_count == settlement_count else "待确认",
-			"tone": "ready" if settlement_count and confirmed_settlement_count == settlement_count else "pending",
-			"count": confirmed_settlement_count,
-			"detail": "未确认结算结果不作为发放依据。",
-		},
-	]
+	process_steps = []
+	for item in _workflow_status(company, payroll_month, attendance_lock_version):
+		if item["locked"]:
+			status, tone = "已锁定", "ready"
+		elif item["stale"]:
+			status, tone = "配置已变更", "warning"
+		elif item["ready"] and item["prerequisites_locked"]:
+			status, tone = "可锁定", "pending"
+		else:
+			status, tone = "待处理", "blocked"
+		process_steps.append({
+			"key": item["key"],
+			"title": item["label"],
+			"summary": "；".join(item["warnings"] or item["blockers"]),
+			"status": status,
+			"tone": tone,
+			"count": sum(int(metric.get("value") or 0) for metric in item["metrics"] if str(metric.get("value") or "").isdigit()),
+			"detail": "；".join(item["blockers"] or item["warnings"]) or "系统校验已通过，等待人工锁定。",
+		})
 	return {
 		"scope": {"company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version},
 		"cards": [
@@ -4148,6 +4549,11 @@ def confirm_payroll_settlement_records(company: str, payroll_month: str, attenda
 	if not _can_manage_payroll_rules():
 		frappe.throw(_("您没有确认薪资结算的权限"))
 	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	workflow_started = _doctype_exists(PAYROLL_STEP_LOCK_DOCTYPE) and bool(
+		_safe_count(PAYROLL_STEP_LOCK_DOCTYPE, {"company": company, "payroll_month": payroll_month})
+	)
+	if workflow_started:
+		_assert_workflow_locked_for_generation(company, payroll_month, attendance_lock_version)
 	scope_filters = _payroll_scope_filters(company, payroll_month, attendance_lock_version)
 	attendance_count = _safe_count(MONTHLY_ATTENDANCE_DOCTYPE, _attendance_scope_filters(company, payroll_month, attendance_lock_version))
 	input_count = _safe_count(PAYROLL_INPUT_DOCTYPE, scope_filters)
@@ -4164,6 +4570,9 @@ def confirm_payroll_settlement_records(company: str, payroll_month: str, attenda
 		if doc.calculation_status not in ("已确认", "已生成工资单"):
 			doc.calculation_status = "已确认"
 			doc.save(ignore_permissions=True)
+	if workflow_started:
+		validation = _validate_payroll_workflow_step(company, payroll_month, "calculation", attendance_lock_version)
+		_save_step_lock(company, payroll_month, attendance_lock_version, validation)
 	frappe.db.commit()
 	return {"confirmed": settlement_count, "company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version}
 

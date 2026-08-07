@@ -34,18 +34,8 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "员工档案库",
-   "link_count": 0,
-   "link_to": "employee-archive",
-   "link_type": "Page",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
    "label": "员工关系",
-   "link_count": 8,
+   "link_count": 9,
    "onboard": 0,
    "type": "Card Break"
   },
@@ -86,6 +76,16 @@
    "link_count": 0,
    "link_to": "Employee Separation",
    "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "离职记录",
+   "link_count": 0,
+   "link_to": "employee-separation-records",
+   "link_type": "Page",
    "onboard": 0,
    "type": "Link"
   },

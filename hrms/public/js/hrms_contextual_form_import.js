@@ -1,6 +1,7 @@
 (function () {
 	const API = "hrms.api.form_data_intake";
 	const ROSTER_TEMPLATE_KEY = "employee_roster";
+	let listImportAttachTimers = [];
 
 	function current_company() {
 		return window.hrmsCompanyContext?.getCurrentCompany?.() || frappe.defaults?.get_user_default?.("Company") || "";
@@ -195,9 +196,18 @@
 
 	function schedule_list_import_action() {
 		// Frappe recreates a List page's inner toolbar while its data is loading.
-		// Attach after that lifecycle step so the action remains visible.
-		setTimeout(attach_list_import_action, 2800);
-		setTimeout(attach_list_import_action, 4800);
+		// Replace outstanding delayed work so a fast route change cannot mutate an
+		// old List page several seconds later.
+		listImportAttachTimers.forEach((timer) => window.clearTimeout(timer));
+		const timers = [];
+		[0, 350, 1200].forEach((delay) => {
+			const timer = window.setTimeout(() => {
+				attach_list_import_action();
+				listImportAttachTimers = listImportAttachTimers.filter((item) => item !== timer);
+			}, delay);
+			timers.push(timer);
+		});
+		listImportAttachTimers = timers;
 	}
 
 	function install_contextual_actions() {

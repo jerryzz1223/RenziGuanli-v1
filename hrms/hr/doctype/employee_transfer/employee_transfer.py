@@ -1,128 +1,184 @@
 # Copyright (c) 2018, Frappe Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
 
-
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import getdate
+from frappe.utils import cstr, getdate, nowdate
 
 from hrms.hr.utils import update_employee_work_history, validate_active_employee
 
 
-CROSS_COMPANY_TRANSFER_TYPE = "跨公司调动"
+# The first rollout only permits changes that belong to an employee's current role.
+TRANSFER_PROPERTY_FIELDS = {
+	"department": "部门",
+	"designation": "岗位",
+	"grade": "职级",
+	"reports_to": "直属上级",
+	"employment_type": "工作性质",
+	"custom_direct_indirect": "直间接",
+	"custom_is_confirmed": "是否转正",
+}
 
 
 class EmployeeTransfer(Document):
-	# begin: auto-generated types
-	# This code is auto-generated. Do not modify anything in this block.
-
-	from typing import TYPE_CHECKING
-
-	if TYPE_CHECKING:
-		from frappe.types import DF
-
-		from hrms.hr.doctype.employee_property_history.employee_property_history import (
-			EmployeePropertyHistory,
-		)
-
-		amended_from: DF.Link | None
-		company: DF.Link | None
-		create_new_employee_id: DF.Check
-		department: DF.Link | None
-		employee: DF.Link
-		employee_name: DF.Data | None
-		new_company: DF.Link | None
-		new_employee_id: DF.Link | None
-		approval_reference: DF.Data | None
-		remarks: DF.SmallText | None
-		reallocate_leaves: DF.Check
-		transfer_date: DF.Date
-		transfer_details: DF.Table[EmployeePropertyHistory]
-		transfer_reason: DF.Data | None
-		transfer_type: DF.Literal["调岗", "晋升", "降级", "转全职", "跨公司调动", "其他"]
-	# end: auto-generated types
-
 	def validate(self):
+		self.sync_employee_identity()
 		validate_active_employee(self.employee)
-		self.validate_company_change()
+		self.derive_transfer_type()
+		self.validate_transfer_details()
+
+	def sync_employee_identity(self):
+		"""Keep the system link internal and expose the company employee code in the UI."""
+		if not self.employee:
+			frappe.throw(_("请先通过员工工号选择员工。"))
+
+		employee = frappe.get_doc("Employee", self.employee)
+		employee_code = cstr(employee.get("custom_employee_code") or employee.get("employee_number")).strip()
+		if not employee_code:
+			frappe.throw(_("员工 {0} 未维护工号，不能办理人事异动。").format(employee.employee_name))
+
+		self.employee_code_display = employee_code
+		self.employee_name = employee.employee_name
+		self.company = employee.company
+		self.department = employee.department
+		return employee
+
+	def derive_transfer_type(self):
+		"""Use a stable, human-readable type derived from the actual changes."""
+		changed_fields = {cstr(row.fieldname).strip() for row in self.transfer_details}
+		if "custom_is_confirmed" in changed_fields:
+			self.transfer_type = "转全职"
+		elif "grade" in changed_fields:
+			self.transfer_type = "晋升"
+		else:
+			self.transfer_type = "调岗"
+
+	def validate_transfer_details(self):
 		if not self.transfer_details:
-			frappe.throw(_("请至少添加一项实际发生变化的异动明细。"))
+			frappe.throw(_("请至少添加一项实际发生变化的异动明细"))
 
-	def validate_company_change(self):
-		is_cross_company_transfer = self.transfer_type == CROSS_COMPANY_TRANSFER_TYPE
+		employee = frappe.get_doc("Employee", self.employee)
+		employee_meta = frappe.get_meta("Employee")
+		details = {}
 
-		if is_cross_company_transfer:
-			if not self.new_company:
-				frappe.throw(_("跨公司调动请选择新公司。"))
-			if self.new_company == self.company:
-				frappe.throw(_("跨公司调动的新公司不能与原公司相同。"))
-			return
+		for row in self.transfer_details:
+			fieldname = cstr(row.fieldname).strip()
+			if fieldname not in TRANSFER_PROPERTY_FIELDS:
+				frappe.throw(_("不支持通过人事异动修改字段：{0}").format(row.property or fieldname))
+			if fieldname in details:
+				frappe.throw(_("变更项目不能重复：{0}").format(TRANSFER_PROPERTY_FIELDS[fieldname]))
 
-		if self.new_company:
-			frappe.throw(_("普通人事异动不能填写新公司，请选择“跨公司调动”。"))
-		if self.create_new_employee_id:
-			frappe.throw(_("只有跨公司调动可以新建员工档案。"))
+			field = employee_meta.get_field(fieldname)
+			if not field:
+				frappe.throw(_("员工档案中不存在字段：{0}").format(TRANSFER_PROPERTY_FIELDS[fieldname]))
+			if row.new is None or not cstr(row.new).strip():
+				frappe.throw(_("请填写{0}的变更后内容。").format(TRANSFER_PROPERTY_FIELDS[fieldname]))
+
+			current_value = employee.get(fieldname)
+			row.current = cstr(current_value)
+			row.property = TRANSFER_PROPERTY_FIELDS[fieldname]
+			if cstr(current_value).strip() == cstr(row.new).strip():
+				frappe.throw(_("{0}的变更前后不能相同。").format(row.property))
+			if fieldname == "reports_to" and row.new == employee.name:
+				frappe.throw(_("直属上级不能选择员工本人。"))
+			if field.fieldtype == "Link" and field.options and not frappe.db.exists(field.options, row.new):
+				frappe.throw(_("{0}不存在：{1}").format(row.property, row.new))
+			details[fieldname] = row
+
+		if "department" in details and "designation" not in details:
+			frappe.throw(_("调整部门时必须同时选择新岗位"))
+
+		if "department" in details:
+			department_company = frappe.db.get_value("Department", details["department"].new, "company")
+			if self.company and department_company != self.company:
+				frappe.throw(_("目标部门 {0} 不属于公司 {1}。").format(details["department"].new, self.company))
 
 	def before_submit(self):
-		if getdate(self.transfer_date) > getdate():
-			frappe.throw(
-				_("生效日期未到，不能提交人事异动。"),
-				frappe.DocstatusTransitionError,
-			)
+		if not self.transfer_date:
+			frappe.throw(_("请填写生效日期。"))
+		if getdate(self.transfer_date) > getdate(nowdate()):
+			frappe.throw(_("生效日期未到，不能提交人事异动"), frappe.DocstatusTransitionError)
 
 	def on_submit(self):
 		employee = frappe.get_doc("Employee", self.employee)
-		is_cross_company_transfer = self.transfer_type == CROSS_COMPANY_TRANSFER_TYPE
-		if self.create_new_employee_id:
-			new_employee = frappe.copy_doc(employee)
-			new_employee.name = None
-			new_employee.employee_number = None
-			new_employee = update_employee_work_history(
-				new_employee, self.transfer_details, date=self.transfer_date
-			)
-			if is_cross_company_transfer:
-				new_employee.internal_work_history = []
-				new_employee.date_of_joining = self.transfer_date
-				new_employee.company = self.new_company
-			# move user_id to new employee before insert
-			if employee.user_id and not self.validate_user_in_details():
-				new_employee.user_id = employee.user_id
-				employee.db_set("user_id", "")
-			new_employee.insert()
-			self.db_set("new_employee_id", new_employee.name)
-			# relieve the old employee
-			employee.db_set("relieving_date", self.transfer_date)
-			employee.db_set("status", "Left")
-		else:
-			employee = update_employee_work_history(employee, self.transfer_details, date=self.transfer_date)
-			if is_cross_company_transfer:
-				employee.company = self.new_company
-				employee.date_of_joining = self.transfer_date
-			employee.save()
+		update_employee_work_history(employee, self.transfer_details, date=self.transfer_date)
+		employee.save()
 
 	def on_cancel(self):
 		employee = frappe.get_doc("Employee", self.employee)
-		if self.create_new_employee_id:
-			if self.new_employee_id:
-				frappe.throw(
-					_("Please delete the Employee {0} to cancel this document").format(
-						f"<a href='/app/Form/Employee/{self.new_employee_id}'>{self.new_employee_id}</a>"
-					)
-				)
-			# mark the employee as active
-			employee.status = "Active"
-			employee.relieving_date = ""
-		else:
-			employee = update_employee_work_history(
-				employee, self.transfer_details, date=self.transfer_date, cancel=True
-			)
-		if self.transfer_type == CROSS_COMPANY_TRANSFER_TYPE:
-			employee.company = self.company
+		update_employee_work_history(employee, self.transfer_details, date=self.transfer_date, cancel=True)
 		employee.save()
 
-	def validate_user_in_details(self):
-		for item in self.transfer_details:
-			if item.fieldname == "user_id" and item.new != item.current:
-				return True
-		return False
+
+@frappe.whitelist()
+def get_employee_business_options(company: str | None = None) -> list[dict]:
+	"""Return employee choices as employee code plus name, never internal document IDs."""
+	filters = {"status": "Active"}
+	if company:
+		filters["company"] = company
+
+	fields = ["name", "employee_name", "company", "department"]
+	employee_meta = frappe.get_meta("Employee")
+	if employee_meta.has_field("custom_employee_code"):
+		fields.append("custom_employee_code")
+	if employee_meta.has_field("employee_number"):
+		fields.append("employee_number")
+
+	employees = frappe.get_all("Employee", filters=filters, fields=fields, order_by="employee_name asc")
+	return [
+		{
+			"name": employee.name,
+			"employee_name": employee.employee_name,
+			"employee_code": employee.get("custom_employee_code") or employee.get("employee_number"),
+			"company": employee.company,
+			"department": employee.department,
+		}
+		for employee in employees
+		if employee.get("custom_employee_code") or employee.get("employee_number")
+	]
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def get_designations_for_department(
+	doctype: str, txt: str, searchfield: str, start: int, page_len: int, filters: dict
+) -> list[list[str]]:
+	"""Return positions already used or explicitly mapped in the target department."""
+	filters = frappe._dict(filters or {})
+	department = filters.get("department")
+	company = filters.get("company")
+	designation_meta = frappe.get_meta("Designation")
+
+	conditions = ["d.name like %(txt)s"]
+	params = {"txt": f"%{txt}%", "start": start, "page_len": page_len}
+	department_conditions = []
+	if department:
+		params["department"] = department
+		department_conditions.append(
+			"d.name in (select distinct e.designation from `tabEmployee` e "
+			"where e.department = %(department)s and ifnull(e.designation, '') != '')"
+		)
+		if designation_meta.has_field("hrms_source_department"):
+			department_conditions.append("d.hrms_source_department = %(department)s")
+	if company and not department:
+		params["company"] = company
+		department_conditions.append(
+			"d.name in (select distinct e.designation from `tabEmployee` e "
+			"where e.company = %(company)s and ifnull(e.designation, '') != '')"
+		)
+	if department_conditions:
+		conditions.append(f"({' or '.join(department_conditions)})")
+
+	# nosemgrep: frappe-semgrep-rules.rules.frappe-using-db-sql
+	return frappe.db.sql(
+		f"""
+			select d.name, ifnull(d.designation_name, d.name)
+			from `tabDesignation` d
+			where {' and '.join(conditions)}
+			order by d.designation_name asc
+			limit %(start)s, %(page_len)s
+		""",
+		params,
+		as_list=True,
+	)

@@ -84,7 +84,19 @@ def test_get_country_returns_empty_dict_on_request_failure():
 		assert module.get_country(["country"]) == {}
 
 
+def test_get_country_skips_lookup_without_request_ip():
+	module = load_hrms_utils_module()
+	module.country_info.clear()
+	module.frappe.local = types.SimpleNamespace()
+
+	with patch.object(module.requests, "get") as mocked_get:
+		assert module.get_country(["country"]) == {}
+
+	mocked_get.assert_not_called()
+
+
 if __name__ == "__main__":
 	test_get_country_uses_timeout_and_caches_by_requested_fields()
 	test_get_country_returns_empty_dict_on_request_failure()
+	test_get_country_skips_lookup_without_request_ip()
 	print("hrms utils country lookup contract passed.")

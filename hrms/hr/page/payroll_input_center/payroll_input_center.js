@@ -10,9 +10,11 @@ frappe.pages["payroll-input-center"].on_page_load = function (wrapper) {
 };
 
 frappe.pages["payroll-input-center"].on_page_show = function (wrapper) {
-	if (wrapper.payroll_input_center) {
-		wrapper.payroll_input_center.refresh_from_route();
-	}
+	wrapper.payroll_input_center?.activate();
+};
+
+frappe.pages["payroll-input-center"].on_page_hide = function (wrapper) {
+	wrapper.payroll_input_center?.deactivate();
 };
 
 class PayrollInputCenter {
@@ -33,6 +35,7 @@ class PayrollInputCenter {
 		this.payroll_rule_rows = [];
 		this.payroll_mapping_rows = [];
 		this.process_readiness = {};
+		this.payroll_workflow = null;
 		this.month_runbook = null;
 		this.source_form_imports = [
 			{ key: "reward_punishment", label: "奖惩提报" },
@@ -52,6 +55,7 @@ class PayrollInputCenter {
 			{ key: "payroll-disbursement", label: "工资发放" },
 			{ key: "data-closure", label: "数据闭环导入" },
 			{ key: "salary-rules", label: "薪资规则" },
+			{ key: "attendance-pay-rules", label: "考勤计薪规则" },
 			{ key: "salary-templates", label: "工资表模板" },
 			{ key: "salary-assignments", label: "员工分配" },
 			{ key: "salary-master", label: "薪资主数据" },
@@ -67,30 +71,54 @@ class PayrollInputCenter {
 		this.primary_tabs = [
 			{ key: "monthly-workbench", label: "本月算薪" },
 			{ key: "employee-salary", label: "员工薪资" },
-			{ key: "salary-rules", label: "薪酬项目与规则" },
+			{ key: "salary-rules", label: "定薪与核算规则" },
 			{ key: "payroll-reports", label: "报表与发放" },
 		];
 		this.process_steps = [
-			{ key: "master", label: "基础资料", route: "employee-salary", description: "只读校验人事员工与组织资料" },
-			{ key: "items", label: "薪酬项目", route: "salary-rules", description: "定义工资项与计算规则" },
-			{ key: "templates", label: "工资表模板", route: "salary-templates", description: "组合应发、应扣与公司承担项" },
-			{ key: "assignments", label: "员工分配", route: "salary-assignments", description: "分配模板并维护已批准员工定薪" },
-			{ key: "sources", label: "月度来源", route: "data-closure", description: "锁定考勤与确认当月变量" },
+			{ key: "master", label: "人员基础", route: "employee-salary", description: "校验花名册关键资料并锁定当月人员范围" },
+			{ key: "salary", label: "员工定薪", route: "salary-assignments", description: "确认每位员工当月生效的底薪和固定津贴" },
+			{ key: "rules", label: "核算规则", route: "salary-rules", description: "确认应发、应扣、公司承担和导出口径" },
+			{ key: "attendance", label: "考勤计薪", route: "attendance-pay-rules", description: "确认缺勤、加班、夜班和全勤奖如何影响工资" },
+			{ key: "sources", label: "月度封板", route: "data-closure", description: "绑定考勤终稿并确认奖金、补贴和扣款" },
 			{ key: "calculation", label: "试算复核", route: "monthly-workbench", description: "生成输入与结算结果" },
 			{ key: "delivery", label: "报表发放", route: "payroll-reports", description: "确认、导出与发放" },
 		];
 		this.active_tab = this.resolve_tab(frappe.get_route()[1] || "monthly-workbench");
 		this.active_process_step = this.process_step_for(this.active_tab);
+		this.last_route_refresh_at = 0;
+		this.cache_ttl = 30_000;
 	}
 
 	show() {
 		this.page.clear_inner_toolbar?.();
 		this.page.set_primary_action(__("导入薪资资料"), () => this.open_payroll_import_selector());
-		this.bind_route_events();
-		this.bind_company_context();
+		this.activate(true);
 		this.render();
 		this.load_active_tab();
+		this.last_route_refresh_at = Date.now();
 		this.refresh_company_context_when_ready();
+	}
+
+	is_active() {
+		const container = this.wrapper.closest(".page-container");
+		return !container || container.classList.contains("active");
+	}
+
+	activate(initial = false) {
+		this.bind_route_events();
+		this.bind_company_context();
+		if (!initial) this.refresh_from_route("", true);
+	}
+
+	deactivate() {
+		if (this.company_context_bound) {
+			window.removeEventListener("hrms:company-context-changed", this.handle_company_context_change);
+			this.company_context_bound = false;
+		}
+		if (this.route_events_bound) {
+			window.removeEventListener("hrms:route-change", this.handle_hrms_route_change);
+			this.route_events_bound = false;
+		}
 	}
 
 	get_context_company() {
@@ -105,12 +133,14 @@ class PayrollInputCenter {
 		if (this.company_context_bound) return;
 		this.company_context_bound = true;
 		this.handle_company_context_change = (event) => {
+			if (!this.is_active()) return;
 			const company = event?.detail?.company || this.get_context_company();
 			if (!company || company === this.company) return;
 			this.company = company;
 			this.attendance_lock_version = "";
 			this.available_attendance_locks = [];
 			this.process_readiness = {};
+			this.payroll_workflow = null;
 			this.month_runbook = null;
 			this.render();
 			this.load_active_tab();
@@ -122,11 +152,13 @@ class PayrollInputCenter {
 		const ready = window.hrmsCompanyContext?.ready?.();
 		if (!ready || typeof ready.then !== "function") return;
 		ready.then((company) => {
+			if (!this.is_active()) return;
 			if (!company || company === this.company) return;
 			this.company = company;
 			this.attendance_lock_version = "";
 			this.available_attendance_locks = [];
 			this.process_readiness = {};
+			this.payroll_workflow = null;
 			this.month_runbook = null;
 			this.render();
 			this.load_active_tab();
@@ -137,6 +169,7 @@ class PayrollInputCenter {
 		if (this.route_events_bound) return;
 		this.route_events_bound = true;
 		this.handle_hrms_route_change = (event) => {
+			if (!this.is_active()) return;
 			const tab = this.tab_from_route_detail(event.detail);
 			if (tab) this.refresh_from_route(tab);
 		};
@@ -156,14 +189,20 @@ class PayrollInputCenter {
 		return this.resolve_tab(parts[1] || "monthly-workbench");
 	}
 
-	refresh_from_route(tab = "") {
+	refresh_from_route(tab = "", force = false) {
 		const next_tab = this.resolve_tab(tab || this.tab_from_current_route());
 		const has_body = Boolean(this.body());
-		if (next_tab === this.active_tab && has_body) return;
+		if (next_tab === this.active_tab && has_body) {
+			if (!force || Date.now() - this.last_route_refresh_at < this.cache_ttl) return;
+			this.last_route_refresh_at = Date.now();
+			this.load_active_tab();
+			return;
+		}
 		this.active_tab = next_tab;
 		this.active_process_step = this.process_step_for(next_tab);
 		this.render();
 		this.load_active_tab();
+		this.last_route_refresh_at = Date.now();
 	}
 
 	resolve_tab(tab) {
@@ -173,15 +212,15 @@ class PayrollInputCenter {
 	primary_tab_for(tab) {
 		if (["monthly-workbench", "monthly-payroll", "data-closure", "welfare-sources", "variables", "inputs", "settlements"].includes(tab)) return "monthly-workbench";
 		if (["employee-salary"].includes(tab)) return "employee-salary";
-		if (["salary-rules", "salary-templates", "salary-assignments", "salary-master"].includes(tab)) return "salary-rules";
+		if (["salary-rules", "attendance-pay-rules", "salary-templates", "salary-assignments", "salary-master"].includes(tab)) return "salary-rules";
 		return "payroll-reports";
 	}
 
 	process_step_for(tab) {
 		if (tab === "employee-salary") return "master";
-		if (tab === "salary-rules") return "items";
-		if (tab === "salary-templates") return "templates";
-		if (["salary-assignments", "salary-master"].includes(tab)) return "assignments";
+		if (["salary-assignments", "salary-master"].includes(tab)) return "salary";
+		if (["salary-rules", "salary-templates"].includes(tab)) return "rules";
+		if (tab === "attendance-pay-rules") return "attendance";
 		if (["data-closure", "welfare-sources", "variables"].includes(tab)) return "sources";
 		if (["monthly-workbench", "monthly-payroll", "inputs", "settlements"].includes(tab)) return "calculation";
 		return "delivery";
@@ -223,7 +262,11 @@ class PayrollInputCenter {
 	}
 
 	update_process_guide_status(statuses = {}) {
-		this.process_readiness = Object.assign({}, this.process_readiness || {}, statuses);
+		// Async page queries may finish after the lock query. Always let the
+		// authoritative workflow lock status win so the step bar does not revert or
+		// appear to "disappear" while the page is still loading.
+		const workflowStatuses = this.payroll_workflow ? this.process_status_from_workflow(this.payroll_workflow) : {};
+		this.process_readiness = Object.assign({}, this.process_readiness || {}, statuses, workflowStatuses);
 		this.wrapper.querySelectorAll("[data-process-key]").forEach((button) => {
 			const state = this.process_state_for(button.dataset.processKey);
 			button.className = `hrms-payroll-process-step is-${state.state} ${button.dataset.processKey === this.active_process_step ? "is-selected" : ""}`;
@@ -245,6 +288,115 @@ class PayrollInputCenter {
 		return byKey;
 	}
 
+	process_status_from_workflow(workflow = {}) {
+		const statuses = {};
+		(workflow.steps || []).forEach((step) => {
+			statuses[step.key] = {
+				state: step.locked ? "complete" : step.stale ? "warning" : step.ready && step.prerequisites_locked ? "current" : "blocked",
+				label: step.locked ? __("已锁定") : step.stale ? __("配置已变更") : step.ready && step.prerequisites_locked ? __("可锁定") : __("待处理"),
+				detail: (step.blockers || []).join("；") || (step.warnings || []).join("；") || __("系统校验已通过，等待人工锁定。"),
+			};
+		});
+		return statuses;
+	}
+
+	load_payroll_workflow_status() {
+		if (!this.company || !this.payroll_month) return;
+		const requestedCompany = this.company;
+		const requestedMonth = this.payroll_month;
+		const requestedVersion = this.attendance_lock_version;
+		frappe.call({
+			method: "hrms.api.payroll_input.get_payroll_workflow_status",
+			args: this.scope_args(),
+			callback: (response) => {
+				if (requestedCompany !== this.company || requestedMonth !== this.payroll_month || requestedVersion !== this.attendance_lock_version) return;
+				this.payroll_workflow = response.message || {};
+				this.update_process_guide_status(this.process_status_from_workflow(this.payroll_workflow));
+				this.render_active_step_lock();
+			},
+		});
+	}
+
+	render_active_step_lock() {
+		const target = this.wrapper.querySelector("[data-payroll-step-lock]");
+		if (!target) return;
+		const step = (this.payroll_workflow?.steps || []).find((item) => item.key === this.active_process_step);
+		if (!step) {
+			target.innerHTML = `<div class="hrms-payroll-lock-panel is-loading">${frappe.utils.escape_html(__("正在校验当前步骤…"))}</div>`;
+			return;
+		}
+		const stateLabel = step.locked ? __("已锁定") : step.stale ? __("已变更，需重新锁定") : step.ready && step.prerequisites_locked ? __("校验通过，可以锁定") : __("尚未通过校验");
+		const actionLabel = step.key === "calculation" ? __("确认试算并锁定") : step.key === "delivery" ? __("确认报表发放完成") : __("确认并锁定本步");
+		target.innerHTML = `
+			<div class="hrms-payroll-lock-panel is-${step.locked ? "locked" : step.stale ? "stale" : step.ready ? "ready" : "blocked"}">
+				<div class="hrms-payroll-lock-copy">
+					<span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("当前步骤 · {0}", [step.label]))}</span>
+					<h4>${frappe.utils.escape_html(stateLabel)}</h4>
+					<p>${frappe.utils.escape_html(step.locked ? __("系统已保存当时的数据快照；上游数据变更后会自动判定为失效。") : __("系统先检查完整性和匹配关系，再由负责人手工确认。"))}</p>
+				</div>
+				<div class="hrms-payroll-lock-metrics">${(step.metrics || []).map((metric) => `<span><small>${frappe.utils.escape_html(__(metric.label || ""))}</small><strong>${frappe.utils.escape_html(String(metric.value ?? 0))}</strong></span>`).join("")}</div>
+				<div class="hrms-payroll-lock-messages">
+					${(step.blockers || []).map((message) => `<div class="is-blocker">• ${frappe.utils.escape_html(__(message))}</div>`).join("")}
+					${(step.warnings || []).map((message) => `<div class="is-warning">• ${frappe.utils.escape_html(__(message))}</div>`).join("")}
+					${!step.blockers?.length && !step.warnings?.length ? `<div class="is-ready">✓ ${frappe.utils.escape_html(__("本步所有系统检查已通过。"))}</div>` : ""}
+				</div>
+				<div class="hrms-payroll-lock-actions">
+					${step.locked ? `<small>${frappe.utils.escape_html(__("锁定人：{0} · {1}", [step.locked_by || "-", step.locked_on || "-"]))}</small><button class="btn btn-default btn-sm" data-unlock-payroll-step>${frappe.utils.escape_html(__("解锁并使后续步骤失效"))}</button>` : `<button class="btn btn-default btn-sm" data-refresh-payroll-step>${frappe.utils.escape_html(__("重新校验"))}</button><button class="btn btn-primary btn-sm" data-lock-payroll-step ${step.ready && step.prerequisites_locked ? "" : "disabled"}>${frappe.utils.escape_html(actionLabel)}</button>`}
+				</div>
+			</div>`;
+		target.querySelector("[data-refresh-payroll-step]")?.addEventListener("click", () => this.load_payroll_workflow_status());
+		target.querySelector("[data-lock-payroll-step]")?.addEventListener("click", () => this.lock_active_payroll_step(step));
+		target.querySelector("[data-unlock-payroll-step]")?.addEventListener("click", () => this.unlock_active_payroll_step(step));
+		const sourcesLocked = Boolean((this.payroll_workflow?.steps || []).find((item) => item.key === "sources")?.locked);
+		this.wrapper.querySelectorAll('[data-workbench-action="generate-input"], [data-workbench-action="generate-settlement"], [data-generate-monthly], [data-generate-settlement]').forEach((button) => {
+			button.disabled = !sourcesLocked;
+			if (!sourcesLocked) button.title = __("请先按顺序锁定人员基础、员工定薪、核算规则、考勤计薪和月度封板。");
+		});
+	}
+
+	lock_active_payroll_step(step) {
+		frappe.confirm(
+			__("确认锁定“{0}”？系统会保存当前校验快照，后续步骤将以此为前置。", [step.label]),
+			() => {
+				frappe.call({
+					method: "hrms.api.payroll_input.lock_payroll_workflow_step",
+					args: this.scope_args({ step_key: step.key }),
+					freeze: true,
+					freeze_message: __("正在重新校验并锁定…"),
+					callback: (response) => {
+						this.payroll_workflow = response.message || {};
+						this.update_process_guide_status(this.process_status_from_workflow(this.payroll_workflow));
+						this.render_active_step_lock();
+						frappe.show_alert({ message: __("“{0}”已锁定", [step.label]), indicator: "green" });
+						if (step.key === "calculation") this.load_active_tab();
+					},
+				});
+			},
+		);
+	}
+
+	unlock_active_payroll_step(step) {
+		frappe.prompt(
+			[{ fieldname: "reason", fieldtype: "Small Text", label: __("解锁原因"), reqd: 1 }],
+			(values) => {
+				frappe.call({
+					method: "hrms.api.payroll_input.unlock_payroll_workflow_step",
+					args: this.scope_args({ step_key: step.key, reason: values.reason }),
+					freeze: true,
+					freeze_message: __("正在解锁并使后续快照失效…"),
+					callback: (response) => {
+						this.payroll_workflow = response.message || {};
+						this.update_process_guide_status(this.process_status_from_workflow(this.payroll_workflow));
+						this.render_active_step_lock();
+						frappe.show_alert({ message: __("已解锁，后续步骤需重新校验和锁定"), indicator: "orange" });
+					},
+				});
+			},
+			__("解锁 {0}", [step.label]),
+			__("确认解锁"),
+		);
+	}
+
 	open_process_step(route, anchor = "") {
 		this.pending_config_anchor = anchor || "";
 		this.route_to_tab(route);
@@ -256,7 +408,7 @@ class PayrollInputCenter {
 				<div class="hrms-payroll-input-head">
 					<div>
 						<h2>${frappe.utils.escape_html(__("薪酬管理中心"))}</h2>
-						<p>${frappe.utils.escape_html(__("联动人事基础资料，按步骤维护薪酬项目、员工定薪、月度来源、试算与发放。"))}</p>
+						<p>${frappe.utils.escape_html(__("先确认人员与定薪，再锁定核算规则、考勤计薪口径和本月数据，最后试算、复核与发放。"))}</p>
 					</div>
 					<div class="hrms-payroll-input-controls">
 						<input class="form-control" data-company data-company-context readonly aria-readonly="true" title="${frappe.utils.escape_html(__("请在顶部公司切换器中切换公司"))}" placeholder="${frappe.utils.escape_html(__("公司"))}" value="${frappe.utils.escape_html(this.company || "")}">
@@ -279,6 +431,7 @@ class PayrollInputCenter {
 						.join("")}
 				</div>
 				${this.render_process_guide()}
+				<div data-payroll-step-lock></div>
 				<div data-payroll-body></div>
 			</div>
 		`;
@@ -288,6 +441,7 @@ class PayrollInputCenter {
 			this.attendance_lock_version = "";
 			this.available_attendance_locks = [];
 			this.process_readiness = {};
+			this.payroll_workflow = null;
 			this.month_runbook = null;
 			this.render_attendance_lock_options();
 			this.load_available_attendance_locks();
@@ -295,7 +449,9 @@ class PayrollInputCenter {
 		});
 		this.wrapper.querySelector("[data-lock-version]").addEventListener("change", (event) => {
 			this.attendance_lock_version = event.target.value;
+			this.payroll_workflow = null;
 			this.load_active_tab();
+			this.load_payroll_workflow_status();
 		});
 		this.wrapper.querySelectorAll("[data-tab]").forEach((button) => {
 			button.addEventListener("click", () => {
@@ -311,6 +467,8 @@ class PayrollInputCenter {
 		});
 		this.render_attendance_lock_options();
 		this.load_available_attendance_locks();
+		this.render_active_step_lock();
+		this.load_payroll_workflow_status();
 	}
 
 	render_attendance_lock_options() {
@@ -338,6 +496,7 @@ class PayrollInputCenter {
 				}
 				this.render_attendance_lock_options();
 				this.load_active_tab();
+				this.load_payroll_workflow_status();
 			},
 		});
 	}
@@ -380,6 +539,10 @@ class PayrollInputCenter {
 		}
 		if (this.active_tab === "salary-rules") {
 			this.load_salary_rules();
+			return;
+		}
+		if (this.active_tab === "attendance-pay-rules") {
+			this.load_attendance_pay_rules();
 			return;
 		}
 		if (this.active_tab === "salary-templates") {
@@ -684,7 +847,7 @@ class PayrollInputCenter {
 			</div>
 			<div class="hrms-payroll-step-purpose">
 				<div><strong>${frappe.utils.escape_html(__("这一步做什么"))}</strong><span>${frappe.utils.escape_html(__("检查公司、工号、姓名、部门、岗位、在职状态和入职/转正日期，确保考勤与薪资能匹配到同一个员工。"))}</span></div>
-				<div><strong>${frappe.utils.escape_html(__("去哪里修改"))}</strong><span>${frappe.utils.escape_html(__("在“人事 → 员工花名册”维护；保存后本页自动读取最新结果。员工定薪放在第 4 步。"))}</span></div>
+				<div><strong>${frappe.utils.escape_html(__("去哪里修改"))}</strong><span>${frappe.utils.escape_html(__("在“人事 → 员工花名册”维护；保存后本页自动读取最新结果。员工定薪放在第 2 步。"))}</span></div>
 			</div>
 			<div data-employee-salary-cards></div>
 			<div class="hrms-payroll-preview-note" data-employee-preview-note></div>
@@ -822,8 +985,7 @@ class PayrollInputCenter {
 				<div><strong>${frappe.utils.escape_html(__("不在本步做"))}</strong><span>${frappe.utils.escape_html(__("不修改员工主档、定薪或计算公式，不直接产生正式工资。"))}</span></div>
 			</div>
 			<div data-data-closure-preview>${preview ? this.render_data_closure_preview(preview) : ""}</div>
-			<div data-import-template-table></div>
-			<div data-settlement-field-table></div>
+			<details class="hrms-payroll-advanced"><summary>${frappe.utils.escape_html(__("需要排查导入时展开：Excel 字段与系统字段"))}</summary><div data-import-template-table></div><div data-settlement-field-table></div></details>
 		`;
 		this.body().querySelector("[data-download-data-template]").addEventListener("click", () => this.download_data_closure_template());
 		this.body().querySelector("[data-upload-data-closure]").addEventListener("click", () => this.open_data_closure_uploader());
@@ -922,7 +1084,7 @@ class PayrollInputCenter {
 	load_salary_rules() {
 		this.body().innerHTML = `
 			<div class="hrms-payroll-input-list-head hrms-payroll-step-head">
-				<div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("步骤 2 · 在本页配置"))}</span><h3>${frappe.utils.escape_html(__("定义薪酬项目"))}</h3><p>${frappe.utils.escape_html(__("只处理底薪、津贴、奖金、扣款和公司承担项；工资表模板与员工分配分别在后两步处理。"))}</p></div>
+				<div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("步骤 3 · 核算口径"))}</span><h3>${frappe.utils.escape_html(__("确认薪资核算规则"))}</h3><p>${frappe.utils.escape_html(__("这里确认固定薪资、当月变量、应发应扣和公司成本的计算口径；考勤对工资的影响在第 4 步单独确认。"))}</p></div>
 				<div class="hrms-payroll-action-group">
 					<button class="btn btn-default btn-sm" data-open-payroll-components>${frappe.utils.escape_html(__("打开标准工资项"))}</button>
 					<button class="btn btn-default btn-sm" data-download-formulas>${frappe.utils.escape_html(__("下载公式模板"))}</button>
@@ -930,24 +1092,21 @@ class PayrollInputCenter {
 					<button class="btn btn-primary btn-sm" data-new-formula>${frappe.utils.escape_html(__("新增/修改公式"))}</button>
 				</div>
 			</div>
-			<div class="hrms-payroll-step-purpose">
-				<div><strong>${frappe.utils.escape_html(__("结果"))}</strong><span>${frappe.utils.escape_html(__("每个薪酬项目都有唯一编码、收支方向、来源或公式，可以被工资表模板引用。"))}</span></div>
-				<div><strong>${frappe.utils.escape_html(__("不在本步做"))}</strong><span>${frappe.utils.escape_html(__("不分配员工，不导入本月考勤或变量，不生成工资。"))}</span></div>
-			</div>
-			<section class="hrms-payroll-config-section hrms-payroll-calculation-template" id="payroll-input-template">
+			<div class="hrms-payroll-step-purpose"><div><strong>${frappe.utils.escape_html(__("你需要确认什么"))}</strong><span>${frappe.utils.escape_html(__("员工定薪是否进入固定薪资，奖金/补贴/扣款如何汇总，应发、实发与公司成本如何组成。"))}</span></div><div><strong>${frappe.utils.escape_html(__("日常是否需要逐项查看"))}</strong><span>${frappe.utils.escape_html(__("不需要。上方“当前步骤”会自动校验公式、映射和工资方案；只有调整口径时才展开下方专业设置。"))}</span></div></div>
+			<div class="hrms-payroll-rule-summary"><div><strong>${frappe.utils.escape_html(__("固定薪资"))}</strong><span>${frappe.utils.escape_html(__("底薪、职能津贴、证书及多能工津贴"))}</span></div><div><strong>${frappe.utils.escape_html(__("月度变量"))}</strong><span>${frappe.utils.escape_html(__("奖金、补贴、社保公积金、税费与其他扣款"))}</span></div><div><strong>${frappe.utils.escape_html(__("结算结果"))}</strong><span>${frappe.utils.escape_html(__("应发、应扣、实发与公司实际负担"))}</span></div></div>
+			<details class="hrms-payroll-advanced" id="payroll-rule-editor"><summary>${frappe.utils.escape_html(__("需要调整时展开：公式与必需输入"))}</summary><section class="hrms-payroll-config-section hrms-payroll-calculation-template" id="payroll-input-template">
 				<div class="hrms-payroll-project-map-head">
 					<div><h3>${frappe.utils.escape_html(__("必需输入（只读）· 工资计算模板"))}</h3><p>${frappe.utils.escape_html(__("先确认三类输入，再点击下方计算结果维护公式；输入数据在对应步骤维护。"))}</p></div>
 					<span class="hrms-payroll-template-status">${frappe.utils.escape_html(__("公司级模板"))}</span>
 				</div>
 				<div class="hrms-payroll-source-groups" data-payroll-input-groups></div>
-			</section>
-			<section class="hrms-payroll-config-section" id="payroll-formulas">
+			</section><section class="hrms-payroll-config-section" id="payroll-formulas">
 				<div class="hrms-payroll-project-map-head">
 					<div><h3>${frappe.utils.escape_html(__("计算结果"))}</h3><p>${frappe.utils.escape_html(__("点击结果卡即可选择字段、组合函数、校验并保存。"))}</p></div>
 					<div class="hrms-payroll-action-group"><input class="form-control input-sm" data-formula-search placeholder="${frappe.utils.escape_html(__("搜索计算结果"))}"><button class="btn btn-default btn-sm" data-reset-formulas>${frappe.utils.escape_html(__("初始化公司公式"))}</button></div>
 				</div>
 				<div data-payroll-formula-table></div>
-			</section>
+			</section></details>
 			<details class="hrms-payroll-advanced hrms-payroll-project-library" id="payroll-config-items">
 				<summary>${frappe.utils.escape_html(__("专业设置：查看全部薪酬项目"))}</summary>
 				<div class="hrms-payroll-project-map-head">
@@ -981,6 +1140,51 @@ class PayrollInputCenter {
 		this.load_payroll_configuration_items();
 	}
 
+	format_attendance_rule_parameters(rule = {}) {
+		const parameters = rule.parameters || {};
+		if (rule.rule_code === "ATTENDANCE_FULL_ATTENDANCE_BONUS") {
+			return (parameters.thresholds || []).map((item) => __("缺勤不超过 {0} 小时：{1} 元", [item[0], item[1]])).join("；");
+		}
+		if (rule.rule_code === "PAYROLL_SETTLEMENT_ABSENCE_DEDUCTION") return __("标准计薪工时：{0} 小时", [parameters.standard_hours_divisor || "-"]);
+		if (rule.rule_code === "PAYROLL_SETTLEMENT_OVERTIME_PAY") return __("平日 {0} 倍 · 周末 {1} 倍 · 节假日 {2} 倍 · 基准 {3} 小时", [parameters.weekday || "-", parameters.weekend || "-", parameters.holiday || "-", parameters.standard_hours_divisor || "-"]);
+		if (rule.rule_code === "PAYROLL_SETTLEMENT_NIGHT_SHIFT") return __("大夜班 {0} 元/次 · 小夜班 {1} 元/次", [parameters.large_night_shift || "-", parameters.small_night_shift || "-"]);
+		return JSON.stringify(parameters);
+	}
+
+	load_attendance_pay_rules() {
+		this.body().innerHTML = `
+			<div class="hrms-payroll-input-list-head hrms-payroll-step-head">
+				<div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("步骤 4 · 考勤如何影响工资"))}</span><h3>${frappe.utils.escape_html(__("确认考勤计薪规则"))}</h3><p>${frappe.utils.escape_html(__("考勤终稿提供工时和次数，本步规则负责把它们转换成缺勤扣款、加班费、夜班津贴和全勤奖。"))}</p></div>
+				<button class="btn btn-default btn-sm" data-open-attendance-center>${frappe.utils.escape_html(__("前往考勤终稿"))}</button>
+			</div>
+			<div class="hrms-payroll-step-purpose"><div><strong>${frappe.utils.escape_html(__("先有事实"))}</strong><span>${frappe.utils.escape_html(__("考勤中心导入并锁定标准工时、出勤、缺勤、加班、夜班等本月事实。"))}</span></div><div><strong>${frappe.utils.escape_html(__("再定计算口径"))}</strong><span>${frappe.utils.escape_html(__("本页确认分母、倍率、每次津贴和全勤奖门槛；规则锁定后才可以封板本月数据。"))}</span></div></div>
+			<div data-attendance-pay-rule-cards></div>
+			<details class="hrms-payroll-advanced"><summary>${frappe.utils.escape_html(__("如何验证规则是真正生效的"))}</summary><div class="hrms-payroll-rule-verification"><p>${frappe.utils.escape_html(__("保存后重新校验本步。系统会从当前公司、当前月份读取这些参数，并将实际使用的规则快照写入薪资输入表的来源追溯数据。"))}</p><ol><li>${frappe.utils.escape_html(__("修改一个测试月份的规则参数。"))}</li><li>${frappe.utils.escape_html(__("解锁本步并重新锁定，再重新试算。"))}</li><li>${frappe.utils.escape_html(__("在结算表对比缺勤扣款、加班费、夜班津贴或全勤奖变化。"))}</li></ol></div></details>
+		`;
+		this.body().querySelector("[data-open-attendance-center]").addEventListener("click", () => frappe.set_route("attendance-import-center"));
+		this.load_rule_permission();
+		frappe.call({
+			method: "hrms.api.payroll_input.get_payroll_attendance_rule_overview",
+			args: { company: this.company, payroll_month: this.payroll_month },
+			callback: (response) => {
+				const result = response.message || {};
+				const target = this.wrapper.querySelector("[data-attendance-pay-rule-cards]");
+				if (!target) return;
+				if (!result.valid) {
+					target.innerHTML = `<div class="hrms-payroll-salary-alert"><strong>${frappe.utils.escape_html(__("考勤计薪规则未通过"))}</strong>${(result.blockers || []).map((message) => `<span>${frappe.utils.escape_html(__(message))}</span>`).join("")}</div>`;
+					return;
+				}
+				target.innerHTML = `<div class="hrms-payroll-attendance-rule-grid">${(result.rules || []).map((rule) => `<article><div><span>${frappe.utils.escape_html(__(rule.effect || ""))}</span><h4>${frappe.utils.escape_html(__(rule.title || rule.rule_name || ""))}</h4><p>${frappe.utils.escape_html(__(rule.description || ""))}</p></div><strong>${frappe.utils.escape_html(this.format_attendance_rule_parameters(rule))}</strong><small>${frappe.utils.escape_html(__("当前来源：{0}", [rule.source || "-"]))}</small><button class="btn btn-default btn-sm" data-edit-attendance-rule="${frappe.utils.escape_html(rule.rule_code)}">${frappe.utils.escape_html(__("修改计薪参数"))}</button></article>`).join("")}</div>`;
+				target.querySelectorAll("[data-edit-attendance-rule]").forEach((button) => {
+					button.addEventListener("click", () => {
+						const rule = (result.rules || []).find((item) => item.rule_code === button.dataset.editAttendanceRule) || {};
+						this.edit_payroll_rule({ ...rule, rule_category: "考勤", status: "已启用" });
+					});
+				});
+			},
+		});
+	}
+
 	load_salary_template_step() {
 		this.body().innerHTML = `
 			<div class="hrms-payroll-input-list-head hrms-payroll-step-head">
@@ -1009,17 +1213,16 @@ class PayrollInputCenter {
 	load_salary_assignment_step() {
 		this.body().innerHTML = `
 			<div class="hrms-payroll-input-list-head hrms-payroll-step-head">
-				<div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("步骤 4 · 在本页维护"))}</span><h3>${frappe.utils.escape_html(__("员工分配与已批准定薪"))}</h3><p>${frappe.utils.escape_html(__("先把工资表模板分配给员工，再保存该员工已批准、有生效日的固定薪资。"))}</p></div>
-				<div class="hrms-payroll-action-group"><button class="btn btn-default btn-sm" data-open-standard-assignments>${frappe.utils.escape_html(__("打开模板分配"))}</button><button class="btn btn-default btn-sm" data-download-salary-change-template>${frappe.utils.escape_html(__("下载定薪模板"))}</button><button class="btn btn-default btn-sm" data-import-salary-change>${frappe.utils.escape_html(__("导入员工定薪"))}</button><button class="btn btn-primary btn-sm" data-new-salary-change>${frappe.utils.escape_html(__("新增员工定薪"))}</button></div>
+				<div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("步骤 2 · 员工薪资基准"))}</span><h3>${frappe.utils.escape_html(__("确认每位员工的已批准定薪"))}</h3><p>${frappe.utils.escape_html(__("维护底薪、职能津贴、证书/多能工津贴、生效日和审批状态。"))}</p></div>
+				<div class="hrms-payroll-action-group"><button class="btn btn-default btn-sm" data-download-salary-change-template>${frappe.utils.escape_html(__("下载定薪模板"))}</button><button class="btn btn-default btn-sm" data-import-salary-change>${frappe.utils.escape_html(__("导入员工定薪"))}</button><button class="btn btn-primary btn-sm" data-new-salary-change>${frappe.utils.escape_html(__("新增员工定薪"))}</button></div>
 			</div>
 			<div class="hrms-payroll-step-purpose">
-				<div><strong>${frappe.utils.escape_html(__("与人事如何联动"))}</strong><span>${frappe.utils.escape_html(__("员工、部门、岗位来自人事主档；本步只增加薪酬专属的模板分配、金额、生效日和审批状态。"))}</span></div>
+				<div><strong>${frappe.utils.escape_html(__("与人事如何联动"))}</strong><span>${frappe.utils.escape_html(__("员工、部门、岗位来自人事花名册；本步只增加薪酬专属的固定金额、生效日和审批状态。"))}</span></div>
 				<div><strong>${frappe.utils.escape_html(__("生效条件"))}</strong><span>${frappe.utils.escape_html(__("只有已批准、当月有效且非试运营值的定薪记录才能进入试算。"))}</span></div>
 			</div>
 			<div data-salary-assignment-overview></div>
 			<div data-salary-changes></div>
 		`;
-		this.body().querySelector("[data-open-standard-assignments]").addEventListener("click", () => frappe.set_route("List", "Salary Structure Assignment"));
 		this.body().querySelector("[data-download-salary-change-template]").addEventListener("click", () => this.download_employee_salary_change_template());
 		this.body().querySelector("[data-import-salary-change]").addEventListener("click", () => this.open_employee_salary_change_import());
 		this.body().querySelector("[data-new-salary-change]").addEventListener("click", () => this.open_employee_salary_change_dialog());
@@ -1030,14 +1233,14 @@ class PayrollInputCenter {
 				const result = response.message || {};
 				this.update_process_guide_status(this.process_status_from_salary_architecture(result));
 				const coverage = result.coverage || {};
-				const standardPayroll = result.standard_payroll || {};
 				const missing = result.missing_profiles || [];
 				const pending = result.pending_changes || [];
 				const trial = result.trial_profiles || [];
+				const noEmployees = !(coverage.active_employee_count || 0);
+				const hasBlockers = noEmployees || missing.length || pending.length || trial.length;
 				const target = this.wrapper.querySelector("[data-salary-assignment-overview]");
 				if (!target) return;
-				const assignmentGap = Math.max((coverage.active_employee_count || 0) - (standardPayroll.assignment_count || 0), 0);
-				target.innerHTML = `${this.render_metric_cards([{ label: "在职员工", value: coverage.active_employee_count || 0 }, { label: "有效模板分配", value: standardPayroll.assignment_count || 0 }, { label: "已批准定薪", value: coverage.approved_profile_count || 0 }, { label: "缺口项", value: assignmentGap + missing.length + pending.length + trial.length }])}${assignmentGap || missing.length || pending.length || trial.length ? `<div class="hrms-payroll-salary-alert"><strong>${frappe.utils.escape_html(__("当前不能通过第 4 步"))}</strong>${assignmentGap ? `<span>${frappe.utils.escape_html(__("缺少有效工资表模板分配：{0} 人", [assignmentGap]))}</span>` : ""}${missing.length ? `<span>${frappe.utils.escape_html(__("缺少已批准定薪：{0} 人", [missing.length]))}</span>` : ""}${pending.length ? `<span>${frappe.utils.escape_html(__("待审核薪资异动：{0} 条", [pending.length]))}</span>` : ""}${trial.length ? `<span>${frappe.utils.escape_html(__("待替换试运营定薪：{0} 人", [trial.length]))}</span>` : ""}</div>` : `<div class="hrms-payroll-salary-ready">${frappe.utils.escape_html(__("员工模板分配和定薪已覆盖当前月份，可以进入第 5 步。"))}</div>`}`;
+				target.innerHTML = `${this.render_metric_cards([{ label: "在职员工", value: coverage.active_employee_count || 0 }, { label: "已批准定薪", value: coverage.approved_profile_count || 0 }, { label: "定薪覆盖率", value: `${coverage.coverage_percent || 0}%` }, { label: "待处理", value: missing.length + pending.length + trial.length }])}${hasBlockers ? `<div class="hrms-payroll-salary-alert"><strong>${frappe.utils.escape_html(__("当前不能通过第 2 步"))}</strong>${noEmployees ? `<span>${frappe.utils.escape_html(__("当前公司没有可用的在职员工。"))}</span>` : ""}${missing.length ? `<span>${frappe.utils.escape_html(__("缺少已批准定薪：{0} 人", [missing.length]))}</span>` : ""}${pending.length ? `<span>${frappe.utils.escape_html(__("待审核薪资异动：{0} 条", [pending.length]))}</span>` : ""}${trial.length ? `<span>${frappe.utils.escape_html(__("待替换试运营定薪：{0} 人", [trial.length]))}</span>` : ""}</div>` : `<div class="hrms-payroll-salary-ready">${frappe.utils.escape_html(__("当月在职员工均已有有效、已批准且非测试值的定薪，可以锁定本步。"))}</div>`}`;
 			},
 		});
 		this.load_employee_salary_changes();
@@ -1415,6 +1618,12 @@ class PayrollInputCenter {
 					})
 					.then(() => {
 						frappe.show_alert({ message: __("薪资规则已保存"), indicator: "green" });
+						if (this.active_tab === "attendance-pay-rules") {
+							this.payroll_workflow = null;
+							this.load_attendance_pay_rules();
+							this.load_payroll_workflow_status();
+							return;
+						}
 						this.load_payroll_rules();
 						this.validate_payroll_rule_execution();
 						this.load_payroll_configuration_items();
@@ -1555,7 +1764,6 @@ class PayrollInputCenter {
 	process_status_from_salary_architecture(result = {}) {
 		const coverage = result.coverage || {};
 		const rules = result.rules || {};
-		const standardPayroll = result.standard_payroll || {};
 		const stages = result.stages || [];
 		const stageByKey = {};
 		stages.forEach((stage) => {
@@ -1564,28 +1772,21 @@ class PayrollInputCenter {
 		const employeeReady = (coverage.active_employee_count || 0) > 0;
 		const rulesReady = stageByKey.rules?.tone === "ready";
 		const profileReady = stageByKey.profile?.tone === "ready" && stageByKey.trial?.tone !== "blocked";
-		const templateReady = (standardPayroll.template_count || 0) > 0;
-		const assignmentReady = (standardPayroll.assignment_count || 0) >= (coverage.active_employee_count || 0) && profileReady;
 		return {
 			master: {
 				state: employeeReady ? "complete" : "blocked",
 				label: employeeReady ? __("已满足") : __("缺员工资料"),
 				detail: __("员工基础资料必须先维护公司、工号、姓名、部门、岗位、状态和入职信息。"),
 			},
-			items: {
+			salary: {
+				state: profileReady ? "complete" : "blocked",
+				label: profileReady ? __("已满足") : __("缺员工定薪"),
+				detail: __("每位在职员工必须有当月有效、已批准且非测试值的定薪记录。"),
+			},
+			rules: {
 				state: rulesReady ? "complete" : "blocked",
-				label: rulesReady ? __("已满足") : __("缺薪资规则"),
-				detail: __("工资项、启用公式和字段映射必须完整。"),
-			},
-			templates: {
-				state: templateReady ? "complete" : "blocked",
-				label: templateReady ? __("已满足") : __("缺工资表模板"),
-				detail: __("必须至少有一套当前公司已启用的标准 HRMS 工资表模板。"),
-			},
-			assignments: {
-				state: assignmentReady ? "complete" : "blocked",
-				label: assignmentReady ? __("已满足") : __("缺员工分配/定薪"),
-				detail: __("每位参与算薪员工必须有有效模板分配和当月有效、已批准、非测试的定薪记录。"),
+				label: rulesReady ? __("已满足") : __("缺核算规则"),
+				detail: __("应发、应扣、公司承担和导出公式及字段映射必须通过校验。"),
 			},
 		};
 	}

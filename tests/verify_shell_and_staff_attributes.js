@@ -224,7 +224,6 @@ for (const marker of [
 
 for (const marker of [
 	"frappe.set_route(\"hr-settings-center\")",
-	"ensure_personnel_pages",
 	"员工属性设置已迁移到设置中心",
 ]) {
 	mustInclude(pageJs, marker, `旧员工属性设置入口 must route to 设置中心: ${marker}`);

@@ -22,8 +22,7 @@ import { employeeResource } from "@/data/employee"
 
 import dayjs from "@/utils/dayjs"
 import getIonicConfig from "@/utils/ionicConfig"
-
-import FrappePushNotification from "../public/frappe-push-notification"
+import { showNotification } from "@/utils/pushNotifications"
 
 /* Core CSS required for Ionic components to work properly */
 import "@ionic/vue/css/core.css"
@@ -35,6 +34,9 @@ import "./main.css"
 
 const app = createApp(App)
 const socket = initSocket()
+const AUTH_REFRESH_INTERVAL = 60_000
+let lastUserRefreshAt = 0
+let userRefreshPromise = null
 
 setConfig("resourceFetcher", frappeRequest)
 app.use(resourcesPlugin)
@@ -59,38 +61,62 @@ app.provide("$socket", socket)
 app.provide("$dayjs", dayjs)
 
 const registerServiceWorker = async () => {
-	window.frappePushNotification = new FrappePushNotification("hrms")
-
-	if ("serviceWorker" in navigator) {
-		let serviceWorkerURL = "/assets/hrms/frontend/sw.js"
-		let config = ""
-
-		try {
-			config = await window.frappePushNotification.fetchWebConfig()
-			serviceWorkerURL = `${serviceWorkerURL}?config=${encodeURIComponent(
-				JSON.stringify(config)
-			)}`
-		} catch (err) {
-			console.error("Failed to fetch FCM config", err)
-		}
-
-		navigator.serviceWorker
-			.register(serviceWorkerURL, {
-				type: "classic",
-			})
-			.then((registration) => {
-				if (config) {
-					window.frappePushNotification.initialize(registration).then(() => {
-						console.log("Frappe Push Notification initialized")
-					})
-				}
-			})
-			.catch((err) => {
-				console.error("Failed to register service worker", err)
-			})
-	} else {
+	if (!("serviceWorker" in navigator)) {
 		console.error("Service worker not enabled/supported by the browser")
+		return
 	}
+
+	const baseServiceWorkerURL = "/assets/hrms/frontend/sw.js"
+	const relayServerURL = window.frappe?.boot?.push_relay_server_url
+	if (!relayServerURL) {
+		// Static precaching remains useful even when Firebase is not configured.
+		try {
+			await navigator.serviceWorker.register(baseServiceWorkerURL, { type: "classic" })
+		} catch (err) {
+			console.error("Failed to register service worker", err)
+		}
+		return
+	}
+
+	try {
+		// Firebase is not needed to render or navigate the app. Loading it lazily
+		// keeps the notification SDK out of the critical startup bundle.
+		const { default: FrappePushNotification } = await import(
+			"../public/frappe-push-notification"
+		)
+		window.frappePushNotification = new FrappePushNotification("hrms")
+		window.frappePushNotification.onMessage(showNotification)
+		const config = await window.frappePushNotification.fetchWebConfig()
+		const serviceWorkerURL = `${baseServiceWorkerURL}?config=${encodeURIComponent(
+			JSON.stringify(config)
+		)}`
+		const registration = await navigator.serviceWorker.register(serviceWorkerURL, {
+			type: "classic",
+		})
+		await window.frappePushNotification.initialize(registration)
+	} catch (err) {
+		console.error("Failed to initialize service worker or push notifications", err)
+	}
+}
+
+const refreshCurrentUser = async () => {
+	if (
+		userResource.data &&
+		Date.now() - lastUserRefreshAt < AUTH_REFRESH_INTERVAL
+	) {
+		return userResource.data
+	}
+	if (!userRefreshPromise) {
+		userRefreshPromise = Promise.resolve(userResource.reload())
+			.then((data) => {
+				lastUserRefreshAt = Date.now()
+				return data
+			})
+			.finally(() => {
+				userRefreshPromise = null
+			})
+	}
+	return userRefreshPromise
 }
 
 router.isReady().then(async () => {
@@ -112,7 +138,7 @@ router.beforeEach(async (to, _, next) => {
 	let isLoggedIn = session.isLoggedIn
 
 	try {
-		if (isLoggedIn) await userResource.reload()
+		if (isLoggedIn) await refreshCurrentUser()
 	} catch (error) {
 		isLoggedIn = false
 	}

@@ -1,7 +1,31 @@
 .hrms-attendance-import-center {
-	margin: 0 auto;
-	max-width: 1380px;
-	padding: 16px 0 32px;
+	box-sizing: border-box;
+	margin: 0;
+	max-width: none;
+	padding: 16px 24px 32px;
+	width: 100%;
+}
+
+/* This page is a data workbench.  Do not constrain wide result tables to the
+ * generic Desk reading-column width; retain just enough edge space to scan. */
+.page-container.hrms-attendance-wide-layout .layout-main-section-wrapper,
+.page-container.hrms-attendance-wide-layout .layout-main-section,
+.layout-main-section-wrapper.hrms-attendance-wide-layout,
+.layout-main-section.hrms-attendance-wide-layout {
+	margin-left: 0 !important;
+	margin-right: 0 !important;
+	max-width: none !important;
+	padding-left: 0 !important;
+	padding-right: 0 !important;
+	width: 100% !important;
+}
+
+.page-container.hrms-attendance-wide-layout .page-body,
+.page-container.hrms-attendance-wide-layout .page-main {
+	max-width: none !important;
+	padding-left: 0 !important;
+	padding-right: 0 !important;
+	width: 100% !important;
 }
 
 .hrms-attendance-import-head,
@@ -45,6 +69,72 @@
 
 .hrms-attendance-import-controls {
 	flex-shrink: 0;
+}
+
+.hrms-attendance-company-context,
+.hrms-attendance-month-control {
+	display: grid;
+	gap: 3px;
+}
+
+.hrms-attendance-company-context > span,
+.hrms-attendance-month-control > span {
+	color: var(--text-muted, #6b7280);
+	font-size: 11px;
+}
+
+.hrms-attendance-company-context > strong {
+	align-items: center;
+	background: var(--control-bg, #f1f3f5);
+	border-radius: 6px;
+	display: flex;
+	font-size: 14px;
+	font-weight: 500;
+	min-height: 32px;
+	padding: 0 11px;
+}
+
+.hrms-attendance-month-switcher {
+	align-items: center;
+	display: flex;
+	gap: 2px;
+}
+
+.hrms-attendance-month-switcher .btn {
+	min-height: 32px;
+	padding: 3px 10px;
+}
+
+.hrms-attendance-month-switcher .hrms-attendance-month-current {
+	font-weight: 600;
+	min-width: 104px;
+}
+
+.hrms-attendance-month-picker {
+	display: grid;
+	gap: 14px;
+}
+
+.hrms-attendance-month-picker__year {
+	align-items: center;
+	display: flex;
+	justify-content: space-between;
+}
+
+.hrms-attendance-month-picker__months {
+	display: grid;
+	gap: 8px;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.hrms-attendance-month-picker__months .btn {
+	min-height: 34px;
+}
+
+.hrms-attendance-month-picker__months .active {
+	background: var(--primary, #2490ef);
+	border-color: var(--primary, #2490ef);
+	color: #fff;
 }
 
 .hrms-attendance-filter-control {
@@ -556,6 +646,233 @@
 	white-space: pre-wrap;
 }
 
+.hrms-attendance-source-grid,
+.hrms-attendance-final-grid {
+	display: grid;
+	gap: 12px;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	padding: 16px;
+}
+
+.hrms-attendance-source-card,
+.hrms-attendance-final-grid article,
+.hrms-attendance-final-checklist {
+	background: #fff;
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 6px;
+}
+
+.hrms-attendance-source-card {
+	display: grid;
+	gap: 14px;
+	padding: 14px;
+}
+
+.hrms-attendance-source-card__head,
+.hrms-attendance-source-card__head > div,
+.hrms-attendance-source-card__actions,
+.hrms-attendance-result-controls,
+.hrms-attendance-final-checklist__head {
+	display: flex;
+	gap: 8px;
+}
+
+.hrms-attendance-source-card__head,
+.hrms-attendance-final-checklist__head {
+	align-items: start;
+	justify-content: space-between;
+}
+
+.hrms-attendance-source-card__head > div {
+	flex-direction: column;
+}
+
+.hrms-attendance-source-card__head small,
+.hrms-attendance-process-footnote,
+.hrms-attendance-final-checklist__head span,
+.hrms-attendance-final-readiness small,
+.hrms-attendance-final-readiness em {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+}
+
+.hrms-attendance-source-card dl {
+	display: grid;
+	gap: 8px;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	margin: 0;
+}
+
+.hrms-attendance-source-card dl div {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+
+.hrms-attendance-source-card dt {
+	color: var(--text-muted, #6b7280);
+	font-size: 11px;
+	font-weight: 400;
+}
+
+.hrms-attendance-source-card dd {
+	margin: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.hrms-attendance-source-card__actions,
+.hrms-attendance-result-controls {
+	align-items: center;
+	flex-wrap: wrap;
+}
+
+.hrms-attendance-process-footnote {
+	border-top: 1px solid var(--border-color, #e5e7eb);
+	margin: 0 16px;
+	padding: 12px 0 16px;
+}
+
+.hrms-attendance-api-notice {
+	background: #fffbeb;
+	border: 1px solid #fcd34d;
+	border-radius: 6px;
+	display: grid;
+	gap: 4px;
+	margin: 0 16px 16px;
+	padding: 10px 12px;
+}
+
+.hrms-attendance-processing-status {
+	border-radius: 999px;
+	display: inline-block;
+	font-size: 12px;
+	line-height: 1.4;
+	padding: 2px 8px;
+	white-space: nowrap;
+}
+
+.hrms-attendance-processing-status.is-empty,
+.hrms-attendance-processing-status.is-neutral {
+	background: #f3f4f6;
+	color: #4b5563;
+}
+
+.hrms-attendance-processing-status.is-pending,
+.hrms-attendance-processing-status.is-review {
+	background: #dbeafe;
+	color: #1d4ed8;
+}
+
+.hrms-attendance-processing-status.is-warning {
+	background: #fef3c7;
+	color: #92400e;
+}
+
+.hrms-attendance-processing-status.is-confirmed {
+	background: #dcfce7;
+	color: #166534;
+}
+
+.hrms-attendance-processing-status.is-rejected {
+	background: #fee2e2;
+	color: #b91c1c;
+}
+
+.hrms-attendance-result-controls {
+	border-bottom: 1px solid var(--border-color, #e5e7eb);
+	padding: 0 14px 12px;
+}
+
+.hrms-attendance-result-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.hrms-attendance-result-tabs .active {
+	background: var(--primary, #00875a);
+	border-color: var(--primary, #00875a);
+	color: #fff;
+}
+
+.hrms-attendance-trace {
+	color: var(--text-muted, #6b7280);
+	font-size: 11px;
+	max-width: 210px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.hrms-attendance-final-checklist {
+	margin: 16px;
+	overflow: hidden;
+}
+
+.hrms-attendance-final-checklist__head {
+	background: #f8fafc;
+	border-bottom: 1px solid var(--border-color, #e5e7eb);
+	padding: 12px 14px;
+}
+
+.hrms-attendance-final-readiness {
+	display: grid;
+	gap: 1px;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.hrms-attendance-final-readiness > div {
+	display: grid;
+	gap: 6px;
+	padding: 12px 14px;
+}
+
+.hrms-attendance-final-readiness em {
+	font-style: normal;
+}
+
+.hrms-attendance-final-grid {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	padding-top: 0;
+}
+
+.hrms-attendance-monthly-support {
+	margin-top: 16px;
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 8px;
+	background: #fff;
+}
+
+.hrms-attendance-monthly-support .hrms-attendance-list-head {
+	margin: 0;
+	padding: 16px;
+	border-bottom: 1px solid var(--border-color, #e5e7eb);
+}
+
+.hrms-attendance-monthly-support-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 12px;
+	padding: 16px;
+}
+
+.hrms-attendance-final-grid article {
+	display: grid;
+	gap: 10px;
+	padding: 16px;
+}
+
+.hrms-attendance-final-grid p {
+	color: var(--text-muted, #6b7280);
+	margin: 0;
+}
+
+.hrms-attendance-final-grid .btn {
+	justify-self: start;
+}
+
 @keyframes hrms-dingtalk-pulse {
 	50% {
 		opacity: 0.3;
@@ -566,9 +883,26 @@
 	.hrms-attendance-kpi-grid {
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
+
+	.hrms-attendance-source-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.hrms-attendance-monthly-support-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.hrms-attendance-final-readiness {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
 }
 
 @media (max-width: 700px) {
+	.hrms-attendance-import-center {
+		padding-left: 12px;
+		padding-right: 12px;
+	}
+
 	.hrms-attendance-import-head,
 	.hrms-attendance-list-head,
 	.hrms-attendance-toolbar {
@@ -577,7 +911,10 @@
 	}
 
 	.hrms-attendance-kpi-grid,
-	.hrms-attendance-quick-grid {
+	.hrms-attendance-quick-grid,
+	.hrms-attendance-final-grid,
+	.hrms-attendance-monthly-support-grid,
+	.hrms-attendance-final-readiness {
 		grid-template-columns: 1fr;
 	}
 

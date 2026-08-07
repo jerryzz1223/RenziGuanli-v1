@@ -27,7 +27,6 @@ HRMS_ACCESS_PAGE_ROLES = ["System Manager"]
 
 PERSONNEL_PAGE_DEFINITIONS = [
 	{"name": "employee-detail", "title": "员工档案详情", "icon": "user"},
-	{"name": "employee-archive", "title": "员工档案库", "icon": "users"},
 	{"name": "employee-roster-import", "title": "导入花名册", "icon": "upload"},
 	{"name": "employee-roster-export", "title": "导出花名册", "icon": "download"},
 	{"name": "personnel-reports", "title": "人事报表", "icon": "bar-chart"},
@@ -334,6 +333,17 @@ COMPANY_ROSTER_CUSTOM_FIELDS = [
 		"insert_after": "employment_type",
 	},
 	{
+		"category": "在职信息",
+		"field_label": "工作性质",
+		"fieldname": "custom_personnel_status",
+		"fieldtype": "Select",
+		"options": "在职\n试用期\n退休返聘\n待离职\n已离职",
+		"description": "由转正、返聘和离职生效日期自动计算，不手工维护",
+		"insert_after": "employment_type",
+		"read_only": 1,
+		"no_copy": 1,
+	},
+	{
 		"category": "个人信息",
 		"field_label": "民族",
 		"fieldname": "custom_ethnicity",
@@ -485,6 +495,7 @@ COMPANY_ROSTER_FIELD_ORDER = [
 	"permanent_address",
 	"custom_native_place",
 	"designation",
+	"custom_personnel_status",
 	"custom_direct_indirect",
 	"custom_ethnicity",
 	"custom_marital_status_text",
@@ -539,8 +550,12 @@ HEADER_FIELD_ALIASES = {
 	"员工等级": "grade",
 	"分支机构": "branch",
 	"分公司": "branch",
-	"在职状态": "status",
-	"员工状态": "status",
+	"工作性质": "custom_personnel_status",
+	"人员状态": "custom_personnel_status",
+	"在职状态": "custom_personnel_status",
+	"员工状态": "custom_personnel_status",
+	"雇佣类型": "employment_type",
+	"用工类型": "employment_type",
 	"转正日期": "final_confirmation_date",
 	"合同-结束月份": "contract_end_date",
 }
@@ -550,7 +565,7 @@ EMPLOYEE_ROSTER_REQUIRED_COLUMNS = {
 	"custom_employee_code": "工号",
 	"department": "部门",
 	"designation": "岗位",
-	"employment_type": "工作性质",
+	"custom_personnel_status": "工作性质",
 	"date_of_joining": "入职日期",
 	"custom_id_type": "证件类型",
 	"passport_number": "证件号码",
@@ -571,6 +586,7 @@ EMPLOYEE_IMPORT_REQUIRED_ALTERNATIVES = {
 }
 
 FIELD_GOVERNANCE_DEFAULTS = {
+	"custom_personnel_status": {"aliases": "工作性质\n人员状态\n在职状态\n员工状态"},
 	"custom_education_category": {"aliases": "学历类别\n学历取得类别", "detail_block": "教育经历", "record_type": "单行资料块"},
 	"custom_study_mode": {"aliases": "学习形式\n学习方式", "detail_block": "教育经历", "record_type": "单行资料块"},
 	"custom_education_level": {"aliases": "学历\n最高学历\n文化程度", "detail_block": "教育经历", "record_type": "单行资料块"},
@@ -672,14 +688,14 @@ FIELD_OVERRIDES = {
 	"date_of_birth": {"category": "个人信息", "field_label": "出生年月"},
 	"salutation": {"category": "个人信息", "field_label": "称谓"},
 	"date_of_joining": {"category": "在职信息", "field_label": "入职日期"},
-	"status": {"category": "在职信息", "field_label": "状态", "description": "员工当前状态"},
+	"status": {"category": "在职信息", "field_label": "系统状态", "description": "Frappe 内部单据状态，不作为人事业务口径"},
 	"company": {"category": "在职信息", "field_label": "公司", "description": "员工所属公司"},
 	"branch": {"category": "在职信息", "field_label": "分支机构（分公司）"},
 	"department": {"category": "在职信息", "field_label": "部门", "description": "员工所属部门"},
 	"designation": {"category": "在职信息", "field_label": "岗位", "description": "员工当前岗位"},
 	"reports_to": {"category": "在职信息", "field_label": "上级主管", "description": "员工汇报对象"},
 	"grade": {"category": "在职信息", "field_label": "员工等级"},
-	"employment_type": {"category": "在职信息", "field_label": "工作性质", "description": "全职、实习、外包等"},
+	"employment_type": {"category": "在职信息", "field_label": "雇佣类型", "description": "内部用工分类，供薪资、合同等模块使用"},
 	"user_id": {"category": "联系信息", "field_label": "用户账号"},
 	"create_user_automatically": {"category": "联系信息", "field_label": "自动创建用户", "description": "自动为员工创建系统用户"},
 	"create_user_permission": {"category": "联系信息", "field_label": "自动创建用户权限"},
@@ -851,6 +867,7 @@ def _get_template_doc():
 	_apply_employee_required_defaults(doc)
 	_apply_employee_internal_field_policy(doc)
 	ensure_required_roster_columns(doc)
+	_apply_personnel_status_surface_policy(doc)
 	return doc
 
 
@@ -989,6 +1006,9 @@ def _sync_company_roster_fields(doc):
 			"insert_after": item.get("insert_after") or CATEGORY_INSERT_AFTER.get(item["category"], "date_of_joining"),
 			"description": item.get("description"),
 		}
+		for property_name in ("read_only", "no_copy"):
+			if item.get(property_name) is not None:
+				custom_field[property_name] = item[property_name]
 		if item.get("options"):
 			custom_field["options"] = item["options"]
 
@@ -1019,7 +1039,10 @@ def _sync_company_roster_fields(doc):
 		if supports_required:
 			row_values["required"] = 1 if item["fieldname"] in required_fieldnames else 0
 		if row:
-			for fieldname in ("fieldtype", "options", "insert_after", "source"):
+			managed_fields = ["fieldtype", "options", "insert_after", "source"]
+			if item["fieldname"] == "custom_personnel_status":
+				managed_fields.extend(["category", "field_label", "description"])
+			for fieldname in managed_fields:
 				value = row_values.get(fieldname)
 				if row.get(fieldname) != value:
 					row.set(fieldname, value)
@@ -1277,6 +1300,15 @@ def ensure_personnel_pages():
 	return {"created": created, "updated": updated, "cleaned": cleaned}
 
 
+def ensure_employee_personnel_status_setup():
+	"""Create/govern the public status field and backfill existing Employees."""
+	doc = _get_template_doc()
+	_apply_personnel_status_surface_policy(doc)
+	from hrms.hr.employee_personnel_status import sync_due_employee_personnel_statuses
+
+	return sync_due_employee_personnel_statuses()
+
+
 def _property_history_doc_filters(employee=None, department=None, company=None):
 	filters = {"docstatus": ["!=", 2]}
 	if employee:
@@ -1343,7 +1375,7 @@ def get_employee_property_history(employee: str | None = None, department: str |
 			continue
 
 		date_field = source["date_field"]
-		parent_rows = frappe.get_all(
+		parent_rows = frappe.get_list(
 			source_doctype,
 			filters=_property_history_doc_filters(employee=employee, department=department, company=company),
 			fields=["name", "employee", "employee_name", "department", "company", date_field, "docstatus", "modified"],
@@ -2608,15 +2640,11 @@ def get_employee_import_export_schema():
 
 
 EMPLOYEE_ROSTER_STATUS_CARDS = [
-	{"label": "在职", "filters": {"status": "Active"}},
-	{"label": "全职", "filters": {"status": "Active", "employment_type": "Full-time"}},
-	{"label": "实习生", "filters": {"status": "Active", "employment_type": "Intern"}},
-	{"label": "外包", "filters": {"status": "Active", "employment_type": "Contract"}},
-	{"label": "退休返聘", "filters": {"status": "Active", "employment_type": "Retainer"}},
-	{"label": "试用期", "filters": {"status": "Active", "custom_is_confirmed": "否"}},
-	{"label": "待离职", "filters": {"status": "Inactive"}},
-	{"label": "正式", "filters": {"status": "Active", "custom_is_confirmed": "是"}},
-	{"label": "已离职", "filters": {"status": "Left"}},
+	{"label": "在职", "filters": {"custom_personnel_status": "在职"}},
+	{"label": "试用期", "filters": {"custom_personnel_status": "试用期"}},
+	{"label": "退休返聘", "filters": {"custom_personnel_status": "退休返聘"}},
+	{"label": "待离职", "filters": {"custom_personnel_status": "待离职"}},
+	{"label": "已离职", "filters": {"custom_personnel_status": "已离职"}},
 ]
 
 EMPLOYEE_ROSTER_SORT_OPTIONS = {
@@ -2665,6 +2693,39 @@ def ensure_required_roster_columns(doc):
 	return doc
 
 
+def _apply_personnel_status_surface_policy(doc):
+	"""Expose one business status while keeping native Frappe fields internal."""
+	changed = False
+	rows_by_fieldname = {row.fieldname: row for row in doc.template_items}
+	personnel_status = rows_by_fieldname.get("custom_personnel_status")
+	if personnel_status:
+		for fieldname, value in (
+			("field_label", "工作性质"),
+			("category", "在职信息"),
+			("options", "在职\n试用期\n退休返聘\n待离职\n已离职"),
+		):
+			if personnel_status.get(fieldname) != value:
+				personnel_status.set(fieldname, value)
+				changed = True
+		for fieldname in ("enabled", "roster_visible", "detail_visible", "form_visible", "import_enabled", "export_enabled"):
+			if _template_item_supports_field(fieldname) and _template_row_int(personnel_status, fieldname) != 1:
+				personnel_status.set(fieldname, 1)
+				changed = True
+
+	for internal_fieldname in ("status", "employment_type"):
+		row = rows_by_fieldname.get(internal_fieldname)
+		if not row:
+			continue
+		for fieldname in ("roster_visible", "detail_visible"):
+			if _template_item_supports_field(fieldname) and _template_row_int(row, fieldname) != 0:
+				row.set(fieldname, 0)
+				changed = True
+
+	if changed:
+		doc.save(ignore_permissions=True)
+	return doc
+
+
 def _get_employee_roster_columns():
 	# search_fields: ["employee_name", "cell_number", "custom_employee_code"]
 	# sort_options
@@ -2702,6 +2763,7 @@ def _build_employee_roster_filters(filters=None):
 		"status",
 		"employment_type",
 		"custom_is_confirmed",
+		"custom_personnel_status",
 		"department",
 		"designation",
 		"company",
@@ -2712,6 +2774,14 @@ def _build_employee_roster_filters(filters=None):
 	for fieldname, value in filters.items():
 		if fieldname in allowed_filters and fieldname in meta_fields and value not in (None, ""):
 			employee_filters[fieldname] = value
+
+	# Every roster request is scoped to the active company.  The browser sends
+	# it explicitly; a server-side default keeps direct API calls from silently
+	# returning employees from every company.
+	if "company" in meta_fields and not employee_filters.get("company"):
+		default_company = frappe.defaults.get_user_default("Company")
+		if default_company:
+			employee_filters["company"] = default_company
 
 	return employee_filters
 
@@ -2744,6 +2814,7 @@ def _get_roster_fetch_fields(columns):
 		"passport_number",
 		"status",
 		"employment_type",
+		"custom_personnel_status",
 		"date_of_joining",
 	]:
 		fetch_fields.add(fieldname)
@@ -2817,6 +2888,18 @@ def _sort_employee_roster_by_business_code(rows, sort_order):
 	return populated + blank
 
 
+def _count_employee_rows(filters, or_filters=None):
+	"""Count permission-filtered employees without materializing every name."""
+	rows = frappe.get_list(
+		EMPLOYEE_DOCTYPE,
+		filters=filters,
+		or_filters=or_filters,
+		fields=[{"COUNT": "*", "as": "count"}],
+		limit_page_length=1,
+	)
+	return frappe.utils.cint(rows[0].get("count")) if rows else 0
+
+
 @frappe.whitelist()
 def get_employee_by_business_code(employee_code: str, company: str = ""):
 	"""Resolve the public company work number to the internal Employee link value."""
@@ -2877,7 +2960,7 @@ def get_employee_roster(
 	fields = _get_roster_fetch_fields(columns)
 
 	if sort_field == "custom_employee_code":
-		all_rows = frappe.get_all(
+		all_rows = frappe.get_list(
 			EMPLOYEE_DOCTYPE,
 			filters=employee_filters,
 			or_filters=or_filters,
@@ -2887,7 +2970,7 @@ def get_employee_roster(
 		total = len(all_rows)
 		rows = _sort_employee_roster_by_business_code(all_rows, sort_order)[start : start + page_length]
 	else:
-		rows = frappe.get_all(
+		rows = frappe.get_list(
 			EMPLOYEE_DOCTYPE,
 			filters=employee_filters,
 			or_filters=or_filters,
@@ -2896,15 +2979,7 @@ def get_employee_roster(
 			limit_start=start,
 			limit_page_length=page_length,
 		)
-		total = len(
-			frappe.get_all(
-				EMPLOYEE_DOCTYPE,
-				filters=employee_filters,
-				or_filters=or_filters,
-				pluck="name",
-				limit_page_length=0,
-			)
-		)
+		total = _count_employee_rows(employee_filters, or_filters)
 	rows = _hydrate_employee_roster_display_values(rows)
 
 	return {
@@ -2936,7 +3011,7 @@ def get_employee_roster_summary(filters: str = "{}"):
 			{
 				"label": card["label"],
 				"filters": card["filters"],
-				"count": frappe.db.count(EMPLOYEE_DOCTYPE, filters=card_filters),
+				"count": _count_employee_rows(card_filters),
 			}
 		)
 	return summary
@@ -2972,6 +3047,7 @@ def _get_employee_detail_sections(doc, department_display=""):
 		_serialize_item(row)
 		for row in template.template_items
 		if not _is_employee_internal_field(row.fieldname)
+		and row.fieldname not in {"status", "employment_type"}
 		and row.get("enabled")
 		and _field_flag_enabled(row, "detail_visible", 1)
 	]
@@ -3271,15 +3347,17 @@ def get_employee_detail(employee: str):
 			"name": doc.name,
 			"employee_name": doc.get("employee_name"),
 			"custom_employee_code": doc.get("custom_employee_code") or doc.get("employee_number"),
+			"company": doc.get("company"),
 			"department": doc.get("department"),
 			"department_display": department_display,
 			"designation": doc.get("designation"),
-			"employment_type": doc.get("employment_type"),
+			"custom_personnel_status": doc.get("custom_personnel_status"),
+			"custom_is_confirmed": doc.get("custom_is_confirmed"),
+			"final_confirmation_date": doc.get("final_confirmation_date"),
 			"date_of_joining": doc.get("date_of_joining"),
 			"gender": doc.get("gender"),
 			"age": doc.get("age"),
 			"cell_number": doc.get("cell_number"),
-			"status": doc.get("status"),
 			"image": doc.get("image"),
 		},
 		"sections": _get_employee_detail_sections(doc, department_display),
@@ -3297,7 +3375,7 @@ def _can_edit_employee_detail():
 
 @frappe.whitelist()
 def get_employee_detail_navigation(employee: str, filters: str = "{}"):
-	names = frappe.get_all(
+	names = frappe.get_list(
 		EMPLOYEE_DOCTYPE,
 		filters=_build_employee_roster_filters(filters),
 		pluck="name",
@@ -3578,6 +3656,46 @@ def _normalise_probation_employment_type(values, warnings, row_index=None):
 		)
 
 
+def _normalise_personnel_status_import(values, warnings, row_index=None):
+	"""Translate business-facing 工作性质 into the native source fields.
+
+	The stored custom status remains derived and read-only. Legacy values from
+	older rosters are accepted so an existing workbook does not create invalid
+	Employment Type records or bypass the separation lifecycle.
+	"""
+	value = str(values.pop("custom_personnel_status", "") or "").strip()
+	if not value:
+		return
+
+	if value in {"在职", "正式", "全职"}:
+		values.setdefault("employment_type", "Full-time")
+		if value == "正式":
+			values.setdefault("custom_is_confirmed", "是")
+	elif value in {"试用", "试用期"}:
+		values.setdefault("employment_type", "Full-time")
+		values.setdefault("custom_is_confirmed", "否")
+	elif value in {"退休返聘", "返聘"}:
+		values.setdefault("employment_type", "Retainer")
+	elif value in {"实习", "实习生"}:
+		values.setdefault("employment_type", "Intern")
+	elif value in {"外包", "合同工"}:
+		values.setdefault("employment_type", "Contract")
+	elif value == "待离职":
+		if not values.get("relieving_date"):
+			values["status"] = "Inactive"
+			warnings.append(
+				_("第 {0} 行：工作性质为“待离职”但未填离职日期，已标记为待离职，请在离职管理中补齐生效日期。").format(
+					row_index or ""
+				)
+			)
+	elif value in {"已离职", "离职"}:
+		values["status"] = "Left"
+	else:
+		warnings.append(
+			_("第 {0} 行：工作性质“{1}”无法识别，已按在职导入。").format(row_index or "", value)
+		)
+
+
 def _get_default_company():
 	default_company = frappe.defaults.get_user_default("Company") or frappe.defaults.get_global_default("company")
 	if default_company and frappe.db.exists("Company", default_company):
@@ -3781,6 +3899,7 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 		values["naming_series"] = "HR-EMP-"
 	if not values.get("status"):
 		values["status"] = "Active"
+	_normalise_personnel_status_import(values, warnings, row_index)
 	_normalise_probation_employment_type(values, warnings, row_index)
 	if not values.get("date_of_birth") and fields_by_name.get("date_of_birth"):
 		values["date_of_birth"] = EMPLOYEE_FALLBACK_DATE_OF_BIRTH
@@ -4182,8 +4301,15 @@ def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tab
 	return output.getvalue()
 
 
+def _employee_export_records_cache_key(current_filters=None):
+	filters = _parse_json(current_filters, {}) or {}
+	company = filters.get("company") or frappe.defaults.get_user_default("Company") or ""
+	scope = f"{frappe.session.user}|{company}"
+	return f"employee_roster_export_records:{hashlib.sha256(scope.encode()).hexdigest()[:20]}"
+
+
 def log_employee_export_record(filename, selected_fields, selected_tables, export_scope, current_filters):
-	cache_key = "employee_roster_export_records"
+	cache_key = _employee_export_records_cache_key(current_filters)
 	records = frappe.cache().get_value(cache_key) or []
 	records.insert(
 		0,
@@ -4201,8 +4327,8 @@ def log_employee_export_record(filename, selected_fields, selected_tables, expor
 
 
 @frappe.whitelist()
-def get_employee_export_records():
-	return frappe.cache().get_value("employee_roster_export_records") or []
+def get_employee_export_records(current_filters: str = "{}"):
+	return frappe.cache().get_value(_employee_export_records_cache_key(current_filters)) or []
 
 
 def _report_file_stem(report_name):
@@ -4371,7 +4497,10 @@ def download_employee_roster_export(
 		frappe.throw(_("请至少选择一个导出字段"))
 
 	export_scope = "current_filters" if export_scope == "current_filters" else "all"
-	filters = _build_employee_roster_filters(current_filters) if export_scope == "current_filters" else {}
+	active_filters = _build_employee_roster_filters(current_filters)
+	filters = active_filters if export_scope == "current_filters" else {
+		"company": active_filters["company"]
+	} if active_filters.get("company") else {}
 	log_employee_export_record(EMPLOYEE_EXPORT_FILENAME, selected_fields, selected_tables, export_scope, filters)
 	provide_binary_file(
 		EMPLOYEE_EXPORT_FILENAME.removesuffix(".xlsx"),
