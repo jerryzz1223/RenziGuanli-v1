@@ -70,7 +70,7 @@
 				"employee-transfer",
 				"employee-property-history",
 				"employee-skill-map",
-				"employee-grievance",
+				"hrms-employee-reward-punishment",
 				"exit-interview",
 			],
 		},
@@ -218,9 +218,9 @@
 
 	function companiesForDailyOperation(companies) {
 		const primary = preferredCompany(companies);
-		// Keep a clean fallback for a brand-new developer site that has not yet
-		// created 永新. Once 永新 exists, no legacy/test company is selectable.
-		return SINGLE_COMPANY_OPERATION_MODE && primary ? [primary] : companies;
+		// Daily HR work currently belongs to Yongxin only. Do not expose fixture,
+		// legacy, or future company records in the global selector.
+		return SINGLE_COMPANY_OPERATION_MODE ? (primary ? [primary] : []) : companies;
 	}
 
 	function resolveInitialCompany(companies) {
@@ -232,7 +232,7 @@
 		if (primary) return primary.name;
 		const userDefault = userDefaultCompany();
 		if (userDefault && available.has(userDefault)) return userDefault;
-		return companies[0] || "";
+		return companies[0]?.name || "";
 	}
 
 	function loadCompanyContext() {
@@ -779,7 +779,7 @@
 		}
 		wrapper.appendChild(selector);
 
-		if (companies.length && canManageCompanyIdentity()) {
+		if (!SINGLE_COMPANY_OPERATION_MODE && companies.length && canManageCompanyIdentity()) {
 			const editButton = document.createElement("button");
 			editButton.type = "button";
 			editButton.className = "hrms-top-company-context__edit";

@@ -63,6 +63,11 @@ for (const marker of [
 	"规则设置",
 	"字段映射",
 	"部门映射",
+	"list_department_mappings",
+	"upsert_department_mapping",
+	"新增部门映射",
+	"钉钉原部门",
+	"花名册目标部门",
 	"处理规则",
 	"考勤初稿",
 	"苹果树",
@@ -99,6 +104,10 @@ for (const marker of [
 	"missed_punch_columns()",
 	"补卡时间",
 	"红苹果金额",
+	"render_missed_punch_summary",
+	"忘打卡汇总",
+	"有效补卡笔数",
+	"绿苹果",
 	"下载最新加工结果",
 	"加工数据",
 	"update_processing_record",
@@ -120,6 +129,8 @@ for (const marker of [
 	"特殊工时",
 	"monthly_support_sources",
 	"render_monthly_support_imports",
+	"render_attendance_summary_markup",
+	"bind_attendance_summary_events",
 	"data-monthly-support-upload",
 	"data-monthly-support-process",
 	"data-monthly-support-exceptions",
@@ -235,13 +246,26 @@ for (const forbiddenMarker of ["download_exception_workbook", "download_exceptio
 const attendanceViewGroupsStart = attendancePageJs.indexOf("this.view_groups = [");
 const attendanceViewGroupsEnd = attendancePageJs.indexOf("this.view_map =", attendanceViewGroupsStart);
 const attendanceViewGroups = attendancePageJs.slice(attendanceViewGroupsStart, attendanceViewGroupsEnd);
-for (const [earlier, later] of [["考勤汇总", "异常处理"], ["异常处理", "加工结果"]]) {
+for (const [earlier, later] of [["月度终稿", "异常处理"], ["异常处理", "加工结果"]]) {
 	if (attendanceViewGroups.indexOf(earlier) >= attendanceViewGroups.indexOf(later)) {
 		throw new Error(`Attendance workflow order must be ${earlier} → ${later}.`);
 	}
 }
-if (attendanceViewGroups.includes("月度终稿")) {
-	throw new Error("Monthly finalization must be integrated into 考勤汇总, not exposed as a duplicate sidebar view.");
+if (attendanceViewGroups.includes("每日导入")) {
+	throw new Error("Daily import must not remain as a duplicate sidebar view.");
+}
+const monthlyFinalBodyStart = attendancePageJs.indexOf("\trender_monthly_final() {");
+const monthlyFinalBodyEnd = attendancePageJs.indexOf("\n\topen_monthly_support_uploader", monthlyFinalBodyStart);
+const monthlyFinalBody = attendancePageJs.slice(monthlyFinalBodyStart, monthlyFinalBodyEnd);
+const monthlyFinalSections = [
+	"this.render_attendance_summary_markup(batch)",
+	"this.render_monthly_support_imports(checks)",
+	"this.render_monthly_final_markup(batch, checks)",
+];
+for (let index = 1; index < monthlyFinalSections.length; index += 1) {
+	if (monthlyFinalBody.indexOf(monthlyFinalSections[index - 1]) >= monthlyFinalBody.indexOf(monthlyFinalSections[index])) {
+		throw new Error("Monthly final page must render attendance summary, supplemental sources, then monthly finalization.");
+	}
 }
 if (attendancePageJs.includes("data-monthly-support-precheck")) {
 	throw new Error("Monthly support sources must check structure during processing, without a separate precheck button.");
@@ -303,8 +327,8 @@ if (attendancePageJs.includes("dingtalk_export_v1 当前仅支持预览")) {
 	throw new Error("DingTalk four-sheet exports must offer a controlled daily-statistics import after preview.");
 }
 
-if (!homeRedirectJs.includes('label: "每日导入", route: "/desk/attendance-import-center/daily-import"')) {
-	throw new Error("The global attendance sidebar must provide the daily-import route.");
+if (!homeRedirectJs.includes('label: "月度终稿", route: "/desk/attendance-import-center/monthly-final"')) {
+	throw new Error("The global attendance sidebar must provide the monthly-final route.");
 }
 
 for (const marker of ["flex: 0 0 220px", "min-width: 220px", "white-space: nowrap", "text-overflow: ellipsis"]) {
@@ -463,7 +487,6 @@ for (const marker of [
 
 const shellJs = read("hrms/public/js/hrms_home_redirect_v6.js");
 for (const marker of [
-	"attendance-import-center/daily-import",
 	"attendance-import-center/processing-results",
 	"attendance-import-center/exceptions",
 	"attendance-import-center/monthly-final",

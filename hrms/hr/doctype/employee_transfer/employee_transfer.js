@@ -96,19 +96,56 @@ function derive_transfer_type(frm) {
 	}
 }
 
+function set_transfer_value_if_changed(frm, fieldname, value) {
+	const nextValue = value || "";
+	if ((frm.doc[fieldname] || "") === nextValue) {
+		return false;
+	}
+	frm.set_value(fieldname, nextValue);
+	return true;
+}
+
 function sync_transfer_employee(frm) {
-	if (!frm.doc.employee) return;
+	const selectedEmployee = frm.doc.employee;
+	if (
+		!selectedEmployee ||
+		frappe.ui.form.is_saving ||
+		frm.__hrms_transfer_identity_loading === selectedEmployee
+	) {
+		return;
+	}
+
+	frm.__hrms_transfer_identity_loading = selectedEmployee;
+	const clearLoading = () => {
+		if (frm.__hrms_transfer_identity_loading === selectedEmployee) {
+			delete frm.__hrms_transfer_identity_loading;
+		}
+	};
 
 	frappe.call({
 		method: "hrms.hr.doctype.employee_transfer.employee_transfer.get_employee_business_options",
 		args: { company: frm.doc.company || "" },
 		callback(response) {
-			const employee = (response.message || []).find((row) => row.name === frm.doc.employee);
-			if (!employee) return;
-			frm.set_value("employee_code_display", employee.employee_code || "");
-			frm.set_value("employee_name", employee.employee_name || "");
-			frm.set_value("company", employee.company || frm.doc.company || "");
-			frm.set_value("department", employee.department || frm.doc.department || "");
+			try {
+				if (frm.doc.employee !== selectedEmployee || frappe.ui.form.is_saving) {
+					return;
+				}
+
+				const employee = (response.message || []).find((row) => row.name === selectedEmployee);
+				if (!employee) {
+					return;
+				}
+
+				set_transfer_value_if_changed(frm, "employee_code_display", employee.employee_code || "");
+				set_transfer_value_if_changed(frm, "employee_name", employee.employee_name || "");
+				set_transfer_value_if_changed(frm, "company", employee.company || frm.doc.company || "");
+				set_transfer_value_if_changed(frm, "department", employee.department || frm.doc.department || "");
+			} finally {
+				clearLoading();
+			}
+		},
+		error() {
+			clearLoading();
 		},
 	});
 }
@@ -127,7 +164,6 @@ frappe.ui.form.on("Employee Transfer", {
 
 	refresh(frm) {
 		apply_transfer_form_labels(frm);
-		sync_transfer_employee(frm);
 		derive_transfer_type(frm);
 	},
 
@@ -145,9 +181,6 @@ frappe.ui.form.on("Employee Transfer", {
 	},
 
 	on_submit(frm) {
-		const employee = frm.doc.employee;
-		if (!employee) return;
 		frappe.show_alert({ message: __("人事异动已提交并写入任职记录"), indicator: "green" });
-		frappe.set_route("employee-detail", employee);
 	},
 });

@@ -9,6 +9,7 @@ const assert = (condition, message) => {
 
 const propertyUpdate = read("hrms", "hr", "employee_property_update.js");
 const transferJs = read("hrms", "hr", "doctype", "employee_transfer", "employee_transfer.js");
+const employeeSelectorJs = read("hrms", "hr", "employee_business_code_selector.js");
 const transferPy = read("hrms", "hr", "doctype", "employee_transfer", "employee_transfer.py");
 const transfer = JSON.parse(read("hrms", "hr", "doctype", "employee_transfer", "employee_transfer.json"));
 const history = JSON.parse(read("hrms", "hr", "doctype", "employee_property_history", "employee_property_history.json"));
@@ -36,8 +37,14 @@ assert(
 	"异动目标字段变更必须在控件创建时绑定，避免 Link 控件打开后丢失事件。",
 );
 assert(
-	propertyUpdate.includes("row.__hrms_transfer_control = control"),
-	"部门联动后必须保留目标控件实例，避免岗位下拉框被整块重绘销毁。",
+	propertyUpdate.includes("control_state.control = control") &&
+		propertyUpdate.includes("frm.__hrms_transfer_control_state"),
+	"部门联动控件必须缓存在表单实例上，不能写入待序列化的明细数据。",
+);
+assert(
+	!propertyUpdate.includes("row.__hrms_transfer_control") &&
+		!propertyUpdate.includes("row.__hrms_setting_transfer_value"),
+	"异动明细不得挂载控件实例或 UI 状态，否则保存时 JSON 序列化会循环引用报错。",
 );
 assert(
 	!propertyUpdate.includes("control.df.onchange ="),
@@ -56,12 +63,46 @@ for (const marker of [
 	"derive_transfer_type",
 	"异动原因",
 	"生效日期",
-	'frappe.set_route("employee-detail", employee)',
+	"人事异动已提交并写入任职记录",
 ]) {
 	assert(transferJs.includes(marker), `人事异动表单缺少精简业务逻辑: ${marker}`);
 }
+
+assert(
+	!employeeSelectorJs.includes("freeze: true") &&
+		!employeeSelectorJs.includes('freeze_message: __("正在匹配员工工号")'),
+	"工号匹配不得冻结整页，避免保存或提交后遗留灰色遮罩。",
+);
+assert(
+	!transferJs.includes('frappe.set_route("employee-detail", employee)'),
+	"异动提交后不得在 Frappe 保存收尾期间立即跳转页面。",
+);
 for (const forbidden of ["sync_transfer_type_fields", "CROSS_COMPANY_TRANSFER_TYPE", '"branch"']) {
 	assert(!transferJs.includes(forbidden), `人事异动仍残留已停用逻辑: ${forbidden}`);
+}
+
+const refreshBlock = transferJs.match(/\n\trefresh\(frm\) \{([\s\S]*?)\n\t\},/);
+assert(refreshBlock, "人事异动必须保留刷新事件。");
+assert(
+	!refreshBlock[1].includes("sync_transfer_employee"),
+	"保存或提交触发刷新时不得再次异步回写员工身份字段。",
+);
+for (const marker of [
+	"set_transfer_value_if_changed",
+	"__hrms_transfer_identity_loading",
+	"frm.doc.employee !== selectedEmployee || frappe.ui.form.is_saving",
+]) {
+	assert(transferJs.includes(marker), `人事异动身份同步缺少保存并发保护: ${marker}`);
+}
+assert(!transferJs.includes("frm.is_saving"), "必须使用 Frappe 真实的全局保存状态，表单实例上没有 is_saving 属性。");
+
+for (const marker of [
+	"TRANSFER_LINK_LABEL_FIELDS",
+	"_resolve_transfer_link_value",
+	"row.new = _resolve_transfer_link_value(field.options, new_value, employee.company)",
+	'department = _resolve_transfer_link_value("Department", department, company)',
+]) {
+	assert(transferPy.includes(marker), `人事异动必须将业务名称转换为关联字段内部值: ${marker}`);
 }
 
 assert(field("employee")?.hidden === 1 && field("employee")?.reqd === 1, "内部 Employee 主键必须保留但隐藏。");

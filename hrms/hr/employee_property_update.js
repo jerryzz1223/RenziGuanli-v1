@@ -374,6 +374,7 @@ var render_business_change_action = function (frm, table) {
 			const row = (frm.doc[table] || []).find((item) => item.name === row_name);
 			if (!row || frm.doc.docstatus !== 0) return;
 
+			clear_transfer_control_state(frm, row);
 			frappe.model.clear_doc(row.doctype, row.name);
 			frm.refresh_field(table);
 			frm.dirty();
@@ -386,6 +387,21 @@ var render_business_change_action = function (frm, table) {
 
 var get_transfer_detail = function (frm, table, fieldname) {
 	return (frm.doc[table] || []).find((row) => !row.__deleted && row.fieldname === fieldname);
+};
+
+var get_transfer_control_state = function (frm, row) {
+	// UI controls contain DOM references and circular objects. Keep them on the
+	// form instance, never on a child document that Frappe serializes on save.
+	frm.__hrms_transfer_control_state = frm.__hrms_transfer_control_state || Object.create(null);
+	frm.__hrms_transfer_control_state[row.name] =
+		frm.__hrms_transfer_control_state[row.name] || { control: null, setting: false };
+	return frm.__hrms_transfer_control_state[row.name];
+};
+
+var clear_transfer_control_state = function (frm, row) {
+	if (frm.__hrms_transfer_control_state && row?.name) {
+		delete frm.__hrms_transfer_control_state[row.name];
+	}
 };
 
 var get_transfer_target_department = function (frm, table) {
@@ -581,7 +597,10 @@ var render_transfer_property_panels = function (frm, table, rows, can_edit) {
 			const fieldnames = key === "department" ? ["department", "designation"] : [key];
 			(frm.doc[table] || [])
 				.filter((row) => fieldnames.includes(row.fieldname))
-				.forEach((row) => frappe.model.clear_doc(row.doctype, row.name));
+				.forEach((row) => {
+					clear_transfer_control_state(frm, row);
+					frappe.model.clear_doc(row.doctype, row.name);
+				});
 			frm.refresh_field(table);
 			frm.dirty();
 			render_transfer_property_editor(frm, table);
@@ -662,9 +681,10 @@ var render_transfer_property_control = function (frm, table, row, $panel, can_ed
 		return;
 	}
 
+	const control_state = get_transfer_control_state(frm, row);
 	let control;
 	const handle_change = () => {
-		if (row.__hrms_setting_transfer_value) return;
+		if (control_state.setting) return;
 
 		const value = control.get_value();
 		if ((row.new || "") === (value || "")) return;
@@ -678,12 +698,13 @@ var render_transfer_property_control = function (frm, table, row, $panel, can_ed
 		if (!designation || !designation.new) return;
 
 		frappe.model.set_value(designation.doctype, designation.name, "new", "");
-		const designation_control = designation.__hrms_transfer_control;
+		const designation_state = get_transfer_control_state(frm, designation);
+		const designation_control = designation_state.control;
 		if (!designation_control) return;
 
-		designation.__hrms_setting_transfer_value = true;
+		designation_state.setting = true;
 		designation_control.set_value("");
-		designation.__hrms_setting_transfer_value = false;
+		designation_state.setting = false;
 	};
 
 	control = frappe.ui.form.make_control({
@@ -698,7 +719,7 @@ var render_transfer_property_control = function (frm, table, row, $panel, can_ed
 		},
 		render_input: true,
 	});
-	row.__hrms_transfer_control = control;
+	control_state.control = control;
 
 	if (row.fieldname === "designation") {
 		control.get_query = () => ({
@@ -710,9 +731,9 @@ var render_transfer_property_control = function (frm, table, row, $panel, can_ed
 		});
 	}
 
-	row.__hrms_setting_transfer_value = true;
+	control_state.setting = true;
 	control.set_value(row.new || "");
-	row.__hrms_setting_transfer_value = false;
+	control_state.setting = false;
 };
 
 var show_dialog = function (frm, table, field_labels) {

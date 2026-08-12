@@ -326,7 +326,7 @@ preview_sync_payload
 		return `
 			<div class="hrms-settings-panel">
 				<h3>${__("多行记录类型")}</h3>
-				<p>${__("奖惩记录、教育经历、任职记录等后续可从单行资料块升级成独立多行记录。")}</p>
+				<p>${__("教育经历、任职记录等资料块可按业务需要继续升级为独立多行记录；奖惩记录已使用独立档案。")}</p>
 				${(state.data?.field_center?.record_types || [])
 					.map(
 						(item) => `

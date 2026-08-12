@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
@@ -11,7 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 API_PATH = ROOT / "hrms" / "api" / "attendance_processing_center.py"
 PROCESSOR_PATH = ROOT / "hrms" / "api" / "attendance_processors" / "attendance_draft.py"
 DOCTYPE_DIR = ROOT / "hrms" / "hr" / "doctype" / "hrms_attendance_processing_record"
+DEPARTMENT_MAPPING_DIR = ROOT / "hrms" / "hr" / "doctype" / "hrms_attendance_department_mapping"
 BATCH_JSON = ROOT / "hrms" / "hr" / "doctype" / "hrms_attendance_import_batch" / "hrms_attendance_import_batch.json"
+STATUS_SYNC_PATCH = ROOT / "hrms" / "patches" / "v16_0" / "sync_attendance_import_batch_status_options.py"
+PATCHES_FILE = ROOT / "hrms" / "patches.txt"
 
 
 def require(source: str, marker: str, message: str = ""):
@@ -19,7 +23,12 @@ def require(source: str, marker: str, message: str = ""):
 		raise AssertionError(message or f"Missing contract marker: {marker}")
 
 
-for path in (API_PATH, PROCESSOR_PATH, DOCTYPE_DIR / "hrms_attendance_processing_record.json", DOCTYPE_DIR / "hrms_attendance_processing_record.py"):
+for path in (
+	API_PATH, PROCESSOR_PATH,
+	DOCTYPE_DIR / "hrms_attendance_processing_record.json", DOCTYPE_DIR / "hrms_attendance_processing_record.py",
+	DEPARTMENT_MAPPING_DIR / "hrms_attendance_department_mapping.json", DEPARTMENT_MAPPING_DIR / "hrms_attendance_department_mapping.py",
+	STATUS_SYNC_PATCH,
+):
 	if not path.exists():
 		raise AssertionError(f"Missing attendance processing component: {path.relative_to(ROOT)}")
 
@@ -27,6 +36,8 @@ api = API_PATH.read_text(encoding="utf-8")
 processor = PROCESSOR_PATH.read_text(encoding="utf-8")
 doctype = json.loads((DOCTYPE_DIR / "hrms_attendance_processing_record.json").read_text(encoding="utf-8"))
 batch = json.loads(BATCH_JSON.read_text(encoding="utf-8"))
+status_sync_patch = STATUS_SYNC_PATCH.read_text(encoding="utf-8")
+patches_file = PATCHES_FILE.read_text(encoding="utf-8")
 
 for method in (
 	"get_processing_batch",
@@ -47,6 +58,8 @@ for method in (
 	"list_processing_batches",
 	"list_manual_adjustments",
 	"get_processing_configuration",
+	"list_department_mappings",
+	"upsert_department_mapping",
 	"generate_monthly_final_files",
 	"get_monthly_final_preview",
 ):
@@ -59,6 +72,10 @@ for marker in (
 	"processed_result",
 	"ATTENDANCE_DRAFT_RESULT_COLUMNS",
 	"MISSED_PUNCH_RESULT_COLUMNS",
+	"MISSED_PUNCH_SIGNOFF_COLUMNS",
+	"APPLE_TREE_SIGNOFF_COLUMNS",
+	"def _missed_punch_summary",
+	"红苹果金额",
 	"processed_rows",
 	"review_rows",
 	"月度终稿来源未完备",
@@ -119,6 +136,10 @@ for marker in (
 	"该来源已经确认；如需更正，请使用“查看/更正记录”。",
 	"确认未打卡（不计入下游）",
 	"def _department_comparison",
+	"def _department_mapping_for",
+	"HRMS Attendance Department Mapping",
+	"创建人部门",
+	"department_mapping=_department_mapping_for",
 	"钉钉考勤表部门：{0}；花名册部门：{1}。",
 	"source_department",
 	"roster_department",
@@ -129,6 +150,7 @@ for marker in (
 	"审批状态",
 	"红苹果",
 	"红苹果金额",
+	"result_summary",
 ):
 	require(api, marker)
 
@@ -176,7 +198,7 @@ for method in (
 	"get_processing_batch", "register_source_file", "register_monthly_support_file", "precheck_monthly_support_file", "process_monthly_support_file", "confirm_monthly_support_file", "precheck_source_slot", "process_source_slot",
 	"list_processing_results", "export_processing_result", "get_processing_record", "update_processing_record", "bulk_update_processing_records", "confirm_source_result",
 	"list_processing_exceptions", "list_processing_batches", "list_manual_adjustments",
-	"get_processing_configuration", "generate_monthly_final_files", "get_monthly_final_preview",
+	"get_processing_configuration", "list_department_mappings", "upsert_department_mapping", "generate_monthly_final_files", "get_monthly_final_preview",
 ):
 	start = api.find(f"def {method}(")
 	end = api.find("\n@frappe.whitelist()", start + 1)
@@ -219,7 +241,29 @@ for source_type in ("housing_allowance", "full_attendance", "special_hours"):
 	require(source_type_options, source_type, f"Processing record must support monthly source {source_type}.")
 
 status_options = next(field["options"] for field in batch["fields"] if field["fieldname"] == "status")
-for status in ("已导入", "已生成异常", "待加工", "待处理异常", "待确认", "已确认"):
-	require(status_options, status, f"Import batch must retain/add status {status}.")
+allowed_batch_statuses = set(status_options.splitlines())
+for status in ("已导入", "已生成异常", "待加工", "结构异常", "待处理异常", "待确认", "已确认"):
+	if status not in allowed_batch_statuses:
+		raise AssertionError(f"Import batch must retain/add status {status}.")
+
+# Mirror Frappe's Select validation for every literal status directly written
+# to an import batch.  This catches the exact regression where the API wrote
+# “结构异常” but the DocType did not permit that value.
+written_batch_statuses = set(re.findall(r'batch\.status\s*=\s*"([^"]+)"', api))
+unsupported_statuses = written_batch_statuses - allowed_batch_statuses
+if unsupported_statuses:
+	raise AssertionError(f"Import batch writes unsupported Select statuses: {sorted(unsupported_statuses)}")
+
+# The Select definition protects new sites; this patch protects existing sites
+# and any historic Property Setter that overrides the app-owned options.
+require(patches_file, "hrms.patches.v16_0.sync_attendance_import_batch_status_options")
+for marker in (
+	'frappe.reload_doc("hr", "doctype", "hrms_attendance_import_batch")',
+	'"Property Setter"',
+	'"property": "options"',
+	'REQUIRED_STATUS = "结构异常"',
+	"frappe.clear_cache(doctype=DOCTYPE)",
+):
+	require(status_sync_patch, marker, f"Attendance status sync patch is incomplete: {marker}")
 
 print("Attendance processing center contract passed.")

@@ -17,7 +17,6 @@ const assert = (condition, message) => {
 });
 
 [
-	"employee_archive/employee_archive.js",
 	"employee_property_history/employee_property_history.js",
 	"employee_roster_import/employee_roster_import.js",
 	"form_data_intake/form_data_intake.js",
@@ -29,7 +28,6 @@ const assert = (condition, message) => {
 });
 
 [
-	"employee_archive/employee_archive.js",
 	"employee_property_history/employee_property_history.js",
 	"form_data_intake/form_data_intake.js",
 	"organizational_chart/organizational_chart.js",
@@ -38,7 +36,6 @@ const assert = (condition, message) => {
 });
 
 [
-	"employee_archive/employee_archive.js",
 	"employee_detail/employee_detail.js",
 	"employee_property_history/employee_property_history.js",
 	"form_data_intake/form_data_intake.js",
@@ -61,11 +58,11 @@ assert(shell.includes("schedule_hrms_dynamic_localization(changed_nodes)"), "Mut
 assert(shell.includes("compact_localization_roots"), "Localization must avoid walking nested DOM roots more than once");
 assert(shell.includes("requestIdleCallback"), "Dynamic localization must yield to user interactions");
 assert(shell.includes("localized_value !== original_value"), "Localization must not write unchanged text and retrigger its observer");
-assert(hooks.includes("hrms_home_redirect_v6.js?v=20260805h"), "The optimized Desk shell must use a fresh browser cache key");
+assert(hooks.includes("hrms_home_redirect_v6.js?v=20260811b"), "The optimized Desk shell must use a fresh browser cache key");
 
 const employeeDetail = read("hrms/hr/page/employee_detail/employee_detail.js");
 assert(employeeDetail.includes("invalid_route_employee"), "Employee detail must reject literal undefined/null route values");
-assert(employeeDetail.includes('frappe.set_route("employee-archive")'), "Invalid employee detail URLs must return to the archive");
+assert(employeeDetail.includes('frappe.set_route("List", "Employee")'), "Invalid employee detail URLs must return to the roster");
 
 const api = read("hrms/api/employee_field_template.py");
 const branding = read("hrms/branding.py");

@@ -6,6 +6,13 @@ from frappe.model.document import Document
 API_SYNC_MODE = "内网服务器主动拉取API"
 
 
+def _has_text_value(value) -> bool:
+	if isinstance(value, str):
+		return bool(value.strip())
+
+	return bool(value)
+
+
 class HRMSDingTalkSettings(Document):
 	def validate(self):
 		"""Prevent a production pull from being enabled with incomplete credentials.
@@ -21,11 +28,11 @@ class HRMSDingTalkSettings(Document):
 			frappe.throw(_("启用每日自动同步前，请先将同步模式切换为“内网服务器主动拉取API”。"))
 
 		if self.enabled and self.sync_mode == API_SYNC_MODE:
-			if not self.company:
+			if not _has_text_value(self.company):
 				frappe.throw(_("请先选择同步公司（Company）。"))
-			if not self.client_id:
+			if not _has_text_value(self.client_id):
 				frappe.throw(_("启用 API 同步前，请填写客户端 ID / 应用 Key（Client ID / AppKey）。"))
-			if not self.get_password("client_secret", raise_exception=False):
+			if not _has_text_value(self.get_password("client_secret", raise_exception=False)):
 				frappe.throw(_("启用 API 同步前，请填写客户端密钥 / 应用密钥（Client Secret / AppSecret）。"))
 
 		if self.daily_sync_enabled:

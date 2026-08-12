@@ -154,6 +154,7 @@ import { Autocomplete, DateTimePicker, ErrorMessage, Input, TextEditor } from "f
 import { computed, onMounted, inject } from "vue"
 
 import Link from "@/components/Link.vue"
+import { normalizeSelectOptions } from "@/utils/formFieldOptions"
 
 const __ = inject("$translate")
 
@@ -206,11 +207,7 @@ const selectionList = computed(() => {
 	if (props.fieldtype === "Link" && props.documentList) {
 		return props.documentList
 	} else if (props.fieldtype == "Select" && props.options) {
-		const options = props.options.split("\n")
-		return options.map((option) => ({
-			label: __(option),
-			value: option,
-		}))
+		return normalizeSelectOptions(props.options, __)
 	}
 
 	return []

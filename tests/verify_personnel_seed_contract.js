@@ -27,7 +27,7 @@ assert(fs.existsSync(path.join(propertyHistoryPagePath, "employee_property_histo
 
 const pageJson = readJson("hrms", "hr", "page", "employee_property_history", "employee_property_history.json");
 assert(pageJson.name === "employee-property-history", "任职记录 Page name 必须是 employee-property-history。");
-assert(pageJson.title === "任职记录", "任职记录 Page 标题必须是中文。");
+assert(pageJson.title === "异动记录", "异动记录 Page 标题必须是中文。");
 
 const pageRoot = path.join(root, "hrms", "hr", "page");
 const legacyPropertyHistoryPages = fs
@@ -42,13 +42,13 @@ const pageJs = read("hrms", "hr", "page", "employee_property_history", "employee
 for (const marker of [
 	'frappe.pages["employee-property-history"]',
 	"hrms.api.employee_field_template.get_employee_property_history",
-	"办理人事异动",
-	"办理转正",
 	"Employee Transfer",
 	"Employee Promotion",
 ]) {
 	assert(pageJs.includes(marker), `任职记录页缺少必要标记: ${marker}`);
 }
+assert(!pageJs.includes('set_primary_action(__("办理人事异动")'), "异动记录页不得重复提供办理入口。");
+assert(!pageJs.includes('add_inner_button(__("打开人事异动列表")'), "异动记录页不得绕回 Employee Transfer 列表。");
 
 for (const marker of [
 	"get_employee_property_history",
@@ -93,6 +93,8 @@ for (const workspaceParts of [
 	assert(!workspaceSource.includes('"link_to": "Employee Property History"'), `${workspaceParts.join("/")} 不能指向任职记录子表。`);
 	assert(!workspaceSource.includes('"link_to": "Employee Training"'), `${workspaceParts.join("/")} 不能指向培训经历子表。`);
 	assert(workspaceSource.includes('"link_to": "employee-property-history"'), `${workspaceParts.join("/")} 必须进入任职记录汇总页。`);
+	assert(workspaceSource.includes('"label": "异动记录"'), `${workspaceParts.join("/")} 左侧必须只展示异动记录入口。`);
+	assert(!workspaceSource.includes('"link_to": "Employee Transfer"'), `${workspaceParts.join("/")} 左侧不得直接办理人事异动。`);
 	assert(workspaceSource.includes('"link_to": "Employee Skill Map"'), `${workspaceParts.join("/")} 必须进入培训经历父级资料。`);
 }
 

@@ -20,6 +20,44 @@ TRANSFER_PROPERTY_FIELDS = {
 	"custom_is_confirmed": "是否转正",
 }
 
+# Frappe Link fields store the document name, while the HR UI deliberately
+# shows the business-facing name. Departments created by the legacy data, for
+# example, may be stored as "行政课 - 1D" but shown as "行政课".
+TRANSFER_LINK_LABEL_FIELDS = {
+	"Department": "department_name",
+	"Designation": "designation_name",
+}
+
+
+def _resolve_transfer_link_value(doctype: str, value: str, company: str | None = None) -> str:
+	"""Resolve a business label to the internal value required by a Link field."""
+	value = cstr(value).strip()
+	if not value or frappe.db.exists(doctype, value):
+		return value
+
+	label_field = TRANSFER_LINK_LABEL_FIELDS.get(doctype)
+	if not label_field:
+		return value
+
+	filters = {label_field: value}
+	if doctype == "Department" and company:
+		filters["company"] = company
+
+	matches = frappe.get_all(doctype, filters=filters, pluck="name", limit_page_length=2)
+	if len(matches) == 1:
+		return matches[0]
+
+	if len(matches) > 1:
+		label = _("部门") if doctype == "Department" else _("岗位")
+		scope = _("公司 {0} 下").format(company) if company else ""
+		frappe.throw(
+			_("{0}存在多个业务名称为“{1}”的{2}，请先在组织架构中保持业务名称唯一。").format(
+				scope, value, label
+			)
+		)
+
+	return value
+
 
 class EmployeeTransfer(Document):
 	def validate(self):
@@ -74,6 +112,12 @@ class EmployeeTransfer(Document):
 				frappe.throw(_("员工档案中不存在字段：{0}").format(TRANSFER_PROPERTY_FIELDS[fieldname]))
 			if row.new is None or not cstr(row.new).strip():
 				frappe.throw(_("请填写{0}的变更后内容。").format(TRANSFER_PROPERTY_FIELDS[fieldname]))
+
+			new_value = cstr(row.new).strip()
+			if field.fieldtype == "Link" and field.options:
+				row.new = _resolve_transfer_link_value(field.options, new_value, employee.company)
+			else:
+				row.new = new_value
 
 			current_value = employee.get(fieldname)
 			row.current = cstr(current_value)
@@ -148,6 +192,8 @@ def get_designations_for_department(
 	filters = frappe._dict(filters or {})
 	department = filters.get("department")
 	company = filters.get("company")
+	if department:
+		department = _resolve_transfer_link_value("Department", department, company)
 	designation_meta = frappe.get_meta("Designation")
 
 	conditions = ["d.name like %(txt)s"]

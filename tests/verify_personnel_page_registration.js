@@ -19,7 +19,7 @@ assert(
 assert(setup.includes("def after_migrate():"), "缺少部署后页面注册入口。");
 assert(setup.includes("ensure_personnel_pages()"), "部署后必须调用人员页面注册。 ");
 assert(
-	pageTemplate.includes('{"name": "employee-property-history", "title": "任职记录"'),
+	pageTemplate.includes('{"name": "employee-property-history", "title": "异动记录"'),
 	"任职记录必须在人员页面定义中注册。",
 );
 assert(

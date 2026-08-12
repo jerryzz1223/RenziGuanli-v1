@@ -161,6 +161,8 @@ TRANSLATIONS = {
 	"Employee Separation": "员工离职",
 	"Employee Exits": "离职员工",
 	"Employee Grievance": "员工申诉",
+	"HRMS Employee Reward Punishment": "员工奖惩记录",
+	"HRMS Reward Punishment Rule": "奖惩规则",
 	"Grievance Type": "申诉类型",
 	"Employee Skill Map": "员工技能矩阵",
 	"Training Program": "培训项目",

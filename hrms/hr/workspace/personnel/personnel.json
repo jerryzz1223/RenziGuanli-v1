@@ -92,17 +92,7 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "人事异动",
-   "link_count": 0,
-   "link_to": "Employee Transfer",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "任职记录",
+   "label": "异动记录",
    "link_count": 0,
    "link_to": "employee-property-history",
    "link_type": "Page",
@@ -124,7 +114,7 @@
    "is_query_report": 0,
    "label": "奖惩记录",
    "link_count": 0,
-   "link_to": "Employee Grievance",
+   "link_to": "HRMS Employee Reward Punishment",
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"

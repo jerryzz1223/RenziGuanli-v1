@@ -30,17 +30,24 @@ const apiSource = read(apiPath);
 
 for (const marker of [
 	'frappe.pages["employee-property-history"]',
-	"办理人事异动",
-	"办理转正",
-	"打开人事异动列表",
 	"get_employee_property_history",
-	"任职记录来自人事异动和转正/晋升单据中的 Employee Property History 变更明细",
+	"异动记录来自花名册员工详情中办理的人事异动和转正/晋升单据",
 	"查看来源单据",
-	"暂无任职记录。请通过人事异动或转正单据生成任职变化。",
-	"正在读取任职记录...",
+	"暂无异动记录。请从员工花名册进入员工详情办理人事异动。",
+	"正在读取异动记录...",
 	"@media (max-width: 768px)",
 ]) {
 	assertIncludes(source, marker, `Employee property history page missing marker: ${marker}`);
+}
+
+for (const forbidden of [
+	'set_primary_action(__("办理人事异动")',
+	'add_inner_button(__("办理转正")',
+	'add_inner_button(__("打开人事异动列表")',
+]) {
+	if (source.includes(forbidden)) {
+		throw new Error(`异动记录页必须只读，不得显示入口: ${forbidden}`);
+	}
 }
 
 assertIncludes(

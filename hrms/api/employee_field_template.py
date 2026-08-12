@@ -54,7 +54,7 @@ PERSONNEL_PAGE_DEFINITIONS = [
 		"icon": "key",
 		"roles": HRMS_ACCESS_PAGE_ROLES,
 	},
-	{"name": "employee-property-history", "title": "任职记录", "icon": "timeline"},
+	{"name": "employee-property-history", "title": "异动记录", "icon": "timeline"},
 	{"name": "attendance-import-center", "title": "考勤导入中心", "icon": "upload"},
 	{"name": "payroll-input-center", "title": "薪资输入中心", "icon": "database"},
 	{"name": "form-data-intake", "title": "人资表单导入中心", "icon": "upload"},
@@ -3169,6 +3169,23 @@ def _make_related_record(
 
 
 def _get_employee_related_records(doc):
+	reward_punishment_items = _get_employee_doctype_items(
+		"HRMS Employee Reward Punishment",
+		{"employee": doc.name},
+		[
+			("奖惩类型", "reward_punishment_type"),
+			("奖惩类别", "category"),
+			("奖惩日期", "occurred_on"),
+			("主旨", "subject"),
+			("奖惩原因", "reason"),
+			("处理结果", "decision_result"),
+			("奖惩金额", "amount"),
+			("经办人", "handled_by"),
+			("附件", "attachment"),
+			("状态", "status"),
+		],
+		order_by="occurred_on desc",
+	)
 	transfer_items = _get_employee_doctype_items(
 		"Employee Transfer",
 		{"employee": doc.name},
@@ -3236,10 +3253,9 @@ def _get_employee_related_records(doc):
 				"奖惩记录",
 				"记录奖励、处分、奖惩日期、奖惩原因、处理结果、附件等信息，用于员工成长记录和人事档案留痕。",
 				["奖惩类别", "奖惩日期", "奖惩原因", "处理结果", "经办人", "附件"],
-				[],
-				None,
-				"配置奖惩字段",
-				"staff-attribute-settings",
+				reward_punishment_items,
+				"HRMS Employee Reward Punishment",
+				"新增奖惩记录",
 			),
 			_make_related_record(
 				"考察期信息",

@@ -1,0 +1,41 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "HR-RULE-.#####",
+ "creation": "2026-08-11 00:00:00.000000",
+ "description": "人事奖惩分类、全薪比例和次数折算规则。",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["company", "reward_punishment_type", "category", "rate_percent", "standard_text", "column_break_rule", "conversion_count", "converts_to", "termination_action", "display_order", "enabled", "remarks"],
+ "fields": [
+  {"fieldname": "company", "fieldtype": "Link", "in_list_view": 1, "label": "公司", "options": "Company", "reqd": 1},
+  {"fieldname": "reward_punishment_type", "fieldtype": "Select", "in_list_view": 1, "label": "奖惩类型", "options": "奖励\n惩处", "reqd": 1},
+  {"fieldname": "category", "fieldtype": "Data", "in_list_view": 1, "label": "奖惩类别", "reqd": 1, "unique": 0},
+  {"default": "0", "description": "8 表示全薪的 8%。", "fieldname": "rate_percent", "fieldtype": "Percent", "in_list_view": 1, "label": "全薪比例", "reqd": 1},
+  {"fieldname": "standard_text", "fieldtype": "Data", "in_list_view": 1, "label": "标准说明", "read_only": 1},
+  {"fieldname": "column_break_rule", "fieldtype": "Column Break"},
+  {"default": "0", "description": "0 表示不做次数折算。", "fieldname": "conversion_count", "fieldtype": "Int", "in_list_view": 1, "label": "折算所需次数"},
+  {"fieldname": "converts_to", "fieldtype": "Data", "in_list_view": 1, "label": "折算为"},
+  {"default": "0", "fieldname": "termination_action", "fieldtype": "Check", "label": "终止劳动关系"},
+  {"default": "0", "fieldname": "display_order", "fieldtype": "Int", "label": "显示顺序"},
+  {"default": "1", "fieldname": "enabled", "fieldtype": "Check", "in_list_view": 1, "label": "启用"},
+  {"fieldname": "remarks", "fieldtype": "Small Text", "label": "备注"}
+ ],
+ "links": [],
+ "modified": "2026-08-11 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Reward Punishment Rule",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "HR Manager", "share": 1, "write": 1},
+  {"email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "HR User"}
+ ],
+ "search_fields": "company,reward_punishment_type,category,standard_text,converts_to",
+ "sort_field": "display_order",
+ "sort_order": "ASC",
+ "states": [],
+ "title_field": "category",
+ "track_changes": 1
+}

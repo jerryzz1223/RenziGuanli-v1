@@ -134,7 +134,6 @@ for (const marker of [
 
 for (const marker of [
 	"员工花名册",
-	"员工档案库",
 	"入职管理",
 	"转正管理",
 	"离职管理",

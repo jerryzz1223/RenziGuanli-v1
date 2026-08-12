@@ -77,13 +77,12 @@ for (const marker of [
 	'.css("display", "none")',
 	".form-sidebar .form-name-container",
 	'$(this).attr("data-copy")',
-	"frm.savesubmit = function",
-	'__("\u6b63\u5f0f\u63d0\u4ea4 {0}\uff1f", [employee_label])',
-	'form.save("Submit", callback, btn)',
 	'frappe.set_route("employee-detail", frm.doc.employee)',
 ]) {
 	assert(separationJs.includes(marker), `离职表单缺少业务身份或精简页面逻辑: ${marker}`);
 }
+assert(!separationJs.includes("check_if_latest"), "离职提交不能调用已移除的 check_if_latest");
+assert(!separationJs.includes("frm.savesubmit = function"), "离职表单应使用 Frappe 原生提交流程");
 for (const forbidden of ["get_onboarding_details", '__("Project")', '__("Task")']) {
 	assert(!separationJs.includes(forbidden), `离职表单不能继续使用旧项目活动逻辑: ${forbidden}`);
 }

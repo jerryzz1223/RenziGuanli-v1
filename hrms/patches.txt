@@ -50,4 +50,6 @@ hrms.patches.v16_0.set_reference_fields_in_expense_claim_advance
 hrms.patches.v16_0.update_partially_paid_employee_advance_status
 hrms.patches.v16_0.ensure_personnel_pages
 hrms.patches.v16_0.ensure_attendance_import_center_page
+hrms.patches.v16_0.sync_attendance_import_batch_status_options
 hrms.patches.v16_0.create_organization_management_custom_fields #2026-07-06
+hrms.patches.v16_0.repair_yongxin_company_relationships #2026-08-11

@@ -9,8 +9,6 @@ const topNavCssPath = path.join(root, "hrms", "public", "css", "hrms_top_nav.css
 const employeeFormPath = path.join(root, "hrms", "public", "js", "erpnext", "employee.js");
 const employeeListPath = path.join(root, "hrms", "public", "js", "erpnext", "employee_list.js");
 const employeeApiPath = path.join(root, "hrms", "api", "employee_field_template.py");
-const employeeArchiveJsonPath = path.join(root, "hrms", "hr", "page", "employee_archive", "employee_archive.json");
-const employeeArchiveJsPath = path.join(root, "hrms", "hr", "page", "employee_archive", "employee_archive.js");
 const employeeTransferPath = path.join(root, "hrms", "hr", "doctype", "employee_transfer", "employee_transfer.js");
 const employeeTransferJsonPath = path.join(root, "hrms", "hr", "doctype", "employee_transfer", "employee_transfer.json");
 const employeePromotionPath = path.join(root, "hrms", "hr", "doctype", "employee_promotion", "employee_promotion.js");
@@ -42,7 +40,6 @@ function mustInclude(source, marker, message) {
 mustInclude(hooks, '"Employee": "public/js/erpnext/employee_list.js"', "Employee list view customization must be registered in hooks.py.");
 mustInclude(hooks, '"Employee": "public/js/erpnext/employee.js"', "Employee form customization must remain registered in hooks.py.");
 mustInclude(topNavCss, "hrms-roster-toolbar-control-hidden", "员工花名册必须隐藏未启用的标准工具栏控件。");
-mustInclude(topNavCss, "margin-top: 14px", "员工档案库筛选栏必须与状态卡片保持清晰的垂直间距。");
 
 for (const label of ["桌面", "Desktop", "网站", "Website", "编辑侧边栏", "Edit Sidebar", "Delete Demo Data"]) {
 	mustInclude(redirect, label, `Global sidebar dropdown cleanup must handle: ${label}`);
@@ -200,12 +197,11 @@ for (const label of ["员工管理", "员工关系"]) {
 
 for (const [label, linkTo] of [
 	["员工花名册", "Employee"],
-	["员工档案库", "employee-archive"],
 	["入职管理", "Employee Onboarding"],
 	["转正管理", "Employee Promotion"],
 	["离职管理", "Employee Separation"],
 	["离职记录", "employee-separation-records"],
-	["人事异动", "Employee Transfer"],
+	["异动记录", "employee-property-history"],
 ]) {
 	if (!personnel.links.some((link) => link.type === "Link" && link.label === label && link.link_to === linkTo)) {
 		throw new Error(`Personnel workspace must use real Frappe route for ${label} -> ${linkTo}`);
@@ -213,51 +209,6 @@ for (const [label, linkTo] of [
 	if (!personnelSidebar.items.some((item) => item.type === "Link" && item.label === label && item.link_to === linkTo)) {
 		throw new Error(`Personnel sidebar must use real Frappe route for ${label} -> ${linkTo}`);
 	}
-}
-
-if (!fs.existsSync(employeeArchiveJsonPath) || !fs.existsSync(employeeArchiveJsPath)) {
-	throw new Error("员工档案库 must be an independent Frappe Page, not another Employee list alias.");
-}
-
-const employeeArchiveJson = JSON.parse(fs.readFileSync(employeeArchiveJsonPath, "utf8"));
-const employeeArchiveJs = fs.readFileSync(employeeArchiveJsPath, "utf8");
-
-if (employeeArchiveJson.name !== "employee-archive" || employeeArchiveJson.title !== "员工档案库") {
-	throw new Error("员工档案库 Page route/title is incorrect.");
-}
-
-for (const marker of [
-	"frappe.pages[\"employee-archive\"]",
-	"frappe.ui.make_app_page",
-	"hrms.api.employee_field_template.get_employee_roster",
-	"hrms.api.employee_field_template.get_employee_roster_summary",
-	"Employee",
-	"员工档案库",
-	"姓名/手机号",
-	"姓名、手机号、工号",
-	"员工姓名",
-	"姓名",
-	"工号",
-	"部门",
-	"岗位",
-	"工作性质",
-	"入职日期",
-	"证件类型",
-	"证件号码",
-	"手机号码",
-	"操作",
-	"设置花名册字段",
-	"frappe.set_route(\"employee-detail\"",
-	"当前没有真实员工档案",
-	"this.page_length = 100",
-	"hrms-employee-archive-view",
-	"render_pagination",
-]) {
-	mustInclude(employeeArchiveJs, marker, `员工档案库 Page is missing real-data behavior marker: ${marker}`);
-}
-
-if (employeeArchiveJs.includes("hrms-archive-page hrms-employee-roster-view")) {
-	throw new Error("员工档案库必须使用独立页面样式，不能复用花名册页面类。");
 }
 
 const employeeCodeSelector = fs.readFileSync(employeeCodeSelectorPath, "utf8");

@@ -108,7 +108,10 @@
 			function render_dialog() {
 				const body = dialog.fields_dict.import_content.$wrapper;
 				if (!preview) {
-					body.html(`<div class="hrms-context-import"><p>${escape(template.description)}</p><div class="alert alert-info">${escape(__("当前公司："))}${escape(company)}<br>${escape(__("请先下载模板，填写“数据”页后上传。系统会校验必填字段、工号和部门，再写入对应模块的可处理数据。"))}</div><button class="btn btn-default btn-sm" data-download-template>${escape(__("下载基础模板"))}</button></div>`);
+					const uploadTip = template.entry_mode === "reward_punishment_drafts"
+						? __("可直接上传现有《奖惩提报单》；系统会自动识别标题、表头和数据行，忽略合计与签字栏，并校验奖惩条例、全薪比例和金额。")
+						: __("请先下载模板，填写“数据”页后上传。系统会校验必填字段、工号和部门，再写入对应模块的可处理数据。");
+					body.html(`<div class="hrms-context-import"><p>${escape(template.description)}</p><div class="alert alert-info">${escape(__("当前公司："))}${escape(company)}<br>${escape(uploadTip)}</div><button class="btn btn-default btn-sm" data-download-template>${escape(__("下载基础模板"))}</button></div>`);
 					dialog.set_primary_action(__("选择 Excel 文件"), select_file);
 					body.find("[data-download-template]").on("click", () => download_template(template));
 					return;
@@ -130,7 +133,11 @@
 						const result = response.message || {};
 						dialog.hide();
 						frappe.show_alert({ message: __("{0} 已导入 {1} 行", [template.label, result.valid_rows || 0]), indicator: "green" });
-						frappe.set_route("List", "HRMS Form Import Row", { import_batch: result.batch_name });
+						if (result.target_doctype) {
+							frappe.set_route("List", result.target_doctype, { source_import_batch: result.batch_name });
+						} else {
+							frappe.set_route("List", "HRMS Form Import Row", { import_batch: result.batch_name });
+						}
 					});
 				});
 			}
@@ -178,7 +185,7 @@
 		"Training Event": { key: "training_registration", label: "培训登记表" },
 		"Appraisal": { key: "performance_summary", label: "绩效总结表" },
 		"Employee Skill Map": { key: "certificate_management", label: "证书管理表" },
-		"Employee Grievance": { key: "reward_punishment", label: "奖惩提报表" },
+		"HRMS Employee Reward Punishment": { key: "reward_punishment", label: "奖惩提报表", button_label: "导入奖惩表" },
 		"HRMS Attendance Day Check": { key: "attendance_daily", label: "每日考勤表" },
 		"HRMS Attendance Exception": { key: "attendance_exception", label: "出勤异常表" },
 		"HRMS Apple Reward Record": { key: "apple_reward", label: "苹果树表" },

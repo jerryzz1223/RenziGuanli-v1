@@ -37,7 +37,7 @@ DEFAULT_FORM_APPROVAL_ROUTES = {
 }
 
 PAYROLL_TEMPLATE_KEYS = {
-	"salary_structure_change", "reward_punishment", "skill_certificate_allowance", "full_attendance_bonus",
+	"salary_structure_change", "skill_certificate_allowance", "full_attendance_bonus",
 	"housing_allowance", "education_allowance", "dormitory_fee", "social_insurance", "service_award",
 	"exit_payroll_settlement",
 }
@@ -62,7 +62,7 @@ FORM_IMPORT_ENTRY_ROUTES = {
 	"apple_reward": "/desk/attendance-import-center",
 	"attendance_final": "/desk/attendance-import-center",
 	"salary_structure_change": "/desk/payroll-input-center",
-	"reward_punishment": "/desk/payroll-input-center",
+	"reward_punishment": "/desk/hrms-employee-reward-punishment",
 	"skill_certificate_allowance": "/desk/payroll-input-center",
 	"full_attendance_bonus": "/desk/payroll-input-center",
 	"housing_allowance": "/desk/payroll-input-center",
@@ -333,15 +333,19 @@ FORM_IMPORT_PROFILES = [
 	},
 	{
 		"key": "reward_punishment",
-		"module": "薪酬",
+		"module": "人事",
 		"label": "奖惩提报",
-		"description": "奖惩申请、人事确认和财务金额提报；审核后生成薪酬福利/扣款来源，并同步为薪资变量。",
+		"description": "导入人事奖惩提报单，按公司奖惩规则校验全薪、比例和金额，直接生成可编辑的人事奖惩草稿。",
 		"source_sheets": ["奖惩提报单（提交人事）", "奖惩提报单（提交财务）"],
-		"processing_target": "薪酬福利/扣款来源 / 薪资变量（确认后）",
-		"target_doctype": "HRMS Payroll Welfare Source Record",
+		"processing_target": "员工奖惩记录（可编辑草稿）",
+		"target_doctype": "HRMS Employee Reward Punishment",
+		"entry_mode": "reward_punishment_drafts",
+		"row_identity_keys": ["employee_code", "employee_name"],
 		"columns": [
-			_column("employee_code", "工号", True), _column("employee_name", "姓名", True), _column("department", "部门", True), _column("occurred_on", "发生日", True),
-			_column("subject", "主旨", True), _column("reward_punishment_type", "奖惩类型", True), _column("rule", "奖惩条例"), _column("standard", "标准"), _column("amount", "金额（元）"), _column("remarks", "备注"),
+			_column("sequence_no", "序号"), _column("department", "部门", True), _column("employee_name", "姓名", True), _column("employee_code", "工号", True),
+			_column("occurred_on", "发生日", True), _column("subject", "主旨", True), _column("category", "奖惩条例", True, ["奖惩类别"]),
+			_column("reward_punishment_type", "奖惩类型"), _column("standard", "标准"), _column("full_salary", "全薪", True),
+			_column("amount", "金额（元）", True, ["金额"]), _column("remarks", "备注"),
 		],
 	},
 	{
@@ -611,6 +615,9 @@ def _read_plan(file_url, profile):
 		normalized = {key: _normalise_text(values[column_index - 1] if len(values) >= column_index else "") for key, column_index in mapping.items()}
 		if not any(normalized.values()):
 			continue
+		identity_keys = profile.get("row_identity_keys") or []
+		if identity_keys and not any(normalized.get(key) for key in identity_keys):
+			continue
 		rows.append({"row_number": row_number, "raw": raw, "normalized": normalized})
 	return {
 		"sheet_name": sheet.title,
@@ -683,7 +690,7 @@ def _business_date(data):
 
 
 def _record_key(profile, data, row_number):
-	bits = [profile["key"], data.get("external_id") or data.get("employee_code") or data.get("candidate_email") or data.get("candidate_name") or data.get("proposal_no") or data.get("feedback_no") or "ROW", data.get("date_of_joining") or data.get("attendance_date") or data.get("transfer_date") or data.get("payroll_month") or data.get("training_date") or row_number]
+	bits = [profile["key"], data.get("external_id") or data.get("employee_code") or data.get("candidate_email") or data.get("candidate_name") or data.get("proposal_no") or data.get("feedback_no") or "ROW", data.get("date_of_joining") or data.get("attendance_date") or data.get("transfer_date") or data.get("occurred_on") or data.get("payroll_month") or data.get("training_date") or row_number]
 	return "-".join(_normalise_text(value).replace(" ", "")[:40] for value in bits)
 
 
@@ -734,11 +741,61 @@ def _onboarding_import_context(data, company):
 	return frappe._dict({"errors": errors, "applicant": applicant, "offer": offer, "template": template, "holiday_list": holiday_list})
 
 
+def _normalise_reward_punishment_data(data, company):
+	from hrms.hr.doctype.hrms_reward_punishment_rule.hrms_reward_punishment_rule import (
+		get_effective_reward_punishment_rule,
+	)
+
+	errors = []
+	date_text = _normalise_text(data.get("occurred_on")).replace(".", "-").replace("/", "-")
+	if date_text:
+		try:
+			data["occurred_on"] = getdate(date_text).isoformat()
+		except Exception:
+			errors.append(_("发生日格式无法识别：{0}").format(data.get("occurred_on")))
+	category = _normalise_text(data.get("category"))
+	rule = get_effective_reward_punishment_rule(company, category) if category else None
+	if category and not rule:
+		errors.append(_("当前公司未配置或未启用奖惩条例“{0}”。").format(category))
+		return errors
+	if not rule:
+		return errors
+	provided_type = _normalise_text(data.get("reward_punishment_type"))
+	if provided_type and provided_type != rule.reward_punishment_type:
+		errors.append(
+			_("奖惩类型“{0}”与条例“{1}”的系统类型“{2}”不一致。").format(
+				provided_type, category, rule.reward_punishment_type
+			)
+		)
+	data["reward_punishment_type"] = rule.reward_punishment_type
+	data["rule"] = rule.name
+	data["rate_percent"] = flt(rule.rate_percent)
+	data["standard"] = rule.standard_text
+	full_salary = flt(data.get("full_salary"))
+	amount = flt(data.get("amount"))
+	expected_amount = round(full_salary * flt(rule.rate_percent) / 100, 2)
+	data["full_salary"] = full_salary
+	data["amount"] = amount
+	if full_salary <= 0:
+		errors.append(_("全薪必须大于0。"))
+	elif abs(amount - expected_amount) > 0.01:
+		errors.append(
+			_("金额与规则不符：{0}×{1:g}%应为{2:.2f}元，表中为{3:.2f}元。").format(
+				full_salary, flt(rule.rate_percent), expected_amount, amount
+			)
+		)
+	return errors
+
+
 def _validate_rows(profile, company, plan):
 	result = []
 	for item in plan["rows"]:
 		data = item["normalized"]
+		prevalidation_errors = []
+		if profile["key"] == "reward_punishment":
+			prevalidation_errors = _normalise_reward_punishment_data(data, company)
 		errors = [_("缺少必填值：{0}").format(column["label"]) for column in profile["columns"] if column.get("required") and not data.get(column["key"])]
+		errors = prevalidation_errors + errors
 		employee = _employee_by_code(company, data.get("employee_code")) or _employee_by_name(company, data.get("employee_name"))
 		if data.get("employee_code") and not employee:
 			errors.append(_("未匹配到当前公司在职员工工号：{0}").format(data["employee_code"]))
@@ -822,7 +879,7 @@ def preview_form_import(file_url: str, template_key: str, company: str):
 	rows = _validate_rows(profile, company, plan) if not plan["missing_required"] else []
 	failed = sum(1 for row in rows if row["errors"])
 	return {
-		"entry_mode": "staging", "template": {"key": profile["key"], "label": profile["label"], "module": profile["module"], "processing_target": profile["processing_target"]},
+		"entry_mode": profile.get("entry_mode", "staging"), "template": {"key": profile["key"], "label": profile["label"], "module": profile["module"], "processing_target": profile["processing_target"]},
 		"sheet_name": plan["sheet_name"], "header_row": plan["header_row"], "headers": plan["headers"], "mapping": plan["mapping"],
 		"missing_required": plan["missing_required"], "total_rows": len(plan["rows"]), "valid_rows": len(rows) - failed, "failed_rows": failed,
 		"preview_rows": [{"row_number": row["row_number"], "record_key": row["record_key"], "employee": row["employee"], "errors": row["errors"], "normalized": row["normalized"]} for row in rows[:100]],
@@ -847,16 +904,39 @@ def import_form_workbook(file_url: str, template_key: str, company: str, notes: 
 		"mapping_json": json.dumps({"sheet_name": plan["sheet_name"], "header_row": plan["header_row"], "mapping": plan["mapping"]}, ensure_ascii=False),
 		"error_summary": _("{0} 行校验失败").format(failed) if failed else "", "imported_by": frappe.session.user, "imported_on": now_datetime(), "notes": notes,
 	}).insert(ignore_permissions=True)
+	created_records = []
+	direct_reward_drafts = profile.get("entry_mode") == "reward_punishment_drafts"
 	for row in rows:
 		data = row["normalized"]
-		frappe.get_doc({
+		row_doc = frappe.get_doc({
 			"doctype": FORM_IMPORT_ROW_DOCTYPE, "import_batch": batch.name, "company": company, "module_name": profile["module"], "template_key": profile["key"],
 			"row_number": row["row_number"], "record_key": row["record_key"], "employee": row["employee"], "employee_code": data.get("employee_code"),
 			"employee_name": data.get("employee_name") or data.get("candidate_name"), "department": row["department"], "business_date": _business_date(data),
-		"status": "处理失败" if row["errors"] else "待人事审核", "target_doctype": profile.get("target_doctype", ""),
+			"status": "处理失败" if row["errors"] else "待人事审核", "target_doctype": profile.get("target_doctype", ""),
 			"raw_data_json": json.dumps(row["raw"], ensure_ascii=False), "normalized_data_json": json.dumps(data, ensure_ascii=False), "error_message": "；".join(row["errors"]),
 		}).insert(ignore_permissions=True)
-	return {"batch_name": batch.name, "total_rows": len(rows), "valid_rows": len(rows) - failed, "failed_rows": failed, "status": batch.status}
+		if direct_reward_drafts and not row["errors"]:
+			target = _insert_target(row_doc, data)
+			row_doc.target_doctype = target.doctype
+			row_doc.target_name = target.name
+			row_doc.status = "已生成草稿"
+			row_doc.review_status = "无需生成单据"
+			row_doc.generated_by = frappe.session.user
+			row_doc.generated_on = now_datetime()
+			row_doc.save(ignore_permissions=True)
+			created_records.append(target.name)
+	if direct_reward_drafts and not failed:
+		batch.status = "已处理"
+		batch.save(ignore_permissions=True)
+	return {
+		"batch_name": batch.name,
+		"total_rows": len(rows),
+		"valid_rows": len(rows) - failed,
+		"failed_rows": failed,
+		"status": batch.status,
+		"target_doctype": profile.get("target_doctype", "") if direct_reward_drafts else "",
+		"created_records": created_records,
+	}
 
 
 @frappe.whitelist()
@@ -1220,7 +1300,9 @@ def _insert_target(row, data, payroll_month="", attendance_lock_version="", appr
 	# Older staged rows were created before reward/exit forms were routed to the
 	# payroll source ledger.  Preserve their source data but upgrade their target
 	# at generation time instead of requiring a re-import.
-	if row.template_key in ("reward_punishment", "exit_payroll_settlement"):
+	if row.template_key == "reward_punishment":
+		target = "HRMS Employee Reward Punishment"
+	elif row.template_key == "exit_payroll_settlement":
 		target = "HRMS Payroll Welfare Source Record"
 	# Upgrade historical staging rows to their dedicated, formal business record.
 	if row.template_key in BUSINESS_PROCESS_TEMPLATE_CONFIG:
@@ -1437,6 +1519,38 @@ def _insert_target(row, data, payroll_month="", attendance_lock_version="", appr
 				"remarks": _("待改善：{0}\n下一期计划：{1}\n来源：{2}").format(data.get("improvements") or "", data.get("next_plan") or "", row.name),
 			}
 		).insert(ignore_permissions=True)
+
+	if target == "HRMS Employee Reward Punishment":
+		rule_name = data.get("rule") or frappe.db.get_value(
+			"HRMS Reward Punishment Rule",
+			{"company": row.company, "category": data.get("category"), "enabled": 1},
+			"name",
+		)
+		if not rule_name:
+			frappe.throw(_("当前公司未找到启用的奖惩条例“{0}”。").format(data.get("category") or ""))
+		values = {
+			"employee": row.employee,
+			"rule": rule_name,
+			"occurred_on": data.get("occurred_on") or row.business_date,
+			"subject": data.get("subject"),
+			"status": "草稿",
+			"reason": data.get("remarks") or data.get("subject"),
+			"full_salary": flt(data.get("full_salary")),
+			"manual_amount_override": 0,
+			"amount": flt(data.get("amount")),
+			"handled_by": frappe.session.user,
+			"source_import_row": row.name,
+			"source_import_batch": row.import_batch,
+			"source_file": _row_source_file(row),
+			"remarks": data.get("remarks"),
+		}
+		existing = frappe.db.get_value(target, {"source_import_row": row.name}, "name")
+		if existing:
+			doc = frappe.get_doc(target, existing)
+			doc.update(values)
+			doc.save(ignore_permissions=True)
+			return doc
+		return frappe.get_doc({"doctype": target, **values}).insert(ignore_permissions=True)
 
 	if target == "HRMS Employee Salary Change":
 		from hrms.api import payroll_input
@@ -1752,6 +1866,14 @@ def _activate_non_submittable_target(row, target):
 		target.approved_by = target.approved_by or frappe.session.user
 		target.save(ignore_permissions=True)
 		return _("薪资异动已批准；后续薪资结算会读取该员工在生效月份前的最新版本。")
+	if target.doctype == "HRMS Employee Reward Punishment":
+		if target.status == "草稿":
+			target.status = "待审核"
+			target.save(ignore_permissions=True)
+		target.status = "已生效"
+		target.decision_result = target.decision_result or row.review_note or _("经导入审核生效。")
+		target.save(ignore_permissions=True)
+		return _("员工奖惩记录已归档生效。")
 	if target.doctype == "HRMS Payroll Welfare Source Record":
 		from hrms.api import payroll_input
 

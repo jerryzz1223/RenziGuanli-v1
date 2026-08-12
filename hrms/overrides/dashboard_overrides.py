@@ -18,6 +18,7 @@ def get_dashboard_for_employee(data):
 					"Employee Onboarding",
 					"Employee Transfer",
 					"Employee Promotion",
+					"HRMS Employee Reward Punishment",
 					"Employee Grievance",
 				],
 			},

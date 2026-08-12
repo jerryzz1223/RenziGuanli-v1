@@ -23,32 +23,6 @@ function apply_separation_display_rules(frm) {
 	hide_internal_separation_name(frm);
 }
 
-function apply_separation_submit_confirmation(frm) {
-	if (frm.__hrms_separation_submit_confirmation_applied) return;
-
-	frm.__hrms_separation_submit_confirmation_applied = true;
-	frm.savesubmit = function (btn, callback) {
-		const form = this;
-		const employee_label = [form.doc.employee_code_display, form.doc.employee_name]
-			.filter(Boolean)
-			.join(" · ");
-
-		return form.check_if_latest().then(
-			() =>
-				new Promise((resolve, reject) => {
-					frappe.confirm(
-						__("正式提交 {0}？", [employee_label]),
-						() => form.save("Submit", callback, btn).then(resolve).catch(reject),
-						() => {
-							form.validated = false;
-							resolve();
-						},
-					);
-				}),
-		);
-	};
-}
-
 frappe.ui.form.on("Employee Separation", {
 	setup: function (frm) {
 		window.hrmsEmployeeBusinessCodeSelector.setup(frm);
@@ -56,7 +30,6 @@ frappe.ui.form.on("Employee Separation", {
 
 	refresh: function (frm) {
 		window.hrmsEmployeeBusinessCodeSelector.refresh(frm);
-		apply_separation_submit_confirmation(frm);
 		[
 			"employee",
 			"employee_separation_template",
