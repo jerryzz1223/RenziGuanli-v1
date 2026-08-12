@@ -33,6 +33,7 @@ from hrms.api.attendance_processors.missed_punch import precheck_missed_punch_st
 
 IMPORT_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
 PROCESSING_RECORD_DOCTYPE = "HRMS Attendance Processing Record"
+DEPARTMENT_MAPPING_DOCTYPE = "HRMS Attendance Department Mapping"
 SOURCE_TYPES = ("attendance_draft", "apple_tree", "missing_card")
 MONTHLY_SUPPORT_SOURCE_TYPES = ("housing_allowance", "full_attendance", "special_hours")
 SOURCE_LABELS = {
@@ -142,9 +143,8 @@ ATTENDANCE_DRAFT_RESULT_COLUMNS = (
 	("clock_out_missing_count", "下班漏打卡次数"),
 )
 
-# A missed-punch result remains a single source dataset, one approval per row.
-# Its business fields are intentionally explicit so the page and the download
-# are the same complete form rather than a JSON summary cell.
+# The review page remains a complete, columnar view of one approval per row.
+# The separate printable download contract is defined just below.
 MISSED_PUNCH_RESULT_COLUMNS = (
 	("employee_code", "工号"),
 	("employee_name", "姓名"),
@@ -160,24 +160,60 @@ MISSED_PUNCH_RESULT_COLUMNS = (
 	("amount", "红苹果金额"),
 )
 
-# One Apple-tree source row stays one visible result row.  This is the same
-# processed dataset used by the source download; it is not an extra business
-# table or a raw-import export.
+# The downloaded missed-punch workbook is a paper sign-off list, not an audit
+# dump.  Approval and source identifiers remain persisted and available in the
+# review UI, while the workbook contains only the fields HR needs to print.
+MISSED_PUNCH_SIGNOFF_COLUMNS = (
+	"序号",
+	"部门",
+	"创建时间",
+	"补卡时间",
+	"补卡类型",
+	"补卡理由",
+	"创建人",
+	"签名",
+	"备注",
+)
+
+# The first fields intentionally mirror the established Apple-tree sign-off
+# table.  System-only processing columns follow them, so the page and the
+# downloadable result use one familiar, usable header instead of two layouts.
 APPLE_TREE_RESULT_COLUMNS = (
-	("数据ID", "数据ID"),
-	("审批编号", "审批编号"),
-	("奖惩日期", "奖惩日期"),
 	("创建时间", "创建时间"),
-	("部门", "部门"),
-	("姓名", "姓名"),
+	("奖惩日期", "奖/惩日期"),
+	("部门", "受奖/惩人部门"),
+	("姓名", "受奖/惩人"),
+	("绿苹果", "绿苹果"),
+	("红苹果", "红苹果"),
+	("项目", "奖/惩项目"),
+	("备注", "备注"),
+	("创建人", "创建人"),
 	("工号", "工号"),
 	("苹果类型", "苹果类型"),
 	("有效苹果数", "有效苹果数"),
-	("项目", "项目"),
-	("备注", "备注"),
-	("创建人", "创建人"),
+	("审批编号", "审批编号"),
 	("审批结果", "审批结果"),
 	("审批状态", "审批状态"),
+)
+
+APPLE_TREE_RESULT_TRAIL_HEADERS = ("异常说明", "审核状态", "是否计入下游", "来源追溯")
+
+# Apple-tree downloads are paper sign-off lists.  The complete approval,
+# exception and provenance fields remain available in the review UI and audit
+# records, but do not belong on this printable form.
+APPLE_TREE_SIGNOFF_COLUMNS = (
+	"序号",
+	"创建时间",
+	"奖/惩日期",
+	"受奖/惩人部门",
+	"受奖/惩人",
+	"绿苹果",
+	"红苹果",
+	"奖/惩项目",
+	"备注",
+	"创建人",
+	"签名",
+	"备注",
 )
 
 EXCEPTION_LABELS = {
@@ -344,14 +380,16 @@ def _source_department_values(original_value: Any) -> list[str]:
 	"""Read the unmodified department values from retained source rows."""
 	if not isinstance(original_value, dict):
 		return []
-	rows = original_value.get("rows") or []
+	# Attendance drafts retain a ``rows`` list; DingTalk forgot-punch records
+	# retain one raw row directly, where the column is ``创建人部门``.
+	rows = original_value.get("rows")
 	if not isinstance(rows, list):
-		return []
+		rows = [original_value]
 	values = []
 	for row in rows:
 		if not isinstance(row, dict):
 			continue
-		value = row.get("实际部门") or row.get("部门") or row.get("department")
+		value = row.get("创建人部门") or row.get("实际部门") or row.get("部门") or row.get("department")
 		value = str(value or "").strip()
 		if value and value not in values:
 			values.append(value)
@@ -372,6 +410,26 @@ def _department_comparison(record: dict[str, Any]) -> dict[str, str] | None:
 	return {
 		"source_department": "、".join(source_departments) or "（原表未提供）",
 		"roster_department": str(roster_department).strip() or "（花名册未提供）",
+	}
+
+
+def _department_mapping_for(company: str, source_type: str = "missing_card") -> dict[str, str]:
+	"""Return only reviewed, enabled aliases for the current company/source."""
+	try:
+		rows = frappe.get_all(
+			DEPARTMENT_MAPPING_DOCTYPE,
+			filters={"company": company, "source_type": source_type, "enabled": 1},
+			fields=["source_department", "target_department"],
+			limit_page_length=0,
+		)
+	except Exception:
+		# A site that has not migrated the optional mapping DocType must still be
+		# able to retain and review source rows without a hidden fallback mapping.
+		return {}
+	return {
+		str(row.source_department or "").strip(): str(row.target_department or "").strip()
+		for row in rows
+		if str(row.source_department or "").strip() and str(row.target_department or "").strip()
 	}
 
 
@@ -779,6 +837,7 @@ def _process_batch(batch) -> dict[str, Any]:
 		source_file=batch.source_file,
 		source_sheet=sheet_name,
 		employee_directory=employees or None,
+		department_mapping=_department_mapping_for(batch.company, "missing_card"),
 	)
 
 
@@ -871,7 +930,8 @@ def _result_rows(batch, page_length: int = 5000):
 		order_by="employee_code asc, source_row asc",
 		limit_page_length=page_length,
 	)
-	return [_serialize_record(row) for row in records]
+	rows = [_serialize_record(row) for row in records]
+	return _hydrate_apple_tree_result_rows(batch, rows) if batch.source_type == "apple_tree" else rows
 
 
 def _serialize_record(record):
@@ -915,8 +975,179 @@ def _effective_result_values(row: dict[str, Any]) -> dict[str, Any]:
 	return values
 
 
+def _missed_punch_summary(rows: list[dict[str, Any]]) -> dict[str, int | float]:
+	"""Calculate the one result sheet's effective, downstream-eligible totals."""
+	def number(value: Any) -> int | float:
+		try:
+			parsed = float(value or 0)
+		except (TypeError, ValueError):
+			return 0
+		return int(parsed) if parsed.is_integer() else parsed
+
+	summary: dict[str, int | float] = {
+		"included_rows": 0,
+		"green_apples": 0,
+		"red_apples": 0,
+		"amount": 0,
+	}
+	for row in rows:
+		if not row.get("eligible_for_downstream"):
+			continue
+		values = _effective_result_values(row)
+		if not values.get("included"):
+			continue
+		summary["included_rows"] += 1
+		summary["red_apples"] += number(values.get("red_apples"))
+		summary["amount"] += number(values.get("amount"))
+	return summary
+
+
+def _signoff_datetime(value: Any) -> Any:
+	"""Keep sign-off dates sortable in Excel without inventing invalid values."""
+	if isinstance(value, datetime) or value in (None, ""):
+		return value or ""
+	try:
+		parsed = datetime.fromisoformat(str(value).strip())
+		return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+	except (TypeError, ValueError):
+		return value
+
+
+def _missed_punch_signoff_values(row: dict[str, Any], fallback_sequence: int) -> list[Any]:
+	"""Project one auditable record into the printable nine-column list."""
+	values = _effective_result_values(row)
+	original = row.get("original_value") if isinstance(row.get("original_value"), dict) else {}
+	sequence = _row_value(original, "序号")
+	return [
+		sequence if sequence not in (None, "") else fallback_sequence,
+		values.get("department") or _row_value(original, "创建人部门", "部门") or "",
+		_signoff_datetime(values.get("created_at") or _row_value(original, "创建时间")),
+		_signoff_datetime(values.get("punch_time") or _row_value(original, "补卡时间")),
+		values.get("punch_type") or _row_value(original, "补卡类型") or "",
+		values.get("reason") or _row_value(original, "补卡理由") or "",
+		values.get("employee_name") or _row_value(original, "创建人", "姓名") or "",
+		"",
+		"",
+	]
+
+
+def _apple_tree_summary(rows: list[dict[str, Any]]) -> dict[str, int | float]:
+	"""Total downstream-eligible green and red apples independently."""
+	def number(value: Any) -> int | float:
+		try:
+			parsed = float(value or 0)
+		except (TypeError, ValueError):
+			return 0
+		return int(parsed) if parsed.is_integer() else parsed
+
+	summary: dict[str, int | float] = {"green_apples": 0, "red_apples": 0}
+	for row in rows:
+		if not row.get("eligible_for_downstream"):
+			continue
+		values = _effective_result_values(row)
+		amount = number(values.get("有效苹果数"))
+		if values.get("苹果类型") == "绿苹果":
+			summary["green_apples"] += amount
+		elif values.get("苹果类型") == "红苹果":
+			summary["red_apples"] += amount
+	return summary
+
+
+def _apple_tree_result_values(row: dict[str, Any], raw: dict[str, Any] | None = None) -> dict[str, Any]:
+	"""Project current and legacy Apple-tree records into one visible layout."""
+	raw = raw or row.get("original_value") or {}
+	current = _effective_result_values(row)
+	value = lambda *keys: _row_value(raw, *keys) or _row_value(current, *keys)
+	return {
+		"创建时间": value("创建时间", "created_at"),
+		"奖惩日期": value("奖/惩日期", "奖惩日期", "award_date"),
+		"部门": value("受奖/惩人部门", "部门", "department"),
+		"姓名": value("受奖/惩人", "姓名", "employee_name"),
+		"绿苹果": value("绿苹果", "原始绿苹果"),
+		"红苹果": value("红苹果", "原始红苹果"),
+		"项目": value("奖/惩项目", "项目", "project"),
+		"备注": value("备注", "remark"),
+		"创建人": value("创建人", "creator"),
+		"工号": _row_value(current, "工号", "employee_code") or row.get("employee_code") or "",
+		"苹果类型": _row_value(current, "苹果类型") or "",
+		"有效苹果数": _row_value(current, "有效苹果数") or "",
+		"审批编号": value("审批编号", "approval_no") or row.get("approval_no") or "",
+		"审批结果": value("审批结果", "approval_result"),
+		"审批状态": value("审批状态", "approval_status"),
+	}
+
+
+def _signoff_number(value: Any) -> Any:
+	"""Use numeric apple counts when the retained source value is numeric text."""
+	if value in (None, "") or isinstance(value, (int, float)):
+		return value or ""
+	try:
+		parsed = float(str(value).strip())
+		return int(parsed) if parsed.is_integer() else parsed
+	except (TypeError, ValueError):
+		return value
+
+
+def _apple_tree_signoff_values(row: dict[str, Any], fallback_sequence: int) -> list[Any]:
+	"""Project one auditable Apple-tree record into the printable form."""
+	original = row.get("original_value") if isinstance(row.get("original_value"), dict) else {}
+	values = row.get("processed_value") or _apple_tree_result_values(row)
+	sequence = _row_value(original, "序号")
+	return [
+		sequence if sequence not in (None, "") else fallback_sequence,
+		_signoff_datetime(values.get("创建时间")),
+		_signoff_datetime(values.get("奖惩日期")),
+		values.get("部门", ""),
+		values.get("姓名", ""),
+		_signoff_number(values.get("绿苹果")),
+		_signoff_number(values.get("红苹果")),
+		values.get("项目", ""),
+		values.get("备注", ""),
+		values.get("创建人", ""),
+		"",
+		"",
+	]
+
+
+def _apple_tree_signoff_title(attendance_month: Any) -> str:
+	try:
+		return f"{int(str(attendance_month).split('-')[1])}月苹果树"
+	except (IndexError, TypeError, ValueError):
+		return "苹果树"
+
+
+def _hydrate_apple_tree_result_rows(batch, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	"""Backfill old simplified records from their retained source rows.
+
+	Older batches persisted only editable fields.  Reading the immutable uploaded
+	file by source-row makes both their grid and their new download usable without
+	changing the audit record.
+	"""
+	raw_by_source_row = {}
+	try:
+		source_rows, _sheet_name = _read_source_rows(batch)
+		raw_by_source_row = {str(raw.get("source_row")): raw for raw in source_rows}
+	except Exception:
+		# A missing historical attachment must not stop users viewing/exporting the
+		# fields that were already persisted.
+		pass
+	for row in rows:
+		raw = raw_by_source_row.get(str(row.get("source_row")))
+		row["processed_value"] = _apple_tree_result_values(row, raw)
+	return rows
+
+
+def _apple_tree_trace(row: dict[str, Any]) -> str:
+	return " · ".join(
+		str(value) for value in (row.get("source_file"), row.get("source_sheet"), row.get("source_row"), row.get("source_id"), row.get("approval_no"))
+		if value not in (None, "")
+	) or "--"
+
+
 def _export_processed_result(batch) -> dict[str, str]:
 	from openpyxl import Workbook
+	from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+	from openpyxl.utils import get_column_letter
 	from frappe.utils.file_manager import save_file
 
 	rows = _result_rows(batch)
@@ -926,9 +1157,11 @@ def _export_processed_result(batch) -> dict[str, str]:
 	if batch.source_type == "attendance_draft":
 		headers = ["序号"] + [label for _field, label in ATTENDANCE_DRAFT_RESULT_COLUMNS] + ["异常说明", "审核状态", "是否计入下游", "来源文件", "来源工作表", "来源行"]
 	elif batch.source_type == "apple_tree":
-		headers = [label for _field, label in APPLE_TREE_RESULT_COLUMNS] + ["异常类型", "异常说明", "审核状态", "建议值", "确认值", "是否计入下游", "来源文件", "来源工作表", "来源行"]
+		headers = list(APPLE_TREE_SIGNOFF_COLUMNS)
+		sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+		sheet.cell(row=1, column=1, value=_apple_tree_signoff_title(batch.attendance_month))
 	elif batch.source_type == "missing_card":
-		headers = ["序号"] + [label for _field, label in MISSED_PUNCH_RESULT_COLUMNS] + ["异常类型", "异常说明", "审核状态", "是否计入下游", "来源文件", "来源工作表", "来源行", "来源ID", "审批编号"]
+		headers = list(MISSED_PUNCH_SIGNOFF_COLUMNS)
 	else:
 		headers = ["工号", "姓名", "部门", "加工结果", "异常类型", "异常说明", "审核状态", "建议值", "确认值", "可进入下游", "来源文件", "来源工作表", "来源行", "来源ID", "审批编号"]
 	sheet.append(headers)
@@ -944,22 +1177,9 @@ def _export_processed_result(batch) -> dict[str, str]:
 				row.get("source_file"), row.get("source_sheet"), row.get("source_row"),
 			])
 		elif batch.source_type == "apple_tree":
-			values = row.get("processed_value") or {}
-			sheet.append([
-				*[values.get(field, "") for field, _label in APPLE_TREE_RESULT_COLUMNS],
-				"、".join(row.get("exception_labels") or []) or "无", row.get("exception_message"), row.get("review_status"),
-				_json(row.get("proposed_value")), _json(row.get("confirmed_value")) if row.get("confirmed_value") is not None else "",
-				"是" if row.get("eligible_for_downstream") else "否", row.get("source_file"), row.get("source_sheet"), row.get("source_row"),
-			])
+			sheet.append(_apple_tree_signoff_values(row, index))
 		elif batch.source_type == "missing_card":
-			values = _effective_result_values(row)
-			sheet.append([
-				index,
-				*["是" if field == "included" and values.get(field) else "否" if field == "included" else values.get(field, "") for field, _label in MISSED_PUNCH_RESULT_COLUMNS],
-				"、".join(row.get("exception_labels") or []) or "无", row.get("exception_message"), row.get("review_status"),
-				"是" if row.get("eligible_for_downstream") else "否", row.get("source_file"), row.get("source_sheet"),
-				row.get("source_row"), row.get("source_id"), row.get("approval_no"),
-			])
+			sheet.append(_missed_punch_signoff_values(row, index))
 		else:
 			sheet.append([
 				row.get("employee_code"), row.get("employee_name"), row.get("department"), _json(row.get("processed_value")),
@@ -968,8 +1188,72 @@ def _export_processed_result(batch) -> dict[str, str]:
 				"是" if row.get("eligible_for_downstream") else "否", row.get("source_file"), row.get("source_sheet"),
 				row.get("source_row"), row.get("source_id"), row.get("approval_no"),
 			])
-	for column in sheet.columns:
-		sheet.column_dimensions[column[0].column_letter].width = min(max(max(len(str(cell.value or "")) for cell in column) + 2, 12), 48)
+	if batch.source_type == "missing_card":
+		thin = Side(style="thin", color="000000")
+		border = Border(left=thin, right=thin, top=thin, bottom=thin)
+		for cell in sheet[1]:
+			cell.fill = PatternFill("solid", fgColor="D9D9D9")
+			cell.font = Font(bold=True)
+			cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+			cell.border = border
+		sheet.row_dimensions[1].height = 28
+		for row_cells in sheet.iter_rows(min_row=2, min_col=3, max_col=4):
+			for cell in row_cells:
+				if isinstance(cell.value, datetime):
+					cell.number_format = "yyyy-mm-dd hh:mm:ss"
+		for row_cells in sheet.iter_rows(min_row=2, max_col=len(MISSED_PUNCH_SIGNOFF_COLUMNS)):
+			for cell in row_cells:
+				cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+				cell.border = border
+			sheet.row_dimensions[row_cells[0].row].height = 36
+		sheet.freeze_panes = "A2"
+		sheet.auto_filter.ref = sheet.dimensions
+		sheet.sheet_view.showGridLines = False
+		sheet.page_setup.orientation = "landscape"
+		sheet.page_setup.fitToWidth = 1
+		sheet.print_title_rows = "1:1"
+	elif batch.source_type == "apple_tree":
+		thin = Side(style="thin", color="000000")
+		border = Border(left=thin, right=thin, top=thin, bottom=thin)
+		title = sheet["A1"]
+		title.font = Font(bold=True, size=22)
+		title.alignment = Alignment(horizontal="center", vertical="center")
+		sheet.row_dimensions[1].height = 34
+		for cell in sheet[2]:
+			cell.fill = PatternFill("solid", fgColor="BDD7EE")
+			cell.font = Font(bold=True)
+			cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+			cell.border = border
+		sheet.row_dimensions[2].height = 34
+		for row_cells in sheet.iter_rows(min_row=3, max_col=len(APPLE_TREE_SIGNOFF_COLUMNS)):
+			for cell in row_cells:
+				cell.alignment = Alignment(
+					horizontal="left" if cell.column in (8, 9) else "center",
+					vertical="center",
+					wrap_text=True,
+				)
+				cell.border = border
+			sheet.row_dimensions[row_cells[0].row].height = 48
+		for cell in sheet["B"][2:]:
+			if isinstance(cell.value, datetime):
+				cell.number_format = "yyyy-mm-dd hh:mm:ss"
+		for cell in sheet["C"][2:]:
+			if isinstance(cell.value, datetime):
+				cell.number_format = "yyyy-mm-dd"
+		sheet.freeze_panes = "A3"
+		sheet.auto_filter.ref = f"A2:L{sheet.max_row}"
+		sheet.sheet_view.showGridLines = False
+		sheet.page_setup.orientation = "landscape"
+		sheet.page_setup.fitToWidth = 1
+		sheet.print_title_rows = "1:2"
+	for column_index, column in enumerate(sheet.iter_cols(), start=1):
+		sheet.column_dimensions[get_column_letter(column_index)].width = min(max(max(len(str(cell.value or "")) for cell in column) + 2, 12), 48)
+	if batch.source_type == "missing_card":
+		for column_letter, width in {"A": 8, "B": 12, "C": 21, "D": 21, "E": 14, "F": 18, "G": 12, "H": 14, "I": 14}.items():
+			sheet.column_dimensions[column_letter].width = width
+	elif batch.source_type == "apple_tree":
+		for column_letter, width in {"A": 8, "B": 20, "C": 14, "D": 15, "E": 12, "F": 8, "G": 8, "H": 50, "I": 28, "J": 12, "K": 14, "L": 16}.items():
+			sheet.column_dimensions[column_letter].width = width
 	output = BytesIO()
 	book.save(output)
 	file = save_file(f"{batch.attendance_month}_{SOURCE_LABELS[batch.source_type]}_加工结果.xlsx", output.getvalue(), None, None, is_private=1)
@@ -1229,7 +1513,13 @@ def list_processing_results(company: str, attendance_month: str, source_type: st
 	rows = _result_rows(batch, min(max(cint(page_length), 1), 5000))
 	if cint(exception_only):
 		rows = [row for row in rows if row["exception_codes"] and row["review_status"] == "待审核"]
-	return {"batch": batch.name, "processed_rows": rows, "processed_result": _processing_meta(batch).get("processed_result"), "can_confirm": bool(rows) or batch.status in {"待处理异常", "待确认"}}
+	return {
+		"batch": batch.name,
+		"processed_rows": rows,
+		"processed_result": _processing_meta(batch).get("processed_result"),
+		"result_summary": _missed_punch_summary(rows) if source_type == "missing_card" else _apple_tree_summary(rows) if source_type == "apple_tree" else {},
+		"can_confirm": bool(rows) or batch.status in {"待处理异常", "待确认"},
+	}
 
 
 @frappe.whitelist()
@@ -1554,6 +1844,82 @@ def get_processing_configuration(company: str, configuration_type: str):
 	if configuration_type == "department-mapping":
 		return {"items": [{"name": "员工匹配", "source_value": "工号为主键；姓名与部门辅助", "target_value": "冲突进入统一待审核", "status": "已发布"}]}
 	return {"items": [{"name": "自动化边界", "source_value": "特殊工时与样例人工差异", "target_value": "不猜测；进入其他来源或统一审核", "status": "已发布"}]}
+
+
+@frappe.whitelist()
+def list_department_mappings(company: str, source_type: str = "missing_card"):
+	"""List company-scoped, auditable aliases for historical DingTalk departments."""
+	_require_processing_manager()
+	company = _require_company(company)
+	if source_type != "missing_card":
+		frappe.throw(_("当前仅支持维护“忘打卡”来源的部门映射。"))
+	items = frappe.get_all(
+		DEPARTMENT_MAPPING_DOCTYPE,
+		filters={"company": company, "source_type": source_type},
+		fields=["name", "source_department", "target_department", "enabled", "modified", "modified_by"],
+		order_by="modified desc",
+		limit_page_length=500,
+	)
+	return {
+		"items": [{
+			"name": item.name,
+			"source_department": item.source_department,
+			"target_department": item.target_department,
+			"enabled": cint(item.enabled),
+			"status": "已启用" if cint(item.enabled) else "已停用",
+			"modified": item.modified,
+			"modified_by": item.modified_by,
+		} for item in items],
+	}
+
+
+@frappe.whitelist()
+def upsert_department_mapping(
+	company: str,
+	source_department: str,
+	target_department: str,
+	enabled: int = 1,
+	source_type: str = "missing_card",
+):
+	"""Save a reviewed alias without rewriting existing batch history."""
+	_require_processing_manager()
+	company = _require_company(company)
+	if source_type != "missing_card":
+		frappe.throw(_("当前仅支持维护“忘打卡”来源的部门映射。"))
+	source_department, target_department = (source_department or "").strip(), (target_department or "").strip()
+	if not source_department or not target_department:
+		frappe.throw(_("钉钉原部门和花名册目标部门均不能为空。"))
+	if not frappe.db.exists("Department", target_department):
+		frappe.throw(_("花名册目标部门不存在，请从有效部门中选择。"))
+	existing = frappe.db.get_value(
+		DEPARTMENT_MAPPING_DOCTYPE,
+		{"company": company, "source_type": source_type, "source_department": source_department},
+		"name",
+	)
+	if existing:
+		doc = frappe.get_doc(DEPARTMENT_MAPPING_DOCTYPE, existing)
+		doc.target_department = target_department
+		doc.enabled = cint(enabled)
+		doc.save(ignore_permissions=True)
+	else:
+		doc = frappe.get_doc({
+			"doctype": DEPARTMENT_MAPPING_DOCTYPE,
+			"company": company,
+			"source_type": source_type,
+			"source_department": source_department,
+			"target_department": target_department,
+			"enabled": cint(enabled),
+		}).insert(ignore_permissions=True)
+	return {
+		"item": {
+			"name": doc.name,
+			"source_department": doc.source_department,
+			"target_department": doc.target_department,
+			"enabled": cint(doc.enabled),
+			"status": "已启用" if cint(doc.enabled) else "已停用",
+		},
+		"notice": _("映射将用于后续重新上传并加工的忘打卡批次；已生成批次保留原始记录与审核历史。"),
+	}
 
 
 def _finalization_inputs(company, attendance_month, slots):

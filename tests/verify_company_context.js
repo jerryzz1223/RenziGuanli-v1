@@ -21,6 +21,9 @@ const hooks = read(hooksPath);
 
 for (const marker of [
 	'const PREFERRED_COMPANY = "永新"',
+	"const SINGLE_COMPANY_OPERATION_MODE = true",
+	"SINGLE_COMPANY_OPERATION_MODE ? (primary ? [primary] : []) : companies",
+	'return companies[0]?.name || ""',
 	"hrms_company_context",
 	"localStorage",
 	"get_user_default?.(\"company\")",
@@ -35,6 +38,12 @@ for (const marker of [
 ]) {
 	mustInclude(topNav, marker, `Global company context is missing: ${marker}`);
 }
+
+if (!topNav.includes("!SINGLE_COMPANY_OPERATION_MODE && companies.length && canManageCompanyIdentity()")) {
+	throw new Error("Company management entry must stay hidden while Yongxin single-company mode is active.");
+}
+
+mustInclude(hooks, "hrms_top_nav.js?v=20260811a", "Top-nav cache key must change with the single-company contract.");
 
 for (const marker of [
 	"hrmsCompanyContext",

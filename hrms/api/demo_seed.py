@@ -51,6 +51,7 @@ DEMO_EDITABLE_DOCTYPES = (
 	"Employee",
 	"HRMS Monthly Attendance Summary",
 	"HRMS Employee Salary Change",
+	"HRMS Employee Reward Punishment",
 	"HRMS Payroll Variable Record",
 	"HRMS Payroll Welfare Source Record",
 	"HRMS Payroll Input Record",
@@ -331,6 +332,12 @@ def _seed_foundation(result):
 		},
 		key=TEST_COMPANY,
 	)
+	if not result["dry_run"] and _doctype_exists("HRMS Reward Punishment Rule"):
+		from hrms.hr.doctype.hrms_reward_punishment_rule.hrms_reward_punishment_rule import (
+			ensure_default_reward_punishment_rules,
+		)
+
+		ensure_default_reward_punishment_rules(company=TEST_COMPANY, ignore_permissions=True)
 
 	for department in ("TEST-HRMS-DEPT", "TEST-研发部", "TEST-生产部", "TEST-人资部"):
 		_create_if_missing(
@@ -702,34 +709,33 @@ def _seed_personnel_lists(result):
 		"标准 Employee Transfer/Employee Property History 无原因字段；未虚造",
 	)
 
-	grievance_type = _create_if_missing(
-		result,
-		phase,
-		"Grievance Type",
-		{"name": "TEST-奖惩演示"},
-		{"__newname": "TEST-奖惩演示", "description": "TEST-虚拟奖惩/申诉类型"},
-		key="TEST-奖惩演示",
-		allow_global=True,
-	)
-	if regular and grievance_type:
-		grievance = _create_if_missing(
+	reward_rule = frappe.db.get_value(
+		"HRMS Reward Punishment Rule",
+		{"company": TEST_COMPANY, "category": "嘉奖", "enabled": 1},
+		"name",
+	) if _doctype_exists("HRMS Reward Punishment Rule") else ""
+	if regular and reward_rule:
+		_create_if_missing(
 			result,
 			phase,
-			"Employee Grievance",
-			{"subject": "TEST-奖惩记录演示", "raised_by": regular},
+			"HRMS Employee Reward Punishment",
+			{"subject": "TEST-奖惩记录演示", "employee": regular},
 			{
+				"employee": regular,
+				"rule": reward_rule,
+				"reward_punishment_type": "奖励",
+				"category": "嘉奖",
+				"occurred_on": "2026-07-05",
 				"subject": "TEST-奖惩记录演示",
-				"raised_by": regular,
-				"date": "2026-07-05",
-				"status": "Open",
-				"grievance_against_party": "Employee",
-				"grievance_against": moving_employee,
-				"grievance_type": grievance_type,
-				"description": "TEST-虚拟奖惩/申诉记录，不涉及真实员工。",
+				"reason": "TEST-虚拟项目表现优秀，不涉及真实员工。",
+				"decision_result": "TEST-虚拟嘉奖归档。",
+				"full_salary": 3000,
+				"amount": 240,
+				"status": "已生效",
+				"handled_by": frappe.session.user,
 			},
 			key="奖惩记录 TEST-001",
 		)
-		_event(result, phase, "warnings", "Employee Grievance", grievance, "标准 DocType 语义为员工申诉，并非正式奖惩单")
 
 	if leaver:
 		_create_if_missing(

@@ -839,11 +839,15 @@ def after_migrate():
 	from hrms.api.employee_field_template import ensure_employee_personnel_status_setup
 	from hrms.api.dingtalk_integration import ensure_dingtalk_company_scope
 	from hrms.branding import apply_login_page_customizations
+	from hrms.hr.doctype.hrms_reward_punishment_rule.hrms_reward_punishment_rule import (
+		ensure_default_reward_punishment_rules,
+	)
 	from hrms.localize_zh import apply_hrms_zh_translations
 
 	ensure_personnel_pages()
 	ensure_employee_personnel_status_setup()
 	ensure_dingtalk_company_scope()
+	ensure_default_reward_punishment_rules(ignore_permissions=True)
 	apply_hrms_zh_translations()
 	apply_login_page_customizations()
 

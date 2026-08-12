@@ -348,7 +348,7 @@
 				"employee-transfer",
 				"employee-property-history",
 				"employee-skill-map",
-				"employee-grievance",
+				"hrms-employee-reward-punishment",
 				"exit-interview",
 			],
 			items: [
@@ -369,10 +369,9 @@
 						{ label: "转正管理", route: "/desk/employee-promotion", slug: "employee-promotion" },
 						{ label: "离职管理", route: "/desk/employee-separation", slug: "employee-separation" },
 						{ label: "离职记录", route: "/desk/employee-separation-records", slug: "employee-separation-records" },
-						{ label: "人事异动", route: "/desk/employee-transfer", slug: "employee-transfer" },
-						{ label: "任职记录", route: "/desk/employee-property-history", slug: "employee-property-history" },
+						{ label: "异动记录", route: "/desk/employee-property-history", slug: "employee-property-history" },
 						{ label: "培训经历", route: "/desk/employee-skill-map", slug: "employee-skill-map" },
-						{ label: "奖惩记录", route: "/desk/employee-grievance", slug: "employee-grievance" },
+						{ label: "奖惩记录", route: "/desk/hrms-employee-reward-punishment", slug: "hrms-employee-reward-punishment" },
 						{ label: "离职面谈", route: "/desk/exit-interview", slug: "exit-interview" },
 					],
 				},
@@ -430,15 +429,14 @@
 				"monthly-attendance-sheet",
 			],
 			items: [
-				{ type: "link", label: "主页", route: "/desk/attendance-import-center/daily-import", slug: "attendance-import-center/daily-import" },
+				{ type: "link", label: "主页", route: "/desk/attendance-import-center/monthly-final", slug: "attendance-import-center/monthly-final" },
 				{
 					type: "section",
 					label: "考勤处理",
 					children: [
-						{ label: "每日导入", route: "/desk/attendance-import-center/daily-import", slug: "attendance-import-center/daily-import" },
-						{ label: "加工结果", route: "/desk/attendance-import-center/processing-results", slug: "attendance-import-center/processing-results" },
-						{ label: "异常处理", route: "/desk/attendance-import-center/exceptions", slug: "attendance-import-center/exceptions" },
 						{ label: "月度终稿", route: "/desk/attendance-import-center/monthly-final", slug: "attendance-import-center/monthly-final" },
+						{ label: "异常处理", route: "/desk/attendance-import-center/exceptions", slug: "attendance-import-center/exceptions" },
+						{ label: "加工结果", route: "/desk/attendance-import-center/processing-results", slug: "attendance-import-center/processing-results" },
 					],
 				},
 				{

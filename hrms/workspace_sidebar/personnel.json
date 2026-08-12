@@ -112,18 +112,7 @@
    "collapsible": 0,
    "indent": 0,
    "keep_closed": 0,
-   "label": "人事异动",
-   "link_to": "Employee Transfer",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 0,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "任职记录",
+   "label": "异动记录",
    "link_to": "employee-property-history",
    "link_type": "Page",
    "show_arrow": 0,
@@ -146,7 +135,7 @@
    "indent": 0,
    "keep_closed": 0,
    "label": "奖惩记录",
-   "link_to": "Employee Grievance",
+   "link_to": "HRMS Employee Reward Punishment",
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link"

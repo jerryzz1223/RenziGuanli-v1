@@ -217,6 +217,22 @@ def test_name_only_source_rows_can_use_business_employee_code_aliases():
 	assert record["review_status"] == "无需审核"
 
 
+def test_confirmed_department_mapping_prevents_a_repeat_department_conflict():
+	result = process_missed_punch_rows(
+		[_row("APP-304", name="时杰", department="CCD+")],
+		attendance_month="2026-06",
+		source_file="sample.xlsx",
+		source_sheet="钉钉导出数据",
+		employee_directory=[_employee("E-304", "时杰", "品管课")],
+		department_mapping={"CCD+": "品管课"},
+	)
+	record = result["processed_rows"][0]
+	assert record["source_department"] == "CCD+"
+	assert record["department"] == "品管课"
+	assert "DEPARTMENT_CONFLICT" not in record["exception_codes"]
+	assert record["review_status"] == "无需审核"
+
+
 def test_offline_entries_are_explicit_and_rule_controlled():
 	base = {
 		**_row("", name="张三"),
@@ -346,6 +362,7 @@ if __name__ == "__main__":
 	test_identity_department_departure_and_same_time_conflicts_are_not_silent()
 	test_name_and_department_can_disambiguate_but_missing_source_still_requires_review()
 	test_name_only_source_rows_can_use_business_employee_code_aliases()
+	test_confirmed_department_mapping_prevents_a_repeat_department_conflict()
 	test_offline_entries_are_explicit_and_rule_controlled()
 	test_former_employee_policy_can_be_explicitly_overridden()
 	test_review_application_is_audited_and_does_not_mutate_the_proposal()

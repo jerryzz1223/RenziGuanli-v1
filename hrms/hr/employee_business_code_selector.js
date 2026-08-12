@@ -44,7 +44,7 @@
 	}
 
 	function setup(frm) {
-		frm.set_df_property("employee_code_display", "label", __("员工工号"));
+		frm.set_df_property("employee_code_display", "label", __("公司员工号"));
 		set_employee_identity_hint(frm);
 		frm.toggle_display("employee", false);
 		frm.toggle_display("employee_code_display", true);
@@ -76,9 +76,7 @@
 
 		frappe.call({
 			method: "hrms.api.employee_field_template.get_employee_by_business_code",
-			args: { employee_code },
-			freeze: true,
-			freeze_message: __("正在匹配员工工号"),
+			args: { employee_code, company: frm.doc.company || "" },
 			callback(response) {
 				const employee = response.message;
 				if (!employee) {

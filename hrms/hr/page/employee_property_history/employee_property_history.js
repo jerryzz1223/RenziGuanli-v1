@@ -1,7 +1,7 @@
 frappe.pages["employee-property-history"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
-		title: __("任职记录"),
+		title: __("异动记录"),
 		single_column: true,
 	});
 
@@ -38,9 +38,6 @@ class EmployeePropertyHistoryPage {
 	}
 
 	show() {
-		this.page.set_primary_action(__("办理人事异动"), () => frappe.set_route("Form", "Employee Transfer", "new-employee-transfer"));
-		this.page.add_inner_button(__("办理转正"), () => frappe.set_route("Form", "Employee Promotion", "new-employee-promotion"));
-		this.page.add_inner_button(__("打开人事异动列表"), () => frappe.set_route("List", "Employee Transfer"));
 		this.render();
 		this.activate(true);
 	}
@@ -80,7 +77,7 @@ class EmployeePropertyHistoryPage {
 		this.wrapper.innerHTML = `
 			<div class="hrms-property-history">
 				<div class="hrms-property-history-note">
-					${frappe.utils.escape_html(__("任职记录来自人事异动和转正/晋升单据中的 Employee Property History 变更明细。员工主档不在这里直接编辑。"))}
+					${frappe.utils.escape_html(__("异动记录来自花名册员工详情中办理的人事异动和转正/晋升单据。本页只查看记录，不直接办理。"))}
 				</div>
 				<div class="hrms-property-history-toolbar">
 					<input class="form-control" data-filter="search" type="search" placeholder="${frappe.utils.escape_html(__("搜索员工、部门、变更字段"))}">
@@ -91,7 +88,7 @@ class EmployeePropertyHistoryPage {
 				</div>
 				<div class="hrms-property-history-list" data-list></div>
 				<div class="hrms-property-history-empty text-muted hidden" data-empty>
-					${frappe.utils.escape_html(__("暂无任职记录。请通过人事异动或转正单据生成任职变化。"))}
+					${frappe.utils.escape_html(__("暂无异动记录。请从员工花名册进入员工详情办理人事异动。"))}
 				</div>
 				<div class="hrms-property-history-pagination">
 					<button class="btn btn-default btn-sm" type="button" data-action="prev">${frappe.utils.escape_html(__("上一页"))}</button>
@@ -235,7 +232,7 @@ class EmployeePropertyHistoryPage {
 			error: () => {
 				if (request_id !== this.load_request_id) return;
 				this.set_loading(false);
-				frappe.msgprint(__("任职记录读取失败，请检查 Employee Transfer / Employee Promotion 权限。"));
+				frappe.msgprint(__("异动记录读取失败，请检查 Employee Transfer / Employee Promotion 权限。"));
 			},
 		});
 	}
@@ -245,7 +242,7 @@ class EmployeePropertyHistoryPage {
 		if (!list) return;
 		list.classList.toggle("text-muted", Boolean(loading));
 		if (loading) {
-			list.innerHTML = frappe.utils.escape_html(__("正在读取任职记录..."));
+			list.innerHTML = frappe.utils.escape_html(__("正在读取异动记录..."));
 		}
 	}
 

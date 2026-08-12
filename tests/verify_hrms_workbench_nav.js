@@ -160,7 +160,7 @@ for (const [label, linkTo, linkType] of [
 	["转正管理", "Employee Promotion", "DocType"],
 	["离职管理", "Employee Separation", "DocType"],
 	["离职记录", "employee-separation-records", "Page"],
-	["人事异动", "Employee Transfer", "DocType"],
+	["异动记录", "employee-property-history", "Page"],
 ]) {
 	if (!personnel.links.some((link) => link.type === "Link" && link.label === label && link.link_to === linkTo && link.link_type === linkType)) {
 		throw new Error(`Personnel workspace has no real route for ${label} -> ${linkType}:${linkTo}`);

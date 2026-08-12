@@ -3,7 +3,11 @@ from __future__ import annotations
 import importlib.util
 import sys
 import unittest
+from datetime import datetime
+from io import BytesIO
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 try:
 	from openpyxl import load_workbook
@@ -35,6 +39,56 @@ build_employee_summary = apple_tree.build_employee_summary
 normalize_apple_tree_rows = apple_tree.normalize_apple_tree_rows
 preflight_apple_tree_rows = apple_tree.preflight_apple_tree_rows
 process_apple_tree_rows = apple_tree.process_apple_tree_rows
+
+
+def processing_center_module():
+	"""Load the export helpers with a minimal Frappe facade for workbook tests."""
+	frappe = ModuleType("frappe")
+	frappe._ = lambda text: text
+	def whitelist(function=None, **_kwargs):
+		return (lambda decorated: decorated) if function is None else function
+
+	frappe.whitelist = whitelist
+	frappe.PermissionError = PermissionError
+	frappe.session = SimpleNamespace(user="test@example.com")
+	frappe.get_all = lambda *args, **kwargs: []
+	frappe.db = SimpleNamespace(count=lambda *args, **kwargs: 0)
+	frappe_utils = ModuleType("frappe.utils")
+	frappe_utils.cint = lambda value: int(value or 0)
+	frappe_utils.now_datetime = lambda: None
+	file_manager = ModuleType("frappe.utils.file_manager")
+	frappe_utils.file_manager = file_manager
+	hrms = ModuleType("hrms")
+	hrms.__path__ = [str(PROCESSING_CENTER.parents[1])]
+	hrms_api = ModuleType("hrms.api")
+	hrms_api.__path__ = [str(PROCESSING_CENTER.parent)]
+	processors = ModuleType("hrms.api.attendance_processors")
+	processors.__path__ = [str(PROCESSING_CENTER.parent / "attendance_processors")]
+	module_names = (
+		"frappe", "frappe.utils", "frappe.utils.file_manager", "hrms", "hrms.api", "hrms.api.attendance_processors"
+	)
+	old_modules = {name: sys.modules.get(name) for name in module_names}
+	fake_modules = {
+		"frappe": frappe,
+		"frappe.utils": frappe_utils,
+		"frappe.utils.file_manager": file_manager,
+		"hrms": hrms,
+		"hrms.api": hrms_api,
+		"hrms.api.attendance_processors": processors,
+	}
+	sys.modules.update(fake_modules)
+	try:
+		spec = importlib.util.spec_from_file_location("attendance_processing_center_export_contract", PROCESSING_CENTER)
+		module = importlib.util.module_from_spec(spec)
+		sys.modules[spec.name] = module
+		spec.loader.exec_module(module)
+		return module, file_manager, fake_modules
+	finally:
+		for name, old_module in old_modules.items():
+			if old_module is None:
+				sys.modules.pop(name, None)
+			else:
+				sys.modules[name] = old_module
 
 
 EMPLOYEES = [
@@ -130,9 +184,14 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertIn('row.get("original_data") or row.get("original_value")', center_source)
 		self.assertIn('"奖惩日期"', center_source)
 		self.assertIn('"有效苹果数"', center_source)
+		self.assertIn('(\"奖惩日期\", \"奖/惩日期\")', center_source)
+		self.assertIn('(\"部门\", \"受奖/惩人部门\")', center_source)
+		self.assertIn('(\"项目\", \"奖/惩项目\")', center_source)
+		self.assertIn('def _hydrate_apple_tree_result_rows', center_source)
+		self.assertIn('"是否计入下游", "来源追溯"', center_source)
 		self.assertIn('processed_value.update(confirmed if review_status == "已通过" else proposed)', center_source)
 		self.assertIn('def bulk_update_processing_records(', center_source)
-		self.assertIn('data-bulk-process', page_source)
+		self.assertIn('show_bulk_processing_dialog', page_source)
 		self.assertIn('bulk_update_processing_records', page_source)
 		self.assertIn('批量确认当前数据（通过）', page_source)
 		self.assertIn('"review_status": "待审核"', center_source)
@@ -140,7 +199,142 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertNotIn('批量重新匹配工号', page_source)
 		self.assertIn('isAppleTree', page_source)
 		self.assertIn('"奖惩日期"', page_source)
-		self.assertIn('"有效苹果数"', page_source)
+		self.assertIn('"奖/惩日期"', page_source)
+		self.assertIn('download_processing_file', page_source)
+
+	def test_apple_tree_export_is_only_the_printable_signoff_list(self):
+		if load_workbook is None:
+			self.skipTest("openpyxl is unavailable")
+		center, file_manager, frappe_modules = processing_center_module()
+		saved = {}
+		file_manager.save_file = lambda file_name, content, *_args, **_kwargs: (
+			saved.update({"file_name": file_name, "content": content})
+			or SimpleNamespace(file_name=file_name, file_url="/private/files/test.xlsx")
+		)
+		row = {
+			"employee_code": "E-001",
+			"employee_name": "张三",
+			"department": "连续课",
+			"processed_value": {"工号": "E-001", "苹果类型": "绿苹果", "有效苹果数": 2},
+			"proposed_value": {"工号": "E-001", "姓名": "张三", "部门": "连续课", "苹果类型": "绿苹果", "有效苹果数": 2},
+			"confirmed_value": None,
+			"original_value": source_row(),
+			"exception_labels": ["花名册未找到员工"],
+			"exception_message": "未匹配到员工工号。",
+			"review_status": "待审核",
+			"eligible_for_downstream": False,
+			"source_file": "苹果树.xlsx",
+			"source_sheet": "钉钉导出数据",
+			"source_row": 2,
+			"source_id": "DATA-001",
+			"approval_no": "APPROVAL-001",
+		}
+		row["processed_value"] = center._apple_tree_result_values(row)
+		batch = SimpleNamespace(source_type="apple_tree", attendance_month="2026-06")
+		with patch.dict(sys.modules, frappe_modules), patch.object(center, "_result_rows", return_value=[row]):
+			result = center._export_processed_result(batch)
+
+		book = load_workbook(BytesIO(saved["content"]), read_only=True, data_only=True)
+		sheet = book["加工结果"]
+		export_rows = sheet.iter_rows(values_only=False)
+		title = [cell.value for cell in next(export_rows)]
+		headers = [cell.value for cell in next(export_rows)]
+		values = [cell.value for cell in next(export_rows)]
+		expected_headers = [
+			"序号", "创建时间", "奖/惩日期", "受奖/惩人部门", "受奖/惩人", "绿苹果", "红苹果", "奖/惩项目", "备注", "创建人", "签名", "备注",
+		]
+		self.assertEqual(title[0], "6月苹果树")
+		self.assertEqual(headers, expected_headers)
+		self.assertEqual(values[0], 1)
+		self.assertIsInstance(values[1], datetime)
+		self.assertIsInstance(values[2], datetime)
+		self.assertEqual(values[3:5], ["连续课", "张三"])
+		self.assertEqual(values[5:10], [2, 15, "连续课/绿苹果/保养/作业员完成保养。2颗", "保养A线", "主管甲"])
+		self.assertEqual(values[10:12], [None, None])
+		self.assertEqual(sheet.max_column, 12)
+		self.assertEqual(result["file_url"], "/private/files/test.xlsx")
+
+	def test_missed_punch_export_is_only_the_plain_signoff_list(self):
+		if load_workbook is None:
+			self.skipTest("openpyxl is unavailable")
+		center, file_manager, frappe_modules = processing_center_module()
+		saved = {}
+		file_manager.save_file = lambda file_name, content, *_args, **_kwargs: (
+			saved.update({"file_name": file_name, "content": content})
+			or SimpleNamespace(file_name=file_name, file_url="/private/files/test.xlsx")
+		)
+		row = {
+			"employee_code": "E-001",
+			"employee_name": "张三",
+			"department": "工程课",
+			"processed_value": {
+				"employee_code": "E-001", "employee_name": "张三", "department": "工程课",
+				"created_at": "2026-06-09 09:00:00", "punch_time": "2026-06-10 08:00:00",
+				"punch_type": "忘刷卡补卡", "reason": "忘打卡", "included": True,
+			},
+			"proposed_value": {},
+			"confirmed_value": None,
+			"original_value": {"序号": 7, "创建人": "张三", "创建人部门": "工程课"},
+			"eligible_for_downstream": True,
+			"source_file": "忘打卡.xlsx",
+			"source_sheet": "钉钉导出数据",
+			"source_row": 2,
+			"source_id": "DATA-001",
+			"approval_no": "APPROVAL-001",
+		}
+		batch = SimpleNamespace(source_type="missing_card", attendance_month="2026-06")
+		with patch.dict(sys.modules, frappe_modules), patch.object(center, "_result_rows", return_value=[row]):
+			center._export_processed_result(batch)
+
+		book = load_workbook(BytesIO(saved["content"]), read_only=True, data_only=True)
+		sheet = book["加工结果"]
+		values = list(sheet.iter_rows(values_only=True))
+		self.assertEqual(values[0], ("序号", "部门", "创建时间", "补卡时间", "补卡类型", "补卡理由", "创建人", "签名", "备注"))
+		self.assertEqual(values[1][0:2], (7, "工程课"))
+		self.assertIsInstance(values[1][2], datetime)
+		self.assertIsInstance(values[1][3], datetime)
+		self.assertEqual(values[1][4:7], ("忘刷卡补卡", "忘打卡", "张三"))
+		self.assertEqual(values[1][7:9], (None, None))
+		self.assertEqual(sheet.max_column, 9)
+
+	def test_result_summary_keeps_green_and_red_apple_totals_separate(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		rows = [
+			{
+				"eligible_for_downstream": True,
+				"processed_value": {"苹果类型": "绿苹果", "有效苹果数": 5},
+				"proposed_value": {},
+				"confirmed_value": None,
+			},
+			{
+				"eligible_for_downstream": True,
+				"processed_value": {"苹果类型": "红苹果", "有效苹果数": 2},
+				"proposed_value": {},
+				"confirmed_value": None,
+			},
+			{
+				"eligible_for_downstream": False,
+				"processed_value": {"苹果类型": "红苹果", "有效苹果数": 99},
+				"proposed_value": {},
+				"confirmed_value": None,
+			},
+		]
+
+		self.assertEqual(center._apple_tree_summary(rows), {"green_apples": 5, "red_apples": 2})
+
+	def test_download_endpoint_generates_current_processed_result(self):
+		"""A completed source must take the export path, not the error branch."""
+		center, _file_manager, _frappe_modules = processing_center_module()
+		center.frappe.get_roles = lambda _user: ["HR Manager"]
+		center.frappe.db.count = lambda *_args, **_kwargs: 1
+		batch = SimpleNamespace(name="BATCH-001")
+		generated = {"file_url": "/private/files/apple-tree-current.xlsx", "file_name": "苹果树加工结果.xlsx"}
+		with patch.object(center, "_latest_batch", return_value=batch), patch.object(center, "_export_processed_result", return_value=generated) as export_result, patch.object(center, "_save_batch_notes") as save_notes, patch.object(center, "now_datetime", return_value=SimpleNamespace(isoformat=lambda: "2026-06-30T12:00:00")):
+			result = center.export_processing_result("测试公司", "2026-06", "apple_tree")
+
+		export_result.assert_called_once_with(batch)
+		save_notes.assert_called_once()
+		self.assertEqual(result["processed_result"], generated)
 
 	def test_red_project_accepts_blank_inactive_value(self):
 		row = source_row(

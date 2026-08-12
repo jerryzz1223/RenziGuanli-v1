@@ -20,7 +20,7 @@ def get_all_nodes(method: str, company: str):
 	if method not in frappe.whitelisted:
 		frappe.throw(_("Not Permitted"), frappe.PermissionError)
 
-	root_nodes = method(company=company)
+	root_nodes = method(company=company) or []
 	result = []
 	nodes_to_expand = []
 	queued_ids = set()
@@ -28,12 +28,12 @@ def get_all_nodes(method: str, company: str):
 
 	def queue_expandable_nodes(data):
 		for node in data:
-			node_id = node.get("id")
-			if not node.get("expandable") or not node_id:
+			node_id = _get_node_value(node, "id")
+			if not _get_node_value(node, "expandable") or not node_id:
 				continue
 			if node_id in expanded_ids or node_id in queued_ids:
 				continue
-			nodes_to_expand.append({"id": node_id, "name": node.get("name")})
+			nodes_to_expand.append({"id": node_id, "name": _get_node_value(node, "name")})
 			queued_ids.add(node_id)
 
 	for root in root_nodes:
@@ -41,7 +41,7 @@ def get_all_nodes(method: str, company: str):
 		root_name = _get_node_value(root, "name")
 		if not root_id or root_id in expanded_ids:
 			continue
-		data = method(root_id, company)
+		data = method(root_id, company) or []
 		result.append(dict(parent=root_id, parent_name=root_name, data=data))
 		expanded_ids.add(root_id)
 		queue_expandable_nodes(data)
@@ -51,7 +51,7 @@ def get_all_nodes(method: str, company: str):
 		queued_ids.discard(parent.get("id"))
 		if parent.get("id") in expanded_ids:
 			continue
-		data = method(parent.get("id"), company)
+		data = method(parent.get("id"), company) or []
 		result.append(dict(parent=parent.get("id"), parent_name=parent.get("name"), data=data))
 		expanded_ids.add(parent.get("id"))
 		queue_expandable_nodes(data)

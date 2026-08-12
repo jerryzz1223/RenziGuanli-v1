@@ -9,7 +9,7 @@
 		"Training Event": { key: "training_registration", label: "培训登记表" },
 		"Appraisal": { key: "performance_summary", label: "绩效总结表" },
 		"Employee Skill Map": { key: "certificate_management", label: "证书管理表" },
-		"Employee Grievance": { key: "reward_punishment", label: "奖惩提报表" },
+		"HRMS Employee Reward Punishment": { key: "reward_punishment", label: "奖惩提报表", button_label: "导入奖惩表" },
 		"HRMS Attendance Day Check": { key: "attendance_daily", label: "每日考勤表" },
 		"HRMS Attendance Exception": { key: "attendance_exception", label: "出勤异常表" },
 		"HRMS Apple Reward Record": { key: "apple_reward", label: "苹果树表" },
@@ -26,12 +26,12 @@
 				// The global contextual importer owns the shared page marker.  Reuse it
 				// here so DocType-specific hooks cannot create a duplicate import button.
 				if (window.hrmsFormImport?.addPageActions) {
-					window.hrmsFormImport.addPageActions(listview.page, config.key, config.label);
+					window.hrmsFormImport.addPageActions(listview.page, config.key, config.label, config.button_label);
 					return;
 				}
 				const attach_when_ready = () => {
 					if (window.hrmsFormImport?.addPageActions) {
-						window.hrmsFormImport.addPageActions(listview.page, config.key, config.label);
+						window.hrmsFormImport.addPageActions(listview.page, config.key, config.label, config.button_label);
 						return;
 					}
 					frappe.msgprint(__("导入组件正在加载，请稍后重试。"));

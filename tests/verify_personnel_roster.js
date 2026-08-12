@@ -205,7 +205,7 @@ for (const [label, linkTo] of [
 	["转正管理", "Employee Promotion"],
 	["离职管理", "Employee Separation"],
 	["离职记录", "employee-separation-records"],
-	["人事异动", "Employee Transfer"],
+	["异动记录", "employee-property-history"],
 ]) {
 	if (!personnel.links.some((link) => link.type === "Link" && link.label === label && link.link_to === linkTo)) {
 		throw new Error(`Personnel workspace must use real Frappe route for ${label} -> ${linkTo}`);
