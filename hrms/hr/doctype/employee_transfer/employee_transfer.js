@@ -68,6 +68,7 @@ function apply_transfer_form_labels(frm) {
 		["transfer_reason", "异动原因"],
 		["transfer_date", "生效日期"],
 		["remarks", "备注"],
+		["draft_creation_info", "草稿信息"],
 		["details_section", "异动明细"],
 		["transfer_details", "本次变更项目"],
 	].forEach(([fieldname, label]) => set_transfer_field_property(frm, fieldname, "label", label));
@@ -79,6 +80,33 @@ function apply_transfer_form_labels(frm) {
 		__("选择本次实际变化的部门、岗位、职级、直属上级或工作性质；提交后自动更新员工档案并写入任职记录。")
 	);
 	configure_transfer_employee_identity(frm);
+}
+
+function render_transfer_draft_creation_info(frm) {
+	const field = frm.fields_dict.draft_creation_info;
+	if (!field) return;
+
+	const is_saved_draft = frm.doc.docstatus === 0 && !frm.is_new();
+	frm.toggle_display("draft_creation_info", is_saved_draft);
+	if (!is_saved_draft) return;
+
+	const creation = frappe.datetime.str_to_user?.(frm.doc.creation) || frm.doc.creation || "-";
+	const creator = frm.doc.owner || "-";
+	field.$wrapper.html(
+		`<div class="hrms-transfer-draft-creation-info"><span>${frappe.utils.escape_html(__("创建时间"))}：${frappe.utils.escape_html(creation)}</span><span>${frappe.utils.escape_html(__("创建人"))}：${frappe.utils.escape_html(creator)}</span></div>`,
+	);
+}
+
+function hide_transfer_modified_metadata(frm) {
+	const sidebar = frm.page?.wrapper?.[0]?.querySelector(".form-sidebar");
+	if (!sidebar) return;
+
+	sidebar.querySelectorAll(".modified-by, .form-sidebar-stats > div").forEach((item) => {
+		const text = (item.textContent || "").replace(/\s+/g, " ").trim();
+		if (/最近编辑|last edited|\bedited\b/i.test(text) && !/创建|created/i.test(text)) {
+			item.classList.add("hrms-transfer-modified-metadata-hidden");
+		}
+	});
 }
 
 function derive_transfer_type(frm) {
@@ -165,6 +193,8 @@ frappe.ui.form.on("Employee Transfer", {
 	refresh(frm) {
 		apply_transfer_form_labels(frm);
 		derive_transfer_type(frm);
+		render_transfer_draft_creation_info(frm);
+		hide_transfer_modified_metadata(frm);
 	},
 
 	employee(frm) {

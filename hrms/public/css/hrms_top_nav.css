@@ -1014,6 +1014,29 @@ body.hrms-sidebar-reordering * {
 	transform: rotate(-90deg);
 }
 
+/* 人事异动草稿保留创建信息，避免“最近编辑”与创建记录混在一起。 */
+.hrms-transfer-modified-metadata-hidden {
+	display: none !important;
+}
+
+.hrms-transfer-draft-creation-info {
+	display: flex;
+	gap: 16px;
+	flex-wrap: wrap;
+	padding: 10px 12px;
+	border-radius: 6px;
+	background: var(--subtle-fg, #f7f7f7);
+	color: var(--text-muted, #6c7680);
+	font-size: 13px;
+}
+
+.hrms-roster-filter-status {
+	margin-top: 8px;
+	padding: 0 4px;
+	color: var(--text-muted, #6c7680);
+	font-size: 12px;
+}
+
 .hrms-unified-sidebar-section__children {
 	display: grid;
 	gap: 2px;

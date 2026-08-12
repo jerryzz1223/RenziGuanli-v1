@@ -114,6 +114,11 @@ assert(
 	"员工工号必须由入口预填、只读并作为列表业务编号。",
 );
 assert(field("employee_name")?.read_only === 1 && field("employee_name")?.in_list_view === 1, "员工姓名必须只读展示。");
+assert(transfer.title_field === "employee_code_display", "异动单列表和侧栏必须以员工工号作为业务标识。");
+assert(field("draft_creation_info")?.fieldtype === "HTML", "异动草稿必须保留创建信息展示区。");
+for (const marker of ["render_transfer_draft_creation_info", "创建时间", "创建人", "hide_transfer_modified_metadata"]) {
+	assert(transferJs.includes(marker), `异动草稿创建信息缺少：${marker}`);
+}
 assert(field("transfer_type")?.hidden === 1, "异动场景应由变更项目自动归类，不得重复要求填写。");
 for (const hiddenField of ["company", "new_company", "department", "approval_reference", "create_new_employee_id", "new_employee_id"]) {
 	assert(field(hiddenField)?.hidden === 1, `首版异动必须隐藏旧字段: ${hiddenField}`);

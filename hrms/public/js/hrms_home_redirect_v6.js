@@ -434,6 +434,7 @@
 					type: "section",
 					label: "考勤处理",
 					children: [
+						{ label: "日考勤", route: "/desk/attendance-import-center/daily-attendance", slug: "attendance-import-center/daily-attendance" },
 						{ label: "月度终稿", route: "/desk/attendance-import-center/monthly-final", slug: "attendance-import-center/monthly-final" },
 						{ label: "异常处理", route: "/desk/attendance-import-center/exceptions", slug: "attendance-import-center/exceptions" },
 						{ label: "加工结果", route: "/desk/attendance-import-center/processing-results", slug: "attendance-import-center/processing-results" },

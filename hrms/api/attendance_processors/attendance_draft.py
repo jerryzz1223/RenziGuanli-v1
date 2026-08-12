@@ -17,6 +17,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
+
 REVIEW_NOT_REQUIRED = "无需审核"
 REVIEW_PENDING = "待审核"
 REVIEW_APPROVED = "已通过"
@@ -190,7 +191,7 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 	first = rows[0]
 	raw_code = _value(first, IDENTITY_FIELDS["employee_code"])
 	names = {_value(row, IDENTITY_FIELDS["employee_name"]) for row in rows if _value(row, IDENTITY_FIELDS["employee_name"])}
-	departments = {_value(row, IDENTITY_FIELDS["department"]) for row in rows if _value(row, IDENTITY_FIELDS["department"])}
+	departments = {normalize_department_name(_value(row, IDENTITY_FIELDS["department"])) for row in rows if _value(row, IDENTITY_FIELDS["department"])}
 	codes: list[str] = []
 	if structure["missing_required_fields"]:
 		_add_code(codes, "STRUCTURE_MISSING_REQUIRED_FIELD")
@@ -285,7 +286,7 @@ def _build_employee_index(employee_directory):
 	for raw in employee_directory:
 		code = _value(raw, ("employee_code", "工号", "name"))
 		name = _value(raw, ("employee_name", "姓名", "employee_full_name"))
-		department = _value(raw, ("department", "部门"))
+		department = normalize_department_name(_value(raw, ("department", "部门")))
 		if not code:
 			continue
 		employee = {"employee_code": code, "employee_name": name, "department": department}
@@ -397,6 +398,14 @@ def _name_key(value):
 	return re.sub(r"\s+", "", _text(value)).casefold()
 
 
+_DINGTALK_DEPARTMENT_IDENTIFIER_RE = re.compile(r"\s*[-－—–]\s*\d+\s*$")
+
+
+def normalize_department_name(value):
+	"""Remove DingTalk's trailing department identifier (for example `` - 11``)."""
+	return _DINGTALK_DEPARTMENT_IDENTIFIER_RE.sub("", _text(value)).strip()
+
+
 def _department_key(value):
 	"""Treat a shared department name with 组/课/科 suffixes as one unit.
 
@@ -404,7 +413,7 @@ def _department_key(value):
 	设备组 and 设备课) for the same operational department.  Only normalize the
 	final organizational suffix; all other differences remain reviewable.
 	"""
-	key = _name_key(value)
+	key = re.sub(r"\s+", "", normalize_department_name(value)).casefold()
 	return key[:-1] if len(key) > 1 and key[-1:] in {"组", "课", "科"} else key
 
 

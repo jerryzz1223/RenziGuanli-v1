@@ -140,6 +140,10 @@ for (const marker of [
 	"get_roster_filter_suggestions",
 	"apply_roster_column_filter",
 	"ROSTER_COLUMN_FILTER_STORAGE_KEY",
+	"apply_roster_filters_to_live_listview",
+	"filter_area.clear_filters()",
+	"update_roster_filter_status",
+	"当前筛选",
 ]) {
 	mustInclude(employeeList, marker, `Employee list view is missing roster behavior marker: ${marker}`);
 }

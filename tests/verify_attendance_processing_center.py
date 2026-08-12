@@ -43,6 +43,7 @@ for method in (
 	"get_processing_batch",
 	"register_source_file",
 	"register_monthly_support_file",
+	"bulk_import_and_process_sources",
 	"precheck_monthly_support_file",
 	"process_monthly_support_file",
 	"confirm_monthly_support_file",
@@ -56,6 +57,8 @@ for method in (
 	"confirm_source_result",
 	"list_processing_exceptions",
 	"list_processing_batches",
+	"list_daily_attendance_records",
+	"reset_attendance_month",
 	"list_manual_adjustments",
 	"get_processing_configuration",
 	"list_department_mappings",
@@ -97,8 +100,16 @@ for marker in (
 	"住房补贴",
 	"全勤奖",
 	"特殊工时",
+	"Source file, sheet and row stay in the audit record",
 ):
 	require(api, marker)
+
+for forbidden_export_marker in (
+	'"来源文件", "来源工作表", "来源行"',
+	'"可进入下游", "来源文件", "来源工作表"',
+):
+	if forbidden_export_marker in api:
+		raise AssertionError(f"HR-facing processing exports must not display provenance columns: {forbidden_export_marker}")
 
 # Lock the shared processor variants: Apple Tree uses include_in_downstream,
 # while the other processors use eligible_for_downstream. Both must persist.
@@ -193,11 +204,28 @@ for marker in (
 if "if batch.status == \"已确认\":" not in confirm_body:
 	raise AssertionError("Confirmed sources must reject duplicate confirmation and require an auditable correction path.")
 
+# Batch upload may register and process the six sources, but it must never
+# auto-confirm an exception. A reviewer keeps the final decision in the
+# exception queue, source by source.
+bulk_start = api.find("def bulk_import_and_process_sources(")
+bulk_end = api.find("\n@frappe.whitelist()", bulk_start + 1)
+bulk_body = api[bulk_start:] if bulk_end == -1 else api[bulk_start:bulk_end]
+for marker in (
+	"_detect_bulk_source_type",
+	"批量导入未开始",
+	"process_source_slot",
+	"process_monthly_support_file",
+):
+	require(bulk_body, marker, f"Batch import contract missing: {marker}")
+for forbidden in ("confirm_source_result(", "confirm_monthly_support_file("):
+	if forbidden in bulk_body:
+		raise AssertionError(f"Batch import must not auto-confirm source data: {forbidden}")
+
 # Every callable API must authorize before accessing the batch/record data.
 for method in (
-	"get_processing_batch", "register_source_file", "register_monthly_support_file", "precheck_monthly_support_file", "process_monthly_support_file", "confirm_monthly_support_file", "precheck_source_slot", "process_source_slot",
+	"get_processing_batch", "register_source_file", "register_monthly_support_file", "bulk_import_and_process_sources", "precheck_monthly_support_file", "process_monthly_support_file", "confirm_monthly_support_file", "precheck_source_slot", "process_source_slot",
 	"list_processing_results", "export_processing_result", "get_processing_record", "update_processing_record", "bulk_update_processing_records", "confirm_source_result",
-	"list_processing_exceptions", "list_processing_batches", "list_manual_adjustments",
+	"list_processing_exceptions", "list_processing_batches", "list_daily_attendance_records", "reset_attendance_month", "list_manual_adjustments",
 	"get_processing_configuration", "list_department_mappings", "upsert_department_mapping", "generate_monthly_final_files", "get_monthly_final_preview",
 ):
 	start = api.find(f"def {method}(")

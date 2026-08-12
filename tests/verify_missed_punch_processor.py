@@ -233,6 +233,20 @@ def test_confirmed_department_mapping_prevents_a_repeat_department_conflict():
 	assert record["review_status"] == "无需审核"
 
 
+def test_dingtalk_department_identifier_does_not_create_a_false_department_conflict():
+	result = process_missed_punch_rows(
+		[_row("APP-305", name="张三", department="工程课 - 11")],
+		attendance_month="2026-06",
+		source_file="sample.xlsx",
+		source_sheet="钉钉导出数据",
+		employee_directory=[_employee("E-001", "张三", "工程课")],
+	)
+	record = result["processed_rows"][0]
+	assert "DEPARTMENT_CONFLICT" not in record["exception_codes"]
+	assert record["department"] == "工程课"
+	assert record["source_department"] == "工程课"
+
+
 def test_offline_entries_are_explicit_and_rule_controlled():
 	base = {
 		**_row("", name="张三"),

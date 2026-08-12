@@ -17,6 +17,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
+
 REVIEW_NOT_REQUIRED = "无需审核"
 REVIEW_PENDING = "待审核"
 REVIEW_APPROVED = "已通过"
@@ -104,6 +105,17 @@ _EMPLOYEE_ALIASES = {
 _REVIEW_VALUE_FIELDS = {"工号", "姓名", "部门", "苹果类型", "有效苹果数"}
 _MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 _PROJECT_AMOUNT_RE = re.compile(r"(?<!\d)(\d+(?:\.\d+)?)\s*颗")
+_DINGTALK_DEPARTMENT_IDENTIFIER_RE = re.compile(r"\s*[-－—–]\s*\d+\s*$")
+
+
+def normalize_department_name(value: Any) -> str:
+	"""Remove DingTalk's trailing department identifier (for example `` - 11``)."""
+	return _DINGTALK_DEPARTMENT_IDENTIFIER_RE.sub("", _text(value)).strip()
+
+
+def department_match_key(value: Any) -> str:
+	key = re.sub(r"\s+", "", normalize_department_name(value)).casefold()
+	return key[:-1] if len(key) > 1 and key[-1:] in {"组", "课", "科"} else key
 
 
 @dataclass(frozen=True)
@@ -141,7 +153,7 @@ class _EmployeeIndex:
 		for raw in employees:
 			code = _text(_first(raw, _EMPLOYEE_ALIASES["code"]))
 			name = _text(_first(raw, _EMPLOYEE_ALIASES["name"]))
-			department = _text(_first(raw, _EMPLOYEE_ALIASES["department"]))
+			department = normalize_department_name(_first(raw, _EMPLOYEE_ALIASES["department"]))
 			status = _text(_first(raw, _EMPLOYEE_ALIASES["status"]))
 			if not code:
 				continue
@@ -226,7 +238,7 @@ def _normalize_row(
 	approval_no = _text(_first(raw, _SOURCE_ALIASES["approval_no"]))
 	award_date = _date_text(_first(raw, _SOURCE_ALIASES["award_date"]))
 	created_at = _datetime_text(_first(raw, _SOURCE_ALIASES["created_at"]))
-	department = _text(_first(raw, _SOURCE_ALIASES["department"]))
+	department = normalize_department_name(_first(raw, _SOURCE_ALIASES["department"]))
 	employee_name = _text(_first(raw, _SOURCE_ALIASES["employee_name"]))
 	raw_employee_code = _text(_first(raw, _SOURCE_ALIASES["employee_code"]))
 	project = _text(_first(raw, _SOURCE_ALIASES["project"]))
@@ -535,7 +547,7 @@ def _resolve_employee(raw_code, employee_name, department, index, employees_were
 		return ""
 	matches = index.by_name.get(_name_key(employee_name), [])
 	if len(matches) > 1 and department:
-		department_matches = [item for item in matches if _name_key(item.department) == _name_key(department)]
+		department_matches = [item for item in matches if department_match_key(item.department) == department_match_key(department)]
 		if len(department_matches) == 1:
 			matches = department_matches
 	if len(matches) == 1:
@@ -550,7 +562,7 @@ def _resolve_employee(raw_code, employee_name, department, index, employees_were
 def _validate_employee_context(employee, employee_name, department, codes):
 	if employee_name and _name_key(employee.name) != _name_key(employee_name):
 		_add_code(codes, "EMPLOYEE_NAME_MISMATCH")
-	if department and employee.department and _name_key(employee.department) != _name_key(department):
+	if department and employee.department and department_match_key(employee.department) != department_match_key(department):
 		_add_code(codes, "EMPLOYEE_DEPARTMENT_MISMATCH")
 	if employee.status and employee.status.casefold() not in {"在职", "active"}:
 		_add_code(codes, "FORMER_EMPLOYEE_REQUIRES_CONFIRMATION")

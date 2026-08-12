@@ -19,6 +19,8 @@ MODULE_PATH = (
 	Path(__file__).parents[1] / "hrms" / "api" / "attendance_processors" / "apple_tree.py"
 )
 REAL_WORKBOOK = Path("/Users/lrj/Desktop/薪酬计算设计表单/考勤数据/2.苹果树合计.xlsx")
+SPECIAL_HOURS_WORKBOOK = Path("/Users/lrj/Desktop/薪酬计算设计表单/考勤数据/7.特殊工时（月）.xlsx")
+ATTENDANCE_SOURCE_DIR = Path("/Users/lrj/Desktop/薪酬计算设计表单/考勤数据")
 ATTENDANCE_PAGE = (
 	Path(__file__).parents[1]
 	/ "hrms"
@@ -154,6 +156,18 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertEqual(row["source_id"], "DATA-001")
 		self.assertEqual(row["approval_no"], "APPROVAL-001")
 		self.assertEqual(row["original_data"]["红苹果"], "15")
+
+	def test_dingtalk_department_identifier_does_not_create_a_false_department_mismatch(self):
+		row = normalize_apple_tree_rows(
+			[source_row(**{"受奖/惩人部门": "连续课 - 11"})],
+			rules=self.confirmed_rules(),
+			employees=[{"employee_code": "E-001", "employee_name": "张三", "department": "连续课", "employment_status": "在职"}],
+			source_file="苹果树.xlsx",
+		)[0]
+
+		self.assertNotIn("EMPLOYEE_DEPARTMENT_MISMATCH", row["exception_codes"])
+		self.assertEqual(row["部门"], "连续课")
+		self.assertEqual(row["processed_value"]["部门"], "连续课")
 
 	def test_structure_preflight_reports_missing_columns_without_consuming_rows(self):
 		valid = preflight_apple_tree_rows([source_row()])
@@ -296,6 +310,148 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertEqual(values[1][4:7], ("忘刷卡补卡", "忘打卡", "张三"))
 		self.assertEqual(values[1][7:9], (None, None))
 		self.assertEqual(sheet.max_column, 9)
+
+	def test_monthly_signed_file_uses_the_full_hr_confirmation_layout(self):
+		if load_workbook is None:
+			self.skipTest("openpyxl is unavailable")
+		center, file_manager, frappe_modules = processing_center_module()
+		saved = {}
+		file_manager.save_file = lambda file_name, content, *_args, **_kwargs: (
+			saved.update({"file_name": file_name, "content": content})
+			or SimpleNamespace(file_name=file_name, file_url="/private/files/test.xlsx")
+		)
+		with patch.dict(sys.modules, frappe_modules):
+			result = center._save_monthly_signed_confirmation_file("2026-06", [{
+				"department": "工程课 - 11", "employee_code": "103", "employee_name": "张三", "standard_hours": 168,
+				"actual_attendance_hours": 164.5, "workday_overtime_hours": 35, "restday_overtime_hours": 5,
+				"holiday_overtime_hours": 0, "special_workday_hours": 10.5, "special_restday_hours": 1,
+				"large_night_shifts": 1, "small_night_shifts": 2,
+				"absence_hours": 0, "green_apples": 3, "red_apples": 10, "housing_allowance": 200,
+				"full_attendance_award": 150,
+			}])
+
+		book = load_workbook(BytesIO(saved["content"]), read_only=False, data_only=False)
+		sheet = book["员工签字版"]
+		self.assertEqual(sheet["D1"].value, "6月工时奖惩确认表")
+		self.assertIn("AQ2:AV2", {str(item) for item in sheet.merged_cells.ranges})
+		# This is the paper-form order.  It specifically prevents the historic
+		# regression where the employee code was written under the department
+		# heading in the signed confirmation workbook.
+		self.assertEqual(sheet["B5"].value, 1)
+		self.assertEqual(sheet["C5"].value, "工程课")
+		self.assertEqual(sheet["D5"].value, "103")
+		self.assertEqual(sheet["E5"].value, "张三")
+		self.assertEqual(sheet["G5"].value, 168)
+		self.assertEqual(sheet["H5"].value, 164.5)
+		self.assertEqual(sheet["J5"].value, 10.5)
+		self.assertEqual(sheet["K5"].value, 35)
+		self.assertEqual(sheet["L5"].value, 1)
+		self.assertEqual(sheet["M5"].value, 5)
+		self.assertEqual(sheet["AI5"].value, "=J5+K5")
+		self.assertEqual(sheet["AR5"].value, "=G5-AQ5")
+		self.assertEqual(sheet.max_column, 60)
+		self.assertEqual(sheet["B4"].fill.fgColor.rgb, "00FFD966")
+		self.assertEqual(sheet["Z3"].fill.fgColor.rgb, "00F8CBAD")
+		self.assertEqual(sheet["AH3"].fill.fgColor.rgb, "00D9E2F3")
+		self.assertEqual(sheet["L3"].fill.fgColor.rgb, "00FFFF00")
+		self.assertEqual(result["file_url"], "/private/files/test.xlsx")
+
+	def test_special_hours_are_split_by_date_before_final_calculation(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		self.assertEqual(
+			center._special_hours_breakdown(
+				[{"day": 1, "hours": 10.5}, {"day": 6, "hours": 1}], "2026-06"
+			),
+			{"special_workday_hours": 10.5, "special_restday_hours": 1.0, "special_holiday_hours": 0.0},
+		)
+		calculation = center._final_calculation({
+			"standard_hours": 168, "actual_attendance_hours": 168,
+			"special_workday_hours": 10.5, "workday_overtime_hours": 12.5,
+			"special_restday_hours": 1, "restday_overtime_hours": 22,
+		})
+		self.assertEqual(calculation["settlement_15"], 23)
+		self.assertEqual(calculation["settlement_20"], 23)
+		self.assertEqual(calculation["adjusted_one_absence"], 0)
+
+	def test_daily_attendance_date_normalizes_dingtalk_display_dates(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		self.assertEqual(center._daily_attendance_date("26-06-01 星期一"), "2026-06-01")
+		self.assertEqual(center._daily_attendance_date("2026/06/30"), "2026-06-30")
+		self.assertEqual(center._daily_attendance_date("未填写"), "")
+
+	def test_bulk_import_classifies_the_six_standard_file_names_before_writing_batches(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		self.assertEqual(center._detect_bulk_source_type("", "1.考勤初稿.xlsx"), "attendance_draft")
+		self.assertEqual(center._detect_bulk_source_type("", "2.苹果树合计.xlsx"), "apple_tree")
+		self.assertEqual(center._detect_bulk_source_type("", "3.忘打卡合计.xlsx"), "missing_card")
+		self.assertEqual(center._detect_bulk_source_type("", "4.住房补贴（月）.xlsx"), "housing_allowance")
+		self.assertEqual(center._detect_bulk_source_type("", "5.全勤奖（月）.xlsx"), "full_attendance")
+		self.assertEqual(center._detect_bulk_source_type("", "7.特殊工时（月）.xlsx"), "special_hours")
+
+	def test_bulk_import_identifies_real_workbooks_by_structure_not_filename(self):
+		"""A renamed source must still be sent to its correct monthly slot."""
+		if load_workbook is None:
+			self.skipTest("openpyxl is unavailable")
+		fixtures = (
+			("attendance_draft", "1.考勤初稿.xlsx"),
+			("apple_tree", "2.苹果树合计.xlsx"),
+			("missing_card", "3.忘打卡合计.xlsx"),
+			("housing_allowance", "4.住房补贴（月）.xlsx"),
+			("full_attendance", "5.全勤奖（月）.xlsx"),
+			("special_hours", "7.特殊工时（月）.xlsx"),
+		)
+		missing = [name for _source_type, name in fixtures if not (ATTENDANCE_SOURCE_DIR / name).exists()]
+		if missing:
+			self.skipTest(f"real source fixtures are unavailable: {', '.join(missing)}")
+		center, _file_manager, frappe_modules = processing_center_module()
+		with patch.dict(sys.modules, frappe_modules):
+			for expected, filename in fixtures:
+				workbook = load_workbook(ATTENDANCE_SOURCE_DIR / filename, read_only=True, data_only=True)
+				with patch.object(center, "_load_workbook", return_value=workbook):
+					self.assertEqual(center._detect_bulk_source_type("/private/files/upload.xlsx", "upload.xlsx"), expected)
+
+	def test_wang_chuanrui_real_special_hours_reconcile_to_23_hours_at_15_rate(self):
+		if load_workbook is None or not SPECIAL_HOURS_WORKBOOK.exists():
+			self.skipTest("Special-hours sample workbook is unavailable")
+		center, _file_manager, _frappe_modules = processing_center_module()
+		sheet = load_workbook(SPECIAL_HOURS_WORKBOOK, data_only=True)["特殊工时（人为登记）"]
+		day_row = [sheet.cell(3, column).value for column in range(1, sheet.max_column + 1)]
+		wang_row = next(row for row in range(4, sheet.max_row + 1) if str(sheet.cell(row, 3).value or "").strip() == "王传瑞")
+		entries = [
+			{"day": day, "hours": sheet.cell(wang_row, column).value}
+			for column, day in enumerate(day_row, start=1)
+			if isinstance(day, int) and sheet.cell(wang_row, column).value not in (None, "")
+		]
+		breakdown = center._special_hours_breakdown(entries, "2026-06")
+		self.assertEqual(breakdown, {"special_workday_hours": 10.5, "special_restday_hours": 1.0, "special_holiday_hours": 0.0})
+		self.assertEqual(
+			center._final_calculation({"special_workday_hours": breakdown["special_workday_hours"], "workday_overtime_hours": 12.5})["settlement_15"],
+			23,
+		)
+
+	def test_monthly_finance_file_uses_the_compact_confirmation_layout(self):
+		if load_workbook is None:
+			self.skipTest("openpyxl is unavailable")
+		center, file_manager, frappe_modules = processing_center_module()
+		saved = {}
+		file_manager.save_file = lambda file_name, content, *_args, **_kwargs: (
+			saved.update({"file_name": file_name, "content": content})
+			or SimpleNamespace(file_name=file_name, file_url="/private/files/test.xlsx")
+		)
+		with patch.dict(sys.modules, frappe_modules):
+			center._save_monthly_finance_confirmation_file("2026-06", [{
+				"department": "工程课", "employee_name": "张三", "standard_hours": 168, "actual_attendance_hours": 168,
+				"special_workday_hours": 10.5, "workday_overtime_hours": 12.5,
+				"special_restday_hours": 1, "restday_overtime_hours": 22,
+			}])
+		book = load_workbook(BytesIO(saved["content"]), read_only=False, data_only=False)
+		sheet = book["财务版"]
+		self.assertEqual(sheet["A1"].value, "6月工时奖惩确认表")
+		self.assertIn("F2:I2", {str(item) for item in sheet.merged_cells.ranges})
+		self.assertEqual(sheet["A4"].fill.fgColor.rgb, "00FFD966")
+		self.assertEqual(sheet["F5"].value, 168)
+		self.assertEqual(sheet["G5"].value, 23)
+		self.assertEqual(sheet["H5"].value, 23)
 
 	def test_result_summary_keeps_green_and_red_apple_totals_separate(self):
 		center, _file_manager, _frappe_modules = processing_center_module()

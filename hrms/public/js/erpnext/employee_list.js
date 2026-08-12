@@ -497,7 +497,6 @@
 			listview.search_term = "";
 		}
 		clear_roster_native_search_input(listview);
-		frappe.route_options = {};
 		apply_single_roster_filter(get_active_roster_card());
 
 		if (show_alert) {
@@ -565,11 +564,48 @@
 
 	function apply_single_roster_filter(card, search) {
 		sessionStorage.setItem("hrms_roster_active_card", card.label || "");
-		// Frappe ListView consumes route_options when it creates or refreshes a
-		// list. Directly writing URL parameters bypasses that lifecycle and left
-		// the card count and the displayed rows using different filters.
-		frappe.route_options = build_roster_route_options(card.filters, search);
+		const route_options = build_roster_route_options(card.filters, search);
+		const listview = get_active_employee_roster_listview();
+		frappe.route_options = route_options;
+
+		// A status-card click can happen while the Employee List is already the
+		// current route. In that case Frappe does not re-create ListView, so merely
+		// setting route_options leaves the old (often one-person) result on screen.
+		// Reset its actual filter state before loading the requested rows.
+		if (listview) {
+			apply_roster_filters_to_live_listview(listview, route_options);
+			return;
+		}
+
 		frappe.set_route("List", EMPLOYEE_DOCTYPE);
+	}
+
+	function get_active_employee_roster_listview() {
+		const listview = window.cur_listview;
+		return listview?.doctype === EMPLOYEE_DOCTYPE ? listview : null;
+	}
+
+	function apply_roster_filters_to_live_listview(listview, route_options) {
+		const filter_area = listview.filter_area;
+		if (!filter_area?.clear_filters || !filter_area?.add) {
+			frappe.route_options = route_options;
+			listview.start = 0;
+			listview.refresh();
+			return;
+		}
+
+		filter_area.clear_filters();
+		const filters = Object.entries(route_options).map(([fieldname, value]) => {
+			if (Array.isArray(value)) return [EMPLOYEE_DOCTYPE, fieldname, value[0], value[1]];
+			return [EMPLOYEE_DOCTYPE, fieldname, "=", value];
+		});
+		if (filters.length) filter_area.add(filters);
+
+		listview.search_term = "";
+		clear_roster_native_search_input(listview);
+		listview.start = 0;
+		listview.refresh();
+		update_roster_filter_status(listview);
 	}
 
 	function build_roster_route_options(filters, search) {
@@ -624,6 +660,29 @@
 			if (!button) return;
 			button.classList.toggle("is-active", card.label === active_label);
 		});
+		update_roster_filter_status(listview);
+	}
+
+	function update_roster_filter_status(listview) {
+		const wrapper = get_list_wrapper(listview);
+		const panel = wrapper?.querySelector(".hrms-roster-summary");
+		if (!panel) return;
+
+		let status = panel.querySelector(".hrms-roster-filter-status");
+		if (!status) {
+			status = document.createElement("div");
+			status.className = "hrms-roster-filter-status";
+			panel.appendChild(status);
+		}
+
+		const card = get_active_roster_card();
+		const column_filter = get_stored_roster_column_filter();
+		const details = [__(card.label)];
+		if (column_filter?.value) {
+			const label = roster_filterable_columns.get(column_filter.fieldname)?.label || column_filter.fieldname;
+			details.push(`${__(label)}：${column_filter.display_value || column_filter.value}`);
+		}
+		status.textContent = `${__("当前筛选")}：${details.join(" · ")}`;
 	}
 
 function hide_native_filter_controls() {

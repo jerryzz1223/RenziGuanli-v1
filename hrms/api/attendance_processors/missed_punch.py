@@ -8,11 +8,13 @@ without overwriting the source data.
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Iterable, Mapping, Sequence
+
 
 
 FIELD_ALIASES = {
@@ -76,6 +78,18 @@ FORMER_EMPLOYEE_STATUSES = {
 	"terminated",
 	"disabled",
 }
+
+_DINGTALK_DEPARTMENT_IDENTIFIER_RE = re.compile(r"\s*[-－—–]\s*\d+\s*$")
+
+
+def normalize_department_name(value: Any) -> str:
+	"""Remove DingTalk's trailing department identifier (for example `` - 11``)."""
+	return _DINGTALK_DEPARTMENT_IDENTIFIER_RE.sub("", _text(value)).strip()
+
+
+def department_match_key(value: Any) -> str:
+	key = re.sub(r"\s+", "", normalize_department_name(value)).casefold()
+	return key[:-1] if len(key) > 1 and key[-1:] in {"组", "课", "科"} else key
 
 
 @dataclass(frozen=True)
@@ -147,7 +161,7 @@ def process_missed_punch_rows(
 	headers = _ordered_headers(input_rows)
 	structure = precheck_missed_punch_structure(headers)
 	by_code, by_name, has_directory = _employee_indexes(employee_directory)
-	department_map = {_text(key): _text(value) for key, value in (department_mapping or {}).items()}
+	department_map = {normalize_department_name(key): normalize_department_name(value) for key, value in (department_mapping or {}).items()}
 	seen_approvals: dict[str, int] = {}
 	processed_rows = []
 	excluded_source_rows = 0
@@ -226,7 +240,7 @@ def _standardize_row(
 	parsed_punch_time = _parse_datetime(punch_time_value)
 	raw_employee_code = _text(_first_value(source, "employee_code"))
 	raw_employee_name = _text(_first_value(source, "employee_name"))
-	raw_department = _text(_first_value(source, "department"))
+	raw_department = normalize_department_name(_first_value(source, "department"))
 	punch_type = _text(_first_value(source, "punch_type"))
 	approval_result = _text(_first_value(source, "approval_result"))
 	approval_status = _text(_first_value(source, "approval_status"))
@@ -337,13 +351,13 @@ def _resolve_employee(
 ) -> dict[str, Any]:
 	exception_codes: list[str] = []
 	rule_codes: list[str] = []
-	mapped_department = department_mapping.get(raw_department, raw_department)
+	mapped_department = department_mapping.get(normalize_department_name(raw_department), normalize_department_name(raw_department))
 	matched = None
 
 	if has_directory:
 		candidates = by_code.get(raw_code, []) if raw_code else by_name.get(raw_name, [])
 		if not raw_code and len(candidates) > 1 and mapped_department:
-			department_candidates = [candidate for candidate in candidates if candidate["department"] == mapped_department]
+			department_candidates = [candidate for candidate in candidates if department_match_key(candidate["department"]) == department_match_key(mapped_department)]
 			if len(department_candidates) == 1:
 				candidates = department_candidates
 		if not candidates:
@@ -363,7 +377,7 @@ def _resolve_employee(
 		employment_status = matched["employment_status"]
 		if raw_name and employee_name and raw_name != employee_name:
 			_append_code(exception_codes, "EMPLOYEE_NAME_CONFLICT")
-		if mapped_department and department and mapped_department != department:
+		if mapped_department and department and department_match_key(mapped_department) != department_match_key(department):
 			_append_code(exception_codes, "DEPARTMENT_CONFLICT")
 		if _normalized_status(employment_status) in FORMER_EMPLOYEE_STATUSES:
 			if rules.former_employee_policy == "exception":
@@ -395,7 +409,7 @@ def _employee_indexes(employee_directory):
 		employee = {
 			"employee_code": _directory_value(item, "employee_code", "custom_employee_code", "employee_number", "工号", "name"),
 			"employee_name": _directory_value(item, "employee_name", "姓名", "employee_full_name"),
-			"department": _directory_value(item, "department", "部门"),
+			"department": normalize_department_name(_directory_value(item, "department", "部门")),
 			"employment_status": _directory_value(item, "employment_status", "custom_personnel_status", "status", "工作性质"),
 		}
 		if employee["employee_code"]:

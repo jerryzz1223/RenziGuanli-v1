@@ -326,6 +326,16 @@ for (const marker of [
 	mustInclude(js, marker, `Hybrid organization frontend missing marker: ${marker}`);
 }
 
+mustMatch(
+	js,
+	/import html2canvas from "html2canvas";[\s\S]*?export_chart\(\)\s*\{[\s\S]*?html2canvas\(chart,[\s\S]*?image\/png[\s\S]*?link\.download = filename;/s,
+	"Organization chart export must download a PNG instead of opening the browser print dialog",
+);
+
+if (/export_chart\(\)\s*\{\s*window\.print\(\);\s*\}/.test(js)) {
+	throw new Error("Organization chart export must not open the browser print dialog.");
+}
+
 for (const marker of [
 	".hrms-org-page",
 	".hrms-org-sidebar",

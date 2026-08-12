@@ -1,3 +1,5 @@
+import html2canvas from "html2canvas";
+
 frappe.pages["organizational-chart"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
@@ -889,7 +891,35 @@ class HybridOrganizationChart {
 	}
 
 	export_chart() {
-		window.print();
+		const chart = this.wrapper.querySelector(".hrms-org-tree");
+		if (!chart) {
+			frappe.msgprint(__("暂无可导出的组织架构。"));
+			return;
+		}
+
+		frappe.dom.freeze(__("正在导出组织架构..."));
+		const filename = `${this.company || YONGXIN_COMPANY}_组织架构图.png`;
+		html2canvas(chart, {
+			backgroundColor: "#ffffff",
+			scale: 2,
+			useCORS: true,
+			width: Math.ceil(chart.scrollWidth),
+			height: Math.ceil(chart.scrollHeight),
+		})
+			.then((canvas) => {
+				const link = document.createElement("a");
+				link.href = canvas.toDataURL("image/png");
+				link.download = filename;
+				link.click();
+			})
+			.catch((error) => {
+				frappe.msgprint({
+					title: __("组织架构导出失败"),
+					indicator: "red",
+					message: frappe.utils.escape_html(error?.message || __("请稍后重试。")),
+				});
+			})
+			.finally(() => frappe.dom.unfreeze());
 	}
 
 	add_department() {

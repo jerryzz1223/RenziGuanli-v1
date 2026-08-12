@@ -18,6 +18,7 @@
   "department",
   "approval_reference",
   "remarks",
+  "draft_creation_info",
   "details_section",
   "transfer_details",
   "reallocate_leaves",
@@ -111,6 +112,12 @@
    "fieldname": "remarks",
    "fieldtype": "Small Text",
    "label": "备注"
+  },
+  {
+   "fieldname": "draft_creation_info",
+   "fieldtype": "HTML",
+   "label": "草稿信息",
+   "read_only": 1
   },
   {
    "description": "填写本次实际变化的部门、岗位、职级等项目；提交后将更新员工档案并写入任职记录。",
@@ -207,6 +214,6 @@
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
- "title_field": "employee_name",
+ "title_field": "employee_code_display",
  "track_changes": 1
 }

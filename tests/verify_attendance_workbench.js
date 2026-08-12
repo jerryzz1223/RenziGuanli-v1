@@ -55,6 +55,7 @@ for (const marker of [
 	"bind_route_events",
 	"hrms:route-change",
 	"考勤汇总",
+	"日考勤",
 	"加工结果",
 	"异常处理",
 	"数据台账",
@@ -90,6 +91,9 @@ for (const marker of [
 	"approval_no",
 	"get_processing_batch",
 	"register_source_file",
+	"bulk_import_and_process_sources",
+	"批量导入 6 个文件并加工",
+	"allow_multiple: true",
 	"register_monthly_support_file",
 	"process_monthly_support_file",
 	"confirm_monthly_support_file",
@@ -118,6 +122,10 @@ for (const marker of [
 	"confirm_source_result",
 	"list_processing_exceptions",
 	"list_processing_batches",
+	"list_daily_attendance_records",
+	"reset_attendance_month",
+	"render_daily_attendance_markup",
+	"清空本月数据",
 	"list_manual_adjustments",
 	"generate_monthly_final_files",
 	"get_monthly_final_preview",
@@ -139,6 +147,7 @@ for (const marker of [
 	"data-preview-final",
 	"open_monthly_final_preview",
 	"monthly_support_columns",
+	"result_trace(row",
 	"特殊工时明细",
 	"selected_exception_record_ids",
 	"data-exception-record-select",
@@ -330,6 +339,9 @@ if (attendancePageJs.includes("dingtalk_export_v1 当前仅支持预览")) {
 if (!homeRedirectJs.includes('label: "月度终稿", route: "/desk/attendance-import-center/monthly-final"')) {
 	throw new Error("The global attendance sidebar must provide the monthly-final route.");
 }
+if (!homeRedirectJs.includes('label: "日考勤", route: "/desk/attendance-import-center/daily-attendance"')) {
+	throw new Error("The global attendance sidebar must provide the daily-attendance route.");
+}
 
 for (const marker of ["flex: 0 0 220px", "min-width: 220px", "white-space: nowrap", "text-overflow: ellipsis"]) {
 	mustInclude(topNavCss, marker, `Attendance sidebar header layout is missing ${marker}.`);
@@ -490,6 +502,7 @@ for (const marker of [
 	"attendance-import-center/processing-results",
 	"attendance-import-center/exceptions",
 	"attendance-import-center/monthly-final",
+	"attendance-import-center/daily-attendance",
 	"attendance-import-center/import-batches",
 	"attendance-import-center/manual-adjustments",
 	"attendance-import-center/field-mapping",

@@ -110,6 +110,18 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(row["review_status"], "无需审核")
 		self.assertTrue(row["eligible_for_downstream"])
 
+	def test_dingtalk_department_identifier_is_removed_before_matching_and_display(self):
+		rows = [{
+			"姓名": "朱耀辉", "工号": "164", "日期": "26-06-01", "实际部门": "工程课 - 11", "班次": "白班", "标准工时": 8,
+			"source_file": "sample.xlsx", "source_sheet": "每日明细（钉钉导出）", "source_row": 3,
+		}]
+		roster = [{"employee_code": "164", "employee_name": "朱耀辉", "department": "工程课"}]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-06", employee_directory=roster)["processed_rows"][0]
+
+		self.assertNotIn("EMPLOYEE_DEPARTMENT_MISMATCH", row["exception_codes"])
+		self.assertEqual(row["department"], "工程课")
+		self.assertEqual(row["processed_value"]["department"], "工程课")
+
 	@unittest.skipUnless(REAL_WORKBOOK.exists(), "Local real DingTalk sample is unavailable")
 	def test_real_dingtalk_sample_has_5820_source_rows_and_194_employee_results(self):
 		from openpyxl import load_workbook
