@@ -19,6 +19,8 @@ MODULE_PATH = (
 	Path(__file__).parents[1] / "hrms" / "api" / "attendance_processors" / "apple_tree.py"
 )
 REAL_WORKBOOK = Path("/Users/lrj/Desktop/薪酬计算设计表单/考勤数据/2.苹果树合计.xlsx")
+HOUSING_ALLOWANCE_WORKBOOK = Path("/Users/lrj/Desktop/薪酬计算设计表单/考勤数据/4.住房补贴（月）.xlsx")
+FULL_ATTENDANCE_WORKBOOK = Path("/Users/lrj/Desktop/薪酬计算设计表单/考勤数据/5.全勤奖（月）.xlsx")
 SPECIAL_HOURS_WORKBOOK = Path("/Users/lrj/Desktop/薪酬计算设计表单/考勤数据/7.特殊工时（月）.xlsx")
 ATTENDANCE_SOURCE_DIR = Path("/Users/lrj/Desktop/薪酬计算设计表单/考勤数据")
 ATTENDANCE_PAGE = (
@@ -428,6 +430,51 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 			center._final_calculation({"special_workday_hours": breakdown["special_workday_hours"], "workday_overtime_hours": 12.5})["settlement_15"],
 			23,
 		)
+
+	def test_monthly_amount_parser_ignores_new_hire_and_leaver_reference_sections(self):
+		"""Only the numbered master lists become payroll records.
+
+		The real housing and full-attendance exports append two unnumbered
+		reference tables.  Their columns shift left and otherwise make names look
+		like employee codes and amounts look blank.
+		"""
+		if load_workbook is None:
+			self.skipTest("openpyxl is unavailable")
+		fixtures = (
+			("housing_allowance", HOUSING_ALLOWANCE_WORKBOOK),
+			("full_attendance", FULL_ATTENDANCE_WORKBOOK),
+		)
+		missing = [str(path) for _source_type, path in fixtures if not path.exists()]
+		if missing:
+			self.skipTest(f"monthly amount fixtures are unavailable: {', '.join(missing)}")
+		center, _file_manager, _frappe_modules = processing_center_module()
+		for source_type, path in fixtures:
+			with self.subTest(source_type=source_type):
+				workbook = load_workbook(path, data_only=True, read_only=True)
+				sheet = workbook[workbook.sheetnames[0]]
+				batch = SimpleNamespace(source_type=source_type, attendance_month="2026-06", source_file="/private/files/monthly.xlsx")
+				rows = center._monthly_amount_rows(sheet, batch, center.MONTHLY_SUPPORT_SOURCE_CONFIG[source_type])
+				self.assertGreater(len(rows), 150)
+				self.assertEqual(len(rows), len({row["employee_code"] for row in rows}))
+				self.assertTrue(all(str(row["employee_code"]).strip().isdigit() for row in rows))
+				self.assertTrue(all(isinstance(row[center.MONTHLY_SUPPORT_SOURCE_CONFIG[source_type]["value_field"]], (int, float)) for row in rows))
+
+	def test_special_hours_does_not_block_on_a_historical_department_label(self):
+		if load_workbook is None or not SPECIAL_HOURS_WORKBOOK.exists():
+			self.skipTest("Special-hours sample workbook is unavailable")
+		center, _file_manager, _frappe_modules = processing_center_module()
+		workbook = load_workbook(SPECIAL_HOURS_WORKBOOK, data_only=True, read_only=True)
+		batch = SimpleNamespace(source_type="special_hours", attendance_month="2026-06", source_file="/private/files/special.xlsx", company="永新")
+		with patch.object(center, "_load_workbook", return_value=workbook):
+			raw_rows, _sheets = center._read_monthly_support_rows(batch)
+		self.assertTrue(all(row["department"] for row in raw_rows))
+		roster = [
+			{"employee_code": row["employee_code"], "employee_name": row["employee_name"], "department": "当前部门"}
+			for row in raw_rows
+		]
+		with patch.object(center, "_load_workbook", return_value=load_workbook(SPECIAL_HOURS_WORKBOOK, data_only=True, read_only=True)), patch.object(center, "_employee_directory", return_value=roster):
+			result = center._process_monthly_support_rows(batch)
+		self.assertFalse(any("EMPLOYEE_DEPARTMENT_MISMATCH" in row["exception_codes"] for row in result["processed_rows"]))
 
 	def test_monthly_finance_file_uses_the_compact_confirmation_layout(self):
 		if load_workbook is None:

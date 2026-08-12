@@ -49,6 +49,7 @@ MONTHLY_SUPPORT_SOURCE_CONFIG = {
 	"housing_allowance": {
 		"label": "住房补贴",
 		"required_headers": ("工号", "姓名", "住房补贴"),
+		"amount_headers": ("住房补贴", "补贴金额"),
 		"description": "上传当月住房补贴明细；按工号、姓名和住房补贴金额核验。",
 		"mode": "monthly_amount",
 		"value_field": "housing_allowance",
@@ -57,6 +58,7 @@ MONTHLY_SUPPORT_SOURCE_CONFIG = {
 	"full_attendance": {
 		"label": "全勤奖",
 		"required_headers": ("工号", "姓名", "全勤奖"),
+		"amount_headers": ("全勤奖",),
 		"description": "上传当月全勤奖明细；按工号、姓名和全勤奖金额核验。",
 		"mode": "monthly_amount",
 		"value_field": "full_attendance_award",
@@ -536,39 +538,87 @@ def _support_header_matches(sheet, required_headers: tuple[str, ...]):
 	return None, {}
 
 
+def _monthly_amount_header_groups(sheet, config: dict[str, Any]):
+	"""Find monthly amount tables without confusing notes with employee data.
+
+	The supplied HR workbooks print the main list in two side-by-side tables and
+	then add a separate "new hire / leaver" reference section.  The latter has a
+	different column layout and contains employees already listed in the main
+	table, so carrying the first header's column indexes to the bottom of the
+	sheet reads names as employee codes and blank cells as amounts.
+	"""
+	amount_headers = {
+		_normalized_header(value)
+		for value in config.get("amount_headers") or (config["value_header"],)
+	}
+	matches = []
+	for row_number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+		headers = [_normalized_header(value) for value in row]
+		code_indexes = [index for index, value in enumerate(headers) if value == "工号"]
+		name_indexes = [index for index, value in enumerate(headers) if value == "姓名"]
+		amount_indexes = [index for index, value in enumerate(headers) if value in amount_headers]
+		if not code_indexes or not name_indexes or not amount_indexes:
+			continue
+		matches.append({
+			"row_number": row_number,
+			"code_indexes": code_indexes,
+			"name_indexes": name_indexes,
+			"amount_indexes": amount_indexes,
+			"is_numbered_list": "序号" in headers,
+		})
+	# A numbered list is the main source of truth.  If a customer provides a
+	# simple one-table template without serial numbers, preserve its first table
+	# rather than rejecting a valid import.
+	main_matches = [match for match in matches if match["is_numbered_list"]]
+	return matches, (main_matches or matches[:1])
+
+
 def _monthly_amount_rows(sheet, batch, config: dict[str, Any]):
-	header_row, positions = _support_header_matches(sheet, config["required_headers"])
-	if not header_row:
+	all_headers, main_headers = _monthly_amount_header_groups(sheet, config)
+	if not main_headers:
 		return []
 	rows = []
-	code_indexes = positions["工号"]
-	name_indexes = positions["姓名"]
-	amount_indexes = positions[_normalized_header(config["value_header"])]
-	for source_row, values in enumerate(sheet.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
-		for table_index, code_index in enumerate(code_indexes):
-			name_index = name_indexes[min(table_index, len(name_indexes) - 1)]
-			amount_index = amount_indexes[min(table_index, len(amount_indexes) - 1)]
-			department_index = code_index + 2 if code_index + 2 < len(values) else None
-			code = values[code_index] if code_index < len(values) else None
-			name = values[name_index] if name_index < len(values) else None
-			amount = values[amount_index] if amount_index < len(values) else None
-			department = values[department_index] if department_index is not None else None
-			if not any(value not in (None, "") for value in (code, name, amount, department)):
-				continue
-			# Monthly sheets often end with amount totals.  A total has neither an
-			# employee code nor a name, so it must not become a fake review record.
-			if code in (None, "") and name in (None, ""):
-				continue
-			rows.append({
-				"employee_code": str(code).strip() if code not in (None, "") else "",
-				"employee_name": str(name).strip() if name not in (None, "") else "",
-				"department": str(department).strip() if department not in (None, "") else "",
-				config["value_field"]: amount,
-				"source_file": batch.source_file,
-				"source_sheet": sheet.title,
-				"source_row": source_row,
-				"source_id": f"{sheet.title}:{source_row}:{table_index + 1}",
-			})
+	for header in main_headers:
+		next_header_row = next(
+			(item["row_number"] for item in all_headers if item["row_number"] > header["row_number"]),
+			sheet.max_row + 1,
+		)
+		for source_row, values in enumerate(
+			sheet.iter_rows(min_row=header["row_number"] + 1, max_row=next_header_row - 1, values_only=True),
+			start=header["row_number"] + 1,
+		):
+			for table_index, code_index in enumerate(header["code_indexes"]):
+				name_index = header["name_indexes"][min(table_index, len(header["name_indexes"]) - 1)]
+				amount_index = header["amount_indexes"][min(table_index, len(header["amount_indexes"]) - 1)]
+				department_index = name_index + 1 if name_index + 1 < len(values) else None
+				code = values[code_index] if code_index < len(values) else None
+				name = values[name_index] if name_index < len(values) else None
+				amount = values[amount_index] if amount_index < len(values) else None
+				department = values[department_index] if department_index is not None else None
+				if not any(value not in (None, "") for value in (code, name, amount, department)):
+					continue
+				# Monthly sheets often place policy notes between the master list and
+				# the appended reference tables.  Keep incomplete employee rows only
+				# when they still contain a business value to review; otherwise notes,
+				# totals and signature labels must not become fake employees.
+				if code in (None, "") and name in (None, ""):
+					continue
+				if (
+					(code in (None, "") or name in (None, ""))
+					and amount in (None, "")
+					and department in (None, "")
+				):
+					continue
+				rows.append({
+					"employee_code": str(code).strip() if code not in (None, "") else "",
+					"employee_name": str(name).strip() if name not in (None, "") else "",
+					"department": str(department).strip() if department not in (None, "") else "",
+					config["value_field"]: amount,
+					"source_file": batch.source_file,
+					"source_sheet": sheet.title,
+					"source_row": source_row,
+					"source_id": f"{sheet.title}:{source_row}:{table_index + 1}",
+				})
 	return rows
 
 
@@ -725,8 +775,11 @@ def _process_monthly_support_rows(batch):
 		elif employee:
 			if name and str(employee.get("employee_name") or "").strip() and name != str(employee["employee_name"]).strip():
 				exception_codes.append("EMPLOYEE_CODE_NAME_CONFLICT")
-			if department and str(employee.get("department") or "").strip() and department != str(employee["department"]).strip():
-				exception_codes.append("EMPLOYEE_DEPARTMENT_MISMATCH")
+			# Housing allowance, full-attendance and special-hours files are
+			# verified by employee identity plus their respective amount/hours.
+			# Source departments are helpful audit context, but historical labels
+			# must not block a payroll input when the roster has since moved the
+			# employee to another department.
 			department = str(employee.get("department") or department).strip()
 
 		if config["mode"] == "monthly_amount":
