@@ -34,7 +34,7 @@ for (const marker of [
 	'if sort_field == "custom_employee_code":',
 	"_sort_employee_roster_by_business_code(all_rows, sort_order)",
 ]) {
-	mustInclude(employeeApi, marker, `员工档案库接口缺少工号自然排序契约：${marker}`);
+	mustInclude(employeeApi, marker, `员工花名册接口缺少工号自然排序契约：${marker}`);
 }
 
 const sample = ["260613", "260707", "2636", "43", "4228", "87", "281"];

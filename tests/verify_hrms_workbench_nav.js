@@ -155,7 +155,6 @@ for (const label of ["员工管理", "员工关系"]) {
 
 for (const [label, linkTo, linkType] of [
 	["员工花名册", "Employee", "DocType"],
-	["员工档案库", "employee-archive", "Page"],
 	["入职管理", "Employee Onboarding", "DocType"],
 	["转正管理", "Employee Promotion", "DocType"],
 	["离职管理", "Employee Separation", "DocType"],

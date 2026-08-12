@@ -69,7 +69,6 @@ PAGE_SCOPES = {
 	"attendance-import-center": ("attendance", _("考勤录入数据")),
 	"payroll-input-center": ("payroll", _("薪酬录入数据")),
 	"form-data-intake": ("form_intake", _("表单导入数据")),
-	"employee-archive": ("personnel_roster", _("员工花名册数据")),
 	"employee-property-history": ("personnel_history", _("人事异动记录")),
 	"employee-roster-import": ("personnel_roster", _("花名册导入的员工数据")),
 	"organizational-chart": ("organization", _("组织录入数据")),
