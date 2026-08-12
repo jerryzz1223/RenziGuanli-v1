@@ -328,12 +328,16 @@ for (const marker of [
 
 mustMatch(
 	js,
-	/import html2canvas from "html2canvas";[\s\S]*?export_chart\(\)\s*\{[\s\S]*?html2canvas\(chart,[\s\S]*?image\/png[\s\S]*?link\.download = filename;/s,
-	"Organization chart export must download a PNG instead of opening the browser print dialog",
+	/export_chart\(\)\s*\{[\s\S]*?export_organization_chart_excel[\s\S]*?link\.download = file\.file_name \|\| `\$\{this\.company \|\| YONGXIN_COMPANY\}_组织架构图\.xlsx`;/s,
+	"Organization chart export must download an Excel workbook instead of opening the browser print dialog",
 );
 
 if (/export_chart\(\)\s*\{\s*window\.print\(\);\s*\}/.test(js)) {
 	throw new Error("Organization chart export must not open the browser print dialog.");
+}
+
+for (const marker of ["def export_organization_chart_excel", "YONGXIN_ORG_EXPORT_TEMPLATE", "_refresh_organization_export_nodes", "_refresh_organization_export_summary", "组织架构图.xlsx"]) {
+	mustInclude(py, marker, `Organization chart Excel export missing marker: ${marker}`);
 }
 
 for (const marker of [

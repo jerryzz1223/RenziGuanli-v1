@@ -1,6 +1,7 @@
 import json
 import re
 from collections import Counter, defaultdict
+from io import BytesIO
 from pathlib import Path
 
 import frappe
@@ -13,6 +14,9 @@ HYBRID_MANAGER_KEYWORDS = ("课长", "组长", "主管", "总监", "副总", "�
 TEMPLATE_DEPARTMENT_NODE_TYPES = {"division", "department", "team"}
 YONGXIN_Q2_ORG_TEMPLATE = Path(__file__).with_name("yongxin_q2_org_structure.json")
 YONGXIN_Q3_BASELINE_WORKBOOK = Path("/Users/lrj/Documents/SAD/YOngxin/人资/副本人资系统沟通表260713.xlsx")
+YONGXIN_ORG_EXPORT_TEMPLATE = Path(
+	"/Users/lrj/Documents/SAD/YOngxin/人资/人资二/人资系统资料/人资流程模块/1.人力资源规划/1.2组织架构.xlsx"
+)
 YONGXIN_Q3_ORG_SHEET = "26Q3组织架构图"
 YONGXIN_Q3_SNAPSHOT_VERSION = "2026Q3"
 YONGXIN_COMPANY_NAME = "永新"
@@ -732,6 +736,143 @@ def get_hybrid_tree(company: str | None = None, source_mode: str | None = None):
 		},
 		"field_map": HYBRID_ROSTER_FIELD_MAP,
 	}
+
+
+@frappe.whitelist()
+def export_organization_chart_excel(company: str | None = None):
+	"""Refresh the supplied organization-chart workbook without changing its layout."""
+	from copy import copy
+
+	from openpyxl import load_workbook
+	from openpyxl.styles import Alignment, Border, Font, Side
+	from frappe.utils.file_manager import save_file
+
+	if not YONGXIN_ORG_EXPORT_TEMPLATE.exists():
+		frappe.throw(_("未找到组织架构 Excel 模板。"))
+	payload = get_hybrid_tree(company=company)
+	root = payload.get("root") or {}
+	if not root:
+		frappe.throw(_("暂无可导出的组织架构。"))
+	book = load_workbook(YONGXIN_ORG_EXPORT_TEMPLATE)
+	sheet = book["组织架构图"]
+	for worksheet in list(book.worksheets):
+		if worksheet != sheet:
+			book.remove(worksheet)
+	_refresh_organization_export_title(sheet, payload)
+	_refresh_organization_export_nodes(sheet, root)
+	_refresh_organization_export_summary(sheet, get_organization_report(payload.get("company")), copy, Alignment, Border, Font, Side)
+
+	output = BytesIO()
+	book.save(output)
+	company_label = _get_company_label(payload.get("company")) or YONGXIN_COMPANY_NAME
+	file = save_file(f"{company_label}_组织架构图.xlsx", output.getvalue(), None, None, is_private=1)
+	return {"file_url": file.file_url, "file_name": file.file_name}
+
+
+def _refresh_organization_export_title(sheet, payload):
+	for row in sheet.iter_rows():
+		for cell in row:
+			if "组织架构图" in cstr(cell.value):
+				cell.value = f"{_get_company_label(payload.get('company'))}组织架构图"
+				return
+
+
+def _refresh_organization_export_nodes(sheet, root):
+	nodes_by_name = {}
+	summary_header_row = next(
+		(
+			cell.row
+			for row in sheet.iter_rows()
+			for cell in row
+			if cstr(cell.value).strip() == "部门"
+		),
+		sheet.max_row + 1,
+	)
+	for node in _flatten_organization_export_nodes(root):
+		if node.get("node_type") != "department":
+			continue
+		name = _organization_business_name(node.get("name"))
+		if name:
+			nodes_by_name[name] = node
+	for row in sheet.iter_rows():
+		for cell in row:
+			if cell.row >= summary_header_row:
+				continue
+			lines = [line.strip() for line in cstr(cell.value).splitlines() if line.strip()]
+			if not lines:
+				continue
+			node = nodes_by_name.get(_organization_business_name(lines[0]))
+			if not node:
+				continue
+			cell.value = "\n".join(part for part in [node.get("name"), node.get("title"), _organization_export_staffing(node)] if part)
+			below = sheet.cell(row=cell.row + 1, column=cell.column)
+			if "编制" in cstr(below.value) or "空缺" in cstr(below.value):
+				below.value = _organization_export_staffing(node)
+
+
+def _refresh_organization_export_summary(sheet, report, copy, Alignment, Border, Font, Side):
+	department_header = None
+	for row in sheet.iter_rows():
+		for cell in row:
+			if cstr(cell.value).strip() == "部门":
+				department_header = cell
+				break
+		if department_header:
+			break
+	if not department_header:
+		return
+	header_row = department_header.row
+	columns = {
+		"department": department_header.column,
+		"planned_headcount": _find_organization_export_header_column(sheet, header_row, "编制人数"),
+		"current_headcount": _find_organization_export_header_column(sheet, header_row, "现有人数"),
+		"vacancy_count": _find_organization_export_header_column(sheet, header_row, "空缺人数"),
+		"fulfillment_rate": _find_organization_export_header_column(sheet, header_row, "岗位满足率"),
+		"vacancy_notes": _find_organization_export_header_column(sheet, header_row, "Q2招聘岗位及人数"),
+	}
+	if not all(columns.values()):
+		return
+	total_row = next((row for row in range(header_row + 1, sheet.max_row + 1) if cstr(sheet.cell(row=row, column=department_header.column).value).strip() == "汇总"), sheet.max_row + 1)
+	rows = report.get("rows") or []
+	required_rows = len(rows) + 1
+	available_rows = total_row - header_row - 1
+	if required_rows > available_rows:
+		sheet.insert_rows(total_row, required_rows - available_rows)
+		total_row += required_rows - available_rows
+	thin = Side(style="thin", color="000000")
+	border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	for offset, data in enumerate(rows + [{"department": "汇总", **(report.get("total") or {}), "vacancy_notes": "-"}], start=1):
+		row = header_row + offset
+		for key, column in columns.items():
+			cell = sheet.cell(row=row, column=column, value=data.get(key) if key != "vacancy_notes" else data.get(key) or "-")
+			cell.font = copy(sheet.cell(row=header_row + 1, column=column).font) if header_row + 1 < total_row else Font(name="宋体", size=9)
+			cell.alignment = Alignment(horizontal="left" if key in {"department", "vacancy_notes"} else "center", vertical="center", wrap_text=True)
+			cell.border = border
+			if key == "fulfillment_rate" and data.get(key) is not None:
+				cell.number_format = "0%"
+		sheet.row_dimensions[row].height = 24
+
+
+def _find_organization_export_header_column(sheet, row, label):
+	for cell in sheet[row]:
+		if cstr(cell.value).strip() == label:
+			return cell.column
+	return None
+
+
+def _flatten_organization_export_nodes(node):
+	if not node:
+		return []
+	result = [node]
+	for child in node.get("children") or []:
+		result.extend(_flatten_organization_export_nodes(child))
+	return result
+
+
+def _organization_export_staffing(node):
+	return _("编制/实际:{0}/{1}\n空缺:{2}").format(
+		cint(node.get("planned_headcount")), cint(node.get("current_headcount")), cint(node.get("vacancy_count"))
+	)
 
 
 @frappe.whitelist()

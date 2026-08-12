@@ -1,5 +1,3 @@
-import html2canvas from "html2canvas";
-
 frappe.pages["organizational-chart"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
@@ -103,7 +101,7 @@ class HybridOrganizationChart {
 		this.page.add_inner_button(__("展开全部"), () => this.expand_all());
 		this.page.add_inner_button(__("收起全部"), () => this.collapse_all());
 		this.page.add_inner_button(__("导入架构模板"), () => this.import_yongxin_template());
-		this.page.add_inner_button(__("导出"), () => this.export_chart());
+		this.page.add_inner_button(__("导出 Excel"), () => this.export_chart());
 		window.hrmsFormImport?.addPageActions(this.page, "org_structure", "组织架构与编制", "表单导入");
 		this.page.set_primary_action(__("新增部门"), () => this.add_department());
 	}
@@ -891,35 +889,23 @@ class HybridOrganizationChart {
 	}
 
 	export_chart() {
-		const chart = this.wrapper.querySelector(".hrms-org-tree");
-		if (!chart) {
-			frappe.msgprint(__("暂无可导出的组织架构。"));
-			return;
-		}
-
-		frappe.dom.freeze(__("正在导出组织架构..."));
-		const filename = `${this.company || YONGXIN_COMPANY}_组织架构图.png`;
-		html2canvas(chart, {
-			backgroundColor: "#ffffff",
-			scale: 2,
-			useCORS: true,
-			width: Math.ceil(chart.scrollWidth),
-			height: Math.ceil(chart.scrollHeight),
-		})
-			.then((canvas) => {
+		frappe.call({
+			method: "hrms.hr.page.organizational_chart.organizational_chart.export_organization_chart_excel",
+			args: { company: this.company },
+			freeze: true,
+			freeze_message: __("正在生成组织架构 Excel..."),
+			callback: (response) => {
+				const file = response.message || {};
+				if (!file.file_url) return;
 				const link = document.createElement("a");
-				link.href = canvas.toDataURL("image/png");
-				link.download = filename;
+				link.href = file.file_url;
+				link.download = file.file_name || `${this.company || YONGXIN_COMPANY}_组织架构图.xlsx`;
+				link.target = "_blank";
+				document.body.appendChild(link);
 				link.click();
-			})
-			.catch((error) => {
-				frappe.msgprint({
-					title: __("组织架构导出失败"),
-					indicator: "red",
-					message: frappe.utils.escape_html(error?.message || __("请稍后重试。")),
-				});
-			})
-			.finally(() => frappe.dom.unfreeze());
+				link.remove();
+			},
+		});
 	}
 
 	add_department() {
