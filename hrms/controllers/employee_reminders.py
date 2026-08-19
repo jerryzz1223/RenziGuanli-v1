@@ -195,7 +195,7 @@ def get_employees_having_an_event_today(event_type):
 				`status` = 'Active'
 		""",
 			"postgres": f"""
-			SELECT "personal_email", "company", "company_email", "user_id", "employee_name" AS 'name', "image", "date_of_joining"
+			SELECT "personal_email", "company", "company_email", "user_id", "employee_name" AS "name", "image", "date_of_joining"
 			FROM "tabEmployee"
 			WHERE
 				DATE_PART('day', {condition_column}) = date_part('day', %(today)s)

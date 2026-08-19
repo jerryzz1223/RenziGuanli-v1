@@ -17,6 +17,19 @@
 	grid-template-columns: 190px minmax(0, 1fr);
 }
 
+.hrms-org-page.is-fullscreen {
+	background: #f6f8fa;
+	grid-template-columns: minmax(0, 1fr) 340px;
+	height: 100vh;
+	margin: 0;
+	padding: 14px;
+	width: 100vw;
+}
+
+.hrms-org-page.is-fullscreen .hrms-org-sidebar {
+	display: none;
+}
+
 .hrms-org-report-host {
 	background: #fff;
 	min-height: 0;
@@ -161,6 +174,16 @@
 .hrms-org-toolbar-title {
 	align-self: center;
 	font-size: 14px;
+	white-space: nowrap;
+}
+
+.hrms-org-source {
+	color: #667085;
+	display: block;
+	font-size: 11px;
+	margin-top: 3px;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
@@ -484,10 +507,30 @@
 }
 
 .hrms-org-person-more {
+	background: transparent;
+	border: 0;
 	color: #8a94a6;
+	cursor: pointer;
 	display: block;
 	font-size: 11px;
 	margin-top: 2px;
+	padding: 2px 3px;
+	text-align: center;
+	text-decoration: underline;
+	width: 100%;
+}
+
+.hrms-org-person-more:hover,
+.hrms-org-person-more:focus-visible {
+	color: #087a4a;
+}
+
+.hrms-org-page.is-fullscreen .hrms-org-tree-canvas {
+	padding: 26px 30px 56px;
+}
+
+.hrms-org-page.is-fullscreen .hrms-org-node {
+	width: 205px;
 }
 
 .hrms-org-node-toggle,
@@ -767,6 +810,25 @@
 		height: auto;
 		max-height: none;
 		position: static;
+	}
+}
+
+@media (max-width: 760px) {
+	.hrms-org-page.is-fullscreen {
+		grid-template-columns: minmax(0, 1fr);
+		padding: 8px;
+	}
+
+	.hrms-org-page.is-fullscreen .hrms-org-detail {
+		display: none;
+	}
+
+	.hrms-org-toolbar {
+		grid-template-columns: 1fr;
+	}
+
+	.hrms-org-toolbar-actions {
+		flex-wrap: wrap;
 	}
 }
 

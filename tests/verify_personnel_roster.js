@@ -93,12 +93,8 @@ for (const marker of [
 	"添加员工",
 	"导入",
 	"导出",
-	"设置花名册字段",
 	"hide_unused_roster_toolbar_controls",
 	"hrms-roster-toolbar-control-hidden",
-	"open_roster_field_settings",
-	"sessionStorage.setItem(\"hrms_settings_center_active_module\", \"字段管理中心\")",
-	"sessionStorage.setItem(\"hrms_settings_center_focus\", \"roster_visible\")",
 	"快速编辑",
 	"部门筛选",
 	"入职日期",
@@ -127,7 +123,7 @@ for (const marker of [
 	"resolve_roster_employee_name",
 	"decodeURIComponent(match[1])",
 	"event.stopImmediatePropagation()",
-	"custom_employee_code || doc.employee_number || value",
+	"custom_employee_code || value",
 	"apply_roster_meta_columns",
 	"ROSTER_ALL_EMPLOYEES_PAGE_LENGTH",
 	"page_length: ROSTER_ALL_EMPLOYEES_PAGE_LENGTH",
@@ -190,29 +186,16 @@ for (const marker of [
 	mustInclude(employeeForm, marker, `Employee form is missing detail marker: ${marker}`);
 }
 
-for (const label of ["员工管理", "员工关系"]) {
-	if (!personnel.links.some((link) => link.type === "Card Break" && link.label === label)) {
-		throw new Error(`Personnel workspace is missing card group: ${label}`);
-	}
-	if (!personnelSidebar.items.some((item) => item.type === "Section Break" && item.label === label)) {
-		throw new Error(`Personnel sidebar is missing collapsible section: ${label}`);
-	}
+if (personnel.is_hidden !== 1 || personnel.content !== "[]") {
+	throw new Error("Personnel workspace must be retired instead of rendered as a home page.");
 }
 
-for (const [label, linkTo] of [
-	["员工花名册", "Employee"],
-	["入职管理", "Employee Onboarding"],
-	["转正管理", "Employee Promotion"],
-	["离职管理", "Employee Separation"],
-	["离职记录", "employee-separation-records"],
-	["异动记录", "employee-property-history"],
-]) {
-	if (!personnel.links.some((link) => link.type === "Link" && link.label === label && link.link_to === linkTo)) {
-		throw new Error(`Personnel workspace must use real Frappe route for ${label} -> ${linkTo}`);
-	}
-	if (!personnelSidebar.items.some((item) => item.type === "Link" && item.label === label && item.link_to === linkTo)) {
-		throw new Error(`Personnel sidebar must use real Frappe route for ${label} -> ${linkTo}`);
-	}
+if (personnelSidebar.items.some((item) => item.type === "Link" && item.label === "主页")) {
+	throw new Error("Personnel sidebar must not show a home link.");
+}
+
+if (!personnelSidebar.items.some((item) => item.type === "Link" && item.label === "员工花名册" && item.link_to === "Employee")) {
+	throw new Error("Personnel sidebar must retain the employee-roster entry.");
 }
 
 const employeeCodeSelector = fs.readFileSync(employeeCodeSelectorPath, "utf8");
@@ -221,7 +204,6 @@ for (const marker of [
 	"employee_code_display",
 	"toggle_display(\"employee\", false)",
 	"custom_employee_code",
-	"employee_number",
 	"employee_name",
 	"已匹配员工：{0}",
 ]) {

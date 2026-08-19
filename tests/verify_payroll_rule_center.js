@@ -86,6 +86,21 @@ mustInclude(api, "def ensure_default_payroll_rules(company: str", "Default rule 
 mustInclude(api, '{"company": company, "rule_code": rule["rule_code"]}', "Default rules must be idempotent per company.");
 mustInclude(api, '"rule_origin": "内置默认（未保存）"', "Uninitialized companies must still see built-in rule definitions.");
 mustInclude(pageJs, "args: { company: this.company }", "Payroll rule page must pass the selected company.");
-mustInclude(pageJs, "规则来源", "Payroll rule page must identify built-in and company rules.");
+mustInclude(pageJs, "选择要调整的项目", "Payroll rule page must offer a plain-language rule picker.");
+if (pageJs.includes("执行参数 JSON") || pageJs.includes("公式说明（不直接执行）")) {
+	throw new Error("Payroll rule page must not expose JSON or formula editors to business users.");
+}
+for (const marker of [
+	"save_attendance_pay_rule",
+	"render_attendance_rule_editor",
+	"open_attendance_rule_editor",
+	"data-attendance-rule-editor-area",
+	"大夜班每次津贴",
+	"大夜班上班时间",
+	"large_night_shift_start",
+	"点击设置",
+]) {
+	mustInclude(pageJs + api, marker, `Attendance rule inline editor is missing marker: ${marker}`);
+}
 
 console.log("Payroll rule center contract passed.");

@@ -16,36 +16,38 @@ function mustInclude(source, marker) {
 const page = read("hrms/hr/page/payroll_input_center/payroll_input_center.js");
 for (const marker of [
 	"monthly-workbench",
-	"primary_tabs",
 	"本月算薪",
-	"定薪与核算规则",
+	"核算规则",
+	"render_workspace_navigation",
+	"本月数据状态",
 	"load_monthly_workbench",
 	"get_payroll_month_runbook",
 	"生成薪资输入表",
 	"试算本月工资",
 	"ensure_payroll_generation_scope",
 	"缺少薪资试算前置条件",
-	"请先选择已锁定考勤版本",
+	"请先在考勤假期完成并锁定本月考勤终稿",
 	"process_status_from_runbook",
 	"process_readiness",
-	"缺考勤锁定",
+	"缺少锁定考勤终稿",
 	"确认本月结算",
 	"confirm_payroll_settlement_records",
-	"lock_payroll_workflow_step",
-	"unlock_payroll_workflow_step",
-	"系统拒绝读取未锁定考勤、跨公司数据和不同锁定版本的数据",
+	"考勤终稿由考勤假期自动提供",
 ]) {
 	mustInclude(page, marker);
+}
+
+if (page.includes("primary_tabs") || page.includes("hrms-payroll-input-tabs")) {
+	throw new Error("Duplicate payroll primary navigation must not be rendered.");
 }
 
 const api = read("hrms/api/payroll_input.py");
 for (const marker of [
 	"def get_payroll_month_runbook(company: str, payroll_month: str, attendance_lock_version: str):",
 	"def confirm_payroll_settlement_records(company: str, payroll_month: str, attendance_lock_version: str):",
-	'"process_steps": process_steps',
-	'("master", "人员基础")',
-	'("attendance", "考勤计薪规则")',
-	'("sources", "月度数据封板")',
+	'"readiness_areas": readiness_areas',
+	'readiness_area("master", "人员范围"',
+	'readiness_area("sources", "月度增减项"',
 	"_attendance_scope_filters(company, payroll_month, attendance_lock_version)",
 	"status\": \"已批准\"",
 	"无法生成薪资输入表：以下员工缺少本月有效且已批准的薪资异动",
@@ -54,6 +56,11 @@ for (const marker of [
 	"仍有 {0} 条福利/扣款来源待确认，不能确认薪资结算",
 ]) {
 	mustInclude(api, marker);
+}
+
+const readiness = api.slice(api.indexOf("readiness_areas = ["), api.indexOf('"readiness_areas": readiness_areas'));
+if (readiness.includes('readiness_area("attendance"') || readiness.includes('"考勤数据"')) {
+	throw new Error("Attendance must be an implicit dependency, not a payroll workflow area.");
 }
 
 const guide = read("docs/payroll/永新薪酬统算使用说明与项目企划.md");

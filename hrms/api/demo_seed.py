@@ -245,19 +245,19 @@ def _department_name(department_name):
 	)
 
 
-def _employee(employee_number):
+def _employee(employee_code):
 	return frappe.db.get_value(
-		"Employee", {"employee_number": employee_number, "company": TEST_COMPANY}, "name"
+		"Employee", {"custom_employee_code": employee_code, "company": TEST_COMPANY}, "name"
 	)
 
 
-def _demo_source_trace(source_type, employee_number="", extra=None):
+def _demo_source_trace(source_type, employee_code="", extra=None):
 	payload = {
 		"company": TEST_COMPANY,
 		"payroll_month": DEMO_MONTH,
 		"attendance_lock_version": TEST_PAYROLL_LOCK_VERSION,
 		"source_type": source_type,
-		"employee_number": employee_number,
+		"employee_code": employee_code,
 		"seed": "TEST-HRMS local demo",
 	}
 	if extra:
@@ -407,7 +407,7 @@ def _seed_employees(result):
 	for index, (number, employee_name, employment_type, designation, gender, phone) in enumerate(
 		EMPLOYEE_MANIFEST, start=5
 	):
-		any_company = frappe.db.get_value("Employee", {"employee_number": number}, ["name", "company"], as_dict=True)
+		any_company = frappe.db.get_value("Employee", {"custom_employee_code": number}, ["name", "company"], as_dict=True)
 		if any_company and any_company.company != TEST_COMPANY:
 			_event(result, phase, "blocked", "Employee", number, f"business code belongs to {any_company.company}")
 			continue
@@ -420,7 +420,6 @@ def _seed_employees(result):
 			"company": TEST_COMPANY,
 			"department": department,
 			"designation": designation,
-			"employee_number": number,
 			"custom_employee_code": number,
 			"employment_type": employment_type,
 			"cell_number": phone,
@@ -436,7 +435,7 @@ def _seed_employees(result):
 			result,
 			phase,
 			"Employee",
-			{"employee_number": number, "company": TEST_COMPANY},
+			{"custom_employee_code": number, "company": TEST_COMPANY},
 			values,
 			key=number,
 		)
@@ -1038,7 +1037,7 @@ def _seed_payroll(result):
 					"amount": amount,
 					"source_sheet": source_sheet,
 					"remarks": f"TEST-HRMS 本地可编辑变量：{variable_type}",
-					"raw_row_json": json.dumps({"employee_number": item["number"], "variable_type": variable_type, "amount": amount}, ensure_ascii=False),
+					"raw_row_json": json.dumps({"employee_code": item["number"], "variable_type": variable_type, "amount": amount}, ensure_ascii=False),
 					"source_trace_json": trace,
 					"source_hash": source_hash,
 				},
@@ -1107,8 +1106,8 @@ def get_test_hrms_demo_status():
 		"employees": frappe.get_all(
 			"Employee",
 			filters={"company": TEST_COMPANY},
-			fields=["name", "employee_name", "employee_number", "employment_type", "status"],
-			order_by="employee_number asc",
+			fields=["name", "employee_name", "custom_employee_code", "employment_type", "status"],
+			order_by="custom_employee_code asc",
 		),
 		"departments": frappe.get_all(
 			"Department",
@@ -1175,7 +1174,7 @@ def get_test_hrms_demo_records(doctype: str = "", page_length: int = 200):
 			"company",
 			"employee",
 			"employee_name",
-			"employee_number",
+			"custom_employee_code",
 			"employee_code",
 			"department",
 			"attendance_month",
@@ -1431,7 +1430,7 @@ def _full_payroll_closure_workbook_rows(roster, attendance_lock_version):
 				"是" if employee_code in ("TEST-REG-003", "TEST-REH-006", "TEST-LEFT-008") else "否", "已批准", FULL_PAYROLL_SEED_LABEL,
 			]
 		)
-	welfare_headers = ["薪资月份", "来源类型", "工号", "姓名", "部门", "金额", "资格状态", "确认状态", "来源单据/说明", "备注"]
+	welfare_headers = ["薪资月份", "来源类型", "工号", "姓名", "部门", "金额", "方向", "资格状态", "确认状态", "来源单据/说明", "备注"]
 	welfare_values = [
 		("TEST-REG-003", "学历补贴", 300, "学历补贴月报"), ("TEST-REG-003", "租房补贴", 200, "租房补贴申请"),
 		("TEST-REG-003", "社保个人", 524.96, "社保名册"), ("TEST-REG-003", "公积金个人", 120, "公积金名册"),
@@ -1440,13 +1439,14 @@ def _full_payroll_closure_workbook_rows(roster, attendance_lock_version):
 		("TEST-REG-003", "所得税", 25, "财务个税确认"), ("TEST-REG-003", "水电费及扣款", 35, "员工水电明细"),
 		("TEST-REG-003", "已发福利", 30, "生日福利已发"), ("TEST-REG-003", "生产奖", 100, "生产奖确认"),
 		("TEST-PRO-002", "宿舍住宿费", 150, "宿舍入住登记"), ("TEST-TRN-004", "证书多能工津贴", 100, "证书多能工名单"),
-		("TEST-MOV-007", "租房补贴", 100, "租房补贴申请"), ("TEST-REH-006", "奖惩提报", 70, "奖惩提报单"),
-		("TEST-LEFT-008", "离职薪资结算", 80, "离职结算确认单"),
+		("TEST-MOV-007", "租房补贴", 100, "租房补贴申请"), ("TEST-REH-006", "奖惩提报", 70, "奖惩提报单", "应发"),
+		("TEST-LEFT-008", "离职薪资结算", 80, "离职结算确认单", "应扣"),
 	]
 	welfare_rows = [welfare_headers]
-	for employee_code, source_type, amount, reference in welfare_values:
+	for item in welfare_values:
+		employee_code, source_type, amount, reference, *direction = item
 		context = roster[employee_code]
-		welfare_rows.append([FULL_PAYROLL_DEMO_MONTH, source_type, employee_code, context.employee_name, context.department, amount, "符合", "已确认", reference, FULL_PAYROLL_SEED_LABEL])
+		welfare_rows.append([FULL_PAYROLL_DEMO_MONTH, source_type, employee_code, context.employee_name, context.department, amount, direction[0] if direction else "", "符合", "已确认", reference, FULL_PAYROLL_SEED_LABEL])
 	return [("员工薪资异动导入", salary_rows), ("福利扣款来源导入", welfare_rows)]
 
 
@@ -1579,6 +1579,26 @@ def seed_test_hrms_full_payroll_demo(dry_run: int | str = 0):
 			result["protected"] = _assert_protected_unchanged(before)
 			return result
 
+		# The shared demo company can be used by other test scenarios that move
+		# employees to Left.  Restore this fixture's explicit roster state so the
+		# full-payroll seed remains deterministic and isolated.
+		for employee_code in FULL_PAYROLL_SALARIES:
+			employee_name = frappe.db.get_value("Employee", {"company": TEST_COMPANY, "custom_employee_code": employee_code}, "name")
+			if not employee_name:
+				continue
+			is_left = employee_code == "TEST-LEFT-008"
+			frappe.db.set_value(
+				"Employee",
+				employee_name,
+				{
+					"status": "Left" if is_left else "Active",
+					"relieving_date": "2026-07-31" if is_left else None,
+					"reason_for_leaving": "TEST-虚拟离职演示" if is_left else None,
+				},
+				update_modified=False,
+			)
+		frappe.db.commit()
+
 		roster = _full_payroll_roster()
 		from hrms.api import attendance_import, payroll_input
 
@@ -1647,7 +1667,7 @@ def seed_test_hrms_full_payroll_demo(dry_run: int | str = 0):
 		result["steps"]["payroll_closure_import"] = {**closure_result, "file_url": closure_file.file_url}
 
 		trn = roster["TEST-TRN-004"]
-		manual_salary = payroll_input.create_employee_salary_change(
+		manual_salary_name = payroll_input.create_employee_salary_change(
 			company=TEST_COMPANY,
 			employee=trn.employee,
 			employee_code="TEST-TRN-004",
@@ -1661,9 +1681,23 @@ def seed_test_hrms_full_payroll_demo(dry_run: int | str = 0):
 			certificate_allowance=100,
 			multi_skill_allowance=100,
 			full_salary=3920,
-			status="已批准",
+			status="待审核",
 			source_file=closure_file.file_url,
 			remarks="TEST-HRMS 完整薪资试点：手动调薪记录。",
+		)
+		manual_salary = payroll_input.update_employee_salary_change(
+			name=manual_salary_name,
+			company=TEST_COMPANY,
+			values={
+				"effective_date": f"{FULL_PAYROLL_DEMO_MONTH}-15",
+				"change_reason": "测试：转岗调薪",
+				"base_salary": 3500,
+				"function_allowance": 220,
+				"certificate_allowance": 100,
+				"multi_skill_allowance": 100,
+				"status": "已批准",
+				"remarks": "TEST-HRMS 完整薪资试点：人事审核通过后的手动调薪记录。",
+			},
 		)
 		manual_welfare = payroll_input.upsert_payroll_welfare_source_record(
 			company=TEST_COMPANY,
@@ -1695,7 +1729,7 @@ def seed_test_hrms_full_payroll_demo(dry_run: int | str = 0):
 			{
 				"company": TEST_COMPANY,
 				"payroll_month": FULL_PAYROLL_DEMO_MONTH,
-				"attendance_lock_version": attendance_lock_version,
+				"import_batch": variable_import.get("batch"),
 				"employee_code": "TEST-REG-003",
 				"variable_type": "全勤奖",
 			},
@@ -1714,7 +1748,10 @@ def seed_test_hrms_full_payroll_demo(dry_run: int | str = 0):
 			source_sheet="全勤奖",
 			remarks="TEST-HRMS 薪资试点：财务复核后由 200 调整为 180。",
 		)
-		result["steps"]["variable_import_and_edit"] = {"welfare_sync": synced, "variable_import": variable_import, "manual_variable": manual_variable, "file_url": variable_file.file_url}
+		variable_confirmation = payroll_input.confirm_payroll_variable_import_batch(
+			variable_import.get("batch"), TEST_COMPANY, FULL_PAYROLL_DEMO_MONTH
+		)
+		result["steps"]["variable_import_and_edit"] = {"welfare_sync": synced, "variable_import": variable_import, "manual_variable": manual_variable, "variable_confirmation": variable_confirmation, "file_url": variable_file.file_url}
 
 		input_result = payroll_input.generate_payroll_input_records(TEST_COMPANY, FULL_PAYROLL_DEMO_MONTH, attendance_lock_version)
 		settlement_result = payroll_input.generate_payroll_settlement_records(TEST_COMPANY, FULL_PAYROLL_DEMO_MONTH, attendance_lock_version)
@@ -1771,6 +1808,10 @@ def reset_test_hrms_full_payroll_demo(confirm: str = "", dry_run: int | str = 0)
 	batch_names = frappe.get_all("HRMS Attendance Import Batch", filters={"company": TEST_COMPANY, "attendance_month": FULL_PAYROLL_DEMO_MONTH}, pluck="name")
 	version = str((frappe.db.get_value("HRMS Attendance Month Lock", {"company": TEST_COMPANY, "attendance_month": FULL_PAYROLL_DEMO_MONTH}, "active_version") or ""))
 	targets = (
+		# The full trial creates these private upload files only to exercise the
+		# production import APIs.  Keep cleanup self-contained, but constrain it
+		# to this isolated company/month fixture naming convention.
+		("File", {"file_name": ["like", f"TEST-HRMS-{FULL_PAYROLL_DEMO_MONTH}-%"]}),
 		("HRMS Payroll Settlement Record", {"company": TEST_COMPANY, "payroll_month": FULL_PAYROLL_DEMO_MONTH}),
 		("HRMS Payroll Input Record", {"company": TEST_COMPANY, "payroll_month": FULL_PAYROLL_DEMO_MONTH}),
 		("HRMS Payroll Variable Record", {"company": TEST_COMPANY, "payroll_month": FULL_PAYROLL_DEMO_MONTH}),

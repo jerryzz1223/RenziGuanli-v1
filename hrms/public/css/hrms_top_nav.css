@@ -1037,6 +1037,51 @@ body.hrms-sidebar-reordering * {
 	font-size: 12px;
 }
 
+body.hrms-employee-roster-view .hrms-roster-empty-result-header {
+	align-items: stretch;
+	background: var(--fg-color, #fff);
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: var(--border-radius, 6px);
+	display: grid;
+	gap: 0;
+	grid-template-columns: repeat(10, minmax(116px, 1fr)) auto;
+	margin-bottom: 10px;
+	overflow-x: auto;
+}
+
+body.hrms-employee-roster-view .hrms-roster-empty-result-header__cell {
+	border-right: 1px solid var(--border-color, #e5e7eb);
+	color: var(--text-muted, #6b7280);
+	min-height: 42px;
+	padding: 8px 10px;
+}
+
+body.hrms-employee-roster-view .hrms-roster-empty-result-header__cell.has-filter {
+	background: var(--control-bg, #f8fafc);
+	box-shadow: inset 0 -2px 0 var(--primary, #2490ef);
+}
+
+body.hrms-employee-roster-view .hrms-roster-empty-result-header__label {
+	display: grid;
+	font-size: 12px;
+	gap: 5px;
+	margin: 0;
+	white-space: nowrap;
+}
+
+body.hrms-employee-roster-view .hrms-roster-empty-result-header__input {
+	font-size: 13px;
+	height: 28px;
+	min-width: 108px;
+	padding: 3px 7px;
+}
+
+body.hrms-employee-roster-view .hrms-roster-empty-result-header__clear {
+	align-self: center;
+	margin: 0 10px;
+	white-space: nowrap;
+}
+
 .hrms-unified-sidebar-section__children {
 	display: grid;
 	gap: 2px;
@@ -1096,6 +1141,70 @@ body.hrms-employee-roster-view .hrms-roster-native-filters-hidden {
 }
 
 body.hrms-employee-roster-view .hrms-roster-status-date-column-hidden {
+	display: none !important;
+}
+
+/* 头像嵌在姓名文字前，不单独占用花名册列；尺寸与行首勾选框接近。 */
+body.hrms-employee-roster-view .hrms-roster-employee-name-cell {
+	align-items: center;
+	display: flex !important;
+	gap: 7px;
+	min-width: 0;
+}
+
+body.hrms-employee-roster-view .hrms-roster-photo-frame {
+	align-items: center;
+	background: #f1f5f9;
+	border: 1px solid #e2e8f0;
+	border-radius: 50%;
+	display: inline-flex;
+	flex: 0 0 18px;
+	height: 18px;
+	justify-content: center;
+	overflow: hidden;
+	width: 18px;
+}
+
+body.hrms-employee-roster-view .hrms-roster-photo-frame img {
+	height: 100%;
+	object-fit: cover;
+	width: 100%;
+}
+
+body.hrms-employee-roster-view .hrms-roster-photo-frame--empty {
+	background: #eef1f4;
+	border-color: #e4e8ec;
+	position: relative;
+}
+
+body.hrms-employee-roster-view .hrms-roster-photo-frame--empty::before,
+body.hrms-employee-roster-view .hrms-roster-photo-frame--empty::after {
+	background: #9da7b2;
+	content: "";
+	left: 50%;
+	position: absolute;
+	transform: translateX(-50%);
+}
+
+body.hrms-employee-roster-view .hrms-roster-photo-frame--empty::before {
+	border-radius: 50%;
+	height: 6px;
+	top: 3px;
+	width: 6px;
+}
+
+body.hrms-employee-roster-view .hrms-roster-photo-frame--empty::after {
+	border-radius: 7px 7px 3px 3px;
+	bottom: 2px;
+	height: 6px;
+	width: 11px;
+}
+
+/* 花名册只保留业务字段及“快速编辑”；隐藏 Frappe 的更新时间、评论、收藏社交信息。 */
+body.hrms-employee-roster-view .list-row .list-row-activity,
+body.hrms-employee-roster-view .list-row .list-row-modified,
+body.hrms-employee-roster-view .list-row .list-row-comment,
+body.hrms-employee-roster-view .list-row .list-row-like {
 	display: none !important;
 }
 
@@ -1235,6 +1344,102 @@ body.hrms-employee-roster-view .hrms-roster-page-length-hidden {
  * empty menus alongside the purpose-built import and export actions. */
 body.hrms-employee-roster-view .hrms-roster-toolbar-control-hidden {
 	display: none !important;
+}
+
+/* 人事档案只保留业务资料，移除 Frappe 通用的评分、评论、收藏等社交元数据。 */
+body.hrms-personnel-social-controls-hidden .form-sidebar .form-sidebar-stats,
+body.hrms-personnel-social-controls-hidden .form-sidebar .form-stats,
+body.hrms-personnel-social-controls-hidden .form-sidebar .form-footer,
+body.hrms-personnel-social-controls-hidden .form-sidebar .form-timeline,
+body.hrms-personnel-social-controls-hidden .form-sidebar .new-timeline,
+body.hrms-personnel-social-controls-hidden .form-sidebar .comment-box {
+	display: none !important;
+}
+
+/* Employee files use a template-driven form.  Frappe's built-in layout is
+ * section/column based, so moving a control straight into a row makes its
+ * width depend on the source column and produces the compressed fields seen
+ * in the editor.  These dedicated grid slots keep labels, controls, helpers,
+ * and validation messages aligned at every screen size. */
+.hrms-employee-form-template-sections {
+	margin: 4px 0 32px;
+	padding: 0 48px;
+}
+
+.hrms-employee-form-section {
+	border-bottom: 1px solid var(--border-color, #e5e7eb);
+	margin: 0 0 24px;
+	padding: 0 0 24px;
+}
+
+.hrms-employee-form-section__heading {
+	border: 0;
+	color: var(--heading-color, var(--text-color, #1f2937));
+	font-size: 15px;
+	font-weight: 600;
+	line-height: 1.4;
+	margin: 0 0 16px;
+	padding: 0;
+	text-align: left;
+}
+
+.hrms-employee-form-section__grid {
+	display: grid;
+	gap: 18px 20px;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.hrms-employee-form-field {
+	min-width: 0;
+}
+
+.hrms-employee-form-field--wide {
+	grid-column: span 2;
+}
+
+.hrms-employee-form-field .frappe-control,
+.hrms-employee-form-field .form-group {
+	margin-bottom: 0;
+	min-width: 0;
+	width: 100%;
+}
+
+.hrms-employee-form-field .control-input,
+.hrms-employee-form-field .control-value,
+.hrms-employee-form-field input,
+.hrms-employee-form-field textarea {
+	max-width: 100%;
+}
+
+.hrms-employee-empty-native-section {
+	display: none !important;
+}
+
+@media (max-width: 1199px) {
+	.hrms-employee-form-section__grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+@media (max-width: 767px) {
+	.hrms-employee-form-template-sections {
+		margin-bottom: 20px;
+		padding: 0 24px;
+	}
+
+	.hrms-employee-form-section {
+		margin-bottom: 20px;
+		padding-bottom: 20px;
+	}
+
+	.hrms-employee-form-section__grid {
+		gap: 16px;
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.hrms-employee-form-field--wide {
+		grid-column: auto;
+	}
 }
 
 .hrms-staff-attribute-page {

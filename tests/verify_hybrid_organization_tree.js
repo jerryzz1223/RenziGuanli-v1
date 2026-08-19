@@ -108,8 +108,8 @@ for (const marker of [
 	"group_people =",
 	'"people": group_people',
 	'"employee_route": employee.get("name")',
-	'"employee_number": _employee_business_number(employee)',
-	"def resolve_employee_number",
+	'"employee_code": _employee_business_number(employee)',
+	"def resolve_employee_code",
 	"_employee_business_number",
 	"_resolve_yongxin_company_candidates",
 	"_company_business_weight",
@@ -311,12 +311,12 @@ for (const marker of [
 	"data-person-name",
 	"data-employee",
 	"data-employee-route",
-	"data-employee-number",
+	"data-employee-code",
 	"data-action=\"select-node\"",
 	"normalize_employee_route_value",
-	"normalize_employee_number_value",
+	"normalize_employee_code_value",
 	"resolve_employee_route_value",
-	"resolve_employee_number",
+	"resolve_employee_code",
 	"node.employee_route || node.employee",
 	"当前人员没有可用于匹配档案的员工编号",
 	"expand_all",
@@ -338,6 +338,35 @@ if (/export_chart\(\)\s*\{\s*window\.print\(\);\s*\}/.test(js)) {
 
 for (const marker of ["def export_organization_chart_excel", "YONGXIN_ORG_EXPORT_TEMPLATE", "_refresh_organization_export_nodes", "_refresh_organization_export_summary", "组织架构图.xlsx"]) {
 	mustInclude(py, marker, `Organization chart Excel export missing marker: ${marker}`);
+}
+
+for (const marker of [
+	"YONGXIN_Q3_ORG_WORKBOOK_CANDIDATES",
+	"WORKBOOK_SNAPSHOT_NODE_ROWS",
+	"def _get_yongxin_workbook_snapshot_tree",
+	"def _parse_workbook_snapshot_nodes",
+	"def _build_workbook_snapshot_relationships",
+	"def _get_workbook_snapshot_node_detail",
+	'"snapshot_fallback": True',
+	"原始 Excel 未部署，当前页面仍可正常查看",
+	'"source_mode": "workbook_snapshot"',
+	"source_employee_count",
+]) {
+	mustInclude(py, marker, `Workbook-backed organization snapshot missing marker: ${marker}`);
+}
+
+for (const marker of [
+	'this.source_mode = "workbook_snapshot"',
+	"set_source_mode",
+	"toggle_fullscreen",
+	"requestFullscreen",
+	"source_mode: this.source_mode",
+	"原表人员",
+	"另有 {0} 人，请点击查看",
+	"class=\"hrms-org-person-more\"",
+	"data-action=\"select-node\"",
+]) {
+	mustInclude(js, marker, `Organization source/fullscreen frontend missing marker: ${marker}`);
 }
 
 for (const marker of [
@@ -386,6 +415,7 @@ for (const marker of ["get_organization_report", "导出表格", "批准：", "t
 for (const marker of [".hrms-org-report", "border-collapse: collapse", "border: 1px solid #1f2933"]) {
 	mustInclude(css, marker, `Embedded organization report CSS missing marker: ${marker}`);
 }
+mustInclude(css, ".hrms-org-page.is-fullscreen", "Organization chart must provide a dedicated fullscreen layout.");
 
 mustMatch(
 	css,

@@ -129,7 +129,6 @@ for marker in (
 	'values["included"] = bool(row.get("eligible_for_downstream"))',
 	"setattr(doc, identity_field",
 	"custom_employee_code",
-	"employee_number",
 	"Internal document",
 	"frappe.get_roles(frappe.session.user)",
 	"{\"System Manager\", \"HR Manager\"}",
@@ -204,7 +203,7 @@ for marker in (
 if "if batch.status == \"已确认\":" not in confirm_body:
 	raise AssertionError("Confirmed sources must reject duplicate confirmation and require an auditable correction path.")
 
-# Batch upload may register and process the six sources, but it must never
+# Batch upload may register and process the five attendance sources, but it must never
 # auto-confirm an exception. A reviewer keeps the final decision in the
 # exception queue, source by source.
 bulk_start = api.find("def bulk_import_and_process_sources(")
@@ -220,6 +219,27 @@ for marker in (
 for forbidden in ("confirm_source_result(", "confirm_monthly_support_file("):
 	if forbidden in bulk_body:
 		raise AssertionError(f"Batch import must not auto-confirm source data: {forbidden}")
+
+# Full-attendance and special-hours files are attendance-only one-time
+# imports.  Their validation errors remain traceable on the source result, but
+# must not create manual-review tasks or a secondary data-processing path.
+monthly_start = api.find("def _process_monthly_support_rows(")
+monthly_end = api.find("\n\ndef _simple_sheet_rows", monthly_start)
+monthly_body = api[monthly_start:monthly_end]
+for marker in (
+	'"review_status": "无需审核"',
+	'"status": "导入异常" if exception_rows else "已确认"',
+	"import-validation count, not a count of review tasks",
+):
+	require(monthly_body, marker, f"One-time monthly-import contract missing: {marker}")
+if '"review_status": "待审核" if exception_codes else "无需审核"' in monthly_body:
+	raise AssertionError("Monthly support validation errors must not enter the manual-review queue.")
+
+finalization_start = api.find("def _finalization_inputs(")
+finalization_end = api.find("\n\nFINAL_SIGNED_COLUMNS", finalization_start)
+finalization_body = api[finalization_start:finalization_end]
+for marker in ('"import_error_count"', '"pending_exception_count": 0', '"can_confirm": False'):
+	require(finalization_body, marker, f"Monthly import validation visibility missing: {marker}")
 
 # Every callable API must authorize before accessing the batch/record data.
 for method in (

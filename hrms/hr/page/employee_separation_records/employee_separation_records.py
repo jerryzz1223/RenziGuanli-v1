@@ -79,7 +79,6 @@ def _employee_fields():
 		"status",
 		"modified",
 		"custom_employee_code",
-		"employee_number",
 		"custom_personnel_status",
 	)
 	return [fieldname for fieldname in candidates if _meta_has_field(meta, fieldname)]
@@ -187,7 +186,7 @@ def _build_record(employee, separation=None, department_names=None):
 	return frappe._dict(
 		{
 			"employee": employee.get("name"),
-			"employee_code": employee.get("custom_employee_code") or employee.get("employee_number") or "",
+			"employee_code": employee.get("custom_employee_code") or "",
 			"employee_name": employee.get("employee_name") or "",
 			"company": employee.get("company") or "",
 			"department": department,

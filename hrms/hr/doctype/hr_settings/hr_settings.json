@@ -67,12 +67,13 @@
    "label": "Retirement Age (In Years)"
   },
   {
-   "default": "Naming Series",
-   "description": "Employee records are created using the selected option",
+   "default": "Company Employee Code",
+   "description": "员工档案始终使用公司员工号作为唯一编号，不使用系统命名系列。",
    "fieldname": "emp_created_by",
    "fieldtype": "Select",
-   "label": "Employee Naming By",
-   "options": "Naming Series\nEmployee Number\nFull Name"
+   "label": "员工编号规则",
+   "options": "Company Employee Code",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_4",

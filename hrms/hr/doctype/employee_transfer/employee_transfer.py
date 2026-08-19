@@ -72,7 +72,7 @@ class EmployeeTransfer(Document):
 			frappe.throw(_("请先通过员工工号选择员工。"))
 
 		employee = frappe.get_doc("Employee", self.employee)
-		employee_code = cstr(employee.get("custom_employee_code") or employee.get("employee_number")).strip()
+		employee_code = cstr(employee.get("custom_employee_code")).strip()
 		if not employee_code:
 			frappe.throw(_("员工 {0} 未维护工号，不能办理人事异动。").format(employee.employee_name))
 
@@ -166,20 +166,18 @@ def get_employee_business_options(company: str | None = None) -> list[dict]:
 	employee_meta = frappe.get_meta("Employee")
 	if employee_meta.has_field("custom_employee_code"):
 		fields.append("custom_employee_code")
-	if employee_meta.has_field("employee_number"):
-		fields.append("employee_number")
 
 	employees = frappe.get_all("Employee", filters=filters, fields=fields, order_by="employee_name asc")
 	return [
 		{
 			"name": employee.name,
 			"employee_name": employee.employee_name,
-			"employee_code": employee.get("custom_employee_code") or employee.get("employee_number"),
+			"employee_code": employee.get("custom_employee_code"),
 			"company": employee.company,
 			"department": employee.department,
 		}
 		for employee in employees
-		if employee.get("custom_employee_code") or employee.get("employee_number")
+		if employee.get("custom_employee_code")
 	]
 
 

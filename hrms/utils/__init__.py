@@ -85,9 +85,13 @@ def get_employee_email(employee_id: str) -> str | None:
 	if not employee_emails:
 		return None
 
-	return (
-		employee_emails.prefered_email
-		or employee_emails.user_id
-		or employee_emails.company_email
-		or employee_emails.personal_email
-	)
+	for email in (
+		employee_emails.prefered_email,
+		employee_emails.user_id,
+		employee_emails.company_email,
+		employee_emails.personal_email,
+	):
+		if isinstance(email, str) and email.strip():
+			return email.strip()
+
+	return None

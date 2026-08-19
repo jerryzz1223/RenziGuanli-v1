@@ -17,6 +17,21 @@ YONGXIN_Q3_BASELINE_WORKBOOK = Path("/Users/lrj/Documents/SAD/YOngxin/人资/副
 YONGXIN_ORG_EXPORT_TEMPLATE = Path(
 	"/Users/lrj/Documents/SAD/YOngxin/人资/人资二/人资系统资料/人资流程模块/1.人力资源规划/1.2组织架构.xlsx"
 )
+YONGXIN_Q3_ORG_WORKBOOK_CANDIDATES = (
+	Path("/Users/lrj/Documents/SAD/YOngxin/模版/组织架构图260626.xlsx"),
+	YONGXIN_ORG_EXPORT_TEMPLATE,
+)
+YONGXIN_ORG_SHEET_ALIASES = ("26Q3组织架构图", "组织架构图")
+WORKBOOK_SNAPSHOT_NODE_ROWS = {
+	4: "company_leadership",
+	6: "director",
+	10: "division",
+	13: "department",
+	18: "team",
+	21: "work_level",
+	23: "position_group",
+}
+WORKBOOK_SNAPSHOT_EMPLOYEE_ROWS = range(24, 29)
 YONGXIN_Q3_ORG_SHEET = "26Q3组织架构图"
 YONGXIN_Q3_SNAPSHOT_VERSION = "2026Q3"
 YONGXIN_COMPANY_NAME = "永新"
@@ -107,27 +122,25 @@ def _normalize_yongxin_company(company: str | None = None):
 
 
 def _employee_business_number(employee):
-	return cstr(employee.get("custom_employee_code") or employee.get("employee_number") or employee.get("name")).strip()
+	return cstr(employee.get("custom_employee_code")).strip()
 
 
 @frappe.whitelist()
-def resolve_employee_number(employee_number: str, company: str | None = None):
-	"""Resolve the roster's business employee number to Frappe's internal Employee name."""
-	lookup_value = cstr(employee_number).strip()
+def resolve_employee_code(employee_code: str, company: str | None = None):
+	"""Resolve the company work number to the Employee link key."""
+	lookup_value = cstr(employee_code).strip()
 	if not lookup_value or len(lookup_value) > 140 or re.search(r"[/\?#\x00-\x1f]", lookup_value):
 		frappe.throw(_("员工编号无效"))
 
 	company = _normalize_yongxin_company(company)
-	fields = _get_meta_fields("Employee", ["name", "employee_name", "custom_employee_code", "employee_number", "company"])
-	lookup_fields = [field for field in ("custom_employee_code", "employee_number", "name") if field in fields]
+	fields = _get_meta_fields("Employee", ["name", "employee_name", "custom_employee_code", "company"])
 	filters = {}
 	if company and company != "All Companies":
 		filters["company"] = company
 	matches = frappe.get_list(
 		"Employee",
 		fields=fields,
-		filters=filters,
-		or_filters=[[field, "=", lookup_value] for field in lookup_fields],
+		filters={**filters, "custom_employee_code": lookup_value},
 		limit_page_length=3,
 	)
 	if not matches:
@@ -140,7 +153,7 @@ def resolve_employee_number(employee_number: str, company: str | None = None):
 	return {
 		"name": employee.name,
 		"employee_name": employee.get("employee_name"),
-		"employee_number": _employee_business_number(employee),
+		"employee_code": _employee_business_number(employee),
 	}
 
 
@@ -668,6 +681,8 @@ def import_yongxin_q2_org_structure(company: str | None = None, dry_run: int | s
 def get_hybrid_tree(company: str | None = None, source_mode: str | None = None):
 	company = _normalize_yongxin_company(company)
 	source_mode = cstr(source_mode).strip() or "live"
+	if source_mode == "workbook_snapshot":
+		return _get_yongxin_workbook_snapshot_tree(company)
 	if source_mode == "quarterly_template":
 		return _get_yongxin_template_tree(company)
 
@@ -972,12 +987,15 @@ def get_hybrid_node_detail(
 	node_type: str | None = None,
 	company: str | None = None,
 	search: str | None = None,
+	source_mode: str | None = None,
 ):
 	requested_company = cstr(company).strip()
 	company = _normalize_yongxin_company(company)
 	node_id = node_id or ""
 	node_type = node_type or _node_type_from_id(node_id)
 	search = (search or "").strip()
+	if cstr(source_mode).strip() == "workbook_snapshot":
+		return _get_workbook_snapshot_node_detail(node_id, node_type, company, search)
 
 	if not node_id.startswith("department:"):
 		template_detail = _get_template_node_detail(
@@ -1190,6 +1208,341 @@ def _load_yongxin_q2_org_template():
 	if not YONGXIN_Q2_ORG_TEMPLATE.exists():
 		frappe.throw(_("未找到组织架构模板文件。"))
 	return json.loads(YONGXIN_Q2_ORG_TEMPLATE.read_text(encoding="utf-8"))
+
+
+def _resolve_yongxin_org_workbook():
+	"""Use the current Q3 source first, with the in-repository form as a deployable fallback."""
+	for source in YONGXIN_Q3_ORG_WORKBOOK_CANDIDATES:
+		if source.exists():
+			return source
+	return None
+
+
+def _get_yongxin_workbook_snapshot_tree(company=None):
+	"""Build a read-only, source-faithful tree from the merged-cell organization chart.
+
+	The workbook is a spatial diagram rather than a normalized list: each branch is
+	represented by a merged cell.  We retain every role/person cell and connect it
+	to the closest eligible node on the level above, so a page user can inspect the
+	exact source hierarchy without first changing live Department or Employee data.
+	"""
+	from openpyxl import load_workbook
+
+	source = _resolve_yongxin_org_workbook()
+	if not source:
+		# The Excel file is intentionally optional in deployed sites.  The checked-in
+		# snapshot keeps the chart, people and hierarchy readable until the next
+		# source workbook is uploaded to the server.
+		payload = _get_yongxin_template_tree(company)
+		payload.update(
+			{
+				"source_mode": "quarterly_template",
+				"snapshot_fallback": True,
+				"source_document": YONGXIN_Q2_ORG_TEMPLATE.name,
+				"source_sheet": "内置组织快照",
+				"source_label": _("内置组织快照 · 原始 Excel 未部署，当前页面仍可正常查看"),
+			}
+		)
+		return payload
+	workbook = load_workbook(source, read_only=False, data_only=True)
+	sheet = next((workbook[name] for name in YONGXIN_ORG_SHEET_ALIASES if name in workbook.sheetnames), None)
+	if not sheet:
+		frappe.throw(_("组织架构原表中未找到组织图工作表。"))
+
+	employee_lookup = _get_employee_lookup(_get_active_employees(company))
+	nodes = _parse_workbook_snapshot_nodes(sheet, employee_lookup)
+	root = next((node for node in nodes if node.get("node_type") == "company_leadership"), None)
+	if not root:
+		frappe.throw(_("组织架构原表中未找到总经理节点。"))
+	_build_workbook_snapshot_relationships(nodes, root)
+	_summary = _workbook_snapshot_summary(root, nodes)
+	return {
+		"company": company,
+		"root": root,
+		"summary": _summary,
+		"field_map": HYBRID_ROSTER_FIELD_MAP,
+		"source_mode": "workbook_snapshot",
+		"source_document": source.name,
+		"source_sheet": sheet.title,
+		"source_label": _("原表视图 · {0} / {1}").format(source.name, sheet.title),
+	}
+
+
+def _parse_workbook_snapshot_nodes(sheet, employee_lookup):
+	nodes = []
+	seen_cells = set()
+	for merged in sheet.merged_cells.ranges:
+		row = merged.min_row
+		node_type = WORKBOOK_SNAPSHOT_NODE_ROWS.get(row)
+		if row in WORKBOOK_SNAPSHOT_EMPLOYEE_ROWS:
+			node_type = "employee_group"
+		if not node_type:
+			continue
+		cell = sheet.cell(row=row, column=merged.min_col)
+		value = _organization_source_name(cell.value)
+		if not value or cell.coordinate in seen_cells:
+			continue
+		seen_cells.add(cell.coordinate)
+		node = _parse_workbook_snapshot_card(value, node_type, cell.coordinate)
+		if not node:
+			continue
+		node.update(
+			{
+				"row": row,
+				"column_start": merged.min_col,
+				"column_end": merged.max_col,
+				"column_center": (merged.min_col + merged.max_col) / 2,
+				"children": [],
+			}
+		)
+		node["people"] = _build_workbook_snapshot_people(node, employee_lookup)
+		nodes.append(node)
+	return sorted(nodes, key=lambda node: (node["row"], node["column_center"]))
+
+
+def _parse_workbook_snapshot_card(value, node_type, source_cell):
+	lines = [re.sub(r"\s+", " ", line).strip() for line in value.splitlines() if line.strip()]
+	if not lines:
+		return None
+	name = lines[0]
+	planned, current, vacancy = _workbook_snapshot_staffing(value)
+	manager_names, proxy_names = _workbook_snapshot_manager_names(lines)
+	employee_names = _workbook_snapshot_employee_names(lines, node_type)
+	return {
+		"node_id": f"snapshot:{source_cell}",
+		"id": f"snapshot:{source_cell}",
+		"node_type": node_type,
+		"name": name,
+		"title": _workbook_snapshot_title(lines, node_type, manager_names, proxy_names),
+		"source_cell": source_cell,
+		"lines": lines,
+		"manager_names": manager_names,
+		"proxy_names": proxy_names,
+		"employee_names": employee_names,
+		"planned_headcount": planned,
+		"current_headcount": current,
+		"vacancy_count": vacancy,
+	}
+
+
+def _workbook_snapshot_staffing(value):
+	compact = re.sub(r"\s+", "", value)
+	staffing = re.search(r"编制(?:/实际)?[:：]?(\d+)/(\d+)", compact)
+	vacancy = re.search(r"空缺[:：]?(\d+)", compact)
+	planned = cint(staffing.group(1)) if staffing else 0
+	current = cint(staffing.group(2)) if staffing else 0
+	return planned, current, cint(vacancy.group(1)) if vacancy else max(planned - current, 0)
+
+
+def _workbook_snapshot_manager_names(lines):
+	managers, proxies = [], []
+	for index, line in enumerate(lines):
+		compact = re.sub(r"\s+", "", line)
+		role_match = re.match(r"(?:总经理|副总经理|技术总监|管理总监|总监|副总|分管|课长|组长|班长|副组长)[:：](.*)", compact)
+		if role_match:
+			managers.extend(_workbook_snapshot_names(role_match.group(1)))
+			continue
+		if compact.startswith("代理人[:：]"):
+			proxies.extend(_workbook_snapshot_names(compact.split("：", 1)[-1].split(":", 1)[-1]))
+			continue
+		if compact in {"组长", "班长"} and index + 1 < len(lines):
+			managers.extend(_workbook_snapshot_names(lines[index + 1]))
+		# A few source cards contain only a leader name, without a role label.
+		if index == 1 and not managers and (node_like_name := _workbook_snapshot_names(line)):
+			managers.extend(node_like_name)
+	return _deduplicate_names(managers), _deduplicate_names(proxies)
+
+
+def _workbook_snapshot_employee_names(lines, node_type):
+	if node_type not in {"work_level", "position_group", "employee_group"}:
+		return []
+	source_lines = lines if node_type == "employee_group" else lines[1:]
+	return _deduplicate_names(name for line in source_lines for name in _workbook_snapshot_names(line))
+
+
+def _workbook_snapshot_names(value):
+	value = re.sub(r"TBA\s*[*×xX]?\s*\d*", "", cstr(value), flags=re.IGNORECASE)
+	return [
+		name
+		for name in re.findall(r"[\u4e00-\u9fff]{2,4}", value)
+		if name
+		not in {"总经理", "副总经理", "技术总监", "管理总监", "代理人", "直线级", "间师级", "文组级", "文师级", "副组长", "组长", "班长", "员工", "模具员", "备品员", "助理", "物料员", "资讯助理", "膜厚室", "清洁", "厂区"}
+	]
+
+
+def _deduplicate_names(names):
+	result = []
+	for name in names:
+		name = cstr(name).strip()
+		if name and name not in result:
+			result.append(name)
+	return result
+
+
+def _workbook_snapshot_title(lines, node_type, manager_names, proxy_names):
+	parts = []
+	if manager_names:
+		parts.append(_("负责人：{0}").format("、".join(manager_names)))
+	if proxy_names:
+		parts.append(_("代理人：{0}").format("、".join(proxy_names)))
+	if node_type in {"work_level", "position_group", "employee_group"} and len(lines) > 1:
+		parts.append(_("原表人员：{0}人").format(len(_workbook_snapshot_employee_names(lines, node_type))))
+	return " · ".join(parts)
+
+
+def _build_workbook_snapshot_people(node, employee_lookup):
+	people = []
+	for role, names in [
+		(_("负责人"), node.get("manager_names") or []),
+		(_("代理人"), node.get("proxy_names") or []),
+		(_("员工"), node.get("employee_names") or []),
+	]:
+		for name in names:
+			person = _build_person_token(name, role, employee_lookup)
+			if person:
+				people.append(person)
+	return people
+
+
+def _build_workbook_snapshot_relationships(nodes, root):
+	by_type = defaultdict(list)
+	for node in nodes:
+		by_type[node["node_type"]].append(node)
+
+	for node in nodes:
+		node["parent_node_id"] = None
+		node["children"] = []
+		if node is root:
+			continue
+		parent = _find_workbook_snapshot_parent(node, by_type, root)
+		node["parent_node_id"] = parent.get("node_id")
+		parent["children"].append(node)
+
+	for node in nodes:
+		node["connections"] = len(node["children"])
+		node["expandable"] = bool(node["children"])
+
+
+def _find_workbook_snapshot_parent(node, by_type, root):
+	node_type = node["node_type"]
+	if node_type == "director":
+		return root
+	if node_type == "division":
+		manager_names = set(node.get("manager_names") or [])
+		directors = [
+			candidate
+			for candidate in by_type["director"]
+			if manager_names.intersection(candidate.get("manager_names") or [])
+		]
+		return _closest_workbook_snapshot_node(node, directors) if directors else root
+	parent_types = {
+		"department": ("division",),
+		"team": ("department",),
+		"work_level": ("team",),
+		"position_group": ("work_level", "team"),
+		"employee_group": ("position_group", "work_level", "team"),
+	}.get(node_type, ())
+	candidates = [
+		candidate
+		for parent_type in parent_types
+		for candidate in by_type[parent_type]
+		if candidate["row"] < node["row"]
+	]
+	return _closest_workbook_snapshot_node(node, candidates) if candidates else root
+
+
+def _closest_workbook_snapshot_node(node, candidates):
+	return min(
+		candidates,
+		key=lambda candidate: (
+			abs(candidate["column_center"] - node["column_center"]),
+			-node["row"],
+			candidate["column_start"],
+		),
+	)
+
+
+def _workbook_snapshot_summary(root, nodes):
+	people = {
+		person.get("lookup_name") or person.get("employee_name")
+		for node in nodes
+		for person in node.get("people") or []
+		if person.get("role") == _("员工") and (person.get("lookup_name") or person.get("employee_name"))
+	}
+	matched_people = {
+		person.get("lookup_name") or person.get("employee_name")
+		for node in nodes
+		for person in node.get("people") or []
+		if person.get("role") == _("员工") and person.get("matched_employee")
+	}
+	return {
+		"planned_headcount": root.get("planned_headcount", 0),
+		"current_headcount": root.get("current_headcount", 0),
+		"vacancy_count": root.get("vacancy_count", 0),
+		"department_count": len([node for node in nodes if node["node_type"] == "department"]),
+		"source_employee_count": len(people),
+		"matched_employee_count": len(matched_people),
+		"missing_department_count": 0,
+		"missing_manager_count": 0,
+	}
+
+
+def _get_workbook_snapshot_node_detail(node_id, node_type, company=None, search=None):
+	payload = _get_yongxin_workbook_snapshot_tree(company)
+	root = payload.get("root") or {}
+	nodes = _flatten_organization_export_nodes(root)
+	node = next((item for item in nodes if item.get("node_id") == node_id), None)
+	if not node:
+		return {"node_type": node_type, "node_id": node_id, "title": _("未找到原表节点"), "employees": [], "actions": {}}
+	search = cstr(search).strip().lower()
+	people = []
+	seen_people = set()
+	for descendant in _flatten_organization_export_nodes(node):
+		for person in descendant.get("people") or []:
+			key = (person.get("role"), person.get("lookup_name") or person.get("employee_name") or person.get("name"))
+			if key in seen_people:
+				continue
+			seen_people.add(key)
+			people.append(person)
+	if search:
+		people = [
+			person
+			for person in people
+			if search in " ".join(cstr(person.get(key)) for key in ("name", "employee_name", "designation", "role")).lower()
+		]
+	parent = next((item for item in nodes if item.get("node_id") == node.get("parent_node_id")), None)
+	return {
+		"node_type": node.get("node_type"),
+		"node_id": node_id,
+		"title": node.get("name"),
+		"subtitle": " · ".join(
+			part
+			for part in [
+				_("原表单元格：{0}").format(node.get("source_cell")),
+				node.get("title"),
+			]
+			if part
+		),
+		"metrics": {
+			"planned_headcount": node.get("planned_headcount", 0),
+			"current_headcount": node.get("current_headcount", 0),
+			"vacancy_count": node.get("vacancy_count", 0),
+			"employee_count": len([person for person in people if person.get("role") == _("员工")]),
+		},
+		"employees": people,
+		"people": people,
+		"relationships": {
+			"parent": _workbook_snapshot_relation(parent),
+			"children": [_workbook_snapshot_relation(child) for child in node.get("children") or []],
+		},
+		"actions": {},
+	}
+
+
+def _workbook_snapshot_relation(node):
+	if not node:
+		return None
+	return {"name": node.get("node_id"), "label": node.get("name"), "node_type": node.get("node_type")}
 
 
 def _collect_template_department_units(chart_tree):
@@ -1714,7 +2067,6 @@ def _get_employees_by_names(names, company=None, search=None, employee_lookup=No
 			"name",
 			"employee_name",
 			"custom_employee_code",
-			"employee_number",
 			"department",
 			"designation",
 			"grade",
@@ -2003,7 +2355,6 @@ def _get_active_employees(company=None):
 			"name",
 			"employee_name",
 			"custom_employee_code",
-			"employee_number",
 			"company",
 			"branch",
 			"department",
@@ -2698,7 +3049,6 @@ def _get_node_employees(department=None, manager=None, company=None, search=None
 			"name",
 			"employee_name",
 			"custom_employee_code",
-			"employee_number",
 			"department",
 			"designation",
 			"grade",
@@ -2726,7 +3076,6 @@ def _employee_row(employee):
 		"name": employee.get("name"),
 		"employee": employee.get("name"),
 		"employee_route": employee.get("name"),
-		"employee_number": _employee_business_number(employee),
 		"employee_name": employee.get("employee_name") or employee.get("name"),
 		"employee_code": _employee_business_number(employee),
 		"department": employee.get("department"),

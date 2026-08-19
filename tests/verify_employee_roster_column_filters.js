@@ -29,6 +29,8 @@ for (const marker of [
 	".hrms-roster-column-filter-hotspot",
 	".hrms-roster-column-filter-editor",
 	".hrms-roster-column-filter-suggestions.is-visible",
+	".hrms-roster-empty-result-header",
+	".hrms-roster-empty-result-header__input",
 ]) {
 	mustInclude(rosterCss, marker, `花名册缺少表头筛选样式：${marker}`);
 }

@@ -80,6 +80,54 @@ def test_structure_precheck_recognises_the_dingtalk_contract():
 	assert "approval_no" in invalid["missing_required_fields"]
 
 
+def test_hr_monthly_register_uses_file_row_audit_instead_of_missing_dingtalk_fields():
+	row = _row("APP-REGISTER")
+	for field in ("数据id", "审批编号", "审批结果", "审批状态"):
+		row.pop(field, None)
+	row["source_kind"] = "monthly_summary"
+	structure = precheck_missed_punch_structure(list(row))
+	result = process_missed_punch_rows(
+		[row],
+		attendance_month="2026-06",
+		source_file="忘打卡汇总.xlsx",
+		source_sheet="忘打卡合计",
+		employee_directory=[_employee("E-001", "张三", "工程课")],
+		source_row_start=4,
+	)
+	record = result["processed_rows"][0]
+
+	assert structure["is_valid"] is True
+	assert structure["source_kind"] == "monthly_summary"
+	assert record["review_status"] == "无需审核"
+	assert record["source_id"] == "monthly-summary:忘打卡合计:4"
+	assert record["red_apples"] == 2
+	assert record["amount"] == 10
+
+
+def test_monthly_register_excludes_other_month_and_accepts_historical_leaver_by_dates():
+	inside = _row("APP-IN", name="离职员工", punch_time="2026-06-12 08:00")
+	outside = _row("APP-OUT", name="离职员工", punch_time="2026-07-01 08:00")
+	for row in (inside, outside):
+		for field in ("数据id", "审批编号", "审批结果", "审批状态"):
+			row.pop(field, None)
+		row["source_kind"] = "monthly_summary"
+	result = process_missed_punch_rows(
+		[inside, outside],
+		attendance_month="2026-06",
+		source_file="忘打卡汇总.xlsx",
+		source_sheet="忘打卡合计",
+		employee_directory=[{
+			**_employee("E-301", "离职员工", "工程课", "Left"),
+			"date_of_joining": "2026-01-01", "relieving_date": "2026-08-14",
+		}],
+	)
+
+	assert result["metrics"]["excluded_source_rows"] == 1
+	assert len(result["processed_rows"]) == 1
+	assert result["processed_rows"][0]["review_status"] == "无需审核"
+	assert "FORMER_EMPLOYEE_REQUIRES_CONFIRMATION" not in result["processed_rows"][0]["exception_codes"]
+
+
 def test_default_rules_return_one_processed_dataset_and_keep_reviewable_rows():
 	rows = [
 		_row("APP-001"),
@@ -98,9 +146,10 @@ def test_default_rules_return_one_processed_dataset_and_keep_reviewable_rows():
 
 	assert result["status"] == "待处理异常"
 	assert set(result) == {"status", "structure_precheck", "processed_rows", "metrics"}
-	assert len(result["processed_rows"]) == len(rows) - 1
+	# 因公打卡及已终止/未通过的审批不进入人工队列。
+	assert len(result["processed_rows"]) == len(rows) - 2
 	assert result["metrics"]["source_rows"] == len(rows)
-	assert result["metrics"]["excluded_source_rows"] == 1
+	assert result["metrics"]["excluded_source_rows"] == 2
 	assert result["processed_rows"][0]["included"] is True
 	assert result["processed_rows"][0]["red_apples"] == 2
 	assert result["processed_rows"][0]["amount"] == 10
@@ -108,9 +157,7 @@ def test_default_rules_return_one_processed_dataset_and_keep_reviewable_rows():
 	assert result["processed_rows"][0]["proposed_value"]["punch_type"] == "忘刷卡补卡"
 	assert result["processed_rows"][0]["review_status"] == "无需审核"
 	assert "OUTSIDE_ATTENDANCE_MONTH" in result["processed_rows"][1]["exception_codes"]
-	assert "APPROVAL_NOT_APPROVED" in result["processed_rows"][2]["exception_codes"]
-	assert "APPROVAL_NOT_ENDED" in result["processed_rows"][2]["exception_codes"]
-	assert "DUPLICATE_APPROVAL_NO" in result["processed_rows"][3]["exception_codes"]
+	assert "DUPLICATE_APPROVAL_NO" in result["processed_rows"][2]["exception_codes"]
 	assert all(
 		field in result["processed_rows"][1]
 		for field in (
@@ -138,7 +185,20 @@ def test_default_rules_return_one_processed_dataset_and_keep_reviewable_rows():
 	]
 	assert {
 		item["source_row"] for item in result["processed_rows"] if item["review_status"] == "待审核"
-	} == {4, 5, 6}
+	} == {4, 6}
+
+
+def test_approval_in_progress_stays_in_the_human_review_queue():
+	result = process_missed_punch_rows(
+		[_row("APP-PENDING", approval_result="审批中", approval_status="审批中")],
+		attendance_month="2026-06",
+		source_file="sample.xlsx",
+		source_sheet="钉钉导出数据",
+		employee_directory=[_employee("E-001", "张三", "工程课")],
+	)
+	assert len(result["processed_rows"]) == 1
+	assert result["processed_rows"][0]["review_status"] == "待审核"
+	assert result["metrics"]["excluded_source_rows"] == 0
 
 
 def test_identity_department_departure_and_same_time_conflicts_are_not_silent():
@@ -373,6 +433,7 @@ def test_known_sample_contract_when_the_user_workbook_is_available():
 if __name__ == "__main__":
 	test_structure_precheck_recognises_the_dingtalk_contract()
 	test_default_rules_return_one_processed_dataset_and_keep_reviewable_rows()
+	test_approval_in_progress_stays_in_the_human_review_queue()
 	test_identity_department_departure_and_same_time_conflicts_are_not_silent()
 	test_name_and_department_can_disambiguate_but_missing_source_still_requires_review()
 	test_name_only_source_rows_can_use_business_employee_code_aliases()

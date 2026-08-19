@@ -69,8 +69,12 @@ FIELD_BY_LABEL = {item["label"]: item for item in FIELD_DEFINITIONS}
 FIELD_BY_NAME = {item["fieldname"]: item for item in FIELD_DEFINITIONS}
 
 FORMULA_TEMPLATES = [
-	{"output_field": "salary_subtotal", "expression": "[底薪] + [职能津贴] + [证书及多能工津贴]", "category": "固定薪资", "description": "5.2薪资结算表 H=SUM(E:G)"},
-	{"output_field": "missing_hours", "expression": "MAX([标准工时] - [基本出勤工时], 0)", "category": "考勤结算", "description": "缺勤工时 K=I-J"},
+	# Yongxin's certificate and multi-skill allowance form explicitly states that
+	# these allowances stopped forming part of full salary from 2026-05-01.  Keep
+	# the amount visible and payable, but do not let it inflate the hourly base
+	# used for absence or overtime calculations.
+	{"output_field": "salary_subtotal", "expression": "[底薪] + [职能津贴]", "category": "固定薪资", "description": "薪资结算表 G=SUM(E:F)；证书及多能工津贴从 2026-05 起不计入全薪"},
+	{"output_field": "missing_hours", "expression": "[标准工时] - [基本出勤工时]", "category": "考勤结算", "description": "缺勤工时 K=I-J"},
 	{"output_field": "adjusted_absence_hours", "expression": "MAX([缺勤工时] - [调整前周末加班], 0)", "category": "考勤结算", "description": "调整后缺勤工时 M=IF(K-L>0,K-L,0)"},
 	{"output_field": "weekend_overtime_hours", "expression": "MAX([调整前周末加班] - [缺勤工时] + [调整后缺勤工时], 0)", "category": "考勤结算", "description": "调整后周末加班 O=L-K+M"},
 	{"output_field": "full_salary_hourly_rate", "expression": "ROUND([薪资小计] / 174, 8)", "category": "考勤结算", "description": "全薪小时单价"},
@@ -81,7 +85,7 @@ FORMULA_TEMPLATES = [
 	{"output_field": "holiday_overtime_pay", "expression": "ROUND([底薪时薪] * [节假日加班时数] * 3, 2)", "category": "考勤结算", "description": "节假日加班费"},
 	{"output_field": "overtime_pay_total", "expression": "[平日加班费] + [周末加班费] + [节假日加班费]", "category": "考勤结算", "description": "加班费小计 U=SUM(R:T)"},
 	{"output_field": "night_shift_allowance", "expression": "[大夜班次数] * 45 + [小夜班次数] * 24", "category": "考勤结算", "description": "夜班津贴 X=V*45+W*24"},
-	{"output_field": "subsidy_bonus_total", "expression": "[全勤奖] + [住房补贴] + [学历补贴] + [其他奖金]", "category": "奖金补贴", "description": "全勤、住房、学历及其他补贴汇总"},
+	{"output_field": "subsidy_bonus_total", "expression": "[全勤奖] + [住房补贴] + [学历补贴] + [证书及多能工津贴] + [其他奖金]", "category": "奖金补贴", "description": "全勤、住房、学历、证书/多能工及其他补贴汇总"},
 	{"output_field": "bonus_total", "expression": "[提案改善奖] + [红绿苹果] + [补贴小计] + [生产奖]", "category": "奖金补贴", "description": "奖金小计 AD=SUM(Z:AC)"},
 	{"output_field": "absenteeism_deduction", "expression": "ROUND([全薪时薪] * [旷工工时] * 3, 2)", "category": "扣款税费", "description": "旷工扣款 AF=ROUND(H/174*AE*3,2)"},
 	{"output_field": "punishment_total", "expression": "[旷工扣款] + [迟到及全勤奖扣款] + [其他扣款]", "category": "扣款税费", "description": "惩处小计"},

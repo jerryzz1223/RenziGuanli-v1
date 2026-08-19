@@ -1,9 +1,10 @@
-"""Persistent orchestration for the three manually uploaded attendance sources.
+"""Persistent orchestration for manually uploaded attendance sources.
 
 This module intentionally does not change ``attendance_import.py``.  It owns a
 small, auditable workflow backed by existing import batches plus one unified
-processing-record DocType.  Each source produces one processed dataset and all
-uncertain records share the same review contract.
+processing-record DocType.  Attendance-only monthly support files are import-only:
+they are validated on upload but never enter the attendance exception/review
+workflow or receive a second manual transformation.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, now_datetime
 
-from hrms.api.attendance_processors.apple_tree import AppleTreeRules, preflight_apple_tree_rows, process_apple_tree_rows
+from hrms.api.attendance_processors.apple_tree import AppleTreeRules, is_auto_excluded_apple_tree_row, preflight_apple_tree_rows, process_apple_tree_rows
 from hrms.api.attendance_processors.attendance_draft import (
 	flatten_dingtalk_headers,
 	precheck_attendance_draft_structure,
@@ -36,7 +37,12 @@ IMPORT_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
 PROCESSING_RECORD_DOCTYPE = "HRMS Attendance Processing Record"
 DEPARTMENT_MAPPING_DOCTYPE = "HRMS Attendance Department Mapping"
 SOURCE_TYPES = ("attendance_draft", "apple_tree", "missing_card")
-MONTHLY_SUPPORT_SOURCE_TYPES = ("housing_allowance", "full_attendance", "special_hours")
+MONTHLY_SUPPORT_SOURCE_TYPES = ("full_attendance", "special_hours")
+# Compatibility only: finals locked before the payroll/attendance boundary was
+# corrected included housing allowance in their snapshot fingerprint.  They
+# remain immutable and readable for payroll/audit, while every newly generated
+# final uses ``MONTHLY_SUPPORT_SOURCE_TYPES`` and no longer depends on housing.
+LEGACY_MONTHLY_SUPPORT_SOURCE_TYPES = ("housing_allowance", "full_attendance", "special_hours")
 SOURCE_LABELS = {
 	"attendance_draft": "考勤初稿",
 	"apple_tree": "苹果树",
@@ -46,20 +52,11 @@ SOURCE_LABELS = {
 	"special_hours": "特殊工时",
 }
 MONTHLY_SUPPORT_SOURCE_CONFIG = {
-	"housing_allowance": {
-		"label": "住房补贴",
-		"required_headers": ("工号", "姓名", "住房补贴"),
-		"amount_headers": ("住房补贴", "补贴金额"),
-		"description": "上传当月住房补贴明细；按工号、姓名和住房补贴金额核验。",
-		"mode": "monthly_amount",
-		"value_field": "housing_allowance",
-		"value_header": "住房补贴",
-	},
 	"full_attendance": {
 		"label": "全勤奖",
 		"required_headers": ("工号", "姓名", "全勤奖"),
 		"amount_headers": ("全勤奖",),
-		"description": "上传当月全勤奖明细；按工号、姓名和全勤奖金额核验。",
+		"description": "一次性导入当月全勤奖明细；仅校验工号、姓名和全勤奖金额。",
 		"mode": "monthly_amount",
 		"value_field": "full_attendance_award",
 		"value_header": "全勤奖",
@@ -67,7 +64,7 @@ MONTHLY_SUPPORT_SOURCE_CONFIG = {
 	"special_hours": {
 		"label": "特殊工时",
 		"required_headers": ("工号", "姓名"),
-		"description": "上传当月特殊工时人工登记表；按员工与日期工时逐项核验。",
+		"description": "一次性导入当月特殊工时登记表；仅校验员工、日期与工时。",
 		"mode": "special_hours_grid",
 		"value_field": "special_hours",
 	},
@@ -133,6 +130,13 @@ PROCESSING_FIELD_LABELS = {
 	"absence_hours": "旷工工时",
 	"clock_in_missing_count": "上班漏打卡次数",
 	"clock_out_missing_count": "下班漏打卡次数",
+	"attendance_details": "涉及日期及打卡详情",
+	"attendance_date": "考勤日期",
+	"shift": "班次",
+	"clock_in": "上班打卡",
+	"clock_out": "下班打卡",
+	"clock_in_missing": "上班缺卡次数",
+	"clock_out_missing": "下班缺卡次数",
 	"source_row_count": "来源明细行数",
 	"eligible_for_downstream": "计入下游",
 	"include_in_downstream": "计入下游",
@@ -713,28 +717,29 @@ def _monthly_support_precheck(batch) -> dict[str, Any]:
 def _employee_directory(company: str = ""):
 	"""Return business employee codes, never Frappe's internal Employee name.
 
-	The roster's visible 工号 is ``custom_employee_code`` in this deployment;
-	``employee_number`` remains a compatibility fallback.  Internal document
-	names (for example HR-EMP-00001) must not be used to match DingTalk rows.
+	The roster's visible 工号 is ``custom_employee_code`` in this deployment.
+	Internal document names must not be used to match DingTalk rows.
 	"""
 	try:
 		employees = frappe.get_all(
 			"Employee",
 			filters={"company": company} if company else None,
-			fields=["custom_employee_code", "employee_number", "employee_name", "department", "status as employment_status"],
+			fields=["custom_employee_code", "employee_name", "department", "status as employment_status", "date_of_joining", "relieving_date"],
 			# A small default page would make most name+department matches look
 			# missing even though those employees exist in the roster.
 			limit_page_length=5000,
 		)
 		return [
 			{
-				"employee_code": (employee.custom_employee_code or employee.employee_number or "").strip(),
+				"employee_code": (employee.custom_employee_code or "").strip(),
 				"employee_name": employee.employee_name,
 				"department": employee.department,
 				"employment_status": employee.employment_status,
+				"date_of_joining": employee.date_of_joining,
+				"relieving_date": employee.relieving_date,
 			}
 			for employee in employees
-			if (employee.custom_employee_code or employee.employee_number or "").strip()
+			if (employee.custom_employee_code or "").strip()
 		]
 	except Exception:
 		return []
@@ -751,18 +756,51 @@ def _as_nonnegative_number(value: Any):
 
 
 def _process_monthly_support_rows(batch):
-	"""Convert the three monthly auxiliary inputs into reviewable employee rows."""
+	"""Validate and persist the three one-time monthly import datasets.
+
+	Validation errors are deliberately retained with the import result so that
+	HR can correct and re-upload the original workbook.  They are not attendance
+	exceptions: no manual approval, rejection, or data adjustment is available
+	for these sources.
+	"""
 	config = MONTHLY_SUPPORT_SOURCE_CONFIG[batch.source_type]
 	raw_rows, sheets = _read_monthly_support_rows(batch)
-	employees = {str(employee["employee_code"]).strip(): employee for employee in _employee_directory(batch.company)}
+	employee_rows = _employee_directory(batch.company)
+	employees = {str(employee["employee_code"]).strip(): employee for employee in employee_rows}
+	employees_by_name = defaultdict(list)
+	for employee in employee_rows:
+		name_key = re.sub(r"\s+", "", str(employee.get("employee_name") or ""))
+		if name_key:
+			employees_by_name[name_key].append(employee)
+	attendance_batch = _latest_batch(batch.company, batch.attendance_month, "attendance_draft")
+	attendance_people = frappe.get_all(
+		PROCESSING_RECORD_DOCTYPE,
+		filters={"import_batch": attendance_batch.name} if attendance_batch else {"name": "__none__"},
+		fields=["employee_code", "employee_name"],
+		limit_page_length=5000,
+	)
+	attendance_codes = {str(row.employee_code or "").strip() for row in attendance_people if str(row.employee_code or "").strip()}
+	attendance_names = {re.sub(r"\s+", "", str(row.employee_name or "")) for row in attendance_people if str(row.employee_name or "").strip()}
 	seen_codes = set()
 	processed_rows = []
 	last_day = monthrange(int(batch.attendance_month[:4]), int(batch.attendance_month[5:]))[1]
 	for raw in raw_rows:
-		code = raw.get("employee_code") or ""
+		source_code = str(raw.get("employee_code") or "").strip()
+		code = source_code
 		name = raw.get("employee_name") or ""
 		department = raw.get("department") or ""
 		exception_codes = []
+		identity_resolution = ""
+		exclusion_reason = ""
+		coded_employee = employees.get(code)
+		name_matches = employees_by_name.get(re.sub(r"\s+", "", str(name)), []) if name else []
+		if len(name_matches) == 1 and (
+			not coded_employee
+			or (name and str(coded_employee.get("employee_name") or "").strip() != str(name).strip())
+		):
+			matched_by_name = name_matches[0]
+			code = str(matched_by_name.get("employee_code") or "").strip()
+			identity_resolution = _("已按唯一姓名 {0} 将来源工号 {1} 修正为花名册工号 {2}").format(name, source_code or "空", code)
 		if not code:
 			exception_codes.append("EMPLOYEE_CODE_MISSING")
 		elif code in seen_codes:
@@ -781,6 +819,13 @@ def _process_monthly_support_rows(batch):
 			# must not block a payroll input when the roster has since moved the
 			# employee to another department.
 			department = str(employee.get("department") or department).strip()
+		in_attendance_population = bool(code and code in attendance_codes) or bool(name and re.sub(r"\s+", "", str(name)) in attendance_names)
+		if attendance_people and not in_attendance_population:
+			# A support-sheet template may retain departed or zero-value historical
+			# rows. They remain traceable, but must neither block this month nor create
+			# a payroll employee absent from the attendance population.
+			exclusion_reason = _("不在本月考勤初稿人员范围，已保留来源但不进入月度终稿")
+			exception_codes = [code for code in exception_codes if code not in {"EMPLOYEE_CODE_MISSING", "EMPLOYEE_NOT_FOUND", "EMPLOYEE_CODE_NAME_CONFLICT"}]
 
 		if config["mode"] == "monthly_amount":
 			amount = _as_nonnegative_number(raw.get(config["value_field"]))
@@ -788,7 +833,7 @@ def _process_monthly_support_rows(batch):
 				exception_codes.append("MONTHLY_AMOUNT_MISSING")
 			elif amount is None:
 				exception_codes.append("MONTHLY_AMOUNT_INVALID")
-			proposed = {"employee_code": code, "employee_name": name, "department": department, config["value_field"]: amount if amount is not None else raw.get(config["value_field"]), "eligible_for_downstream": not exception_codes}
+			proposed = {"employee_code": code, "employee_name": name, "department": department, config["value_field"]: amount if amount is not None else raw.get(config["value_field"]), "eligible_for_downstream": not exception_codes and not exclusion_reason}
 		else:
 			daily_entries = []
 			for entry in raw.get("special_hours_days") or []:
@@ -797,10 +842,14 @@ def _process_monthly_support_rows(batch):
 					exception_codes.append("SPECIAL_HOURS_INVALID")
 					continue
 				daily_entries.append({"day": entry["day"], "hours": hours})
-			proposed = {"employee_code": code, "employee_name": name, "department": department, "special_hours": sum(entry["hours"] for entry in daily_entries), "special_hours_days": daily_entries, "eligible_for_downstream": not exception_codes}
+			proposed = {"employee_code": code, "employee_name": name, "department": department, "special_hours": sum(entry["hours"] for entry in daily_entries), "special_hours_days": daily_entries, "eligible_for_downstream": not exception_codes and not exclusion_reason}
 
 		exception_codes = list(dict.fromkeys(exception_codes))
-		proposed["eligible_for_downstream"] = not exception_codes
+		proposed["eligible_for_downstream"] = not exception_codes and not exclusion_reason
+		if identity_resolution:
+			proposed["identity_resolution"] = identity_resolution
+		if exclusion_reason:
+			proposed["exclusion_reason"] = exclusion_reason
 		processed_rows.append({
 			"employee_code": code,
 			"employee_name": name,
@@ -814,39 +863,65 @@ def _process_monthly_support_rows(batch):
 			"proposed_value": proposed,
 			"exception_codes": exception_codes,
 			"exception_message": "；".join(EXCEPTION_LABELS.get(code, code) for code in exception_codes),
-			"review_status": "待审核" if exception_codes else "无需审核",
-			"eligible_for_downstream": not exception_codes,
+			# Monthly support data is a one-time import.  A validation error blocks
+			# this import version from the final, but must not create a task in the
+			# shared attendance exception queue.
+			"review_status": "无需审核",
+			"eligible_for_downstream": not exception_codes and not exclusion_reason,
 		})
-	exception_rows = sum(1 for row in processed_rows if row["review_status"] == "待审核")
+	# This is an import-validation count, not a count of review tasks.
+	exception_rows = sum(1 for row in processed_rows if row["exception_codes"])
+	excluded_rows = sum(1 for row in processed_rows if (row.get("proposed_value") or {}).get("exclusion_reason"))
 	return {
-		"status": "待处理异常" if exception_rows else "待确认",
+		"status": "导入异常" if exception_rows else "已确认",
 		"processed_rows": processed_rows,
-		"metrics": {"source_rows": len(raw_rows), "processed_rows": len(processed_rows), "exception_rows": exception_rows},
+		"metrics": {"source_rows": len(raw_rows), "processed_rows": len(processed_rows), "exception_rows": exception_rows, "excluded_rows": excluded_rows},
 		"source_sheets": [sheet.title for sheet in sheets],
 	}
 
 
-def _simple_sheet_rows(sheet, file_url: str) -> list[dict[str, Any]]:
-	rows = sheet.iter_rows(values_only=True)
-	try:
-		headers = [str(value).strip() if value is not None else "" for value in next(rows)]
-	except StopIteration:
+def _simple_sheet_rows(sheet, file_url: str, header_hints: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+	"""Read a flat form whose real header may follow one or more title rows."""
+	values = list(sheet.iter_rows(values_only=True))
+	if not values:
 		return []
+	header_index = 0
+	if header_hints:
+		header_index = max(
+			range(min(12, len(values))),
+			key=lambda index: sum(
+				1 for hint in header_hints if hint in {str(value).strip() for value in values[index] if value not in (None, "")}
+			),
+		)
+	headers = [str(value).strip() if value is not None else "" for value in values[header_index]]
 	result = []
-	for source_row, values in enumerate(rows, start=2):
-		if not any(value not in (None, "") for value in values):
+	for source_row, row_values in enumerate(values[header_index + 1 :], start=header_index + 2):
+		if not any(value not in (None, "") for value in row_values):
 			continue
-		row = {headers[index]: values[index] if index < len(values) else None for index in range(len(headers)) if headers[index]}
+		row = {headers[index]: row_values[index] if index < len(row_values) else None for index in range(len(headers)) if headers[index]}
 		row.update({"source_file": file_url, "source_sheet": sheet.title, "source_row": source_row})
 		result.append(row)
 	return result
 
 
+def _attendance_draft_sheet(workbook):
+	return next(
+		(
+			sheet
+			for sheet in workbook.worksheets
+			if str(sheet.title or "").strip() in {"每日明细（钉钉导出）", "每日明细"}
+			or "每日明细（钉钉导出）" in str(sheet.title or "")
+		),
+		None,
+	)
+
+
 def _source_sheet(workbook, source_type: str):
 	if source_type == "attendance_draft":
-		if "每日明细（钉钉导出）" not in workbook.sheetnames:
-			frappe.throw(_("考勤初稿必须包含“每日明细（钉钉导出）”工作表。"))
-		return workbook["每日明细（钉钉导出）"]
+		sheet = _attendance_draft_sheet(workbook)
+		if not sheet:
+			frappe.throw(_("考勤初稿必须包含“每日明细”或“每日明细（钉钉导出）”工作表。"))
+		return sheet
 	if "钉钉导出数据" in workbook.sheetnames:
 		return workbook["钉钉导出数据"]
 	return workbook[workbook.sheetnames[0]]
@@ -858,7 +933,23 @@ def _read_source_rows(batch):
 	if batch.source_type == "attendance_draft":
 		rows = rows_from_dingtalk_daily_sheet(sheet, source_file=batch.source_file)
 		return rows, sheet.title
-	return _simple_sheet_rows(sheet, batch.source_file), sheet.title
+	header_hints = (
+		("创建时间", "奖/惩日期", "受奖/惩人", "绿苹果", "红苹果", "奖/惩项目")
+		if batch.source_type == "apple_tree"
+		else ("创建时间", "补卡时间", "补卡类型", "补卡理由", "创建人")
+	)
+	rows = _simple_sheet_rows(sheet, batch.source_file, header_hints)
+	if batch.source_type == "apple_tree":
+		preflight = preflight_apple_tree_rows(rows)
+		if preflight.get("来源口径") == "人资月度汇总表":
+			for row in rows:
+				row["source_kind"] = "monthly_summary"
+	elif batch.source_type == "missing_card":
+		preflight = precheck_missed_punch_structure(list(rows[0]) if rows else [])
+		if preflight.get("source_kind") == "monthly_summary":
+			for row in rows:
+				row["source_kind"] = "monthly_summary"
+	return rows, sheet.title
 
 
 def _precheck(batch):
@@ -880,6 +971,28 @@ def _precheck(batch):
 	return {"source_sheet": sheet_name, "row_count": len(rows), "result": result}
 
 
+def _night_shift_matching_rule(company: str) -> dict[str, Any]:
+	"""Read only the human-facing night-shift matching settings.
+
+	The payroll centre owns the company rule; this processor consumes the saved
+	time window when a new attendance draft is processed.  It never changes an
+	already locked attendance result.
+	"""
+	defaults = {"large_night_shift_start": "20:00", "large_night_shift_end": "08:00"}
+	parameters_json = frappe.db.get_value(
+		"HRMS Payroll Rule",
+		{"company": company, "rule_code": "PAYROLL_SETTLEMENT_NIGHT_SHIFT", "status": "已启用"},
+		"parameters_json",
+	)
+	if not parameters_json:
+		return defaults
+	try:
+		parameters = json.loads(parameters_json) if isinstance(parameters_json, str) else dict(parameters_json)
+	except (TypeError, ValueError):
+		return defaults
+	return {**defaults, **{key: parameters.get(key) for key in defaults if parameters.get(key)}}
+
+
 def _process_batch(batch) -> dict[str, Any]:
 	rows, sheet_name = _read_source_rows(batch)
 	employees = _employee_directory(batch.company)
@@ -890,8 +1003,10 @@ def _process_batch(batch) -> dict[str, Any]:
 			source_file=batch.source_file,
 			source_sheet=sheet_name,
 			employee_directory=employees or None,
+			night_shift_rule=_night_shift_matching_rule(batch.company),
 		)
 	if batch.source_type == "apple_tree":
+		excluded_source_rows = sum(1 for row in rows if is_auto_excluded_apple_tree_row(row))
 		processed_rows = process_apple_tree_rows(
 			rows,
 			rules=AppleTreeRules(target_month=batch.attendance_month),
@@ -902,10 +1017,10 @@ def _process_batch(batch) -> dict[str, Any]:
 		)
 		exception_rows = sum(1 for row in processed_rows if row.get("review_status") == "待审核")
 		return {
-			"status": "待处理异常" if exception_rows else "待确认",
+			"status": "已确认" if rows and not processed_rows and excluded_source_rows == len(rows) else "待处理异常" if exception_rows else "待确认",
 			"structure_precheck": preflight_apple_tree_rows(rows),
 			"processed_rows": processed_rows,
-			"metrics": {"source_rows": len(rows), "processed_rows": len(processed_rows), "exception_rows": exception_rows},
+			"metrics": {"source_rows": len(rows), "processed_rows": len(processed_rows), "excluded_source_rows": excluded_source_rows, "exception_rows": exception_rows},
 		}
 	return process_missed_punch_rows(
 		rows,
@@ -1400,7 +1515,8 @@ def get_processing_batch(company: str, attendance_month: str):
 	status = "未上传" if not slots else "已确认" if len(slots) == 3 and all(value == "已确认" for value in batch_statuses) else "待处理异常" if "待处理异常" in batch_statuses else "待确认" if "待确认" in batch_statuses else "待加工"
 	finalization_inputs = _finalization_inputs(company, attendance_month, slots)
 	anchor_batch = _latest_batch(company, attendance_month, "attendance_draft")
-	final_outputs = _processing_meta(anchor_batch).get("monthly_final_outputs", {}) if anchor_batch else {}
+	anchor_meta = _processing_meta(anchor_batch) if anchor_batch else {}
+	final_outputs = anchor_meta.get("monthly_final_outputs", {})
 	return {
 		"batch_id": f"{company}:{attendance_month}",
 		"company": company,
@@ -1409,6 +1525,7 @@ def get_processing_batch(company: str, attendance_month: str):
 		"slots": slots,
 		"finalization_inputs": finalization_inputs,
 		"final_outputs": final_outputs,
+		"signed_final_reconciliation": anchor_meta.get("signed_final_reconciliation", {}),
 		"locked_snapshot_version": final_outputs.get("locked_snapshot_version", ""),
 		"snapshot_ready": bool(finalization_inputs) and all(item["ready"] for item in finalization_inputs),
 	}
@@ -1472,7 +1589,7 @@ def register_monthly_support_file(company: str, attendance_month: str, source_ty
 
 
 def _detect_bulk_source_type(file_url: str, file_name: str = "") -> str:
-	"""Identify one of the six attendance files by its business structure.
+	"""Identify an attendance source or a payroll-only housing file by structure.
 
 	The workbook is the source of truth. File names vary when HR downloads or
 	renames a DingTalk export, so a name is used only as a fallback when its
@@ -1495,10 +1612,14 @@ def _detect_bulk_source_type(file_url: str, file_name: str = "") -> str:
 				return "apple_tree"
 			if "补卡时间" in text and "补卡类型" in text:
 				return "missing_card"
-			if "住房补贴" in text and "工号" in text and "姓名" in text:
-				return "housing_allowance"
+			# The full-attendance workbook is derived from the housing template and
+			# may still contain a copied right-hand ``住房补贴`` header.  Prefer the
+			# more specific full-attendance marker so the two files are not both
+			# classified as housing allowance.
 			if "全勤奖" in text and "工号" in text and "姓名" in text:
 				return "full_attendance"
+			if "住房补贴" in text and "工号" in text and "姓名" in text:
+				return "housing_allowance"
 			if "特殊工时" in text and "工号" in text and "姓名" in text:
 				return "special_hours"
 	except Exception:
@@ -1513,7 +1634,7 @@ def _detect_bulk_source_type(file_url: str, file_name: str = "") -> str:
 
 @frappe.whitelist()
 def bulk_import_and_process_sources(company: str, attendance_month: str, files: str | list[dict[str, Any]]):
-	"""Register and process all six monthly sources, without confirming exceptions.
+	"""Register and process all five attendance sources, without confirming exceptions.
 
 	The files are fully classified before any batch is written.  That gives HR
 	the convenience of selecting six files together without silently putting a
@@ -1525,10 +1646,11 @@ def bulk_import_and_process_sources(company: str, attendance_month: str, files: 
 	if isinstance(files, str):
 		files = _loads(files, [])
 	if not isinstance(files, list):
-		frappe.throw(_("请选择六个 .xlsx 来源文件。"))
+		frappe.throw(_("请选择五个 .xlsx 考勤来源文件。"))
 	classified: dict[str, dict[str, Any]] = {}
 	unmatched = []
 	duplicates = []
+	payroll_only = []
 	for item in files:
 		if not isinstance(item, dict):
 			unmatched.append(str(item))
@@ -1539,6 +1661,9 @@ def bulk_import_and_process_sources(company: str, attendance_month: str, files: 
 			unmatched.append(file_name or file_url)
 			continue
 		source_type = _detect_bulk_source_type(file_url, file_name)
+		if source_type == "housing_allowance":
+			payroll_only.append(file_name or file_url)
+			continue
 		if not source_type:
 			unmatched.append(file_name or file_url)
 			continue
@@ -1547,7 +1672,7 @@ def bulk_import_and_process_sources(company: str, attendance_month: str, files: 
 			continue
 		classified[source_type] = {"file_url": file_url, "file_name": file_name or Path(file_url).name}
 	missing = [SOURCE_LABELS[source_type] for source_type in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES if source_type not in classified]
-	if unmatched or duplicates or missing:
+	if unmatched or duplicates or missing or payroll_only:
 		issues = []
 		if unmatched:
 			issues.append(_("无法识别：{0}").format("、".join(unmatched)))
@@ -1555,6 +1680,8 @@ def bulk_import_and_process_sources(company: str, attendance_month: str, files: 
 			issues.append(_("重复来源：{0}").format("、".join(duplicates)))
 		if missing:
 			issues.append(_("缺少来源：{0}").format("、".join(missing)))
+		if payroll_only:
+			issues.append(_("住房补贴属于薪酬月度增减项，请到薪酬模块导入：{0}").format("、".join(payroll_only)))
 		frappe.throw(_("批量导入未开始。请调整文件后重试：{0}").format("；".join(issues)))
 	items = []
 	for source_type in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES:
@@ -1578,7 +1705,7 @@ def bulk_import_and_process_sources(company: str, attendance_month: str, files: 
 		})
 	return {
 		"items": items,
-		"notice": _("六类来源已完成匹配和加工。异常未自动确认，请逐条在“异常处理”中处理。"),
+		"notice": _("五类考勤来源已完成匹配和导入。全勤奖和特殊工时仅保留导入校验结果，不进入异常处理。"),
 	}
 
 
@@ -1605,15 +1732,22 @@ def precheck_monthly_support_file(company: str, attendance_month: str, source_ty
 
 @frappe.whitelist()
 def process_monthly_support_file(company: str, attendance_month: str, source_type: str):
-	"""Create auditable rows and send only uncertain values to the shared queue."""
+	"""Perform the one-time import and retain its validation result."""
 	_require_processing_manager()
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
 	source_type = _require_monthly_support_source_type(source_type)
 	batch = _latest_batch(company, attendance_month, source_type)
 	if not batch:
 		frappe.throw(_("请先上传该月度补充来源文件。"))
-	if batch.status == "已确认" and frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": batch.name}):
-		frappe.throw(_("该来源已经确认；如需更正，请上传新的来源版本。"))
+	if batch.status in {"已确认", "导入异常"} and frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": batch.name}):
+		return {
+			"batch": batch.name,
+			"source_type": source_type,
+			"status": batch.status,
+			"metrics": _processing_meta(batch).get("metrics", {}),
+			"processed_result": _processing_meta(batch).get("processed_result"),
+			"message": _("该文件已经完成导入校验；如需更正，请重新上传新的来源版本。"),
+		}
 	# 前台不再暴露“预检”这一步；点击加工时自动执行结构校验，
 	# 只有失败才留在卡片上提示用户重新上传。
 	precheck = _monthly_support_precheck(batch)
@@ -1632,34 +1766,32 @@ def process_monthly_support_file(company: str, attendance_month: str, source_typ
 		"metrics": result["metrics"],
 		"processed_result": processed_result,
 		"processed_on": now_datetime().isoformat(),
-		"monthly_support_processing_version": 1,
+		"monthly_support_processing_version": 2,
+		"monthly_support_import_mode": "one_time_import",
 	})
 	return {"batch": batch.name, "source_type": source_type, "status": batch.status, "metrics": result["metrics"], "processed_result": processed_result}
 
 
 @frappe.whitelist()
 def confirm_monthly_support_file(company: str, attendance_month: str, source_type: str):
+	"""Compatibility endpoint for the retired monthly-support confirmation step."""
 	_require_processing_manager()
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
 	source_type = _require_monthly_support_source_type(source_type)
 	batch = _latest_batch(company, attendance_month, source_type)
 	if not batch:
 		frappe.throw(_("尚未上传该月度补充来源文件。"))
-	if batch.status == "已确认":
-		frappe.throw(_("该来源已经确认；如需更正，请上传新的来源版本。"))
-	precheck = _processing_meta(batch).get("monthly_support_precheck") or {}
-	if not precheck.get("is_valid"):
-		frappe.throw(_("请先通过文件结构预检后再确认该来源。"))
-	rows = frappe.get_all(PROCESSING_RECORD_DOCTYPE, filters={"import_batch": batch.name}, fields=["name", "review_status"], limit_page_length=0)
-	if not rows:
-		frappe.throw(_("请先完成加工检查；月度补充来源不能跳过异常处理。"))
-	pending_review_rows = sum(1 for row in rows if row.review_status == "待审核")
-	if pending_review_rows:
-		frappe.throw(_("该来源仍有 {0} 条待处理异常，请先在“异常处理”完成审核。").format(pending_review_rows))
-	batch.status = "已确认"
-	batch.save(ignore_permissions=True)
-	_save_batch_notes(batch, {"monthly_support_confirmed_on": now_datetime().isoformat(), "monthly_support_confirmed_by": frappe.session.user})
-	return {"batch": batch.name, "source_type": source_type, "status": batch.status, "record_count": cint(precheck.get("record_count"))}
+	if batch.status == "导入异常":
+		frappe.throw(_("该文件存在导入校验错误，请更正后重新上传；此类来源不支持异常处理或人工确认。"))
+	if batch.status != "已确认":
+		frappe.throw(_("请先完成一次性导入校验。"))
+	return {
+		"batch": batch.name,
+		"source_type": source_type,
+		"status": batch.status,
+		"record_count": cint((_processing_meta(batch).get("monthly_support_precheck") or {}).get("record_count")),
+		"message": _("该来源已随导入自动生效，无需再次确认。"),
+	}
 
 
 @frappe.whitelist()
@@ -1703,13 +1835,16 @@ def list_processing_results(company: str, attendance_month: str, source_type: st
 	batch = _latest_batch(company, attendance_month, source_type)
 	if not batch:
 		return {"processed_rows": [], "can_confirm": False}
+	meta = _processing_meta(batch)
 	rows = _result_rows(batch, min(max(cint(page_length), 1), 5000))
 	if cint(exception_only):
 		rows = [row for row in rows if row["exception_codes"] and row["review_status"] == "待审核"]
 	return {
 		"batch": batch.name,
+		"status": batch.status,
 		"processed_rows": rows,
-		"processed_result": _processing_meta(batch).get("processed_result"),
+		"processed_result": meta.get("processed_result"),
+		"import_validation": meta.get("monthly_support_precheck") if source_type in MONTHLY_SUPPORT_SOURCE_TYPES else {},
 		"result_summary": _missed_punch_summary(rows) if source_type == "missing_card" else _apple_tree_summary(rows) if source_type == "apple_tree" else {},
 		"can_confirm": bool(rows) or batch.status in {"待处理异常", "待确认"},
 	}
@@ -1819,6 +1954,7 @@ def update_processing_record(company: str, attendance_month: str, source_type: s
 	result = _serialize_record(doc.as_dict())
 	result["batch_status"] = batch_status
 	result["processed_result"] = processed_result
+	frappe.db.commit()
 	return result
 
 
@@ -1924,6 +2060,225 @@ def bulk_update_processing_records(
 	}
 
 
+def _signed_final_header_text(sheet, row: int, column: int) -> str:
+	return re.sub(r"\s+", "", str(sheet.cell(row, column).value or ""))
+
+
+def _signed_final_column(sheet, label: str, *, header_row: int, max_column: int = 64) -> int:
+	needle = re.sub(r"\s+", "", label)
+	for column in range(1, min(sheet.max_column, max_column) + 1):
+		if needle in _signed_final_header_text(sheet, header_row, column):
+			return column
+	frappe.throw(_("已签考勤终稿缺少字段：{0}").format(label))
+
+
+def _signed_final_rows(file_url: str) -> list[dict[str, Any]]:
+	"""Read the supplied HR sign-off form without rewriting the workbook."""
+	workbook = _load_workbook(file_url)
+	sheet = next((item for item in workbook.worksheets if "考勤终稿" in str(item.title or "")), workbook.worksheets[0])
+	header_values = {
+		row_number: next(sheet.iter_rows(min_row=row_number, max_row=row_number, values_only=True), ())
+		for row_number in (2, 3)
+	}
+
+	def header_column(label: str, row_number: int, max_column: int = 64) -> int:
+		needle = re.sub(r"\s+", "", label)
+		for column, value in enumerate(header_values[row_number][:max_column], start=1):
+			if needle in re.sub(r"\s+", "", str(value or "")):
+				return column
+		frappe.throw(_("已签考勤终稿缺少字段：{0}").format(label))
+
+	columns = {
+		"department": header_column("部门", 2),
+		"employee_code": header_column("工号", 2),
+		"employee_name": header_column("姓名", 2),
+		"standard_hours": header_column("标准工时", 2),
+		"actual_attendance_hours": header_column("钉钉导出实际出勤", 2),
+		"workday_overtime_hours": header_column("工作日加班", 3, 25),
+		"restday_overtime_hours": header_column("休息日加班", 3, 25),
+		"holiday_overtime_hours": header_column("节假日加班", 3, 25),
+		"personal_leave_hours": header_column("事假", 3, 25),
+		"sick_leave_hours": header_column("病假", 3, 25),
+		"annual_leave_hours": header_column("特休", 3, 25),
+		"work_injury_hours": header_column("工伤", 3, 25),
+		"rest_arrangement_hours": header_column("排休", 3, 25),
+		"absence_hours": header_column("旷工", 3, 25),
+		"large_night_shifts": header_column("大夜班", 2),
+		"small_night_shifts": header_column("小夜班", 2),
+		# These are HR-reviewed money values. Apple source rows contain counts,
+		# so treating those counts as payroll amounts produces the wrong salary.
+		"green_apple_amount": header_column("绿苹果", 2),
+		"red_apple_amount": header_column("红苹果", 2),
+		"housing_allowance": header_column("住房", 2),
+		"full_attendance_award": header_column("全勤", 2),
+	}
+	rows = []
+	for source_row, source_values in enumerate(sheet.iter_rows(min_row=5, values_only=True), start=5):
+		code = str(source_values[columns["employee_code"] - 1] or "").strip()
+		name = str(source_values[columns["employee_name"] - 1] or "").strip()
+		if not code and not name:
+			continue
+		if not code or not name:
+			continue
+		row = {"source_row": source_row}
+		for fieldname, column in columns.items():
+			value = source_values[column - 1] if column <= len(source_values) else None
+			if fieldname in {"department", "employee_code", "employee_name"}:
+				row[fieldname] = str(value or "").strip()
+			else:
+				row[fieldname] = _as_number(value)
+		rows.append(row)
+	return rows
+
+
+@frappe.whitelist()
+def preview_signed_attendance_final(company: str, attendance_month: str, file_url: str):
+	"""Return an HR-readable reconciliation preview without changing records."""
+	_require_processing_manager()
+	_require_company(company), _require_month(attendance_month)
+	rows = _signed_final_rows(file_url)
+	amount_fields = ("green_apple_amount", "red_apple_amount", "housing_allowance", "full_attendance_award")
+	return {
+		"employee_rows": len(rows),
+		"amount_totals": {field: round(sum(_as_number(row.get(field)) for row in rows), 2) for field in amount_fields},
+		"samples": [
+			{
+				"employee_code": row.get("employee_code"),
+				"employee_name": row.get("employee_name"),
+				**{field: row.get(field) for field in amount_fields},
+			}
+			for row in rows[:5]
+		],
+	}
+
+
+@frappe.whitelist()
+def reconcile_attendance_draft_with_signed_final(company: str, attendance_month: str, file_url: str):
+	"""Use HR's signed final as an audited correction layer over the draft.
+
+	The raw DingTalk draft remains immutable.  Only the employee-level processed
+	projection is corrected, with a review-history event that cites the supplied
+	sign-off workbook.  Employees absent from the signed final are explicitly
+	excluded instead of silently leaking into payroll.
+	"""
+	_require_processing_manager()
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	if not file_url or not file_url.lower().split("?", 1)[0].endswith(".xlsx"):
+		frappe.throw(_("请上传 .xlsx 格式的已签考勤终稿。"))
+	batch = _latest_batch(company, attendance_month, "attendance_draft")
+	if not batch or not frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": batch.name}):
+		frappe.throw(_("请先导入并加工本月考勤初稿。"))
+	final_rows = _signed_final_rows(file_url)
+	if not final_rows:
+		frappe.throw(_("已签考勤终稿没有可识别的员工记录。"))
+	final_by_code = {}
+	for row in final_rows:
+		code = row["employee_code"]
+		if code in final_by_code:
+			frappe.throw(_("已签考勤终稿存在重复工号：{0}").format(code))
+		final_by_code[code] = row
+	records = frappe.get_all(
+		PROCESSING_RECORD_DOCTYPE,
+		filters={"import_batch": batch.name},
+		fields=["name", "employee_code", "employee_name", "proposed_value_json", "confirmed_value_json", "processed_value_json", "review_status", "eligible_for_downstream", "review_history_json"],
+		limit_page_length=5000,
+	)
+	processed_at = now_datetime()
+	matched_codes = set()
+	changed_records = 0
+	attendance_changed_records = 0
+	amount_changed_records = 0
+	excluded_records = 0
+	approved_exceptions = 0
+	fields = tuple(
+		field for field, _label in ATTENDANCE_DRAFT_RESULT_COLUMNS
+		if field not in {"employee_code", "employee_name", "department", "attendance_details", "source_row_count", "night_shift_matching", "clock_in_missing_count", "clock_out_missing_count"}
+	) + ("green_apple_amount", "red_apple_amount", "housing_allowance", "full_attendance_award")
+	amount_fields = {"green_apple_amount", "red_apple_amount", "housing_allowance", "full_attendance_award"}
+	attendance_fields = set(fields) - amount_fields
+	for row in records:
+		doc = frappe.get_doc(PROCESSING_RECORD_DOCTYPE, row.name)
+		final = final_by_code.get(str(row.employee_code or "").strip())
+		proposed = _loads(doc.proposed_value_json, {})
+		confirmed = _loads(doc.confirmed_value_json, None) or dict(proposed)
+		old_confirmed = deepcopy_json(confirmed)
+		previous_status = doc.review_status
+		if final:
+			matched_codes.add(final["employee_code"])
+			for fieldname in fields:
+				if fieldname in final:
+					confirmed[fieldname] = final[fieldname]
+			confirmed.update({"employee_code": final["employee_code"], "employee_name": final["employee_name"], "department": final["department"]})
+			confirmed["signed_final_override"] = 1
+			doc.review_status = "已通过" if previous_status == "待审核" or confirmed != proposed else previous_status
+			doc.eligible_for_downstream = 1
+			if previous_status == "待审核":
+				approved_exceptions += 1
+		else:
+			doc.review_status = "已驳回"
+			doc.eligible_for_downstream = 0
+			excluded_records += 1
+		reason = (
+			_("已与人资签字考勤终稿逐项核对并采用终稿数值；来源：{0}").format(Path(file_url).name)
+			if final else _("该员工不在本月人资签字考勤终稿中，明确不计入本月终稿；来源：{0}").format(Path(file_url).name)
+		)
+		if final:
+			attendance_changed = any(_as_number(old_confirmed.get(field)) != _as_number(final.get(field)) for field in attendance_fields)
+			amount_changed = any(_as_number(old_confirmed.get(field)) != _as_number(final.get(field)) for field in amount_fields)
+			if attendance_changed or amount_changed:
+				changed_records += 1
+			attendance_changed_records += int(attendance_changed)
+			amount_changed_records += int(amount_changed)
+		history = _loads(doc.review_history_json, [])
+		history.append({
+			"old_value": old_confirmed,
+			"new_value": deepcopy_json(confirmed) if final else None,
+			"field_name": "__signed_attendance_final__",
+			"original_value": old_confirmed,
+			"reason": reason,
+			"review_status": doc.review_status,
+			"reviewer": frappe.session.user,
+			"reviewed_on": processed_at.isoformat(),
+			"source_file": file_url,
+		})
+		doc.confirmed_value_json = _json(confirmed) if final else ""
+		processed = _loads(doc.processed_value_json, {})
+		if final:
+			processed.update(confirmed)
+		doc.processed_value_json = _json(processed)
+		doc.reviewer = frappe.session.user
+		doc.reviewed_on = processed_at
+		doc.review_note = reason
+		doc.review_history_json = _json(history)
+		doc.save(ignore_permissions=True)
+	unmatched_final = sorted(set(final_by_code) - matched_codes)
+	if unmatched_final:
+		frappe.throw(_("已签考勤终稿中有 {0} 个工号不在考勤初稿：{1}").format(len(unmatched_final), "、".join(unmatched_final[:20])))
+	_refresh_batch_review_status(batch)
+	processed_result = _export_processed_result(batch)
+	reconciliation = {
+		"source_file": file_url,
+		"source_file_name": Path(file_url).name,
+		"source_checksum": _file_checksum(file_url),
+		"employee_rows": len(final_rows),
+		"matched_records": len(matched_codes),
+		"changed_records": changed_records,
+		"attendance_changed_records": attendance_changed_records,
+		"amount_changed_records": amount_changed_records,
+		"approved_exception_records": approved_exceptions,
+		"excluded_records": excluded_records,
+		"reconciled_by": frappe.session.user,
+		"reconciled_on": processed_at.isoformat(),
+	}
+	_save_batch_notes(batch, {"signed_final_reconciliation": reconciliation, "processed_result": processed_result})
+	# The reconciliation is an explicit HR confirmation action spanning many
+	# records.  Commit it as one auditable unit so it also persists when invoked
+	# from the local acceptance runner (web requests would otherwise be the only
+	# place where Frappe commits automatically).
+	frappe.db.commit()
+	return {"batch": batch.name, "status": batch.status, "reconciliation": reconciliation, "processed_result": processed_result}
+
+
 def deepcopy_json(value):
 	return _loads(_json(value), value)
 
@@ -1950,6 +2305,7 @@ def confirm_source_result(company: str, attendance_month: str, source_type: str)
 		"pending_review_rows": len(pending_review_rows),
 		"confirmation_note": "待审核记录不会阻塞来源确认，且不计入下游计算。",
 	})
+	frappe.db.commit()
 	return {
 		"batch": batch.name,
 		"status": batch.status,
@@ -2026,9 +2382,9 @@ def list_daily_attendance_records(company: str, attendance_month: str, attendanc
 	if not batch:
 		return {"items": [], "available_dates": [], "source_file_name": "", "notice": _("请先导入该月钉钉日考勤明细。")}
 	workbook = _load_workbook(batch.source_file)
-	sheet = next((item for item in workbook.worksheets if item.title == "每日明细（钉钉导出）"), None)
+	sheet = _attendance_draft_sheet(workbook)
 	if not sheet:
-		return {"items": [], "available_dates": [], "source_file_name": batch.source_file.rsplit("/", 1)[-1], "notice": _("考勤初稿中未找到“每日明细（钉钉导出）”工作表。")}
+		return {"items": [], "available_dates": [], "source_file_name": batch.source_file.rsplit("/", 1)[-1], "notice": _("考勤初稿中未找到“每日明细”工作表。")}
 	rows = rows_from_dingtalk_daily_sheet(sheet, source_file=batch.source_file)
 	available_dates = sorted({value for row in rows if (value := _daily_attendance_date(row.get("日期"))).startswith(attendance_month)})
 	items = []
@@ -2209,24 +2565,26 @@ def _finalization_inputs(company, attendance_month, slots):
 		meta = _processing_meta(batch) if batch else {}
 		precheck = meta.get("monthly_support_precheck") or {}
 		processed_rows = frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": batch.name}) if batch else 0
-		pending_exception_count = frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": batch.name, "review_status": "待审核"}) if batch else 0
 		needs_processing = bool(batch and batch.status == "已确认" and not processed_rows)
 		inputs.append({
 			"key": source_type,
 			"source_type": source_type,
 			"label": SOURCE_LABELS[source_type],
 			"kind": "月度补充来源",
-			"status": "需补做加工检查" if needs_processing else "已就绪" if batch and batch.status == "已确认" else batch.status if batch else "未就绪",
-			"ready": bool(batch and batch.status == "已确认" and not needs_processing),
+			"status": "需补做导入校验" if needs_processing else "已就绪" if batch and batch.status == "已确认" else batch.status if batch else "未就绪",
+			"ready": bool(batch and batch.status == "已确认" and processed_rows and not needs_processing),
 			"snapshot_version": "",
 			"source_file": batch.source_file if batch else "",
 			"source_file_name": Path(batch.source_file).name if batch and batch.source_file else "",
 			"record_count": cint(precheck.get("record_count")),
 			"processed_rows": processed_rows,
-			"pending_exception_count": pending_exception_count,
+			# Kept for compatibility with existing clients.  Import validation errors
+			# are shown on the source result page, never in the exception queue.
+			"pending_exception_count": 0,
+			"import_error_count": sum(1 for row in _result_rows(batch, 5000) if row.get("exception_codes")) if batch else 0,
 			"can_precheck": bool(batch and batch.source_file and (batch.status in {"待加工", "预览", "已导入"} or needs_processing)),
 			"can_process": bool(batch and precheck.get("is_valid") and not processed_rows and batch.status == "待加工"),
-			"can_confirm": bool(batch and precheck.get("is_valid") and processed_rows and not pending_exception_count and batch.status == "待确认"),
+			"can_confirm": False,
 			"description": MONTHLY_SUPPORT_SOURCE_CONFIG[source_type]["description"],
 		})
 	return inputs
@@ -2240,7 +2598,7 @@ FINAL_SIGNED_COLUMNS = (
 	("personal_leave_hours", "事假"), ("sick_leave_hours", "病假"), ("annual_leave_hours", "特休"),
 	("work_injury_hours", "工伤"), ("rest_arrangement_hours", "排休"), ("absence_hours", "旷工"),
 	("clock_in_missing_count", "上班漏打卡"), ("clock_out_missing_count", "下班漏打卡"),
-	("red_apples", "红苹果"), ("red_apple_amount", "红苹果金额"),
+	("green_apple_amount", "绿苹果金额"), ("red_apple_amount", "红苹果金额"),
 	("housing_allowance", "住房补贴"), ("full_attendance_award", "全勤奖"), ("special_hours", "特殊工时"),
 	("employee_signature", "员工签字"), ("review_note", "备注"),
 )
@@ -2249,14 +2607,14 @@ FINAL_FINANCE_COLUMNS = (
 	("actual_attendance_hours", "实际出勤"), ("workday_overtime_hours", "工作日加班"),
 	("restday_overtime_hours", "休息日加班"), ("holiday_overtime_hours", "节假日加班"),
 	("large_night_shifts", "大夜班"), ("small_night_shifts", "小夜班"),
-	("absence_hours", "旷工"), ("red_apple_amount", "红苹果金额"), ("housing_allowance", "住房补贴"),
+	("absence_hours", "旷工"), ("green_apple_amount", "绿苹果金额"), ("red_apple_amount", "红苹果金额"), ("housing_allowance", "住房补贴"),
 	("full_attendance_award", "全勤奖"), ("special_hours", "特殊工时"),
 )
 # Version five invalidates the previously saved employee sign-off workbook.
 # It fixes both the retired column order and the missing special-hour / absence
 # formula chain.  Keep this separate from the source snapshot so corrected
 # calculations regenerate even where the underlying monthly data has not changed.
-MONTHLY_FINAL_LAYOUT_VERSION = 5
+MONTHLY_FINAL_LAYOUT_VERSION = 6
 
 
 # The employee-facing file deliberately follows the paper confirmation form
@@ -2346,6 +2704,10 @@ def _final_snapshot_batches(company: str, attendance_month: str):
 	return {source_type: _latest_batch(company, attendance_month, source_type) for source_type in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES}
 
 
+def _legacy_final_snapshot_batches(company: str, attendance_month: str):
+	return {source_type: _latest_batch(company, attendance_month, source_type) for source_type in SOURCE_TYPES + LEGACY_MONTHLY_SUPPORT_SOURCE_TYPES}
+
+
 def _processing_state_hash(batch) -> str:
 	"""Fingerprint the reviewed values that are allowed into the monthly final."""
 	rows = frappe.get_all(
@@ -2375,7 +2737,8 @@ def _monthly_snapshot_version(batches: dict[str, Any]) -> str:
 def _monthly_final_rows(batches: dict[str, Any]):
 	"""Aggregate confirmed processing rows without recalculating their source facts."""
 	rows_by_employee = defaultdict(dict)
-	for source_type, batch in batches.items():
+	attendance_population = set()
+	for source_type, batch in sorted(batches.items(), key=lambda item: item[0] != "attendance_draft"):
 		if not batch:
 			continue
 		for record in _result_rows(batch, 5000):
@@ -2387,6 +2750,13 @@ def _monthly_final_rows(batches: dict[str, Any]):
 			if not code and not name:
 				continue
 			key = code or f"name:{name}"
+			if source_type == "attendance_draft":
+				attendance_population.add(key)
+			elif key not in attendance_population:
+				# Monthly additions and reward files can contain template carry-over or
+				# historical employees. Attendance defines the payroll population; a
+				# supplemental source must never create an extra salary recipient.
+				continue
 			output = rows_by_employee[key]
 			output.setdefault("employee_code", code)
 			output.setdefault("employee_name", name)
@@ -2394,9 +2764,13 @@ def _monthly_final_rows(batches: dict[str, Any]):
 			if source_type == "attendance_draft":
 				for field, _label in ATTENDANCE_DRAFT_RESULT_COLUMNS:
 					output[field] = values.get(field, output.get(field, 0))
+				for field in ("green_apple_amount", "red_apple_amount", "housing_allowance", "full_attendance_award", "signed_final_override"):
+					if field in values:
+						output[field] = values.get(field)
 			elif source_type == "missing_card":
 				output["red_apples"] = _as_number(output.get("red_apples")) + _as_number(values.get("red_apples"))
-				output["red_apple_amount"] = _as_number(output.get("red_apple_amount")) + _as_number(values.get("amount"))
+				if not output.get("signed_final_override"):
+					output["red_apple_amount"] = _as_number(output.get("red_apple_amount")) + _as_number(values.get("amount"))
 			elif source_type == "apple_tree":
 				apple_count = _as_number(values.get("有效苹果数"))
 				if "绿" in str(values.get("苹果类型") or ""):
@@ -2411,6 +2785,8 @@ def _monthly_final_rows(batches: dict[str, Any]):
 				for field, amount in breakdown.items():
 					output[field] = _as_number(output.get(field)) + amount
 			elif source_type in {"housing_allowance", "full_attendance"}:
+				if output.get("signed_final_override"):
+					continue
 				field = MONTHLY_SUPPORT_SOURCE_CONFIG[source_type]["value_field"]
 				output[field] = _as_number(output.get(field)) + _as_number(values.get(field))
 	return sorted(rows_by_employee.values(), key=lambda row: (str(row.get("department") or ""), str(row.get("employee_code") or ""), str(row.get("employee_name") or "")))
@@ -2525,8 +2901,8 @@ def _save_monthly_finance_confirmation_file(attendance_month: str, rows):
 			"",  # The current source does not distinguish the 45-yuan large-night rate.
 			_as_number(row.get("small_night_shifts")),
 			_as_number(row.get("absence_hours")),
-			_as_number(row.get("green_apples")),
-			_as_number(row.get("red_apples")),
+			_as_number(row.get("green_apple_amount")),
+			_as_number(row.get("red_apple_amount")),
 			_as_number(row.get("housing_allowance")),
 			_as_number(row.get("full_attendance_award")),
 			row.get("employee_signature") or "",
@@ -2647,7 +3023,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 			f"=Q{excel_row}*0.5", f"=R{excel_row}", f"=S{excel_row}", f"=V{excel_row}", f"=W{excel_row}", f"=Q{excel_row}*0.5", f"=P{excel_row}", f"=T{excel_row}",
 			f"=I{excel_row}+Z{excel_row}+AA{excel_row}+AB{excel_row}+AC{excel_row}+AD{excel_row}", f"=J{excel_row}+K{excel_row}", f"=L{excel_row}+M{excel_row}", f"=N{excel_row}+O{excel_row}", f"=AG{excel_row}", f"=AE{excel_row}+AF{excel_row}", 0,
 			f"=IF(AL{excel_row}-AI{excel_row}>0,AL{excel_row}-AI{excel_row},0)", f"=IF(AM{excel_row}-AJ{excel_row}>0,AM{excel_row}-AJ{excel_row},0)", f"=AH{excel_row}+AL{excel_row}+AM{excel_row}-AO{excel_row}-AP{excel_row}", f"=G{excel_row}-AQ{excel_row}", f"=IF(AI{excel_row}-AL{excel_row}>0,AI{excel_row}-AL{excel_row},0)", f"=IF(AJ{excel_row}-AM{excel_row}>0,AJ{excel_row}-AM{excel_row},0)", f"=AH{excel_row}+AI{excel_row}+AJ{excel_row}", f"=AK{excel_row}",
-			_as_number(row.get("large_night_shifts")), _as_number(row.get("small_night_shifts")), absence, 0, 0, 0, _as_number(row.get("green_apples")), _as_number(row.get("red_apples")), _as_number(row.get("housing_allowance")), _as_number(row.get("full_attendance_award")), row.get("employee_signature") or "", row.get("review_note") or ""]
+			_as_number(row.get("large_night_shifts")), _as_number(row.get("small_night_shifts")), absence, 0, 0, 0, _as_number(row.get("green_apple_amount")), _as_number(row.get("red_apple_amount")), _as_number(row.get("housing_allowance")), _as_number(row.get("full_attendance_award")), row.get("employee_signature") or "", row.get("review_note") or ""]
 		for column, value in enumerate(values, start=form_start):
 			cell = sheet.cell(row=excel_row, column=column, value=value)
 			cell.border = border
@@ -2701,6 +3077,7 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 		"layout_version": MONTHLY_FINAL_LAYOUT_VERSION,
 	}
 	_save_batch_notes(anchor_batch, {"monthly_final_outputs": final_outputs})
+	frappe.db.commit()
 	return {"blocked": False, "readiness": readiness, "final_outputs": final_outputs, "snapshot_version": locked_snapshot_version}
 
 
@@ -2718,15 +3095,21 @@ def get_monthly_final_preview(company: str, attendance_month: str, kind: str = "
 	batches = _final_snapshot_batches(company, attendance_month)
 	if any(not batch for batch in batches.values()):
 		return {"available": False, "reason": _("终稿来源不完整，无法提供预览。")}
+	locked_version = str(outputs.get("locked_snapshot_version") or "")
 	current_version = _monthly_snapshot_version(batches)
-	if current_version != outputs.get("locked_snapshot_version"):
-		return {"available": False, "stale": True, "reason": _("来源或人工审核已变化，请重新锁定并生成终稿后再查看。")}
+	preview_batches = batches
+	if current_version != locked_version:
+		legacy_batches = _legacy_final_snapshot_batches(company, attendance_month)
+		legacy_matches = bool(all(legacy_batches.values())) and _monthly_snapshot_version(legacy_batches) == locked_version
+		if not legacy_matches:
+			return {"available": False, "stale": True, "reason": _("来源或人工审核已变化，请重新锁定并生成终稿后再查看。")}
+		preview_batches = legacy_batches
 	columns = FINAL_SIGNED_COLUMNS if kind == "signed" else FINAL_FINANCE_COLUMNS
 	return {
 		"available": True,
 		"kind": kind,
 		"title": _("员工签字版") if kind == "signed" else _("财务版"),
-		"locked_snapshot_version": current_version,
+		"locked_snapshot_version": locked_version,
 		"columns": [{"field": field, "label": label} for field, label in columns],
-		"rows": _monthly_final_rows(batches),
+		"rows": _monthly_final_rows(preview_batches),
 	}

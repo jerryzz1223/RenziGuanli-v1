@@ -9,10 +9,23 @@ function expect(condition, message) {
 }
 
 [
+	'add_inner_button(__("设置花名册字段")',
 	'add_inner_button(__("清除搜索与筛选")',
 	"function clear_roster_search_and_filters",
-	"frappe.route_options = {};",
-].forEach((needle) => expect(source.includes(needle), `Missing ${needle}`));
+].forEach((needle) => expect(!source.includes(needle), `Obsolete roster action remains: ${needle}`));
+
+["添加员工", "表单导入", "导出", "allowed_labels", "input[placeholder*='搜索']"].forEach((needle) =>
+	expect(source.includes(needle), `Roster toolbar must retain only the approved actions: ${needle}`),
+);
+
+[
+	"ensure_roster_empty_result_header",
+	"hrms-roster-empty-result-header",
+	"input.dataset.rosterEmptyFilter",
+	"restore_roster_when_cleared",
+	'input.addEventListener("search", restore_roster_when_cleared)',
+	"清除筛选",
+].forEach((needle) => expect(source.includes(needle), `Empty roster result must keep a recoverable filter header: ${needle}`));
 
 [
 	"ROSTER_SEARCH_RECOVERY_STORAGE_KEY",

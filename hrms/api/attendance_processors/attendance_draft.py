@@ -74,6 +74,29 @@ EXCEPTION_MESSAGES = {
 REQUIRED_FIELDS = ("employee_code", "employee_name", "attendance_date")
 _MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 _DATE_RE = re.compile(r"^(?:(\d{4})|(?:\d{2}))(?:-|/)(\d{1,2})(?:-|/)(\d{1,2})")
+_TIME_RE = re.compile(r"(?:^|\s)([01]?\d|2[0-3]):([0-5]\d)")
+
+
+def _time_minutes(value: Any) -> int | None:
+	match = _TIME_RE.search(_text(value))
+	if not match:
+		return None
+	return int(match.group(1)) * 60 + int(match.group(2))
+
+
+def _matches_large_night_shift(row: Mapping[str, Any], rule: Mapping[str, Any] | None) -> bool:
+	"""Match one overnight shift from the configured start/end time.
+
+	A row is counted only when both clock times are available, so an incomplete
+	DingTalk record never overwrites the manually supplied night-shift count.
+	"""
+	start = _time_minutes((rule or {}).get("large_night_shift_start"))
+	end = _time_minutes((rule or {}).get("large_night_shift_end"))
+	clock_in = _time_minutes(_value(row, ("上班时间", "上班打卡", "上班打卡时间", "clock_in")))
+	clock_out = _time_minutes(_value(row, ("下班时间", "下班打卡", "下班打卡时间", "clock_out")))
+	if start is None or end is None or clock_in is None or clock_out is None or start <= end:
+		return False
+	return clock_in >= start and clock_out <= end
 
 
 def precheck_attendance_draft_structure(headers: Sequence[Any]) -> dict[str, Any]:
@@ -137,6 +160,7 @@ def process_attendance_draft_rows(
 	source_file: str = "",
 	source_sheet: str = "每日明细（钉钉导出）",
 	employee_directory: Iterable[Mapping[str, Any]] | None = None,
+	night_shift_rule: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
 	"""Aggregate a DingTalk daily-detail export into one employee dataset."""
 	if not _MONTH_RE.fullmatch(_text(attendance_month)):
@@ -170,6 +194,7 @@ def process_attendance_draft_rows(
 			structure=structure,
 			employee_index=employee_index,
 			date_counts=date_counts,
+			night_shift_rule=night_shift_rule,
 		)
 		for _key, rows in sorted(groups.items(), key=lambda item: _group_sort_key(item[1]))
 	]
@@ -187,7 +212,7 @@ def process_attendance_draft_rows(
 	}
 
 
-def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_sheet, structure, employee_index, date_counts):
+def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_sheet, structure, employee_index, date_counts, night_shift_rule=None):
 	first = rows[0]
 	raw_code = _value(first, IDENTITY_FIELDS["employee_code"])
 	names = {_value(row, IDENTITY_FIELDS["employee_name"]) for row in rows if _value(row, IDENTITY_FIELDS["employee_name"])}
@@ -206,6 +231,8 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 	resolved_code, resolved_name, resolved_department = _resolve_employee(raw_code, name, department, employee_index, codes)
 	totals = {field: Decimal("0") for field in NUMERIC_FIELDS}
 	source_rows = []
+	attendance_details = []
+	matched_large_night_shifts = 0
 	for row in rows:
 		row_number = _source_row(row)
 		date_value = _value(row, IDENTITY_FIELDS["attendance_date"])
@@ -226,7 +253,14 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			_add_code(codes, "SOURCE_SHEET_MISSING")
 		if row_number is None:
 			_add_code(codes, "SOURCE_ROW_MISSING")
+		row_clock_in_missing = Decimal("0")
+		row_clock_out_missing = Decimal("0")
+		matched_large_night = _matches_large_night_shift(row, night_shift_rule)
 		for fieldname, aliases in NUMERIC_FIELDS.items():
+			# A configured time-window is more precise than a pre-filled total on
+			# the same daily row.  Rows without complete times retain the source total.
+			if fieldname == "large_night_shifts" and matched_large_night:
+				continue
 			value, exists = _field_value(row, aliases)
 			if not exists or _is_blank(value):
 				continue
@@ -235,11 +269,27 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 				_add_code(codes, "INVALID_NUMERIC_VALUE")
 				continue
 			totals[fieldname] += number
+			if fieldname == "clock_in_missing_count":
+				row_clock_in_missing = number
+			elif fieldname == "clock_out_missing_count":
+				row_clock_out_missing = number
+		if matched_large_night:
+			totals["large_night_shifts"] += Decimal("1")
+			matched_large_night_shifts += 1
 		source_rows.append({
 			"source_file": _text(row.get("source_file") or source_file),
 			"source_sheet": _text(row.get("source_sheet") or source_sheet),
 			"source_row": row_number,
 			"attendance_date": _text(date_value),
+		})
+		attendance_details.append({
+			"attendance_date": parsed_date or _text(date_value),
+			"shift": _value(row, IDENTITY_FIELDS["shift"]),
+			"clock_in": _text(_value(row, ("上班时间", "上班打卡", "上班打卡时间", "clock_in"))),
+			"clock_out": _text(_value(row, ("下班时间", "下班打卡", "下班打卡时间", "clock_out"))),
+			"clock_in_missing": _display_number(row_clock_in_missing),
+			"clock_out_missing": _display_number(row_clock_out_missing),
+			"source_row": row_number,
 		})
 	if totals["clock_in_missing_count"] > 0:
 		_add_code(codes, "CLOCK_IN_MISSING")
@@ -250,6 +300,12 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		"employee_name": resolved_name or name,
 		"department": resolved_department or department,
 		**{field: _display_number(value) for field, value in totals.items()},
+		"night_shift_matching": {
+			"large_night_shift_start": _text((night_shift_rule or {}).get("large_night_shift_start")),
+			"large_night_shift_end": _text((night_shift_rule or {}).get("large_night_shift_end")),
+			"matched_large_night_shifts": matched_large_night_shifts,
+		},
+		"attendance_details": attendance_details,
 		"source_row_count": len(rows),
 	}
 	review_status = REVIEW_PENDING if codes else REVIEW_NOT_REQUIRED

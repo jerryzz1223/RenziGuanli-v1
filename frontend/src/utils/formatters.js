@@ -1,6 +1,7 @@
 import { createDocumentResource } from "frappe-ui"
 
 import dayjs from "@/utils/dayjs"
+import { TIME_WITH_MERIDIEM_FORMAT } from "@/utils/timeFormats"
 
 const settings = createDocumentResource({
 	doctype: "System Settings",
@@ -33,7 +34,7 @@ export const formatCurrency = (value, currency) => {
 }
 
 export const formatTimestamp = (timestamp) => {
-	const formattedTime = dayjs(timestamp).format("hh:mm a")
+	const formattedTime = dayjs(timestamp).format(TIME_WITH_MERIDIEM_FORMAT)
 
 	if (dayjs(timestamp).isToday()) return formattedTime
 	else if (dayjs(timestamp).isYesterday()) return `${formattedTime} yesterday`

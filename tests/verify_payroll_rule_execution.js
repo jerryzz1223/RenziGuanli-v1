@@ -29,19 +29,25 @@ for (const marker of [
 	"calculation_rules = _payroll_calculation_rules(company, payroll_month)",
 	'"calculation_rules": calculation_rules',
 	"attendance_full_deduction",
+	"def save_attendance_pay_rule",
+	"large_night_shift_start",
+	"大夜班结束时间应为次日时间",
 ]) {
 	requireMarker(api, marker);
 }
 
 for (const marker of [
-	"data-lock-version",
-	"list_available_payroll_attendance_locks",
-	"render_attendance_lock_options",
-	"暂无已锁定考勤终稿",
+	"data-attendance-dependency",
+	"get_payroll_attendance_dependency",
+	"render_attendance_dependency",
+	"正在自动读取考勤假期终稿",
 	"validate_payroll_formula",
 	"校验并保存",
 	"计算公式",
 	"公式已保存并进入下一次试算",
+	"data-attendance-rule-editor-area",
+	"大夜班每次津贴",
+	"大夜班上班时间",
 ]) {
 	requireMarker(page, marker);
 }
@@ -57,4 +63,4 @@ for (const marker of [
 }
 
 requireMarker(inputDoctype, "attendance_full_deduction");
-console.log("Payroll rule execution and attendance-lock selector contract passed.");
+console.log("Payroll rule execution and automatic attendance dependency contract passed.");

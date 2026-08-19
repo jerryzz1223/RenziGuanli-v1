@@ -9,50 +9,42 @@ const mustInclude = (source, marker) => {
 
 const page = read("hrms/hr/page/payroll_input_center/payroll_input_center.js");
 for (const marker of [
-	"人员基础",
+	"workspace_areas",
+	"人员范围",
 	"员工定薪",
-	"核算规则",
-	"考勤计薪",
-	"月度封板",
-	"试算复核",
-	"报表发放",
-	"data-payroll-step-lock",
-	"load_payroll_workflow_status",
-	"lock_payroll_workflow_step",
-	"unlock_payroll_workflow_step",
-	"get_payroll_attendance_rule_overview",
-	"系统先检查完整性和匹配关系",
-	"解锁并使后续步骤失效",
+	"月度增减项",
+	"薪资试算",
+	"确认与发放",
+	"render_workspace_navigation",
+	"data-area-route",
+	"各区域可按需进入",
+	"试算时系统统一检查必要条件",
 	"如何验证规则是真正生效的",
-	"需要排查导入时展开",
 ]) mustInclude(page, marker);
+
+const areas = page.slice(page.indexOf("this.workspace_areas = ["), page.indexOf("this.active_tab ="));
+if ((areas.match(/\{ key:/g) || []).length !== 5) throw new Error("Payroll workspace must expose exactly five business areas.");
+if (areas.includes('key: "attendance"') || areas.includes('route: "data-closure"')) throw new Error("Attendance must not be a payroll workspace area.");
+
+for (const forbidden of ["data-payroll-step-lock", "render_active_step_lock", "load_payroll_workflow_status()", "请先按顺序锁定"]) {
+	if (page.includes(forbidden)) throw new Error(`Obsolete sequential workflow marker: ${forbidden}`);
+}
 
 const api = read("hrms/api/payroll_input.py");
 for (const marker of [
-	"PAYROLL_STEP_LOCK_DOCTYPE",
-	"PAYROLL_WORKFLOW_STEPS",
-	"PAYROLL_ATTENDANCE_RULE_CODES",
-	"def get_payroll_workflow_status",
-	"def lock_payroll_workflow_step",
-	"def unlock_payroll_workflow_step",
 	"def _assert_workflow_locked_for_generation",
-	"请先锁定上一步",
-	"上游步骤解锁",
-	"当前结算已生成工资单",
-	"PAYROLL_SETTLEMENT_ABSENCE_DEDUCTION",
-	"PAYROLL_SETTLEMENT_OVERTIME_PAY",
-	"PAYROLL_SETTLEMENT_NIGHT_SHIFT",
-	"ATTENDANCE_FULL_ATTENDANCE_BONUS",
+	"薪资试算前请处理",
+	"_validate_salary_step(company, payroll_month, attendance_lock_version)",
+	"_validate_rules_step(company, payroll_month, attendance_lock_version)",
+	"_validate_attendance_rule_step(company, payroll_month)",
+	"_validate_sources_step(company, payroll_month, attendance_lock_version)",
+	'"readiness_areas": readiness_areas',
+	"无需人工逐步锁定",
 ]) mustInclude(api, marker);
 
-const doctype = read("hrms/hr/doctype/hrms_payroll_step_lock/hrms_payroll_step_lock.json");
-for (const marker of ["薪资月份", "锁定状态", "校验快照码", "解锁/失效原因", "System Manager", "HR Manager"]) {
-	mustInclude(doctype, marker);
+const assertion = api.slice(api.indexOf("def _assert_workflow_locked_for_generation"), api.indexOf("@frappe.whitelist()\ndef sync_locked_attendance_final_to_payroll"));
+if (assertion.includes("_workflow_status") || assertion.includes("请先按顺序完成并锁定")) {
+	throw new Error("Generation must validate live data, not manual workflow locks.");
 }
 
-const css = read("hrms/hr/page/payroll_input_center/payroll_input_center.css");
-for (const marker of [".hrms-payroll-lock-panel", ".hrms-payroll-lock-panel.is-locked", ".hrms-payroll-attendance-rule-grid", ".hrms-payroll-rule-verification"]) {
-	mustInclude(css, marker);
-}
-
-console.log("Payroll workflow lock contract passed.");
+console.log("Payroll on-demand readiness contract passed.");

@@ -61,7 +61,6 @@ class EmployeeSeparation(EmployeeBoardingController):
 		employee = frappe.get_cached_doc("Employee", self.employee)
 		self.employee_code_display = (
 			getattr(employee, "custom_employee_code", None)
-			or getattr(employee, "employee_number", None)
 			or self.employee_code_display
 		)
 		self.employee_name = employee.employee_name
@@ -95,8 +94,7 @@ def sync_employee_separation_business_identities():
 
 		employee = frappe.get_cached_doc("Employee", row.employee)
 		values = {
-			"employee_code_display": getattr(employee, "custom_employee_code", None)
-			or getattr(employee, "employee_number", None),
+			"employee_code_display": getattr(employee, "custom_employee_code", None),
 			"employee_name": employee.employee_name,
 			"company": employee.company,
 			"department": employee.department,

@@ -25,7 +25,7 @@ class HRSettings(Document):
 		allow_multiple_shift_assignments: DF.Check
 		auto_leave_encashment: DF.Check
 		check_vacancies: DF.Check
-		emp_created_by: DF.Literal["Naming Series", "Employee Number", "Full Name"]
+		emp_created_by: DF.Literal["Company Employee Code"]
 		exit_questionnaire_notification_template: DF.Link | None
 		exit_questionnaire_web_form: DF.Link | None
 		expense_approver_mandatory_in_expense_claim: DF.Check
@@ -66,14 +66,9 @@ class HRSettings(Document):
 		PROCEED_WITH_FREQUENCY_CHANGE = False
 
 	def set_naming_series(self):
-		from erpnext.utilities.naming import set_by_naming_series
-
-		set_by_naming_series(
-			"Employee",
-			"employee_number",
-			self.get("emp_created_by") == "Naming Series",
-			hide_name_field=True,
-		)
+		# EmployeeMaster.autoname owns employee naming.  Do not let the generic
+		# ERPNext naming-series helper expose or re-enable a second rule.
+		self.emp_created_by = "Company Employee Code"
 
 	def validate_frequency_change(self):
 		weekly_job, monthly_job = None, None

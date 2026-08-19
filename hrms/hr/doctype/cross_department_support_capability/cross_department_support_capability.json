@@ -1,0 +1,51 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "CDS-.YYYY.-.#####",
+ "creation": "2026-08-18 00:00:00.000000",
+ "description": "一条记录代表一名员工可支援一个目标部门的一个岗位；同一员工有多项支援能力时，请分别建档。",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "employee_section", "employee", "employee_name", "employee_code", "column_break_employee", "source_department", "source_designation",
+  "support_section", "support_department", "support_designation", "qualification_status", "is_active", "column_break_support", "qualified_on", "valid_from", "valid_until",
+  "remarks"
+ ],
+ "fields": [
+  {"fieldname": "employee_section", "fieldtype": "Section Break", "label": "员工信息"},
+  {"fieldname": "employee", "fieldtype": "Link", "in_list_view": 1, "label": "员工", "options": "Employee", "reqd": 1},
+  {"fetch_from": "employee.employee_name", "fieldname": "employee_name", "fieldtype": "Data", "in_list_view": 1, "label": "姓名", "read_only": 1},
+  {"fetch_from": "employee.custom_employee_code", "fieldname": "employee_code", "fieldtype": "Data", "in_list_view": 1, "label": "工号", "read_only": 1},
+  {"fieldname": "column_break_employee", "fieldtype": "Column Break"},
+  {"fetch_from": "employee.department", "fieldname": "source_department", "fieldtype": "Link", "in_list_view": 1, "label": "原部门", "options": "Department", "read_only": 1},
+  {"fetch_from": "employee.designation", "fieldname": "source_designation", "fieldtype": "Link", "label": "原岗位", "options": "Designation", "read_only": 1},
+  {"fieldname": "support_section", "fieldtype": "Section Break", "label": "支援能力"},
+  {"description": "独立支援目录，可直接填写，不受系统部门主数据限制。", "fieldname": "support_department", "fieldtype": "Data", "in_list_view": 1, "label": "可支援部门", "reqd": 1},
+  {"description": "独立支援目录，可直接填写，不受系统岗位主数据限制。", "fieldname": "support_designation", "fieldtype": "Data", "in_list_view": 1, "label": "可支援岗位", "reqd": 1},
+  {"default": "有效", "fieldname": "qualification_status", "fieldtype": "Select", "in_list_view": 1, "label": "资格状态", "options": "有效\n待复核\n暂停\n失效", "reqd": 1},
+  {"default": "1", "fieldname": "is_active", "fieldtype": "Check", "in_list_view": 1, "label": "可派"},
+  {"fieldname": "column_break_support", "fieldtype": "Column Break"},
+  {"fieldname": "qualified_on", "fieldtype": "Date", "label": "考核通过日期"},
+  {"fieldname": "valid_from", "fieldtype": "Date", "label": "有效开始日期"},
+  {"fieldname": "valid_until", "fieldtype": "Date", "in_list_view": 1, "label": "有效截止日期"},
+  {"fieldname": "remarks", "fieldtype": "Small Text", "label": "备注"}
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-18 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "Cross Department Support Capability",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "HR Manager", "share": 1, "write": 1},
+  {"create": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "HR User", "share": 1, "write": 1}
+ ],
+ "search_fields": "employee,employee_name,employee_code,support_department,support_designation",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name",
+ "track_changes": 1
+}

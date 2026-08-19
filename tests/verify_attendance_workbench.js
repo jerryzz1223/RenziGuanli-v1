@@ -92,11 +92,14 @@ for (const marker of [
 	"get_processing_batch",
 	"register_source_file",
 	"bulk_import_and_process_sources",
-	"批量导入 6 个文件并加工",
+	"批量导入 5 个考勤文件并加工",
 	"allow_multiple: true",
 	"register_monthly_support_file",
 	"process_monthly_support_file",
-	"confirm_monthly_support_file",
+	"导入并校验",
+	"查看导入校验",
+	"导入错误",
+	"不进入异常处理或二次加工",
 	"precheck_source_slot",
 	"process_source_slot",
 	"list_processing_results",
@@ -113,7 +116,7 @@ for (const marker of [
 	"有效补卡笔数",
 	"绿苹果",
 	"下载最新加工结果",
-	"加工数据",
+	"异常日期及原因",
 	"update_processing_record",
 	"bulk_update_processing_records",
 	"本类结果已确认",
@@ -141,8 +144,6 @@ for (const marker of [
 	"bind_attendance_summary_events",
 	"data-monthly-support-upload",
 	"data-monthly-support-process",
-	"data-monthly-support-exceptions",
-	"data-monthly-support-confirm",
 	"data-monthly-support-results",
 	"data-preview-final",
 	"open_monthly_final_preview",
@@ -246,6 +247,12 @@ for (const marker of [
 	mustInclude(attendancePageJs, marker, `Attendance import center is missing marker: ${marker}`);
 }
 
+for (const forbiddenMarker of ["data-monthly-support-exceptions", "data-monthly-support-confirm"]) {
+	if (attendancePageJs.includes(forbiddenMarker)) {
+		throw new Error(`One-time monthly support imports must not expose secondary exception/review actions: ${forbiddenMarker}`);
+	}
+}
+
 for (const forbiddenMarker of ["download_exception_workbook", "download_exception_result", "异常结果工作簿"]) {
 	if (attendancePageJs.includes(forbiddenMarker)) {
 		throw new Error(`Attendance processing must not create a separate exception deliverable: ${forbiddenMarker}`);
@@ -347,7 +354,7 @@ for (const marker of ["flex: 0 0 220px", "min-width: 220px", "white-space: nowra
 	mustInclude(topNavCss, marker, `Attendance sidebar header layout is missing ${marker}.`);
 }
 
-mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260807b", "The sidebar stylesheet cache key must change with its layout.");
+mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260814c", "The sidebar stylesheet cache key must change with its layout.");
 
 if (attendancePageJs.includes('this.wrapper.querySelector("[data-company]").addEventListener("change"')) {
 	throw new Error("Attendance company must be controlled by the global company selector, not a local editable field.");

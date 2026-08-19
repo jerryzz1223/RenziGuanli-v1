@@ -9,6 +9,24 @@ from hrms.tests.utils import HRMSTestSuite
 
 
 class TestEmployeePromotion(HRMSTestSuite):
+	def test_confirmation_interview_rejection_keeps_employee_unchanged(self):
+		employee = make_employee("employee@confirmation-rejection.com", company="_Test Company")
+		current_ctc = frappe.get_doc("Employee", employee).ctc
+		promotion = frappe.get_doc(
+			{
+				"doctype": "Employee Promotion",
+				"employee": employee,
+				"promotion_date": getdate(),
+				"custom_is_confirmation_interview": 1,
+				"custom_confirmation_interview_date": getdate(),
+				"custom_confirmation_interview_notes": "试用期转正面谈，暂不通过。",
+				"custom_confirmation_result": "转正不通过",
+			}
+		).submit()
+
+		self.assertEqual(promotion.docstatus, 1)
+		self.assertEqual(frappe.get_doc("Employee", employee).ctc, current_ctc)
+
 	def test_submit_before_promotion_date(self):
 		employee = make_employee("employee@promotions.com", company="_Test Company")
 		promotion = frappe.get_doc(

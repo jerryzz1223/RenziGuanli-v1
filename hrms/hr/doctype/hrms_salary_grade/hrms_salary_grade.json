@@ -7,6 +7,7 @@
  "engine": "InnoDB",
  "field_order": [
   "salary_structure_version",
+  "salary_level",
   "job_nature",
   "job_grade",
   "post_category",
@@ -26,12 +27,19 @@
  ],
  "fields": [
   {
-   "fieldname": "salary_structure_version",
+    "fieldname": "salary_structure_version",
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "薪资架构版本",
    "options": "HRMS Salary Structure Version",
-   "reqd": 1
+    "reqd": 1
+  },
+  {
+   "description": "薪级表中的连续序号，例如 1、2、3。人员如何匹配薪级在后续独立配置。",
+   "fieldname": "salary_level",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "薪级序号"
   },
   {
    "fieldname": "job_nature",

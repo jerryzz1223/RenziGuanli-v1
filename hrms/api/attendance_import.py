@@ -589,7 +589,7 @@ def _source_file_checksum(file_url):
 
 def _employee_lookup(employee_code=None, employee_name=None):
 	if employee_code:
-		for fieldname in ("custom_employee_code", "employee_number", "name"):
+		for fieldname in ("custom_employee_code",):
 			try:
 				name = frappe.db.get_value("Employee", {fieldname: employee_code}, "name")
 			except Exception:
@@ -2599,7 +2599,7 @@ def unlock_attendance_month(company: str, attendance_month: str, reason: str):
 def _attendance_demo_employee(employee_code):
 	return frappe.db.get_value(
 		"Employee",
-		{"employee_number": employee_code, "company": TEST_ATTENDANCE_DEMO_COMPANY},
+		{"custom_employee_code": employee_code, "company": TEST_ATTENDANCE_DEMO_COMPANY},
 		["name", "employee_name", "department"],
 		as_dict=True,
 	)

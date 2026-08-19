@@ -320,7 +320,7 @@
 					type: "section",
 					label: "快捷入口",
 					children: [
-						{ label: "人事", route: "/desk/personnel", slug: "personnel" },
+						{ label: "人事", route: "/desk/employee", slug: "employee" },
 						{ label: "部门", route: "/desk/department", slug: "department" },
 						{ label: "招聘", route: "/desk/recruitment", slug: "recruitment" },
 						{ label: "考勤假期", route: "/desk/attendance-import-center", slug: "attendance-import-center" },
@@ -331,7 +331,7 @@
 		},
 		{
 			label: "人事",
-			route: "/desk/personnel",
+			route: "/desk/employee",
 			icon: "P",
 			keys: [
 				"personnel",
@@ -350,9 +350,10 @@
 				"employee-skill-map",
 				"hrms-employee-reward-punishment",
 				"exit-interview",
+				"cross-department-support",
 			],
 			items: [
-				{ type: "link", label: "主页", route: "/desk/personnel", slug: "personnel" },
+				{ type: "link", label: "主页", route: "/desk/employee", slug: "employee" },
 				{
 					type: "section",
 					label: "员工管理",
@@ -373,6 +374,13 @@
 						{ label: "培训经历", route: "/desk/employee-skill-map", slug: "employee-skill-map" },
 						{ label: "奖惩记录", route: "/desk/hrms-employee-reward-punishment", slug: "hrms-employee-reward-punishment" },
 						{ label: "离职面谈", route: "/desk/exit-interview", slug: "exit-interview" },
+					],
+				},
+				{
+					type: "section",
+					label: "跨部门协作",
+					children: [
+						{ label: "跨部门支援", route: "/desk/cross-department-support", slug: "cross-department-support" },
 					],
 				},
 			],
@@ -465,10 +473,10 @@
 			icon: "S",
 			keys: [
 				"payroll-input-center",
+				"salary-architecture",
 				"employee-salary",
 				"monthly-payroll",
 				"payroll-disbursement",
-				"data-closure",
 				"payroll-reports",
 				"payroll-analysis",
 				"annual-bonus",
@@ -483,32 +491,32 @@
 				"payroll-settings",
 			],
 			items: [
-				{ type: "link", label: "主页", route: "/desk/payroll-input-center", slug: "payroll-input-center" },
+				{ type: "link", label: "薪酬首页", route: "/desk/payroll-input-center", slug: "payroll-input-center" },
 				{
 					type: "section",
-					label: "薪酬管理",
+					label: "本月薪资",
 					children: [
-						{ label: "月工资表", route: "/desk/payroll-input-center/monthly-payroll", slug: "monthly-payroll" },
-						{ label: "工资发放", route: "/desk/payroll-input-center/payroll-disbursement", slug: "payroll-disbursement" },
-						{ label: "员工薪资", route: "/desk/payroll-input-center/employee-salary", slug: "employee-salary" },
-						{ label: "薪酬报表", route: "/desk/payroll-input-center/payroll-reports", slug: "payroll-reports" },
-						{ label: "薪酬分析", route: "/desk/payroll-input-center/payroll-analysis", slug: "payroll-analysis" },
-						{ label: "计薪规则", route: "/desk/payroll-input-center/salary-rules", slug: "salary-rules" },
-						{ label: "薪资主数据", route: "/desk/payroll-input-center/salary-master", slug: "salary-master" },
-						{ label: "福利扣款来源", route: "/desk/payroll-input-center/welfare-sources", slug: "welfare-sources" },
-						{ label: "数据闭环导入", route: "/desk/payroll-input-center/data-closure", slug: "data-closure" },
-						{ label: "变量导入", route: "/desk/payroll-input-center/variables", slug: "variables" },
-						{ label: "薪资输入表", route: "/desk/payroll-input-center/inputs", slug: "inputs" },
-						{ label: "薪资结算表", route: "/desk/payroll-input-center/settlements", slug: "settlements" },
+						{ label: "人员范围", route: "/desk/payroll-input-center/employee-salary", slug: "employee-salary" },
+						{ label: "员工定薪", route: "/desk/payroll-input-center/salary-assignments", slug: "salary-assignments" },
+						{ label: "月度增减项", route: "/desk/payroll-input-center/variables", slug: "variables" },
+						{ label: "薪资试算", route: "/desk/payroll-input-center/monthly-workbench", slug: "monthly-workbench" },
+						{ label: "确认与发放", route: "/desk/payroll-input-center/payroll-reports", slug: "payroll-reports" },
 					],
 				},
 				{
 					type: "section",
-					label: "薪酬设置",
+					label: "设置",
 					children: [
-						{ label: "薪资设置", route: "/desk/payroll-input-center/salary-rules", slug: "salary-rules" },
-						{ label: "年终奖计算", route: "/desk/payroll-input-center/annual-bonus", slug: "annual-bonus" },
-						{ label: "发送工资条", route: "/desk/payroll-input-center/salary-slips", slug: "salary-slips" },
+						{ label: "核算规则", route: "/desk/payroll-input-center/salary-rules", slug: "salary-rules" },
+						{ label: "考勤计薪设置", route: "/desk/payroll-input-center/attendance-pay-rules", slug: "attendance-pay-rules" },
+					],
+				},
+				{
+					type: "section",
+					label: "其他",
+					children: [
+						{ label: "薪资架构", route: "/desk/salary-architecture", slug: "salary-architecture" },
+						{ label: "年终奖", route: "/desk/payroll-input-center/annual-bonus", slug: "annual-bonus" },
 					],
 				},
 			],
@@ -680,7 +688,7 @@
 
 	var WORKSPACE_ROUTE_SLUGS = {
 		"工作台": "hrms-workbench",
-		"人事": "personnel",
+		"人事": "employee",
 		"组织": "department",
 		"招聘": "recruitment",
 		"考勤假期": "attendance-import-center",
@@ -690,7 +698,7 @@
 		"绩效": "performance",
 		"更多": "hr-settings-center",
 		"HR Setup": "hrms-workbench",
-		"Personnel": "personnel",
+		"Personnel": "employee",
 	};
 
 	function workspace_route_slug(label) {
@@ -1337,12 +1345,31 @@
 		fix_desk_home_links();
 		apply_hrms_sidebar_shell();
 		enable_sidebar_section_collapse();
+		hide_personnel_social_metadata();
+	}
+
+	// The sidebar is the primary navigation.  Optional improvements such as
+	// localization must never stop it from rendering when one of them fails
+	// during Desk startup.
+	function run_hrms_shell_step(label, callback) {
+		try {
+			return callback();
+		} catch (error) {
+			console.error("[HRMS shell] " + label + " failed.", error);
+			return undefined;
+		}
+	}
+
+	function hide_personnel_social_metadata() {
+		var module = active_sidebar_module(stable_route_slug());
+		var is_personnel_module = module && module.label === "人事";
+		document.body.classList.toggle("hrms-personnel-social-controls-hidden", Boolean(is_personnel_module));
 	}
 
 	function apply_hrms_ui_rules() {
-		apply_hrms_shell_rules();
-		hide_unneeded_menu_items();
-		localize_dynamic_text();
+		run_hrms_shell_step("rendering navigation", apply_hrms_shell_rules);
+		run_hrms_shell_step("filtering utility menus", hide_unneeded_menu_items);
+		run_hrms_shell_step("localizing page text", localize_dynamic_text);
 	}
 
 	var hrms_shell_localization_timer = 0;
@@ -1368,14 +1395,14 @@
 				return;
 			}
 			hrms_shell_ui_scheduled = true;
-			window.requestAnimationFrame(function () {
+		window.requestAnimationFrame(function () {
 				hrms_shell_ui_scheduled = false;
-				redirect_to_hrms_home();
-				apply_hrms_shell_rules();
+				run_hrms_shell_step("redirecting the Desk home", redirect_to_hrms_home);
+				run_hrms_shell_step("rendering navigation", apply_hrms_shell_rules);
 				schedule_hrms_localization(220);
 				window.clearTimeout(hrms_shell_ui_followup);
 				hrms_shell_ui_followup = window.setTimeout(function () {
-					apply_hrms_sidebar_shell();
+					run_hrms_shell_step("refreshing navigation", apply_hrms_sidebar_shell);
 				}, 120);
 			});
 		}, delay == null ? 80 : delay);
@@ -1490,11 +1517,11 @@
 		});
 	}
 
-	redirect_to_hrms_home();
+	run_hrms_shell_step("redirecting the Desk home", redirect_to_hrms_home);
 	apply_hrms_ui_rules();
-	bind_hrms_shell_route_events();
+	run_hrms_shell_step("binding route events", bind_hrms_shell_route_events);
 	new MutationObserver(function (mutations) {
-		bind_hrms_shell_route_events();
+		run_hrms_shell_step("binding route events", bind_hrms_shell_route_events);
 		if (mutations.length && mutations.every(should_ignore_hrms_shell_mutation)) {
 			return;
 		}

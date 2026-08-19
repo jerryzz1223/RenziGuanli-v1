@@ -89,7 +89,6 @@ for (const forbidden of ["get_onboarding_details", '__("Project")', '__("Task")'
 
 for (const marker of [
 	"custom_employee_code",
-	"employee_number",
 	"_sync_employee_business_identity",
 	"sync_employee_separation_business_identities",
 	'frappe.db.set_value("Employee Separation"',
@@ -110,7 +109,6 @@ for (const marker of [
 	"_get_employees_by_names",
 	"_get_latest_separations",
 	"custom_employee_code",
-	"employee_number",
 	"relieving_date",
 	"custom_personnel_status",
 	"departure_date",

@@ -26,8 +26,8 @@
    "indent": 0,
    "keep_closed": 0,
    "label": "人事",
-   "link_to": "Personnel",
-   "link_type": "Workspace",
+   "link_to": "Employee",
+   "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link"
   },

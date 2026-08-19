@@ -69,6 +69,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertTrue(row["eligible_for_downstream"])
 		self.assertEqual(row["source_row"], 3)
 		self.assertEqual(len(row["original_value"]["source_rows"]), 2)
+		self.assertEqual([item["attendance_date"] for item in row["processed_value"]["attendance_details"]], ["2026-06-01", "2026-06-02"])
 
 	def test_duplicate_dates_and_identity_conflicts_enter_review_without_loss(self):
 		rows = [
@@ -87,7 +88,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 	def test_explicit_dingtalk_missing_punch_counts_enter_the_shared_review_queue(self):
 		rows = [{
 			"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课", "班次": "白班",
-			"标准工时": 8, "上班未打卡次数": 1, "下班未打卡次数": 2,
+			"标准工时": 8, "上班时间": "08:01", "下班时间": "17:30", "上班未打卡次数": 1, "下班未打卡次数": 2,
 			"source_file": "sample.xlsx", "source_sheet": "每日明细（钉钉导出）", "source_row": 3,
 		}]
 		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")["processed_rows"][0]
@@ -97,6 +98,32 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertTrue({"CLOCK_IN_MISSING", "CLOCK_OUT_MISSING"}.issubset(row["exception_codes"]))
 		self.assertEqual(row["review_status"], "待审核")
 		self.assertFalse(row["eligible_for_downstream"])
+		self.assertEqual(row["processed_value"]["attendance_details"], [{"attendance_date": "2026-06-01", "shift": "白班", "clock_in": "08:01", "clock_out": "17:30", "clock_in_missing": 1, "clock_out_missing": 2, "source_row": 3}])
+
+	def test_large_night_shift_uses_configured_cross_day_time_window(self):
+		rows = [
+			{
+				"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课", "班次": "夜班", "标准工时": 8,
+				"上班时间": "20:05", "下班时间": "07:58", "大夜班": 9,
+				"source_file": "sample.xlsx", "source_sheet": "每日明细（钉钉导出）", "source_row": 3,
+			},
+			{
+				"姓名": "张三", "工号": "E-001", "日期": "26-06-02", "实际部门": "工程课", "班次": "夜班", "标准工时": 8,
+				"上班时间": "20:05", "大夜班": 1,
+				"source_file": "sample.xlsx", "source_sheet": "每日明细（钉钉导出）", "source_row": 4,
+			},
+		]
+		row = processor.process_attendance_draft_rows(
+			rows,
+			attendance_month="2026-06",
+			night_shift_rule={"large_night_shift_start": "20:00", "large_night_shift_end": "08:00"},
+		)["processed_rows"][0]
+
+		# The complete DingTalk record is matched as one large night shift instead
+		# of trusting its wrong source total.  The incomplete record keeps its
+		# already confirmed source count.
+		self.assertEqual(row["processed_value"]["large_night_shifts"], 2)
+		self.assertEqual(row["processed_value"]["night_shift_matching"]["matched_large_night_shifts"], 1)
 
 	def test_department_group_and_section_suffixes_are_the_same_department(self):
 		rows = [{

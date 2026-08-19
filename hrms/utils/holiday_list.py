@@ -29,6 +29,9 @@ def get_holiday_dates_between(
 	if as_dict:
 		return query.run(as_dict=True)
 
+	if select_weekly_off:
+		return query.run()
+
 	return query.run(pluck=True)
 
 

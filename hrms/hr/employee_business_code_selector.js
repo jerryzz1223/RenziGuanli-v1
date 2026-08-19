@@ -29,9 +29,9 @@
 
 		frm.__hrms_loading_employee_code = true;
 		frappe.db
-			.get_value("Employee", frm.doc.employee, ["custom_employee_code", "employee_number", "employee_name"])
+			.get_value("Employee", frm.doc.employee, ["custom_employee_code", "employee_name"])
 			.then(({ message }) => {
-				const employee_code = message?.custom_employee_code || message?.employee_number || "";
+				const employee_code = message?.custom_employee_code || "";
 				if (employee_code) {
 					frm.__hrms_selected_employee_code = employee_code;
 					set_employee_code(frm, employee_code);

@@ -275,6 +275,14 @@ def get_custom_fields():
 		],
 		"Employee": [
 			{
+				"fieldname": "custom_employee_code",
+				"fieldtype": "Data",
+				"label": _("Company Employee Code"),
+				"description": _("The company work number is the employee's unique identity."),
+				"reqd": 1,
+				"insert_after": "naming_series",
+			},
+			{
 				"fieldname": "employment_type",
 				"fieldtype": "Link",
 				"ignore_user_permissions": 1,
@@ -589,7 +597,7 @@ def setup_notifications():
 
 def update_hr_defaults():
 	hr_settings = frappe.get_doc("HR Settings")
-	hr_settings.emp_created_by = "Naming Series"
+	hr_settings.emp_created_by = "Company Employee Code"
 	hr_settings.leave_approval_notification_template = _("Leave Approval Notification")
 	hr_settings.leave_status_notification_template = _("Leave Status Notification")
 
@@ -836,6 +844,7 @@ def after_migrate():
 	update_select_perm_after_install()
 
 	from hrms.api.employee_field_template import ensure_personnel_pages
+	from hrms.api.employee_field_template import ensure_personnel_sidebar_links
 	from hrms.api.employee_field_template import ensure_employee_personnel_status_setup
 	from hrms.api.dingtalk_integration import ensure_dingtalk_company_scope
 	from hrms.branding import apply_login_page_customizations
@@ -845,6 +854,7 @@ def after_migrate():
 	from hrms.localize_zh import apply_hrms_zh_translations
 
 	ensure_personnel_pages()
+	ensure_personnel_sidebar_links()
 	ensure_employee_personnel_status_setup()
 	ensure_dingtalk_company_scope()
 	ensure_default_reward_punishment_rules(ignore_permissions=True)

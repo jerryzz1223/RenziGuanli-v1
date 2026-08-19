@@ -38,7 +38,7 @@ for (const marker of ["/assets/hrms/js/hrms_top_nav.js", "/assets/hrms/css/hrms_
 	}
 }
 
-for (const marker of ["工作台", "人事", "/desk/hrms-workbench", "/desk/personnel", "/desk/department", "/desk/attendance-import-center", "/desk/payroll-input-center", "aria-expanded", "bindMoreDocumentEvents", "closeMoreMenus"]) {
+for (const marker of ["工作台", "人事", "/desk/hrms-workbench", "/desk/employee", "/desk/department", "/desk/attendance-import-center", "/desk/payroll-input-center", "aria-expanded", "bindMoreDocumentEvents", "closeMoreMenus"]) {
 	if (!topNavSource.includes(marker)) {
 		throw new Error(`Top navigation is missing marker: ${marker}`);
 	}
@@ -136,37 +136,20 @@ for (const label of ["快捷入口", "今日事项", "人事提醒", "人事概�
 	}
 }
 
-if (!workbenchSidebar.items.some((item) => item.type === "Link" && item.label === "人事" && item.link_to === "Personnel")) {
-	throw new Error("Workbench sidebar must link to the Personnel workspace.");
+if (!workbenchSidebar.items.some((item) => item.type === "Link" && item.label === "人事" && item.link_to === "Employee" && item.link_type === "DocType")) {
+	throw new Error("Workbench sidebar must open the employee roster directly.");
 }
 
-if (personnel.title !== "人事") {
-	throw new Error(`Personnel workspace title should be 人事, got ${personnel.title}`);
+if (personnel.is_hidden !== 1 || personnel.content !== "[]") {
+	throw new Error("The retired Personnel workspace must be hidden and empty.");
 }
 
-for (const label of ["员工管理", "员工关系"]) {
-	if (!personnel.links.some((link) => link.type === "Card Break" && link.label === label)) {
-		throw new Error(`Personnel workspace is missing card group: ${label}`);
-	}
-	if (!personnelSidebar.items.some((item) => item.type === "Section Break" && item.label === label)) {
-		throw new Error(`Personnel sidebar is missing collapsible section: ${label}`);
-	}
+if (personnelSidebar.items.some((item) => item.type === "Link" && item.label === "主页")) {
+	throw new Error("Personnel sidebar must not show a home link.");
 }
 
-for (const [label, linkTo, linkType] of [
-	["员工花名册", "Employee", "DocType"],
-	["入职管理", "Employee Onboarding", "DocType"],
-	["转正管理", "Employee Promotion", "DocType"],
-	["离职管理", "Employee Separation", "DocType"],
-	["离职记录", "employee-separation-records", "Page"],
-	["异动记录", "employee-property-history", "Page"],
-]) {
-	if (!personnel.links.some((link) => link.type === "Link" && link.label === label && link.link_to === linkTo && link.link_type === linkType)) {
-		throw new Error(`Personnel workspace has no real route for ${label} -> ${linkType}:${linkTo}`);
-	}
-	if (!personnelSidebar.items.some((item) => item.type === "Link" && item.label === label && item.link_to === linkTo && item.link_type === linkType)) {
-		throw new Error(`Personnel sidebar has no real route for ${label} -> ${linkType}:${linkTo}`);
-	}
+if (!personnelSidebar.items.some((item) => item.type === "Link" && item.label === "员工花名册" && item.link_to === "Employee")) {
+	throw new Error("Personnel sidebar must retain the employee roster entry.");
 }
 
 console.log("HRMS workbench and Personnel workspace use native Frappe routes.");

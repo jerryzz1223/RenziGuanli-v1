@@ -41,6 +41,8 @@ class HybridOrganizationChart {
 		this.mode = null;
 		this.report_data = null;
 		this.report_loading = false;
+		this.source_mode = "workbook_snapshot";
+		this.fullscreen_bound = false;
 	}
 
 	show() {
@@ -90,14 +92,22 @@ class HybridOrganizationChart {
 	}
 
 	deactivate() {
-		if (!this.company_context_bound) return;
-		window.removeEventListener("hrms:company-context-changed", this.handle_company_context_change);
-		this.company_context_bound = false;
+		if (this.company_context_bound) {
+			window.removeEventListener("hrms:company-context-changed", this.handle_company_context_change);
+			this.company_context_bound = false;
+		}
+		if (this.fullscreen_bound) {
+			document.removeEventListener("fullscreenchange", this.handle_fullscreen_change);
+			this.fullscreen_bound = false;
+		}
 	}
 
 	setup_actions() {
 		this.page.clear_inner_toolbar();
+		this.page.add_inner_button(__("原表架构"), () => this.set_source_mode("workbook_snapshot"));
+		this.page.add_inner_button(__("实时组织"), () => this.set_source_mode("live"));
 		this.page.add_inner_button(__("一览全局"), () => this.fit_to_view());
+		this.page.add_inner_button(__("全屏查看"), () => this.toggle_fullscreen());
 		this.page.add_inner_button(__("展开全部"), () => this.expand_all());
 		this.page.add_inner_button(__("收起全部"), () => this.collapse_all());
 		this.page.add_inner_button(__("导入架构模板"), () => this.import_yongxin_template());
@@ -121,12 +131,16 @@ class HybridOrganizationChart {
 				</aside>
 				<section class="hrms-org-main">
 					<div class="hrms-org-toolbar">
-						<strong class="hrms-org-toolbar-title">${__("部门层级与人员归属")}</strong>
+						<div>
+							<strong class="hrms-org-toolbar-title">${__("部门层级与人员归属")}</strong>
+							<small class="hrms-org-source" data-source-label>${__("正在读取组织架构来源...")}</small>
+						</div>
 						<div class="hrms-org-search">
 							<input class="form-control" data-search placeholder="${__("搜索部门、员工、岗位")}" />
 						</div>
 						<div class="hrms-org-toolbar-actions">
 							<button class="btn btn-default btn-sm" data-action="fit-view">${__("一览全局")}</button>
+							<button class="btn btn-default btn-sm" data-action="toggle-fullscreen">${__("全屏查看")}</button>
 							<button class="btn btn-default btn-sm" data-action="zoom-out" title="${__("缩小")}">-</button>
 							<button class="btn btn-default btn-sm" data-action="zoom-in" title="${__("放大")}">+</button>
 							<button class="btn btn-default btn-sm" data-action="refresh">${__("刷新")}</button>
@@ -146,6 +160,7 @@ class HybridOrganizationChart {
 		`;
 
 		this.bind_events();
+		this.bind_fullscreen_events();
 	}
 
 	render_report_shell() {
@@ -345,6 +360,9 @@ class HybridOrganizationChart {
 	}
 
 	handle_action(action, element) {
+		if (action === "show-workbook-snapshot") this.set_source_mode("workbook_snapshot");
+		if (action === "show-live-tree") this.set_source_mode("live");
+		if (action === "toggle-fullscreen") this.toggle_fullscreen();
 		if (action === "fit-view") this.fit_to_view();
 		if (action === "zoom-in") this.set_zoom(this.zoom + 0.1);
 		if (action === "zoom-out") this.set_zoom(this.zoom - 0.1);
@@ -357,7 +375,7 @@ class HybridOrganizationChart {
 		if (action === "delete-department") this.delete_department();
 		if (action === "open-employee") {
 			this.open_employee(
-				element?.dataset.employeeNumber,
+				element?.dataset.employeeCode,
 				element?.dataset.employeeRoute || element?.dataset.employee,
 			);
 		}
@@ -373,17 +391,20 @@ class HybridOrganizationChart {
 		frappe
 			.call({
 				method: "hrms.hr.page.organizational_chart.organizational_chart.get_hybrid_tree",
-				args: { company, source_mode: "live" },
+				args: { company, source_mode: this.source_mode },
 				freeze: true,
 				freeze_message: __("正在生成组织架构图..."),
 			})
 			.then((r) => {
 				if (request_id !== this.tree_request_id || company !== this.company || !this.is_active()) return;
 				this.tree = r.message || {};
+				this.source_mode = this.tree.source_mode || this.source_mode;
 				this.field_map = this.tree.field_map || {};
 				this.collapsed_nodes.clear();
+				if (this.source_mode === "workbook_snapshot") this.collapse_snapshot_detail_nodes(this.tree.root);
 				this.view_mode = "overview";
 				this.render_summary();
+				this.render_source_label();
 				this.render_tree();
 				const root = this.tree.root;
 				const initial_node = this.find_initial_department_node(root);
@@ -444,14 +465,18 @@ class HybridOrganizationChart {
 
 	render_summary() {
 		const summary = this.tree?.summary || {};
-		this.wrapper.querySelector("[data-summary]").innerHTML = [
+		const cards = [
 			["编制人数", summary.planned_headcount || 0],
 			["现有人数", summary.current_headcount || 0],
 			["空缺人数", summary.vacancy_count || 0],
 			["部门数", summary.department_count || 0],
-			["未分配部门", summary.missing_department_count || 0],
-			["缺少负责人", summary.missing_manager_count || 0],
-		]
+		];
+		if (this.source_mode === "workbook_snapshot") {
+			cards.push(["原表人员", summary.source_employee_count || 0], ["已匹配档案", summary.matched_employee_count || 0]);
+		} else {
+			cards.push(["未分配部门", summary.missing_department_count || 0], ["缺少负责人", summary.missing_manager_count || 0]);
+		}
+		this.wrapper.querySelector("[data-summary]").innerHTML = cards
 			.map(
 				([label, value]) => `
 					<div class="hrms-org-summary-card">
@@ -460,6 +485,19 @@ class HybridOrganizationChart {
 					</div>`,
 			)
 			.join("");
+	}
+
+	render_source_label() {
+		const label = this.wrapper.querySelector("[data-source-label]");
+		if (!label) return;
+		label.textContent = this.tree?.source_label || (this.source_mode === "live" ? __("实时组织主数据") : __("原表组织架构"));
+	}
+
+	set_source_mode(source_mode) {
+		if (!source_mode || source_mode === this.source_mode) return;
+		this.source_mode = source_mode;
+		this.selected_node = null;
+		this.load_tree();
 	}
 
 	render_tree() {
@@ -535,7 +573,7 @@ class HybridOrganizationChart {
 
 	render_node_heading(node) {
 		const employee_route = this.normalize_employee_route_value(node.employee_route || node.employee);
-		const employee_number = this.normalize_employee_number_value(node.employee_number || node.employee_code);
+		const employee_code = this.normalize_employee_code_value(node.employee_code);
 		if (!employee_route) {
 			return `<strong>${frappe.utils.escape_html(node.name || "")}</strong>`;
 		}
@@ -546,7 +584,7 @@ class HybridOrganizationChart {
 				data-action="open-employee"
 				data-employee="${frappe.utils.escape_html(node.employee || "")}"
 				data-employee-route="${frappe.utils.escape_html(employee_route)}"
-				data-employee-number="${frappe.utils.escape_html(employee_number)}"
+				data-employee-code="${frappe.utils.escape_html(employee_code)}"
 				title="${__("打开员工档案")}"
 			>${frappe.utils.escape_html(node.name || "")}</button>
 		`;
@@ -594,7 +632,17 @@ class HybridOrganizationChart {
 				: node.people;
 			return `
 				<div class="hrms-org-node-lines">
-					${this.render_person_tokens(matching_people)}
+					${this.render_person_tokens(matching_people, { limit: this.search_term ? 0 : 8 })}
+					${
+						!this.search_term && matching_people.length > 8
+							? `<button
+								type="button"
+								class="hrms-org-person-more"
+								data-action="select-node"
+								data-node-id="${frappe.utils.escape_html(node.node_id)}"
+								data-node-type="${frappe.utils.escape_html(node.node_type || "")}">${__("另有 {0} 人，请点击查看", [matching_people.length - 8])}</button>`
+							: ""
+					}
 				</div>
 			`;
 		}
@@ -612,7 +660,7 @@ class HybridOrganizationChart {
 		return list
 			.map((person) => {
 				const employee_route = this.resolve_employee_route_value(person);
-				const employee_number = this.resolve_employee_number_value(person);
+				const employee_code = this.resolve_employee_code_value(person);
 				const matched = Boolean(employee_route && person.matched_employee !== false);
 				const meta = [person.role, person.designation, person.department_label || person.department]
 					.filter(Boolean)
@@ -628,7 +676,7 @@ class HybridOrganizationChart {
 						data-person-name="${frappe.utils.escape_html(person.name || person.employee_name || "")}"
 						data-employee="${frappe.utils.escape_html(person.employee || "")}"
 						data-employee-route="${frappe.utils.escape_html(employee_route)}"
-						data-employee-number="${frappe.utils.escape_html(employee_number)}"
+						data-employee-code="${frappe.utils.escape_html(employee_code)}"
 						data-person-payload="${frappe.utils.escape_html(payload)}"
 						title="${frappe.utils.escape_html([person.match_status, meta].filter(Boolean).join(" · "))}"
 					>
@@ -672,9 +720,35 @@ class HybridOrganizationChart {
 					node_type,
 					company: this.company,
 					search: this.wrapper.querySelector("[data-search]").value || "",
+					source_mode: this.source_mode,
 				},
 			})
 			.then((r) => this.render_detail_panel(r.message || {}));
+	}
+
+	bind_fullscreen_events() {
+		if (this.fullscreen_bound) return;
+		this.fullscreen_bound = true;
+		this.handle_fullscreen_change = () => {
+			const page = this.wrapper.querySelector(".hrms-org-page");
+			page?.classList.toggle("is-fullscreen", document.fullscreenElement === page);
+			window.requestAnimationFrame(() => this.fit_to_view());
+		};
+		document.addEventListener("fullscreenchange", this.handle_fullscreen_change);
+	}
+
+	toggle_fullscreen() {
+		const page = this.wrapper.querySelector(".hrms-org-page");
+		if (!page) return;
+		if (document.fullscreenElement === page) {
+			document.exitFullscreen?.();
+			return;
+		}
+		if (!page.requestFullscreen) {
+			frappe.msgprint(__("当前浏览器不支持全屏模式。"));
+			return;
+		}
+		page.requestFullscreen().catch(() => frappe.msgprint(__("无法进入全屏模式，请检查浏览器权限。")));
 	}
 
 	render_detail_panel(detail) {
@@ -707,13 +781,14 @@ class HybridOrganizationChart {
 	render_department_relationships(relationships) {
 		const parent = relationships.parent;
 		const children = relationships.children || [];
+		const is_snapshot = this.source_mode === "workbook_snapshot";
 		const node_button = (department) => `
 			<button
 				type="button"
 				class="hrms-org-relation-button"
 				data-action="select-node"
-				data-node-id="department:${frappe.utils.escape_html(department.name || "")}"
-				data-node-type="department"
+				data-node-id="${frappe.utils.escape_html(is_snapshot ? department.name || "" : `department:${department.name || ""}`)}"
+				data-node-type="${frappe.utils.escape_html(is_snapshot ? department.node_type || "snapshot" : "department")}"
 			>${frappe.utils.escape_html(department.label || department.name || "")}</button>`;
 		return `
 			<div class="hrms-org-relations">
@@ -757,18 +832,18 @@ class HybridOrganizationChart {
 		}
 		return `
 			<div class="hrms-org-employees">
-				<div class="hrms-org-section-title">${__("当前部门员工")}</div>
+				<div class="hrms-org-section-title">${this.source_mode === "workbook_snapshot" ? __("原表人员（含下级）") : __("当前部门员工")}</div>
 				${employees
 					.map(
 						(employee) => {
 							const employee_route = this.resolve_employee_route_value(employee);
-							const employee_number = this.resolve_employee_number_value(employee);
+							const employee_code = this.resolve_employee_code_value(employee);
 							const matched = Boolean(employee_route && employee.matched_employee !== false);
 							const person_payload = this.person_payload({
 								name: employee.employee_name || employee.name,
 								employee: employee.name,
 								employee_route,
-								employee_number,
+								employee_code,
 								employee_name: employee.employee_name || employee.name,
 								employee_code: employee.employee_code,
 								department: employee.department,
@@ -781,7 +856,7 @@ class HybridOrganizationChart {
 								match_status: employee.match_status || (matched ? __("已匹配员工档案") : __("待匹配员工档案")),
 							});
 							return `
-							<div class="hrms-org-employee-row" data-employee="${frappe.utils.escape_html(employee.name || "")}" data-employee-route="${frappe.utils.escape_html(employee_route)}" data-employee-number="${frappe.utils.escape_html(employee_number)}">
+							<div class="hrms-org-employee-row" data-employee="${frappe.utils.escape_html(employee.name || "")}" data-employee-route="${frappe.utils.escape_html(employee_route)}" data-employee-code="${frappe.utils.escape_html(employee_code)}">
 								<div class="hrms-org-avatar">${frappe.utils.escape_html((employee.employee_name || employee.name || "?").slice(0, 1))}</div>
 								<div>
 									<strong>${frappe.utils.escape_html(employee.employee_name || employee.name || "")}</strong>
@@ -790,7 +865,7 @@ class HybridOrganizationChart {
 								</div>
 								${
 									matched
-										? `<button class="btn btn-xs btn-link" data-action="open-employee" data-employee="${frappe.utils.escape_html(employee.name || "")}" data-employee-route="${frappe.utils.escape_html(employee_route)}" data-employee-number="${frappe.utils.escape_html(employee_number)}">${__("资料")}</button>`
+										? `<button class="btn btn-xs btn-link" data-action="open-employee" data-employee="${frappe.utils.escape_html(employee.name || "")}" data-employee-route="${frappe.utils.escape_html(employee_route)}" data-employee-code="${frappe.utils.escape_html(employee_code)}">${__("资料")}</button>`
 										: `<button class="btn btn-xs btn-link" data-action="open-person" data-person-name="${frappe.utils.escape_html(employee.employee_name || "")}" data-person-payload="${frappe.utils.escape_html(person_payload)}">${__("详情")}</button>`
 								}
 							</div>`;
@@ -886,6 +961,13 @@ class HybridOrganizationChart {
 			ids.push(...this.collect_node_ids(child));
 		});
 		return ids;
+	}
+
+	collapse_snapshot_detail_nodes(node) {
+		for (const child of node?.children || []) {
+			if (["work_level", "position_group"].includes(child.node_type)) this.collapsed_nodes.add(child.node_id);
+			this.collapse_snapshot_detail_nodes(child);
+		}
 	}
 
 	export_chart() {
@@ -1116,17 +1198,17 @@ class HybridOrganizationChart {
 		});
 	}
 
-	open_employee(employee_number, fallback_route) {
+	open_employee(employee_code, fallback_route) {
 		const lookup_value =
-			this.normalize_employee_number_value(employee_number) || this.normalize_employee_route_value(fallback_route);
+			this.normalize_employee_code_value(employee_code) || this.normalize_employee_route_value(fallback_route);
 		if (!lookup_value) {
 			frappe.msgprint(__("当前人员没有可用于匹配档案的员工编号。"));
 			return;
 		}
 		frappe
 			.call({
-				method: "hrms.hr.page.organizational_chart.organizational_chart.resolve_employee_number",
-				args: { employee_number: lookup_value, company: this.company },
+				method: "hrms.hr.page.organizational_chart.organizational_chart.resolve_employee_code",
+				args: { employee_code: lookup_value, company: this.company },
 			})
 			.then((response) => {
 				const employee = this.normalize_employee_route_value(response.message?.name);
@@ -1142,13 +1224,13 @@ class HybridOrganizationChart {
 		return this.normalize_employee_route_value(person?.employee_route || person?.employee);
 	}
 
-	resolve_employee_number_value(person) {
-		if (typeof person === "string") return this.normalize_employee_number_value(person);
-		return this.normalize_employee_number_value(person?.employee_number || person?.employee_code);
+	resolve_employee_code_value(person) {
+		if (typeof person === "string") return this.normalize_employee_code_value(person);
+		return this.normalize_employee_code_value(person?.employee_code);
 	}
 
-	normalize_employee_number_value(employee_number) {
-		const value = String(employee_number || "").trim();
+	normalize_employee_code_value(employee_code) {
+		const value = String(employee_code || "").trim();
 		if (!value || value.length > 140 || /[\/?#\u0000-\u001f]/.test(value)) return "";
 		return value;
 	}
@@ -1162,7 +1244,7 @@ class HybridOrganizationChart {
 	show_person_detail(person) {
 		if (!person || !(person.employee_name || person.name)) return;
 		const employee = this.resolve_employee_route_value(person);
-		const employee_number = this.resolve_employee_number_value(person);
+		const employee_code = this.resolve_employee_code_value(person);
 		const fields = [
 			[__("匹配状态"), person.match_status || (employee ? __("已匹配员工档案") : __("待匹配员工档案"))],
 			[__("员工编号"), person.employee_code],
@@ -1180,7 +1262,7 @@ class HybridOrganizationChart {
 					<p>${frappe.utils.escape_html([person.role, person.match_status].filter(Boolean).join(" · "))}</p>
 				</div>
 				<div class="hrms-org-detail-actions">
-					${employee ? `<button class="btn btn-xs btn-default" data-action="open-employee" data-employee="${frappe.utils.escape_html(person.employee || "")}" data-employee-route="${frappe.utils.escape_html(employee)}" data-employee-number="${frappe.utils.escape_html(employee_number)}">${__("打开员工档案")}</button>` : ""}
+					${employee ? `<button class="btn btn-xs btn-default" data-action="open-employee" data-employee="${frappe.utils.escape_html(person.employee || "")}" data-employee-route="${frappe.utils.escape_html(employee)}" data-employee-code="${frappe.utils.escape_html(employee_code)}">${__("打开员工档案")}</button>` : ""}
 				</div>
 			</div>
 			<div class="hrms-org-person-detail">

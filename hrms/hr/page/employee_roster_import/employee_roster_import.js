@@ -13,6 +13,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		preview_result: null,
 		import_result: null,
 		manual_mappings: {},
+		row_overrides: {},
 		file: null,
 		request_id: 0,
 	};
@@ -35,8 +36,15 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			<div class="hrms-import-landing">
 				<div class="hrms-import-card">
 					<div>
+						<div class="hrms-import-card__title"><span class="orange-dot"></span>${__("覆盖当前花名册")}</div>
+						<p>${__("仅用于首次同步最新版花名册：按工号更新已有员工、补充新员工，并将本表未出现的当前员工标记为已离职（不会删除档案）。")}</p>
+					</div>
+					<button class="btn btn-warning" data-action="start-replace">${__("覆盖当前花名册")}</button>
+				</div>
+				<div class="hrms-import-card">
+					<div>
 						<div class="hrms-import-card__title"><span class="blue-dot"></span>${__("批量添加员工")}</div>
-						<p>${__("适用于首次批量导入添加员工信息，支持导入在职、离职员工。")}</p>
+						<p>${__("适用于后续导入新增人员。已存在工号将跳过，不会覆盖原有资料。")}</p>
 					</div>
 					<button class="btn btn-primary" data-action="start-insert">${__("导入花名册")}</button>
 				</div>
@@ -53,7 +61,12 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	}
 
 	function render_upload() {
-		page.set_title(state.mode === "update" ? __("智能花名册导入-批量修改信息") : __("智能花名册导入-批量添加员工"));
+		const title = {
+			replace: __("智能花名册导入-覆盖当前花名册"),
+			update: __("智能花名册导入-批量修改信息"),
+			insert: __("智能花名册导入-批量添加员工"),
+		}[state.mode] || __("智能花名册导入");
+		page.set_title(title);
 		page.set_primary_action(null);
 		$(page.body).html(`
 			<div class="hrms-import-wizard">
@@ -96,25 +109,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 				});
 				return;
 			}
-			const request_id = ++state.request_id;
-			frappe
-				.call({
-					method: "hrms.api.employee_field_template.preview_employee_roster_import",
-					args: {
-						file_url: state.file.file_url,
-						mode: state.mode || "insert",
-						match_by: state.match_by,
-						manual_mappings: JSON.stringify(state.manual_mappings),
-					},
-					freeze: true,
-					freeze_message: __("正在预览导入结果..."),
-				})
-				.then((r) => {
-					if (request_id !== state.request_id) return;
-					state.step = 3;
-					state.preview_result = r.message || {};
-					render_preview();
-				});
+			request_preview();
 		});
 		$(page.body).html(`
 			<div class="hrms-import-wizard">
@@ -196,12 +191,36 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		return fields.filter((field) => !selected.has(field.fieldname));
 	}
 
+	function request_preview() {
+		const request_id = ++state.request_id;
+		frappe
+			.call({
+				method: "hrms.api.employee_field_template.preview_employee_roster_import",
+				args: {
+					file_url: state.file.file_url,
+					mode: state.mode || "insert",
+					match_by: state.match_by,
+					manual_mappings: JSON.stringify(state.manual_mappings || {}),
+					row_overrides: JSON.stringify(state.row_overrides || {}),
+				},
+				freeze: true,
+				freeze_message: __("正在校验花名册..."),
+			})
+			.then((r) => {
+				if (request_id !== state.request_id) return;
+				state.step = 3;
+				state.preview_result = r.message || {};
+				render_preview();
+			});
+	}
+
 	function render_preview() {
 		const result = state.preview_result || {};
 		const errors = result.errors || [];
-		const preview_rows = result.preview_rows || [];
+		const is_replace = state.mode === "replace";
+		const can_write = !is_replace || !result.failed;
 		page.set_title(__("智能花名册导入-预览导入结果"));
-		page.set_primary_action(__("写入 Employee"), confirm_import);
+		page.set_primary_action(can_write ? __("导入") : null, can_write ? confirm_import : null);
 		$(page.body).html(`
 			<div class="hrms-import-wizard">
 				${render_steps()}
@@ -212,25 +231,23 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 						<div><span>${__("将更新")}</span><strong>${frappe.utils.escape_html(result.updated || 0)}</strong></div>
 						<div><span>${__("失败行")}</span><strong>${frappe.utils.escape_html(result.failed || 0)}</strong></div>
 					</div>
-					<table class="table table-bordered">
-						<thead><tr><th>${__("行号")}</th><th>${__("动作")}</th><th>${__("匹配员工")}</th><th>${__("错误数")}</th></tr></thead>
-						<tbody>${preview_rows
-							.slice(0, 100)
-							.map(
-								(row) => `
-								<tr>
-									<td>${frappe.utils.escape_html(row.row || "")}</td>
-									<td>${frappe.utils.escape_html(__(row.action || ""))}</td>
-									<td>${frappe.utils.escape_html(row.employee || "-")}</td>
-									<td>${frappe.utils.escape_html((row.errors || []).length)}</td>
-								</tr>`,
-							)
-							.join("")}</tbody>
-					</table>
-					${render_errors(errors, __("预览通过，可以写入 Employee。"))}
+					${
+						is_replace
+							? `<div class="alert alert-warning">${__("确认写入后，将新增 {0} 人、更新 {1} 人，并把本花名册未出现的 {2} 名当前员工标记为已离职。员工档案不会删除。", [
+								result.inserted || 0,
+								result.updated || 0,
+								result.archived || 0,
+							])}${result.failed ? `<br>${__("请先修正所有错误行，覆盖操作才可执行。")}` : ""}</div>`
+							: ""
+					}
+					${result.manual_corrections ? `<div class="alert alert-info">${__("已应用 {0} 项本次导入的人工校正；原 Excel 文件不会被修改。", [result.manual_corrections])}</div>` : ""}
+					${result.deferred ? `<div class="alert alert-info">${__("有 {0} 项资料以“-”暂缓填写，将以空值导入，可在员工档案中后续补充。", [result.deferred])}</div>` : ""}
+					${errors.length ? render_errors(errors, "", true) : ""}
+					${errors.length ? "" : `<div class="alert alert-success">${__("预览通过，仅显示需要人工校正的数据。")}</div>`}
 					<div class="hrms-import-actions">
 						<button class="btn btn-default" data-action="back-to-match">${__("返回匹配表头")}</button>
-						<button class="btn btn-primary" data-action="confirm-import">${__("写入 Employee")}</button>
+						${(result.failed_rows || []).length ? `<button class="btn btn-default" data-action="download-preview-failed">${__("下载错误行及修改建议")}</button>` : ""}
+						<button class="btn btn-primary" data-action="confirm-import" ${can_write ? "" : "disabled"}>${__("导入")}</button>
 					</div>
 				</div>
 			</div>
@@ -238,16 +255,20 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	}
 
 	function render_errors(errors, empty_message) {
+		const editable = arguments.length > 2 ? arguments[2] : false;
 		return errors.length
 			? `<table class="table table-bordered">
-				<thead><tr><th>${__("行号")}</th><th>${__("字段")}</th><th>${__("问题")}</th></tr></thead>
+				<thead><tr><th>${__("Excel 位置")}</th><th>${__("字段")}</th><th>${__("当前内容")}</th><th>${__("问题")}</th><th>${__("修改方法")}</th>${editable ? `<th>${__("操作")}</th>` : ""}</tr></thead>
 				<tbody>${errors
 					.map(
 						(error) => `
 						<tr>
-							<td>${frappe.utils.escape_html(error.row || "")}</td>
+							<td>${frappe.utils.escape_html(error.excel_cell || (error.row ? `${__("第")} ${error.row} ${__("行")}` : "-"))}</td>
 							<td>${frappe.utils.escape_html(error.field_label || error.fieldname || "")}</td>
+							<td>${frappe.utils.escape_html(error.current_value || "-")}</td>
 							<td>${frappe.utils.escape_html(error.message || "")}</td>
+							<td>${frappe.utils.escape_html(error.suggestion || __("请修正后重新上传。"))}</td>
+							${editable && error.row && error.fieldname ? `<td><button class="btn btn-xs btn-default" data-action="edit-error-row" data-row-index="${frappe.utils.escape_html(error.row)}">${__("编辑本行")}</button></td>` : editable ? `<td>-</td>` : ""}
 						</tr>`,
 					)
 					.join("")}</tbody>
@@ -256,7 +277,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	}
 
 	function confirm_import() {
-		frappe
+		const submit_import = () => frappe
 			.call({
 				method: "hrms.api.employee_field_template.import_employee_roster",
 				args: {
@@ -264,25 +285,78 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 					mode: state.mode || "insert",
 					match_by: state.match_by,
 					manual_mappings: JSON.stringify(state.manual_mappings || {}),
+					row_overrides: JSON.stringify(state.row_overrides || {}),
 				},
 				freeze: true,
-				freeze_message: __("正在写入 Employee..."),
+				freeze_message: __("正在导入..."),
 			})
 			.then((r) => {
 				state.step = 4;
 				state.import_result = r.message || {};
 				render_result();
 			});
+
+		if (state.mode !== "replace") {
+			submit_import();
+			return;
+		}
+
+		const result = state.preview_result || {};
+		frappe.confirm(
+			__("将覆盖当前花名册：新增 {0} 人、更新 {1} 人，并将本表未出现的 {2} 名当前员工标记为已离职。员工档案不会删除，是否继续？", [
+				result.inserted || 0,
+				result.updated || 0,
+				result.archived || 0,
+			]),
+			submit_import,
+		);
 	}
 
-	function download_failed_rows() {
-		const failed_rows_key = encodeURIComponent(state.import_result?.failed_rows_key || "");
-		const failed_rows = encodeURIComponent(JSON.stringify(state.import_result?.failed_rows || []));
+	function download_failed_rows(result = state.import_result) {
+		const failed_rows_key = encodeURIComponent(result?.failed_rows_key || "");
+		const failed_rows = encodeURIComponent(JSON.stringify(result?.failed_rows || []));
 		window.open(
 			frappe.urllib.get_full_url(
 				`/api/method/hrms.api.employee_field_template.download_employee_roster_failed_rows?failed_rows_key=${failed_rows_key}&failed_rows=${failed_rows}`,
 			),
 		);
+	}
+
+	function open_error_row_editor(row_index) {
+		const row_errors = (state.preview_result?.errors || []).filter(
+			(error) => Number(error.row) === Number(row_index) && error.fieldname,
+		);
+		const unique_errors = [...new Map(row_errors.map((error) => [error.fieldname, error])).values()];
+		if (!unique_errors.length) return;
+
+		const existing_values = state.row_overrides[String(row_index)] || {};
+		const dialog = new frappe.ui.Dialog({
+			title: __("校正 Excel 第 {0} 行", [row_index]),
+			fields: unique_errors.map((error) => ({
+				fieldname: error.fieldname,
+				label: `${error.excel_cell || ""} · ${error.field_label || error.fieldname}`,
+				// Keep corrections as text: a Date control rejects the supported "-"
+				// placeholder before the server can interpret it as "fill in later".
+				fieldtype: "Data",
+				default: existing_values[error.fieldname] ?? error.current_value ?? "",
+				description: `${error.suggestion || ""}${_can_defer_field(error.fieldname) ? `<br>${__("暂不填写时可输入“-”，系统将保留为空，之后可在员工档案补充。")}` : ""}`,
+				reqd: error.message === __("必填字段为空"),
+			})),
+			primary_action_label: __("保存并重新校验"),
+			primary_action(values) {
+				state.row_overrides[String(row_index)] = {
+					...existing_values,
+					...values,
+				};
+				dialog.hide();
+				request_preview();
+			},
+		});
+		dialog.show();
+	}
+
+	function _can_defer_field(fieldname) {
+		return !["custom_employee_code", "first_name", "employee_name", "department", "date_of_joining", "designation"].includes(fieldname);
 	}
 
 	function render_result() {
@@ -300,6 +374,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 						<div><span>${__("读取行数")}</span><strong>${frappe.utils.escape_html(result.row_count || 0)}</strong></div>
 						<div><span>${__("新增员工")}</span><strong>${frappe.utils.escape_html(result.inserted || 0)}</strong></div>
 						<div><span>${__("更新员工")}</span><strong>${frappe.utils.escape_html(result.updated || 0)}</strong></div>
+						${state.mode === "replace" ? `<div><span>${__("标记已离职")}</span><strong>${frappe.utils.escape_html(result.archived || 0)}</strong></div>` : ""}
 						<div><span>${__("跳过")}</span><strong>${frappe.utils.escape_html(result.skipped || 0)}</strong></div>
 						<div><span>${__("失败")}</span><strong>${frappe.utils.escape_html(result.failed || 0)}</strong></div>
 					</div>
@@ -318,7 +393,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 							: `<div class="alert alert-success">${__("导入完成，没有发现行级错误。")}</div>`
 					}
 					<div class="hrms-import-actions">
-						<button class="btn btn-default" data-action="restart">${__("继续导入")}</button>
+						<button class="btn btn-default" data-action="restart">${__("继续导入其他花名册")}</button>
 						${(result.failed_rows || []).length ? `<button class="btn btn-default" data-action="download-failed">${__("下载失败行")}</button>` : ""}
 						<button class="btn btn-primary" data-action="open-employee-list">${__("打开员工花名册")}</button>
 					</div>
@@ -354,8 +429,9 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 						file_url: file.file_url,
 					})
 					.then((r) => {
-						if (request_id !== state.request_id || state.file?.file_url !== file.file_url) return;
-						state.step = 2;
+					if (request_id !== state.request_id || state.file?.file_url !== file.file_url) return;
+					state.step = 2;
+					state.row_overrides = {};
 						state.parse_result = r.message;
 						render_match();
 					});
@@ -369,8 +445,8 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 
 	$(page.body).on("click", "[data-action]", function () {
 		const action = this.dataset.action;
-		if (action === "start-insert" || action === "start-update") {
-			state.mode = action === "start-update" ? "update" : "insert";
+		if (["start-insert", "start-update", "start-replace"].includes(action)) {
+			state.mode = { "start-insert": "insert", "start-update": "update", "start-replace": "replace" }[action];
 			state.step = 1;
 			render_upload();
 		}
@@ -382,15 +458,22 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			render_match();
 		}
 		if (action === "confirm-import") confirm_import();
+		if (action === "edit-error-row") open_error_row_editor(this.dataset.rowIndex);
+		if (action === "download-preview-failed") download_failed_rows(state.preview_result);
 		if (action === "download-failed") download_failed_rows();
 		if (action === "restart") {
+			// A cached Page keeps the previous mode. Return to the landing page so
+			// the next file can explicitly be imported as an addition or an update.
+			state.mode = "";
 			state.step = 1;
+			state.match_by = "employee_code";
 			state.parse_result = null;
 			state.preview_result = null;
 			state.import_result = null;
 			state.manual_mappings = {};
+			state.row_overrides = {};
 			state.file = null;
-			render_upload();
+			render_landing();
 		}
 		if (action === "open-employee-list") frappe.set_route("List", "Employee");
 	});

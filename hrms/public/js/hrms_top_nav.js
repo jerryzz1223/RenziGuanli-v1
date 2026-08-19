@@ -54,7 +54,7 @@
 		{ label: "工作台", route: "/desk/hrms-workbench", keys: ["hrms-workbench"] },
 		{
 			label: "人事",
-			route: "/desk/personnel",
+			route: "/desk/employee",
 			keys: [
 				"personnel",
 				"employee",
@@ -72,6 +72,7 @@
 				"employee-skill-map",
 				"hrms-employee-reward-punishment",
 				"exit-interview",
+				"cross-department-support",
 			],
 		},
 		{
@@ -160,7 +161,7 @@
 
 	const WORKSPACE_ROUTE_SLUGS = {
 		"工作台": "hrms-workbench",
-		"人事": "personnel",
+		"人事": "employee",
 		"部门": "department",
 		"组织": "department",
 		"招聘": "recruitment",
@@ -171,7 +172,7 @@
 		"绩效": "performance",
 		"更多": "hr-settings-center",
 		"HR Setup": "hrms-workbench",
-		"Personnel": "personnel",
+		"Personnel": "employee",
 	};
 
 	function normalizeSlug(value) {
@@ -422,7 +423,7 @@
 	function activeLabel() {
 		const slug = routeSlug();
 		if (slug === "hrms-workbench") return "工作台";
-		if (slug === "personnel") return "人事";
+		if (slug === "personnel" || slug === "employee") return "人事";
 		const match = modules.find((module) => module.keys.some((key) => slug === key || slug.indexOf(`${key}/`) === 0));
 		return match ? match.label : "";
 	}

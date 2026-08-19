@@ -56,7 +56,10 @@ def processing_center_module():
 	frappe.PermissionError = PermissionError
 	frappe.session = SimpleNamespace(user="test@example.com")
 	frappe.get_all = lambda *args, **kwargs: []
-	frappe.db = SimpleNamespace(count=lambda *args, **kwargs: 0)
+	frappe.db = SimpleNamespace(
+		count=lambda *args, **kwargs: 0,
+		get_value=lambda *args, **kwargs: None,
+	)
 	frappe_utils = ModuleType("frappe.utils")
 	frappe_utils.cint = lambda value: int(value or 0)
 	frappe_utils.now_datetime = lambda: None
@@ -183,6 +186,42 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertFalse(invalid["可加工"])
 		self.assertEqual(invalid["状态"], "不通过")
 		self.assertEqual(set(invalid["缺失字段"]), {"数据ID", "审批状态"})
+
+	def test_hr_monthly_register_does_not_require_nonexistent_dingtalk_audit_columns(self):
+		row = source_row(**{"source_kind": "monthly_summary", "绿苹果": 8, "奖/惩项目": "人资组/绿苹果/新员工/每天2颗"})
+		for field in ("数据id", "审批编号", "审批结果", "审批状态"):
+			row.pop(field, None)
+		preflight = preflight_apple_tree_rows([row])
+		processed = normalize_apple_tree_rows(
+			[row],
+			rules=self.confirmed_rules(),
+			employees=EMPLOYEES,
+			source_file="7月苹果树.xlsx",
+			source_sheet="苹果树合计",
+			start_row=4,
+		)
+
+		self.assertTrue(preflight["可加工"])
+		self.assertEqual(preflight["来源口径"], "人资月度汇总表")
+		self.assertEqual(processed[0]["review_status"], "无需审核")
+		self.assertEqual(processed[0]["有效苹果数"], 8)
+		self.assertTrue(processed[0]["source_id"].startswith("monthly-summary:苹果树合计:"))
+		self.assertNotIn("AMOUNT_TEXT_CONFLICT", processed[0]["exception_codes"])
+
+	def test_historical_event_before_relieving_date_is_not_a_former_employee_exception(self):
+		row = source_row(**{"source_kind": "monthly_summary"})
+		for field in ("数据id", "审批编号", "审批结果", "审批状态"):
+			row.pop(field, None)
+		processed = normalize_apple_tree_rows(
+			[row],
+			rules=self.confirmed_rules(),
+			employees=[{
+				"employee_code": "E-001", "employee_name": "张三", "department": "连续课",
+				"employment_status": "Left", "date_of_joining": "2026-01-01", "relieving_date": "2026-08-14",
+			}],
+			source_file="7月苹果树.xlsx",
+		)[0]
+		self.assertNotIn("FORMER_EMPLOYEE_REQUIRES_CONFIRMATION", processed["exception_codes"])
 
 	def test_page_does_not_classify_apple_tree_as_special_hours(self):
 		source = ATTENDANCE_PAGE.read_text(encoding="utf-8")
@@ -599,16 +638,16 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 
 		processed = normalize_apple_tree_rows(rows, rules=self.confirmed_rules(), employees=EMPLOYEES)
 
-		self.assertEqual(len(processed), len(rows))
+		# 审批未通过的苹果树记录不进入人工审批队列。
+		self.assertEqual(len(processed), len(rows) - 1)
 		self.assertIn("DUPLICATE_SOURCE_ID", processed[0]["exception_codes"])
 		self.assertIn("DUPLICATE_APPROVAL_NO", processed[1]["exception_codes"])
 		self.assertIn("AMOUNT_TEXT_CONFLICT", processed[1]["exception_codes"])
 		for row in processed:
 			self.assertEqual(row["review_status"], "待审核")
 			self.assertFalse(row["include_in_downstream"])
-		self.assertIn("APPROVAL_NOT_PASSED", processed[2]["exception_codes"])
-		self.assertIn("MONTH_MISMATCH", processed[3]["exception_codes"])
-		self.assertIn("EMPLOYEE_NAME_MISMATCH", processed[4]["exception_codes"])
+		self.assertIn("MONTH_MISMATCH", processed[2]["exception_codes"])
+		self.assertIn("EMPLOYEE_NAME_MISMATCH", processed[3]["exception_codes"])
 
 	def test_name_department_disambiguation_and_employee_conflicts_enter_review(self):
 		employees = [
@@ -644,6 +683,18 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertIn("EMPLOYEE_NAME_MISMATCH", processed[1]["exception_codes"])
 		self.assertIn("EMPLOYEE_DEPARTMENT_MISMATCH", processed[1]["exception_codes"])
 		self.assertIn("FORMER_EMPLOYEE_REQUIRES_CONFIRMATION", processed[2]["exception_codes"])
+
+	def test_in_progress_apple_approval_remains_reviewable_while_closed_rows_disappear(self):
+		rows = [
+			source_row(**{"数据id": "PENDING", "审批编号": "PENDING-APP", "审批结果": "审批中", "审批状态": "审批中"}),
+			source_row(**{"数据id": "TERMINATED", "审批编号": "TERMINATED-APP", "审批状态": "终止"}),
+			source_row(**{"数据id": "BUSINESS", "审批编号": "BUSINESS-APP", "审批类型": "因公打卡"}),
+		]
+		processed = normalize_apple_tree_rows(rows, rules=self.confirmed_rules(), employees=EMPLOYEES)
+
+		self.assertEqual(len(processed), 1)
+		self.assertEqual(processed[0]["数据ID"], "PENDING")
+		self.assertEqual(processed[0]["review_status"], "待审核")
 
 	def test_missing_source_offline_rows_and_same_time_approvals_enter_review(self):
 		rows = [
@@ -774,7 +825,7 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertEqual(processed[0]["source_file"], "苹果树.xlsx")
 		self.assertIn("APPROVAL_NOT_FINISHED", processed[2]["exception_codes"])
 
-	def test_real_workbook_contract_retains_all_761_source_rows(self):
+	def test_real_workbook_contract_retains_all_reviewable_source_rows(self):
 		if load_workbook is None or not REAL_WORKBOOK.exists():
 			return
 		workbook = load_workbook(REAL_WORKBOOK, read_only=True, data_only=True)
@@ -790,11 +841,13 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 			source_sheet=sheet.title,
 		)
 
+		reviewable_rows = [row for row in raw_rows if not apple_tree.is_auto_excluded_apple_tree_row(row)]
 		self.assertEqual(len(raw_rows), 761)
-		self.assertEqual(len(processed), 761)
-		self.assertEqual(sum(row["苹果类型"] == "绿苹果" for row in processed), 729)
+		self.assertEqual(len(reviewable_rows), 750)
+		self.assertEqual(len(processed), len(reviewable_rows))
+		self.assertEqual(sum(row["苹果类型"] == "绿苹果" for row in processed), 718)
 		self.assertEqual(sum(row["苹果类型"] == "红苹果" for row in processed), 32)
-		self.assertEqual(sum("MONTH_MISMATCH" in row["exception_codes"] for row in processed), 106)
+		self.assertEqual(sum("MONTH_MISMATCH" in row["exception_codes"] for row in processed), 104)
 		self.assertEqual(
 			sum("INACTIVE_APPLE_VALUE_CONFLICT" in row["exception_codes"] for row in processed), 1
 		)

@@ -189,6 +189,7 @@ function return_to_employee_roster_after_insert(frm) {
 
 const EMPLOYEE_FORM_CATEGORY_SECTIONS = [
 	{ category: "个人信息", label: "基础信息" },
+	{ category: "教育信息", label: "教育信息" },
 	{ category: "在职信息", label: "在职信息" },
 	{ category: "联系信息", label: "联系信息" },
 	{ category: "合同保险", label: "合同信息" },
@@ -196,6 +197,16 @@ const EMPLOYEE_FORM_CATEGORY_SECTIONS = [
 	{ category: "个税申报", label: "个税信息" },
 	{ category: "附件", label: "附件" },
 ];
+
+const EMPLOYEE_FORM_WIDE_FIELDNAMES = new Set([
+	"current_address",
+	"permanent_address",
+	"family_background",
+	"health_details",
+	"bio",
+]);
+
+const EMPLOYEE_FORM_WIDE_FIELDTYPES = new Set(["Small Text", "Text", "Text Editor", "Long Text"]);
 
 function apply_employee_field_template(frm) {
 	frappe
@@ -264,31 +275,60 @@ function group_employee_fields_by_template(frm, template) {
 	if (!body.length) return;
 
 	$(frm.wrapper).find(".hrms-employee-form-template-sections").remove();
+	$(frm.wrapper).find(".hrms-employee-empty-native-section").removeClass("hrms-employee-empty-native-section");
 	const container = $(`<div class="hrms-employee-form-template-sections"></div>`);
 	body.prepend(container);
 
-	const category_by_fieldname = Object.fromEntries(fields.map((field) => [field.fieldname, field.category]));
-	const sections = {};
-	EMPLOYEE_FORM_CATEGORY_SECTIONS.forEach((section) => {
-		sections[section.category] = $(`
-			<div class="section-head hrms-employee-form-section" data-employee-section="${section.category}">
-				${__(section.label)}
-			</div>
-			<div class="row form-section visible-section hrms-employee-form-section-body"></div>
-		`);
-		container.append(sections[section.category]);
+	const fields_by_category = new Map();
+	fields.forEach((field) => {
+		const category = EMPLOYEE_FORM_CATEGORY_SECTIONS.some((section) => section.category === field.category)
+			? field.category
+			: "个人信息";
+		const category_fields = fields_by_category.get(category) || [];
+		category_fields.push(field);
+		fields_by_category.set(category, category_fields);
 	});
 
-	fields.forEach((field) => {
-		const control = frm.fields_dict[field.fieldname];
-		const wrapper = $(control.wrapper).closest(".frappe-control");
-		const category = category_by_fieldname[field.fieldname] || "个人信息";
-		const section = sections[category] || sections["个人信息"];
-		const section_body = section.filter(".hrms-employee-form-section-body");
-		if (wrapper.length && section_body.length) {
-			section_body.append(wrapper);
-		}
+	EMPLOYEE_FORM_CATEGORY_SECTIONS.forEach((section) => {
+		const category_fields = fields_by_category.get(section.category);
+		if (!category_fields?.length) return;
+
+		const section_wrapper = $(`
+			<section class="hrms-employee-form-section" data-employee-section="${section.category}">
+				<div class="section-head hrms-employee-form-section__heading">${__(section.label)}</div>
+				<div class="hrms-employee-form-section__grid"></div>
+			</section>
+		`);
+		const grid = section_wrapper.find(".hrms-employee-form-section__grid");
+		container.append(section_wrapper);
+
+		category_fields.forEach((field) => {
+			const control = frm.fields_dict[field.fieldname];
+			const wrapper = $(control.wrapper).closest(".frappe-control").length
+				? $(control.wrapper).closest(".frappe-control")
+				: $(control.wrapper);
+			const is_wide =
+				EMPLOYEE_FORM_WIDE_FIELDNAMES.has(field.fieldname) ||
+				EMPLOYEE_FORM_WIDE_FIELDTYPES.has(field.fieldtype);
+			const field_slot = $("<div class=\"hrms-employee-form-field\"></div>")
+				.attr("data-fieldname", field.fieldname)
+				.toggleClass("hrms-employee-form-field--wide", is_wide);
+			if (wrapper.length) field_slot.append(wrapper);
+			grid.append(field_slot);
+		});
 	});
+
+	// Fields are moved out of Frappe's original section columns.  Hide the now
+	// empty containers so the native layout cannot leave large visual gaps
+	// between the personnel sections.
+	body
+		.find(".form-section")
+		.not(".hrms-employee-form-section")
+		.each(function () {
+			if (!$(this).find(".frappe-control").length) {
+				$(this).addClass("hrms-employee-empty-native-section");
+			}
+		});
 }
 
 function setup_personnel_employee_detail(frm) {

@@ -202,6 +202,7 @@ class EmployeeDetailPage {
 					align-items: start;
 				}
 				.hrms-employee-detail-avatar {
+					position: relative;
 					width: 64px;
 					height: 64px;
 					border-radius: 50%;
@@ -215,6 +216,27 @@ class EmployeeDetailPage {
 					width: 100%;
 					height: 100%;
 					object-fit: cover;
+				}
+				.hrms-employee-detail-avatar-upload {
+					position: absolute;
+					inset: 0;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					padding: 6px;
+					border: 0;
+					border-radius: 50%;
+					background: rgba(15, 23, 42, 0.64);
+					color: #fff;
+					font-size: 12px;
+					line-height: 1.25;
+					text-align: center;
+					opacity: 0;
+					transition: opacity 0.16s ease;
+				}
+				.hrms-employee-detail-avatar:hover .hrms-employee-detail-avatar-upload,
+				.hrms-employee-detail-avatar:focus-within .hrms-employee-detail-avatar-upload {
+					opacity: 1;
 				}
 				.hrms-employee-detail-title {
 					display: flex;
@@ -442,6 +464,70 @@ class EmployeeDetailPage {
 					font-size: 13px;
 					cursor: pointer;
 				}
+				.hrms-employee-material-intro {
+					margin-bottom: 16px;
+					padding: 12px 14px;
+					border: 1px solid #dbeafe;
+					border-radius: 6px;
+					background: #f8fbff;
+					color: var(--hrms-muted);
+					line-height: 1.6;
+				}
+				.hrms-employee-material-groups {
+					display: grid;
+					gap: 14px;
+				}
+				.hrms-employee-material-group {
+					border: 1px solid var(--hrms-border);
+					border-radius: 6px;
+					overflow: hidden;
+				}
+				.hrms-employee-material-group__header {
+					display: flex;
+					justify-content: space-between;
+					gap: 16px;
+					align-items: center;
+					padding: 12px 16px;
+					background: #fbfcfd;
+					border-bottom: 1px solid var(--hrms-border);
+				}
+				.hrms-employee-material-group__header strong { font-size: 14px; }
+				.hrms-employee-material-type-list { display: grid; }
+				.hrms-employee-material-type {
+					display: grid;
+					grid-template-columns: 148px minmax(0, 1fr) auto;
+					gap: 14px;
+					align-items: center;
+					padding: 12px 16px;
+					border-top: 1px solid #eef1f4;
+				}
+				.hrms-employee-material-type:first-child { border-top: 0; }
+				.hrms-employee-material-type__name { font-weight: 600; color: #26323f; }
+				.hrms-employee-material-files { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+				.hrms-employee-material-file {
+					display: inline-flex;
+					align-items: center;
+					gap: 7px;
+					max-width: 260px;
+					padding: 4px 8px 4px 4px;
+					border: 1px solid #e6edf3;
+					border-radius: 5px;
+					background: #fff;
+					color: #2563eb;
+				}
+				.hrms-employee-material-file__image,
+				.hrms-employee-material-file__placeholder {
+					width: 30px;
+					height: 30px;
+					border-radius: 4px;
+					object-fit: cover;
+					background: #eef2f7;
+				}
+				.hrms-employee-material-file__placeholder { display: inline-flex; align-items: center; justify-content: center; color: #667085; font-size: 10px; font-weight: 600; }
+				.hrms-employee-material-file__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+				@media (max-width: 767px) {
+					.hrms-employee-material-type { grid-template-columns: 1fr; gap: 8px; }
+				}
 				.hrms-employee-detail-collapse-row {
 					min-height: 46px;
 				}
@@ -577,7 +663,7 @@ class EmployeeDetailPage {
 		const department_display = this.get_department_display(header);
 		const personnel_status = header.custom_personnel_status || "";
 		const meta = [
-			personnel_status,
+			this.get_personnel_status_display(personnel_status),
 			header.custom_employee_code ? `${__("工号")}：${header.custom_employee_code}` : "",
 			header.cell_number,
 		].filter(Boolean);
@@ -586,6 +672,7 @@ class EmployeeDetailPage {
 				<div class="hrms-employee-detail-profile">
 					<div class="hrms-employee-detail-avatar" title="${frappe.utils.escape_html(__("员工头像"))}">
 						${header.image ? `<img src="${frappe.utils.escape_html(header.image)}" alt="">` : `<span class="avatar avatar-large"><span class="avatar-frame standard-image"></span></span>`}
+						${this.can_edit_employee_detail() ? `<button type="button" class="hrms-employee-detail-avatar-upload" data-action="upload-photo" aria-label="${frappe.utils.escape_html(__("上传照片"))}">${__("上传照片")}</button>` : ""}
 					</div>
 					<div>
 						<div class="hrms-employee-detail-title">
@@ -601,16 +688,25 @@ class EmployeeDetailPage {
 						</div>
 					</div>
 					<div class="hrms-employee-detail-actions hrms-employee-detail-action-strip">
+						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="upload-photo">${__("上传照片")}</button>` : ""}
 						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="edit-employee">${__("编辑资料")}</button>` : ""}
 						<button class="btn btn-default btn-sm" data-action="compare">${__("员工对比")}</button>
 						<button class="btn btn-primary btn-sm" data-action="transfer">${__("办理人事异动")}</button>
-						${personnel_status === "试用期" ? `<button class="btn btn-default btn-sm" data-action="promotion">${__("转正")}</button>` : ""}
+						${personnel_status === "试用期" ? `<button class="btn btn-default btn-sm" data-action="promotion">${__("转正面谈")}</button>` : ""}
 						<button class="btn btn-default btn-sm" data-action="separation">${__("离职")}</button>
 						<button class="btn btn-default btn-sm" data-action="contract">${__("合同记录")}</button>
 					</div>
 				</div>
 			</div>
 		`;
+	}
+
+	get_personnel_status_display(personnel_status) {
+		return {
+			"在职": __("在职 · 正式"),
+			"试用期": __("在职 · 试用期"),
+			"已离职": __("离职"),
+		}[personnel_status] || personnel_status;
 	}
 
 	render_tabs() {
@@ -631,6 +727,9 @@ class EmployeeDetailPage {
 	render_active_tab() {
 		if (this.active_tab === "概览") {
 			return this.render_overview();
+		}
+		if (this.active_tab === "材料附件") {
+			return this.render_material_attachments();
 		}
 		return this.render_section_tab(this.active_tab);
 	}
@@ -653,7 +752,7 @@ class EmployeeDetailPage {
 							${this.render_kpi("部门", department_display || "未设置")}
 							${this.render_kpi("岗位", header.designation || "未设置")}
 							${this.render_kpi("入职日期", header.date_of_joining || "未设置")}
-							${this.render_kpi("工作性质", header.custom_personnel_status || "未设置")}
+							${this.render_kpi("工作性质", this.get_personnel_status_display(header.custom_personnel_status || "未设置"))}
 						</div>
 					</div>
 					<div class="hrms-employee-detail-section hrms-employee-detail-section-card">
@@ -716,7 +815,7 @@ class EmployeeDetailPage {
 			{
 				date: __("至今"),
 				title: __("当前任职"),
-				description: this.join_values([department_display, header.designation, header.custom_personnel_status]),
+				description: this.join_values([department_display, header.designation, this.get_personnel_status_display(header.custom_personnel_status)]),
 			},
 		];
 		return items
@@ -761,12 +860,67 @@ class EmployeeDetailPage {
 	}
 
 	render_readonly_field(field) {
+		const value = field.fieldname === "custom_personnel_status"
+			? this.get_personnel_status_display(field.value)
+			: field.value;
 		return `
 			<div class="hrms-employee-detail-field">
 				<span>${frappe.utils.escape_html(field.field_label || field.fieldname)}</span>
-				<strong class="hrms-employee-detail-field-value">${frappe.utils.escape_html(this.format_value(field.value))}</strong>
+				<strong class="hrms-employee-detail-field-value">${frappe.utils.escape_html(this.format_value(value))}</strong>
 			</div>
 		`;
+	}
+
+	render_material_attachments() {
+		const groups = this.detail?.materials || [];
+		return `
+			<div class="hrms-employee-detail-section hrms-employee-detail-section-card">
+				<div class="hrms-employee-detail-section__header">
+					<h3>${__("材料附件")}</h3>
+					<div class="hrms-employee-detail-section-tools">
+						<span class="text-muted">${this.can_edit_employee_detail() ? __("可拍照或上传") : __("只读")}</span>
+					</div>
+				</div>
+				<div class="hrms-employee-material-intro">${__("每份材料都会归档到当前员工名下。可从设备选择文件，也可直接调用摄像头拍照；支持 JPG、PNG、WebP 和 PDF。")}</div>
+				<div class="hrms-employee-material-groups">
+					${groups.map((group) => this.render_material_group(group)).join("")}
+				</div>
+			</div>
+		`;
+	}
+
+	render_material_group(group) {
+		return `
+			<div class="hrms-employee-material-group">
+				<div class="hrms-employee-material-group__header">
+					<strong>${frappe.utils.escape_html(__(group.label))}</strong>
+					<span class="text-muted">${frappe.utils.escape_html(group.description || "")}</span>
+				</div>
+				<div class="hrms-employee-material-type-list">
+					${(group.types || []).map((material) => this.render_material_type(material)).join("")}
+				</div>
+			</div>
+		`;
+	}
+
+	render_material_type(material) {
+		const files = material.files || [];
+		return `
+			<div class="hrms-employee-material-type">
+				<div class="hrms-employee-material-type__name">${frappe.utils.escape_html(__(material.label))}</div>
+				<div class="hrms-employee-material-files">
+					${files.length ? files.map((file) => this.render_material_file(file)).join("") : `<span class="text-muted">${__("未上传")}</span>`}
+				</div>
+				${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-xs" data-action="upload-material" data-material-type="${frappe.utils.escape_html(material.key)}">${__("拍照/上传")}</button>` : ""}
+			</div>
+		`;
+	}
+
+	render_material_file(file) {
+		const name = frappe.utils.escape_html(file.file_name || __("未命名材料"));
+		const url = frappe.utils.escape_html(file.file_url || "");
+		const image = /\.(?:jpe?g|png|webp)(?:\?.*)?$/i.test(file.file_url || "");
+		return `<a class="hrms-employee-material-file" href="${url}" target="_blank" rel="noopener" title="${name}">${image ? `<img class="hrms-employee-material-file__image" src="${url}" alt="">` : `<span class="hrms-employee-material-file__placeholder">PDF</span>`}<span class="hrms-employee-material-file__name">${name}</span></a>`;
 	}
 
 	render_related_blocks(tab_label) {
@@ -928,13 +1082,27 @@ class EmployeeDetailPage {
 				frappe.set_route("Form", "Employee", this.employee);
 			});
 		});
+		this.wrapper.querySelectorAll("[data-action='upload-photo']").forEach((button) => {
+			button.addEventListener("click", (event) => {
+				event.preventDefault();
+				this.upload_employee_photo();
+			});
+		});
+		this.wrapper.querySelectorAll("[data-action='upload-material']").forEach((button) => {
+			button.addEventListener("click", (event) => {
+				event.preventDefault();
+				this.upload_employee_material(button.dataset.materialType);
+			});
+		});
 		this.wrapper.querySelectorAll("[data-action='promotion']").forEach((button) => {
 			button.addEventListener("click", () => {
 				if (this.detail?.header?.custom_personnel_status !== "试用期") return;
-				const confirmation_date = frappe.datetime.get_today();
+				const interview_date = frappe.datetime.get_today();
 				frappe.new_doc("Employee Promotion", {
 					employee: this.employee,
-					promotion_date: confirmation_date,
+					promotion_date: interview_date,
+					custom_is_confirmation_interview: 1,
+					custom_confirmation_interview_date: interview_date,
 					promotion_details: [
 						{
 							property: __("是否转正"),
@@ -946,7 +1114,7 @@ class EmployeeDetailPage {
 							property: __("转正日期"),
 							fieldname: "final_confirmation_date",
 							current: this.detail?.header?.final_confirmation_date || "",
-							new: confirmation_date,
+							new: interview_date,
 						},
 					],
 				});
@@ -957,7 +1125,7 @@ class EmployeeDetailPage {
 				const header = this.detail?.header || {};
 				frappe.new_doc("Employee Separation", {
 					employee: this.employee,
-					employee_code_display: header.custom_employee_code || header.employee_number || "",
+					employee_code_display: header.custom_employee_code || "",
 					employee_name: header.employee_name || "",
 				});
 			});
@@ -972,6 +1140,72 @@ class EmployeeDetailPage {
 		if (compare_button) {
 			compare_button.addEventListener("click", () => frappe.show_alert(__("员工对比功能将在后续阶段接入")));
 		}
+	}
+
+	upload_employee_photo() {
+		if (!this.can_edit_employee_detail()) {
+			frappe.msgprint(__("只有管理员可以上传员工照片。"));
+			return;
+		}
+
+		new frappe.ui.FileUploader({
+			doctype: "Employee",
+			docname: this.employee,
+			fieldname: "image",
+			allow_multiple: false,
+			restrictions: {
+				allowed_file_types: [".jpg", ".jpeg", ".png", ".webp"],
+				max_file_size: 5 * 1024 * 1024,
+			},
+			on_success: (file) => {
+				frappe
+					.call({
+						method: "hrms.api.employee_field_template.update_employee_photo",
+						args: { employee: this.employee, file_url: file.file_url },
+						freeze: true,
+						freeze_message: __("正在保存员工照片…"),
+					})
+					.then((response) => {
+						const image = response.message?.image || file.file_url;
+						if (this.detail?.header) this.detail.header.image = image;
+						this.render();
+						frappe.show_alert({ message: __("员工照片已更新"), indicator: "green" });
+					});
+			},
+		});
+	}
+
+	upload_employee_material(material_type) {
+		if (!this.can_edit_employee_detail()) {
+			frappe.msgprint(__("只有管理员可以上传员工档案材料。"));
+			return;
+		}
+		new frappe.ui.FileUploader({
+			doctype: "Employee",
+			docname: this.employee,
+			allow_multiple: false,
+			allow_take_photo: true,
+			allow_web_link: false,
+			disable_file_browser: true,
+			restrictions: {
+				allowed_file_types: [".jpg", ".jpeg", ".png", ".webp", ".pdf"],
+				max_file_size: 10 * 1024 * 1024,
+			},
+			on_success: (file, response) => {
+				const file_url = file?.file_url || response?.message?.file_url;
+				if (!file_url) return;
+				frappe.call({
+					method: "hrms.api.employee_field_template.upload_employee_material",
+					args: { employee: this.employee, material_type, file_url },
+					freeze: true,
+					freeze_message: __("正在归档员工材料…"),
+				}).then((result) => {
+					if (this.detail) this.detail.materials = result.message?.materials || this.detail.materials;
+					this.render();
+					frappe.show_alert({ message: __("员工材料已归档"), indicator: "green" });
+				});
+			},
+		});
 	}
 
 	toggle_related_block(key) {

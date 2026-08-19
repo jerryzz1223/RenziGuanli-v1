@@ -64,7 +64,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "状态",
-   "options": "预览\n已导入\n待加工\n结构异常\n待处理异常\n待确认\n已确认\n已生成异常\n已生成月度终稿\n已撤销"
+   "options": "预览\n已导入\n待加工\n结构异常\n导入异常\n待处理异常\n待确认\n已确认\n已生成异常\n已生成月度终稿\n已撤销"
   },
   {
    "default": "0",

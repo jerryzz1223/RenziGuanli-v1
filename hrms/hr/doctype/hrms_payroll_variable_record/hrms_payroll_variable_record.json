@@ -16,6 +16,10 @@
   "department",
   "variable_type",
   "amount",
+  "review_status",
+  "validation_status",
+  "validation_message",
+  "excluded",
   "source_sheet",
   "remarks",
   "raw_row_json"
@@ -88,6 +92,10 @@
    "in_list_view": 1,
    "label": "金额"
   },
+  {"default": "待审核", "fieldname": "review_status", "fieldtype": "Select", "in_list_view": 1, "label": "审核状态", "options": "待审核\n已确认\n已剔除\n已驳回\n已作废"},
+  {"default": "通过", "fieldname": "validation_status", "fieldtype": "Select", "in_list_view": 1, "label": "校验状态", "options": "通过\n警告\n错误"},
+  {"fieldname": "validation_message", "fieldtype": "Small Text", "label": "校验说明"},
+  {"default": "0", "fieldname": "excluded", "fieldtype": "Check", "label": "不参与计算"},
   {
    "fieldname": "source_sheet",
    "fieldtype": "Data",

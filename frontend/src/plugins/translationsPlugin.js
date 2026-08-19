@@ -1,3 +1,22 @@
+export function formatTranslationTemplate(str, args) {
+	if (str == undefined) return str;
+	if (!args || typeof args !== "object") return str;
+
+	let unkeyed_index = 0;
+	return str.replace(/\{(\w*)\}/g, (match, key) => {
+		if (key === "") {
+			key = unkeyed_index;
+			unkeyed_index++;
+		}
+
+		if (Object.prototype.hasOwnProperty.call(args, key)) {
+			return args[key];
+		}
+
+		return match;
+	});
+}
+
 function makeTranslationFunction() {
 	let messages = {};
 	return {
@@ -39,28 +58,10 @@ function makeTranslationFunction() {
 			translated_text = messages[key] || txt;
 		}
 		if (replace && typeof replace === "object") {
-			translated_text = format(translated_text, replace);
+			translated_text = formatTranslationTemplate(translated_text, replace);
 		}
 
 		return translated_text;
-	}
-
-	function format(str, args) {
-		if (str == undefined) return str;
-
-		let unkeyed_index = 0;
-		return str.replace(
-			/\{(\w*)\}/g,
-			(match, key) => {
-				if (key === "") {
-					key = unkeyed_index;
-					unkeyed_index++;
-				}
-				if (key == +key) {
-					return args[key] !== undefined ? args[key] : match;
-				}
-			}
-		);
 	}
 }
 

@@ -14,19 +14,17 @@ function mustInclude(source, marker, message) {
 
 // 原生 employment_type 保留给薪资和合同；花名册使用自动派生的五种人员状态。
 const expectedCards = [
-	["在职", "custom_personnel_status: 在职"],
-	["试用期", "custom_personnel_status: 试用期"],
+	["在职 · 正式", "custom_personnel_status: 在职"],
+	["在职 · 试用期", "custom_personnel_status: 试用期"],
 	["退休返聘", "custom_personnel_status: 退休返聘"],
 	["待离职", "custom_personnel_status: 待离职"],
-	["已离职", "custom_personnel_status: 已离职"],
+	["离职", "custom_personnel_status: 已离职"],
 ];
 
-for (const source of [api, list]) {
-	const normalisedSource = source.replaceAll('"', "");
-	for (const [label, filters] of expectedCards) {
-		const expression = new RegExp(`${label}[\\s\\S]{0,100}${filters}`);
-		if (!expression.test(normalisedSource)) throw new Error(`${label} 的花名册统计口径错误。`);
-	}
+const normalisedList = list.replaceAll('"', "");
+for (const [label, filters] of expectedCards) {
+	const expression = new RegExp(`${label}[\\s\\S]{0,160}${filters}`);
+	if (!expression.test(normalisedList)) throw new Error(`${label} 的花名册统计口径错误。`);
 }
 
 mustInclude(api, '"custom_personnel_status",', "花名册 API 必须返回并允许筛选人员状态。");
@@ -45,7 +43,7 @@ mustInclude(list, "frappe.route_options", "花名册卡片必须使用 Frappe �
 mustInclude(list, "build_roster_route_options", "花名册卡片必须统一构建 Frappe 路由筛选条件。");
 mustInclude(list, '"relieving_date"', "花名册必须读取 Employee 的标准离职日期字段。");
 mustInclude(list, "sync_roster_status_date_column", "待离职和已离职视图必须切换为离职日期列。");
-mustInclude(list, '["待离职", "已离职"]', "只有离职相关视图应显示离职日期列。");
+mustInclude(list, "get_active_roster_card().personnel_status", "离职日期列应按内部状态判断，不依赖展示文案。");
 mustInclude(detail, "header.custom_personnel_status", "员工详情必须读取统一的工作性质字段。");
 mustInclude(detail, "this.detail?.header?.custom_is_confirmed", "转正单必须读取员工当前转正状态。");
 mustInclude(detail, "this.detail?.header?.final_confirmation_date", "转正单必须读取员工当前转正日期。");

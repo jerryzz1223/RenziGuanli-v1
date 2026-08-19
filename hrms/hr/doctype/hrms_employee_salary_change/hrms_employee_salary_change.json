@@ -25,10 +25,13 @@
   "housing_fund_enabled",
   "social_insurance_enabled",
   "company_cost_total",
+  "exclude_from_payroll",
+  "exclude_reason",
   "prepared_by",
   "reviewed_by",
   "approved_by",
   "status",
+  "salary_import_batch",
   "source_file",
   "remarks"
  ],
@@ -152,6 +155,17 @@
    "label": "公司实际负担总计"
   },
   {
+   "default": "0",
+   "fieldname": "exclude_from_payroll",
+   "fieldtype": "Check",
+   "label": "不参与薪资计算"
+  },
+  {
+   "fieldname": "exclude_reason",
+   "fieldtype": "Data",
+   "label": "不参与原因"
+  },
+  {
    "fieldname": "prepared_by",
    "fieldtype": "Data",
    "label": "编制"
@@ -173,6 +187,13 @@
    "in_list_view": 1,
    "label": "状态",
    "options": "草稿\n待审核\n已批准\n已作废"
+  },
+  {
+   "fieldname": "salary_import_batch",
+   "fieldtype": "Link",
+   "label": "定薪导入批次",
+   "options": "HRMS Form Import Batch",
+   "read_only": 1
   },
   {
    "fieldname": "source_file",

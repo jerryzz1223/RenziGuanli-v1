@@ -1,7 +1,7 @@
 {
  "app": "hrms",
  "charts": [],
- "content": "[{\"id\":\"personnel-header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>人事</b></span>\",\"col\":12}},{\"id\":\"personnel-card-1\",\"type\":\"card\",\"data\":{\"card_name\":\"员工管理\",\"col\":4}},{\"id\":\"personnel-card-2\",\"type\":\"card\",\"data\":{\"card_name\":\"员工关系\",\"col\":4}}]",
+ "content": "[]",
  "creation": "2026-06-29 00:00:00.000000",
  "custom_blocks": [],
  "docstatus": 0,
@@ -10,126 +10,9 @@
  "hide_custom": 0,
  "icon": "users",
  "idx": 2,
- "is_hidden": 0,
+ "is_hidden": 1,
  "label": "人事",
- "links": [
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "员工管理",
-   "link_count": 2,
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "员工花名册",
-   "link_count": 0,
-   "link_to": "Employee",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "员工关系",
-   "link_count": 9,
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "入职管理",
-   "link_count": 0,
-   "link_to": "Employee Onboarding",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "入职规则配置",
-   "link_count": 0,
-   "link_to": "Employee Onboarding Template",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "转正管理",
-   "link_count": 0,
-   "link_to": "Employee Promotion",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "离职管理",
-   "link_count": 0,
-   "link_to": "Employee Separation",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "离职记录",
-   "link_count": 0,
-   "link_to": "employee-separation-records",
-   "link_type": "Page",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "异动记录",
-   "link_count": 0,
-   "link_to": "employee-property-history",
-   "link_type": "Page",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "培训经历",
-   "link_count": 0,
-   "link_to": "Employee Skill Map",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "奖惩记录",
-   "link_count": 0,
-   "link_to": "HRMS Employee Reward Punishment",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "离职面谈",
-   "link_count": 0,
-   "link_to": "Exit Interview",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  }
- ],
+ "links": [],
  "modified": "2026-06-29 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "HR",

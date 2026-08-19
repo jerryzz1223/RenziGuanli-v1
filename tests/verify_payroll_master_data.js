@@ -26,12 +26,28 @@ for (const marker of [
 	"import_salary_structure_workbook",
 	"list_salary_structure_versions",
 	"list_salary_grades",
+	"list_assignable_salary_grades",
 	"create_employee_salary_change",
 	"create_employee_salary_change_template_file",
+	"preview_employee_salary_change_workbook",
+	"import_employee_salary_change_workbook",
+	"list_employee_salary_change_import_batches",
+	"rollback_employee_salary_change_import_batch",
+	"salary_import_batch",
+	"_salary_grade_from_structure",
+	"薪资架构版本",
+	"薪资序号",
+	"已匹配薪资架构",
+	"使用表内定薪金额",
+	"update_employee_salary_change",
 	"list_employee_salary_changes",
+	"list_employee_salary_change_grid",
+	"_salary_contribution_defaults",
 	"get_active_salary_change_for_employee",
 	"get_salary_architecture_workbench",
 	"_is_trial_salary_change",
+	"set_employee_payroll_participation",
+	"exclude_from_payroll",
 	"底薪",
 	"职能津贴",
 	"证书及多能工津贴",
@@ -47,7 +63,7 @@ for (const marker of [
 	"薪资主数据",
 	"薪资架构版本",
 	"薪资档位",
-	"员工薪资异动",
+	"员工定薪表",
 	"薪资架构与员工定薪",
 	"下载员工定薪模板",
 	"get_salary_architecture_workbench",
@@ -55,9 +71,32 @@ for (const marker of [
 	"import_salary_structure_workbook",
 	"list_salary_structure_versions",
 	"list_salary_grades",
-	"list_employee_salary_changes",
+	"list_employee_salary_change_grid",
+	"员工定薪表",
+	"缴纳社保",
+	"缴纳公积金",
+	"请输入",
+	"导入 Excel",
+	"人员薪资调整模板（月）",
+	"preview_employee_salary_change_workbook",
+	"import_employee_salary_change_workbook",
+	"update_employee_salary_change",
+	"data-save-salary-change",
+	"下拉只显示当前薪资架构版本的数字等级",
+	"data-salary-change-field=\"salary_grade\"",
+	"assignableSalaryGrades",
+	"员工定薪导入记录",
+	"撤销本次导入",
+	"rollback_employee_salary_change_import_batch",
+	"本月不参与计算",
+	"data-exclude-payroll",
+	"const missingDifference",
 ]) {
 	mustInclude(pageJs, marker, `Payroll center page is missing master-data marker: ${marker}`);
+}
+
+if (pageJs.includes("data-salary-assignment-overview") || pageJs.includes("请先处理以下人员")) {
+	throw new Error("The duplicated salary-action list must not be rendered above the editable table.");
 }
 
 const workbenchJs = read("hrms/hr/page/hrms_workbench/hrms_workbench.js");
@@ -77,7 +116,7 @@ for (const [folder, markers] of [
 	],
 	[
 		"hrms_employee_salary_change",
-		["HRMS Employee Salary Change", "员工薪资异动", "employee_code", "effective_date", "base_salary", "function_allowance", "full_salary"],
+		["HRMS Employee Salary Change", "员工薪资异动", "employee_code", "effective_date", "base_salary", "function_allowance", "full_salary", "exclude_from_payroll"],
 	],
 ]) {
 	const json = read(`hrms/hr/doctype/${folder}/${folder}.json`);

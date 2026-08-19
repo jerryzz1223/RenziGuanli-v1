@@ -78,7 +78,16 @@ _SOURCE_ALIASES = {
 	"creator": ("创建人", "creator"),
 	"approval_result": ("审批结果", "approval_result"),
 	"approval_status": ("审批状态", "approval_status"),
+	"punch_type": ("补卡类型", "打卡类型", "审批类型", "审批名称", "punch_type"),
+	"source_kind": ("source_kind", "来源类型"),
 }
+
+# Closed approvals and business-punch rows do not require a human decision in
+# the Apple-tree result.  They remain in the original uploaded workbook, but
+# are deliberately absent from the processing/review datasets.
+AUTO_EXCLUDED_APPROVAL_RESULTS = {"审批未通过", "审批不通过", "未通过", "已拒绝", "拒绝", "驳回", "已驳回"}
+AUTO_EXCLUDED_APPROVAL_STATUSES = {"终止", "已终止", "已撤销", "撤销"}
+BUSINESS_PUNCH_TYPES = {"因公补卡", "因公打卡"}
 
 _REQUIRED_SOURCE_FIELDS = {
 	"source_id": "数据ID",
@@ -100,6 +109,8 @@ _EMPLOYEE_ALIASES = {
 	"name": ("姓名", "员工姓名", "employee_name"),
 	"department": ("部门", "department"),
 	"status": ("在职状态", "员工状态", "employment_status", "status"),
+	"date_of_joining": ("入职日期", "date_of_joining"),
+	"relieving_date": ("离职日期", "relieving_date"),
 }
 
 _REVIEW_VALUE_FIELDS = {"工号", "姓名", "部门", "苹果类型", "有效苹果数"}
@@ -144,6 +155,8 @@ class _Employee:
 	name: str
 	department: str
 	status: str
+	date_of_joining: str
+	relieving_date: str
 
 
 class _EmployeeIndex:
@@ -155,9 +168,11 @@ class _EmployeeIndex:
 			name = _text(_first(raw, _EMPLOYEE_ALIASES["name"]))
 			department = normalize_department_name(_first(raw, _EMPLOYEE_ALIASES["department"]))
 			status = _text(_first(raw, _EMPLOYEE_ALIASES["status"]))
+			date_of_joining = _date_text(_first(raw, _EMPLOYEE_ALIASES["date_of_joining"]))
+			relieving_date = _date_text(_first(raw, _EMPLOYEE_ALIASES["relieving_date"]))
 			if not code:
 				continue
-			employee = _Employee(code, name, department, status)
+			employee = _Employee(code, name, department, status, date_of_joining, relieving_date)
 			self.by_code[code] = employee
 			if name:
 				self.by_name[_name_key(name)].append(employee)
@@ -170,10 +185,11 @@ def preflight_apple_tree_rows(raw_rows: Iterable[Mapping[str, Any]]) -> dict[str
 	headers = {str(key).strip() for row in rows for key in row}
 	mapping = {}
 	missing = []
+	is_monthly_summary = _is_monthly_summary_headers(headers)
 	for canonical, label in _REQUIRED_SOURCE_FIELDS.items():
 		matched = next((alias for alias in _SOURCE_ALIASES[canonical] if alias in headers), "")
 		mapping[canonical] = matched
-		if not matched:
+		if not matched and not (is_monthly_summary and canonical in {"source_id", "approval_no", "approval_result", "approval_status"}):
 			missing.append(label)
 	return {
 		"状态": "通过" if rows and not missing else "不通过",
@@ -181,6 +197,21 @@ def preflight_apple_tree_rows(raw_rows: Iterable[Mapping[str, Any]]) -> dict[str
 		"行数": len(rows),
 		"缺失字段": missing,
 		"字段映射": mapping,
+		"来源口径": "人资月度汇总表" if is_monthly_summary else "钉钉审批明细",
+		"批次审核说明": "月度汇总表不要求逐行补造钉钉审批编号；以原文件、工作表和行号追溯。" if is_monthly_summary else "",
+	}
+
+
+def _is_monthly_summary_headers(headers: set[str]) -> bool:
+	"""Identify HR's signed monthly register, which is not a DingTalk export."""
+	required = {"创建时间", "奖/惩日期", "受奖/惩人", "绿苹果", "红苹果", "奖/惩项目"}
+	audit = {"数据ID", "数据id", "审批编号", "审批结果", "审批状态"}
+	return required.issubset(headers) and not (headers & audit)
+
+
+def is_monthly_summary_apple_tree_row(raw: Mapping[str, Any]) -> bool:
+	return _text(_first(raw, _SOURCE_ALIASES["source_kind"])).casefold() in {
+		"monthly_summary", "monthly-register", "人资月度汇总表", "月度汇总表"
 	}
 
 
@@ -193,16 +224,22 @@ def normalize_apple_tree_rows(
 	source_sheet: str = "钉钉导出数据",
 	start_row: int = 2,
 ) -> list[dict[str, Any]]:
-	"""Normalize every raw row into the single processed-row contract."""
+	"""Normalize each reviewable row into the single processed-row contract.
+
+	Explicitly rejected, terminated and business-punch rows are not reviewable;
+	they are kept only in the immutable uploaded source file.  In-progress
+	approvals still normalize to pending-review rows.
+	"""
 
 	rules = rules or AppleTreeRules()
 	rows = [dict(row) for row in raw_rows]
+	reviewable_rows = [(offset, row) for offset, row in enumerate(rows) if not is_auto_excluded_apple_tree_row(row)]
 	employee_index = _build_employee_index(employees)
-	ids = Counter(_text(_first(row, _SOURCE_ALIASES["source_id"])) for row in rows)
-	approvals = Counter(_text(_first(row, _SOURCE_ALIASES["approval_no"])) for row in rows)
-	events = Counter(_event_key(row) for row in rows)
+	ids = Counter(_text(_first(row, _SOURCE_ALIASES["source_id"])) for _offset, row in reviewable_rows)
+	approvals = Counter(_text(_first(row, _SOURCE_ALIASES["approval_no"])) for _offset, row in reviewable_rows)
+	events = Counter(_event_key(row) for _offset, row in reviewable_rows)
 	processed = []
-	for offset, raw in enumerate(rows):
+	for offset, raw in reviewable_rows:
 		processed.append(
 			_normalize_row(
 				raw,
@@ -221,6 +258,18 @@ def normalize_apple_tree_rows(
 	return processed
 
 
+def is_auto_excluded_apple_tree_row(raw: Mapping[str, Any]) -> bool:
+	"""Whether a source row is already closed and must skip human review."""
+	approval_result = _text(_first(raw, _SOURCE_ALIASES["approval_result"]))
+	approval_status = _text(_first(raw, _SOURCE_ALIASES["approval_status"]))
+	punch_type = _text(_first(raw, _SOURCE_ALIASES["punch_type"]))
+	return (
+		approval_result in AUTO_EXCLUDED_APPROVAL_RESULTS
+		or approval_status in AUTO_EXCLUDED_APPROVAL_STATUSES
+		or punch_type in BUSINESS_PUNCH_TYPES
+	)
+
+
 def _normalize_row(
 	raw: dict[str, Any],
 	offset: int,
@@ -234,6 +283,7 @@ def _normalize_row(
 	source_sheet: str,
 	start_row: int,
 ) -> dict[str, Any]:
+	is_monthly_summary = is_monthly_summary_apple_tree_row(raw)
 	source_id = _text(_first(raw, _SOURCE_ALIASES["source_id"]))
 	approval_no = _text(_first(raw, _SOURCE_ALIASES["approval_no"]))
 	award_date = _date_text(_first(raw, _SOURCE_ALIASES["award_date"]))
@@ -249,9 +299,11 @@ def _normalize_row(
 	row_source_sheet = _text(raw.get("_source_sheet") or raw.get("source_sheet") or source_sheet)
 	codes: list[str] = []
 
+	if is_monthly_summary and not source_id:
+		source_id = f"monthly-summary:{row_source_sheet}:{raw.get('_source_row') or raw.get('source_row') or start_row + offset}"
 	if rules.require_source_id and not source_id:
 		_add_code(codes, "MISSING_SOURCE_ID")
-	if rules.require_approval_no and not approval_no:
+	if rules.require_approval_no and not approval_no and not is_monthly_summary:
 		_add_code(codes, "MISSING_APPROVAL_NO")
 	if source_id and ids[source_id] > 1:
 		_add_code(codes, "DUPLICATE_SOURCE_ID")
@@ -297,26 +349,30 @@ def _normalize_row(
 		if _text(inactive_value) not in {_text(value) for value in rules.placeholder_values}:
 			_add_code(codes, "INACTIVE_APPLE_VALUE_CONFLICT")
 	project_amounts = _project_amounts(project)
-	if amount is not None and len(project_amounts) == 1 and amount not in project_amounts:
+	# In HR's monthly register the project text is the unit standard (for example
+	# 2 apples per day) while the numeric column is the reviewed monthly result.
+	# Comparing those two values created dozens of false exceptions.
+	if not is_monthly_summary and amount is not None and len(project_amounts) == 1 and amount not in project_amounts:
 		_add_code(codes, "AMOUNT_TEXT_CONFLICT")
-	elif len(project_amounts) > 1:
+	elif not is_monthly_summary and len(project_amounts) > 1:
 		_add_code(codes, "PROJECT_AMOUNT_AMBIGUOUS")
 
 	approval_result = _text(_first(raw, _SOURCE_ALIASES["approval_result"]))
 	approval_status = _text(_first(raw, _SOURCE_ALIASES["approval_status"]))
-	if not approval_result:
+	if not approval_result and not is_monthly_summary:
 		_add_code(codes, "MISSING_APPROVAL_RESULT")
-	if not approval_status:
+	if not approval_status and not is_monthly_summary:
 		_add_code(codes, "MISSING_APPROVAL_STATUS")
-	if approval_result not in rules.passed_results:
+	if not is_monthly_summary and approval_result not in rules.passed_results:
 		_add_code(codes, "APPROVAL_NOT_PASSED")
-	if approval_status not in rules.finished_statuses:
+	if not is_monthly_summary and approval_status not in rules.finished_statuses:
 		_add_code(codes, "APPROVAL_NOT_FINISHED")
 	_validate_month(rules, award_date, created_at, codes)
 	employee_code = _resolve_employee(
 		raw_employee_code,
 		employee_name,
 		department,
+		award_date,
 		employee_index,
 		employees_were_supplied,
 		codes,
@@ -532,7 +588,7 @@ def _build_employee_index(employees):
 	return _EmployeeIndex(employees)
 
 
-def _resolve_employee(raw_code, employee_name, department, index, employees_were_supplied, codes):
+def _resolve_employee(raw_code, employee_name, department, event_date, index, employees_were_supplied, codes):
 	if index is None:
 		_add_code(codes, "EMPLOYEE_MATCH_PENDING")
 		return raw_code
@@ -541,7 +597,7 @@ def _resolve_employee(raw_code, employee_name, department, index, employees_were
 		if employee is None:
 			_add_code(codes, "EMPLOYEE_NOT_FOUND")
 		else:
-			_validate_employee_context(employee, employee_name, department, codes)
+			_validate_employee_context(employee, employee_name, department, event_date, codes)
 		return raw_code
 	if not employee_name:
 		return ""
@@ -551,7 +607,7 @@ def _resolve_employee(raw_code, employee_name, department, index, employees_were
 		if len(department_matches) == 1:
 			matches = department_matches
 	if len(matches) == 1:
-		_validate_employee_context(matches[0], employee_name, department, codes)
+		_validate_employee_context(matches[0], employee_name, department, event_date, codes)
 		return matches[0].code
 	_add_code(codes, "EMPLOYEE_NAME_AMBIGUOUS" if matches else "EMPLOYEE_NOT_FOUND")
 	if not employees_were_supplied and not matches:
@@ -559,12 +615,22 @@ def _resolve_employee(raw_code, employee_name, department, index, employees_were
 	return ""
 
 
-def _validate_employee_context(employee, employee_name, department, codes):
+def _validate_employee_context(employee, employee_name, department, event_date, codes):
 	if employee_name and _name_key(employee.name) != _name_key(employee_name):
 		_add_code(codes, "EMPLOYEE_NAME_MISMATCH")
 	if department and employee.department and department_match_key(employee.department) != department_match_key(department):
 		_add_code(codes, "EMPLOYEE_DEPARTMENT_MISMATCH")
-	if employee.status and employee.status.casefold() not in {"在职", "active"}:
+	# Current status alone cannot invalidate a historical July record.  A person
+	# who left in August was still eligible in July.  Only flag an event outside
+	# the actual employment interval (or a former employee without dated proof).
+	outside_employment = bool(
+		(event_date and employee.date_of_joining and event_date < employee.date_of_joining)
+		or (event_date and employee.relieving_date and event_date > employee.relieving_date)
+	)
+	former_without_dated_proof = bool(
+		employee.status and employee.status.casefold() not in {"在职", "active"} and not employee.relieving_date
+	)
+	if outside_employment or former_without_dated_proof:
 		_add_code(codes, "FORMER_EMPLOYEE_REQUIRES_CONFIRMATION")
 
 
@@ -587,7 +653,18 @@ def _event_key(row):
 	name = _text(_first(row, _SOURCE_ALIASES["employee_name"]))
 	created_at = _datetime_text(_first(row, _SOURCE_ALIASES["created_at"]))
 	identity = code or _name_key(name)
-	return (identity, created_at) if identity and created_at else None
+	if not identity or not created_at:
+		return None
+	if is_monthly_summary_apple_tree_row(row):
+		return (
+			identity,
+			created_at,
+			_date_text(_first(row, _SOURCE_ALIASES["award_date"])),
+			_text(_first(row, _SOURCE_ALIASES["project"])),
+			_text(_first(row, _SOURCE_ALIASES["green"])),
+			_text(_first(row, _SOURCE_ALIASES["red"])),
+		)
+	return (identity, created_at)
 
 
 def _effective_value(row):
@@ -725,6 +802,8 @@ __all__ = [
 	"apply_reviews",
 	"build_employee_summary",
 	"normalize_apple_tree_rows",
+	"is_auto_excluded_apple_tree_row",
+	"is_monthly_summary_apple_tree_row",
 	"preflight_apple_tree_rows",
 	"process_apple_tree_rows",
 ]

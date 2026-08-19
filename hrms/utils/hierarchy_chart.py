@@ -41,7 +41,7 @@ def get_all_nodes(method: str, company: str):
 		root_name = _get_node_value(root, "name")
 		if not root_id or root_id in expanded_ids:
 			continue
-		data = method(root_id, company) or []
+		data = method(node=root_id, company=company) or []
 		result.append(dict(parent=root_id, parent_name=root_name, data=data))
 		expanded_ids.add(root_id)
 		queue_expandable_nodes(data)
@@ -51,7 +51,7 @@ def get_all_nodes(method: str, company: str):
 		queued_ids.discard(parent.get("id"))
 		if parent.get("id") in expanded_ids:
 			continue
-		data = method(parent.get("id"), company) or []
+		data = method(node=parent.get("id"), company=company) or []
 		result.append(dict(parent=parent.get("id"), parent_name=parent.get("name"), data=data))
 		expanded_ids.add(parent.get("id"))
 		queue_expandable_nodes(data)

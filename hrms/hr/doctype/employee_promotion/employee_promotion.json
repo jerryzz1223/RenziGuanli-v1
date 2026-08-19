@@ -14,6 +14,12 @@
   "column_break_3",
   "promotion_date",
   "company",
+  "custom_is_confirmation_interview",
+  "confirmation_interview_section",
+  "custom_confirmation_interview_date",
+  "custom_confirmation_interviewer",
+  "custom_confirmation_interview_notes",
+  "custom_confirmation_result",
   "details_section",
   "promotion_details",
   "salary_details_section",
@@ -67,6 +73,41 @@
    "fieldtype": "Link",
    "label": "Company",
    "options": "Company"
+  },
+  {
+   "default": "0",
+   "fieldname": "custom_is_confirmation_interview",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "转正面谈单",
+   "no_copy": 1
+  },
+  {
+   "fieldname": "confirmation_interview_section",
+   "fieldtype": "Section Break",
+   "label": "转正面谈"
+  },
+  {
+   "fieldname": "custom_confirmation_interview_date",
+   "fieldtype": "Date",
+   "label": "面谈日期"
+  },
+  {
+   "fieldname": "custom_confirmation_interviewer",
+   "fieldtype": "Data",
+   "label": "面谈人"
+  },
+  {
+   "fieldname": "custom_confirmation_interview_notes",
+   "fieldtype": "Small Text",
+   "label": "面谈记录"
+  },
+  {
+   "fieldname": "custom_confirmation_result",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "转正结果",
+   "options": "转正通过\n转正不通过"
   },
   {
    "description": "Set the properties that should be updated in the Employee master on promotion submission",

@@ -134,7 +134,6 @@ def _run_roster_template_acceptance():
 		"first_name": code,
 		"employee_name": code,
 		"custom_employee_code": code,
-		"employee_number": code,
 		"company": TEST_COMPANY,
 		"department": demo_seed.TEST_DEPARTMENT,
 		"designation": demo_seed.TEST_DESIGNATION,
@@ -144,7 +143,6 @@ def _run_roster_template_acceptance():
 		"gender": "Male",
 		"cell_number": "13900000117",
 		"status": "Active",
-		"naming_series": "HR-EMP-",
 	}
 	for index, field in enumerate(fields, start=1):
 		sheet.cell(row=2, column=index, value=values.get(field["fieldname"], ""))
@@ -304,11 +302,9 @@ def _ensure_test_employee(code, with_holiday_list=False):
 		name = frappe.get_doc(
 			{
 				"doctype": "Employee",
-				"naming_series": "HR-EMP-",
 				"first_name": code,
 				"employee_name": code,
 				"custom_employee_code": code,
-				"employee_number": code,
 				"company": TEST_COMPANY,
 				"department": demo_seed.TEST_DEPARTMENT,
 				"designation": demo_seed.TEST_DESIGNATION,

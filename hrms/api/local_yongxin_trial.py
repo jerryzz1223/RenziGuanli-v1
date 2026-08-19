@@ -31,6 +31,7 @@ LOCAL_SITE = "hrms.localhost"
 TRIAL_COMPANY = "永新"
 SOURCE_WORKBOOK = "/tmp/hrms-yongxin-source.xlsx"
 CLEAR_CONFIRMATION = "CLEAR LOCALHOST YONGXIN BUSINESS DATA"
+MARKED_TRIAL_CLEAR_CONFIRMATION = "CLEAR LOCALHOST YONGXIN TRIAL MARKED DATA"
 RUN_CONFIRMATION = "RUN LOCALHOST YONGXIN TRIAL"
 TRIAL_MARKER = "LOCALHOST-YONGXIN-TRIAL-20260729"
 
@@ -192,6 +193,133 @@ def _delete_doctype(doctype):
 			doc.cancel()
 		frappe.delete_doc(doctype, name, ignore_permissions=True, force=True)
 	return len(names)
+
+
+def _delete_named_docs(doctype, names):
+	"""Delete an explicit, provenance-backed set of documents only."""
+	deleted = 0
+	# Frappe normally queues dynamic-link cleanup after every deletion.  The
+	# local trial can contain hundreds of rows, and an already busy local queue
+	# would otherwise reject a safe cleanup midway.  In maintenance mode Frappe
+	# executes that same cleanup synchronously instead of enqueuing jobs.
+	previous_in_test = frappe.in_test
+	frappe.in_test = True
+	try:
+		for name in sorted(set(name for name in names if name and frappe.db.exists(doctype, name))):
+			doc = frappe.get_doc(doctype, name)
+			if doc.docstatus == 1:
+				doc.cancel()
+			frappe.delete_doc(doctype, name, ignore_permissions=True, force=True)
+			deleted += 1
+	finally:
+		frappe.in_test = previous_in_test
+	return deleted
+
+
+def _marked_trial_batch_names():
+	return frappe.get_all(
+		"HRMS Form Import Batch",
+		filters={"company": TRIAL_COMPANY, "notes": ["like", f"%{TRIAL_MARKER}%"]},
+		pluck="name",
+	)
+
+
+def _marked_trial_target_names(batch_names):
+	"""Collect only documents explicitly generated from marked import rows."""
+	targets = defaultdict(set)
+	row_names = []
+	for row in frappe.get_all(
+		"HRMS Form Import Row",
+		filters={"import_batch": ["in", batch_names or [""]]},
+		fields=["name", "target_doctype", "target_name"],
+		limit_page_length=100000,
+	):
+		row_names.append(row.name)
+		if row.target_doctype and row.target_name:
+			targets[row.target_doctype].add(row.target_name)
+	return targets, row_names
+
+
+def _marked_trial_document_names(doctype):
+	"""Find documents that carry the local trial marker in auditable fields."""
+	if not frappe.db.exists("DocType", doctype):
+		return set()
+	meta = frappe.get_meta(doctype)
+	filters_base = {"company": TRIAL_COMPANY} if meta.has_field("company") else {}
+	names = set()
+	for fieldname in ("remarks", "notes", "reason", "source_file", "source_trace_json", "raw_row_json"):
+		if not meta.has_field(fieldname):
+			continue
+		filters = {**filters_base, fieldname: ["like", f"%{TRIAL_MARKER}%"]}
+		names.update(frappe.get_all(doctype, filters=filters, pluck="name", limit_page_length=100000))
+	return names
+
+
+def _clear_marked_local_yongxin_trial_data():
+	"""Remove only data that can be traced to the unique local trial marker.
+
+	Employees and departments are deliberately excluded: the trial imported a
+	real roster, so deleting those records based on a broad company filter would
+	be unsafe.  Salary records, imported business documents and temporary files
+	are instead removed through their marked batch/row provenance.
+	"""
+	batch_names = _marked_trial_batch_names()
+	targets, row_names = _marked_trial_target_names(batch_names)
+	# Payroll output records do not repeat the trial marker, but their lock audit
+	# does.  That audit supplies an exact company/month/version scope and is the
+	# provenance link that lets us clean the downstream calculation safely.
+	for lock in frappe.get_all(
+		"HRMS Attendance Lock Audit",
+		filters={"company": TRIAL_COMPANY, "reason": ["like", f"%{TRIAL_MARKER}%"]},
+		fields=["month_lock", "attendance_month", "lock_version"],
+		limit_page_length=1000,
+	):
+		if lock.month_lock:
+			targets["HRMS Attendance Month Lock"].add(lock.month_lock)
+		if not lock.attendance_month or not lock.lock_version:
+			continue
+		for doctype in ("HRMS Payroll Settlement Record", "HRMS Payroll Input Record", "HRMS Payroll Variable Record", "HRMS Payroll Welfare Source Record"):
+			if frappe.db.exists("DocType", doctype):
+				targets[doctype].update(
+					frappe.get_all(
+						doctype,
+						filters={"company": TRIAL_COMPANY, "payroll_month": lock.attendance_month, "attendance_lock_version": lock.lock_version},
+						pluck="name",
+						limit_page_length=100000,
+					)
+				)
+	protected_target_doctypes = {"Employee", "Department", "HRMS Form Import Row", "HRMS Form Import Batch"}
+	allowed_doctypes = set(CLEAR_DOCTYPES) - protected_target_doctypes
+	deleted = OrderedDict()
+	for doctype in CLEAR_DOCTYPES:
+		if doctype not in allowed_doctypes or not frappe.db.exists("DocType", doctype):
+			continue
+		names = _marked_trial_document_names(doctype)
+		names.update(targets.get(doctype, set()))
+		if names:
+			deleted[doctype] = _delete_named_docs(doctype, names)
+	if row_names:
+		deleted["HRMS Form Import Row"] = _delete_named_docs("HRMS Form Import Row", row_names)
+	if batch_names:
+		deleted["HRMS Form Import Batch"] = _delete_named_docs("HRMS Form Import Batch", batch_names)
+	file_names = frappe.get_all("File", filters={"file_name": ["like", f"{TRIAL_MARKER}%"]}, pluck="name", limit_page_length=100000)
+	if file_names:
+		deleted["File"] = _delete_named_docs("File", file_names)
+	remaining_salary_changes = len(_marked_trial_document_names("HRMS Employee Salary Change"))
+	remaining_batches = len(_marked_trial_batch_names())
+	remaining_files = frappe.db.count("File", {"file_name": ["like", f"{TRIAL_MARKER}%"]})
+	return {
+		"site": frappe.local.site,
+		"company": TRIAL_COMPANY,
+		"marker": TRIAL_MARKER,
+		"deleted": {doctype: count for doctype, count in deleted.items() if count},
+		"skipped_target_doctypes": sorted(doctype for doctype in targets if doctype not in allowed_doctypes),
+		"remaining_marked": {
+			"salary_changes": remaining_salary_changes,
+			"form_import_batches": remaining_batches,
+			"files": remaining_files,
+		},
+	}
 
 
 def _counts():
@@ -492,24 +620,32 @@ def prepare_local_yongxin_separation_prerequisites():
 
 @frappe.whitelist()
 def clear_local_yongxin_business_data(confirm: str):
-	"""Remove only local Yongxin transactional and roster data after a backup."""
+	"""Remove only provenance-marked local trial data; never remove the roster."""
 	_assert_local_trial_access()
 	if confirm != CLEAR_CONFIRMATION:
 		frappe.throw(_("确认文字不正确，未执行任何清理。"))
-	deleted = OrderedDict()
 	try:
-		for doctype in CLEAR_DOCTYPES:
-			deleted[doctype] = _delete_doctype(doctype)
+		result = _clear_marked_local_yongxin_trial_data()
 		frappe.db.commit()
 	except Exception:
 		frappe.db.rollback()
 		raise
-	return {
-		"site": frappe.local.site,
-		"company": TRIAL_COMPANY,
-		"deleted": {doctype: count for doctype, count in deleted.items() if count},
-		"remaining": {doctype: count for doctype, count in _counts().items() if count},
-	}
+	return result
+
+
+@frappe.whitelist()
+def clear_local_yongxin_trial_marked_data(confirm: str):
+	"""Clear the exact local trial marker without touching formal Yongxin data."""
+	_assert_local_trial_access()
+	if confirm != MARKED_TRIAL_CLEAR_CONFIRMATION:
+		frappe.throw(_("确认文字不正确，未执行任何清理。"))
+	try:
+		result = _clear_marked_local_yongxin_trial_data()
+		frappe.db.commit()
+		return result
+	except Exception:
+		frappe.db.rollback()
+		raise
 
 
 def _file_from_content(file_name, content):
@@ -565,7 +701,6 @@ def _import_roster(workbook):
 		values = {
 			"first_name": name,
 			"employee_name": name,
-			"employee_number": source.get("工号", ""),
 			"custom_employee_code": source.get("工号", ""),
 			"company": TRIAL_COMPANY,
 			"department": source.get("部门", ""),
@@ -576,7 +711,6 @@ def _import_roster(workbook):
 			"date_of_birth": _date_value(source.get("出生年月"), "1990-01-01"),
 			"employment_type": "Full-time",
 			"status": "Active",
-			"naming_series": "HR-EMP-",
 			"current_address": source.get("现居住地", ""),
 			"permanent_address": source.get("户籍地址", ""),
 			"education_level": source.get("学历", ""),
@@ -679,13 +813,13 @@ def _first_value(row, labels):
 
 
 def _employee_lookup():
-	rows = frappe.get_all("Employee", filters={"company": TRIAL_COMPANY}, fields=["name", "employee_name", "employee_number", "custom_employee_code", "department"])
+	rows = frappe.get_all("Employee", filters={"company": TRIAL_COMPANY}, fields=["name", "employee_name", "custom_employee_code", "department"])
 	by_name = {}
 	by_code = {}
 	for row in rows:
 		if row.employee_name:
 			by_name[_text(row.employee_name)] = row
-		for code in (row.employee_number, row.custom_employee_code):
+		for code in (row.custom_employee_code,):
 			if code:
 				by_code[_text(code)] = row
 	return by_name, by_code
@@ -727,7 +861,7 @@ def _normalise_profile_row(profile, source_row, source_sheet, by_name, by_code):
 	data["department"] = data.get("department") or _first_value(source_row, ["部门", "单位", "实际部门", "创建人部门"])
 	person = by_code.get(_text(data.get("employee_code"))) or by_name.get(_text(data.get("employee_name")))
 	if person:
-		data["employee_code"] = data.get("employee_code") or person.employee_number or person.custom_employee_code
+		data["employee_code"] = data.get("employee_code") or person.custom_employee_code
 		data["employee_name"] = data.get("employee_name") or person.employee_name
 		data["department"] = data.get("department") or person.department
 	# Normalise dates and known numeric labels used by the generic importer.
@@ -745,7 +879,7 @@ def _seed_row(profile, employee):
 	data = {column["key"]: "" for column in profile["columns"]}
 	data.update({
 		"company": TRIAL_COMPANY,
-		"employee_code": employee.employee_number or employee.custom_employee_code,
+		"employee_code": employee.custom_employee_code,
 		"employee_name": employee.employee_name,
 		"department": employee.department,
 		"attendance_month": month,

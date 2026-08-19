@@ -39,6 +39,7 @@ function mustMatch(source, pattern, message) {
 for (const marker of [
 	"fix_desk_home_links",
 	"hide_frappe_breadcrumbs",
+	"run_hrms_shell_step",
 	"enable_sidebar_section_collapse",
 	"HRMS_SIDEBAR_MODULES",
 	"active_sidebar_module",
@@ -59,6 +60,10 @@ for (const marker of [
 	"/desk/hrms-workbench",
 ]) {
 	mustInclude(redirect, marker, `Global shell script must implement: ${marker}`);
+}
+
+if (redirect.includes("redirect_retired_personnel_home")) {
+	throw new Error("Desk startup must not run the retired Personnel redirect before Frappe has initialized its route.");
 }
 
 for (const marker of [

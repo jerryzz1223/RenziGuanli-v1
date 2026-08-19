@@ -21,11 +21,11 @@
 	};
 
 	const roster_cards = [
-		{ label: "在职", filters: { custom_personnel_status: "在职" } },
-		{ label: "试用期", filters: { custom_personnel_status: "试用期" } },
-		{ label: "退休返聘", filters: { custom_personnel_status: "退休返聘" } },
-		{ label: "待离职", filters: { custom_personnel_status: "待离职" } },
-		{ label: "已离职", filters: { custom_personnel_status: "已离职" } },
+		{ label: "在职 · 正式", personnel_status: "在职", filters: { custom_personnel_status: "在职" } },
+		{ label: "在职 · 试用期", personnel_status: "试用期", filters: { custom_personnel_status: "试用期" } },
+		{ label: "退休返聘", personnel_status: "退休返聘", filters: { custom_personnel_status: "退休返聘" } },
+		{ label: "待离职", personnel_status: "待离职", filters: { custom_personnel_status: "待离职" } },
+		{ label: "离职", personnel_status: "已离职", filters: { custom_personnel_status: "已离职" } },
 	];
 
 	const roster_list_columns = [
@@ -42,7 +42,7 @@
 	];
 	const roster_fieldnames = new Set(roster_list_columns.map((column) => column.fieldname));
 	const roster_filterable_columns = new Map(
-		roster_list_columns.map((column) => [column.fieldname, column]),
+		roster_list_columns.filter((column) => column.filterable !== false).map((column) => [column.fieldname, column]),
 	);
 
 	// ListView snapshots its visible columns during construction. Apply the roster
@@ -52,10 +52,10 @@
 	frappe.listview_settings[EMPLOYEE_DOCTYPE] = {
 		hide_name_column: true,
 		page_length: ROSTER_ALL_EMPLOYEES_PAGE_LENGTH,
+		disable_comment_count: true,
 		add_fields: [
 			"employee_name",
 			"custom_employee_code",
-			"employee_number",
 			"department",
 			"designation",
 			"employment_type",
@@ -92,7 +92,7 @@
 				return format_roster_department_display(value, doc);
 			},
 			custom_personnel_status(value) {
-				return frappe.utils.escape_html(String(value || __("未设置")));
+				return frappe.utils.escape_html(format_roster_personnel_status(value));
 			},
 		},
 		onload(listview) {
@@ -104,6 +104,15 @@
 		},
 	};
 
+	function format_roster_personnel_status(value) {
+		const status = String(value || __("未设置"));
+		return {
+			在职: __("在职 · 正式"),
+			试用期: __("在职 · 试用期"),
+			已离职: __("离职"),
+		}[status] || status;
+	}
+
 	function setup_roster_page(listview) {
 		if (!listview || !listview.page) return;
 		bind_natural_employee_code_sorting(listview);
@@ -111,6 +120,7 @@
 
 		mark_employee_roster_view();
 		bind_roster_employee_detail_navigation(listview);
+		bind_roster_row_decorations(listview);
 		configure_roster_list_columns(listview);
 		listview.page.set_title(__("员工花名册"));
 		hide_native_filter_controls();
@@ -118,8 +128,9 @@
 		hide_unused_roster_toolbar_controls(listview);
 		hide_roster_page_length_controls();
 	setup_roster_actions(listview);
-	setup_roster_summary(listview);
+		setup_roster_summary(listview);
 		enhance_roster_column_headers(listview);
+		ensure_roster_empty_result_header(listview);
 		bind_personnel_status_updates(listview);
 		sync_active_roster_card(listview);
 		sync_roster_status_date_column(listview);
@@ -132,6 +143,7 @@
 		sync_roster_status_date_column(listview);
 		normalise_roster_list_cells(listview);
 		enhance_roster_column_headers(listview);
+		ensure_roster_empty_result_header(listview);
 	}, 300);
 		normalise_roster_list_cells(listview);
 	}
@@ -140,7 +152,7 @@
 		const wrapper = get_list_wrapper(listview);
 		if (!wrapper) return;
 
-		const show_departure_date = ROSTER_DEPARTURE_DATE_STATUSES.has(get_active_roster_card().label);
+		const show_departure_date = ROSTER_DEPARTURE_DATE_STATUSES.has(get_active_roster_card().personnel_status);
 		wrapper.classList.toggle("hrms-roster-shows-departure-date", show_departure_date);
 		toggle_roster_date_column(wrapper, "date_of_joining", show_departure_date);
 		toggle_roster_date_column(wrapper, "relieving_date", !show_departure_date);
@@ -205,7 +217,7 @@
 	}
 
 	function get_employee_business_code(employee) {
-		return String(employee?.custom_employee_code || employee?.employee_number || "").trim();
+		return String(employee?.custom_employee_code || "").trim();
 	}
 
 	function compare_employee_business_codes(left, right) {
@@ -267,21 +279,6 @@
 		listview.page.add_inner_button(__("导出"), function () {
 			frappe.set_route("employee-roster-export");
 		});
-
-	listview.page.add_inner_button(__("设置花名册字段"), function () {
-		open_roster_field_settings();
-	});
-
-	listview.page.add_inner_button(__("清除搜索与筛选"), function () {
-		clear_roster_search_and_filters(listview, true);
-	});
-
-}
-
-	function open_roster_field_settings() {
-		sessionStorage.setItem("hrms_settings_center_active_module", "字段管理中心");
-		sessionStorage.setItem("hrms_settings_center_focus", "roster_visible");
-		frappe.set_route("hr-settings-center");
 	}
 
 	function setup_roster_summary(listview) {
@@ -312,6 +309,74 @@
 		panel.appendChild(cards);
 
 		wrapper.insertBefore(panel, wrapper.firstChild);
+	}
+
+	function ensure_roster_empty_result_header(listview) {
+		const wrapper = get_list_wrapper(listview);
+		if (!wrapper) return;
+
+		const existing = wrapper.querySelector(".hrms-roster-empty-result-header");
+		if (!Array.isArray(listview.data) || listview.data.length) {
+			existing?.remove();
+			return;
+		}
+
+		const panel = wrapper.querySelector(".hrms-roster-summary");
+		const header = existing || document.createElement("div");
+		header.className = "hrms-roster-empty-result-header";
+		header.setAttribute("role", "group");
+		header.setAttribute("aria-label", __("员工花名册表头和当前筛选"));
+		header.replaceChildren();
+
+		const active_filter = get_stored_roster_column_filter();
+		roster_list_columns.forEach((column) => {
+			const cell = document.createElement("div");
+			cell.className = "hrms-roster-empty-result-header__cell";
+			cell.dataset.fieldname = column.fieldname;
+
+			const label = document.createElement("label");
+			label.className = "hrms-roster-empty-result-header__label";
+			label.textContent = __(column.label);
+			cell.appendChild(label);
+
+			if (active_filter?.fieldname === column.fieldname) {
+				cell.classList.add("has-filter");
+				const input = document.createElement("input");
+				input.type = "search";
+				input.className = "form-control input-sm hrms-roster-empty-result-header__input";
+				input.dataset.rosterEmptyFilter = "true";
+				input.value = active_filter.display_value || active_filter.value || "";
+				input.placeholder = __("筛选{0}", [column.label]);
+				input.setAttribute("aria-label", __("筛选{0}", [column.label]));
+				label.appendChild(input);
+
+				const restore_roster_when_cleared = () => {
+					if (!input.value.trim() && get_stored_roster_column_filter()) clear_roster_column_filter();
+				};
+				input.addEventListener("input", restore_roster_when_cleared);
+				input.addEventListener("search", restore_roster_when_cleared);
+				input.addEventListener("keydown", (event) => {
+					if (event.key !== "Enter") return;
+					event.preventDefault();
+					const value = input.value.trim();
+					if (!value) return clear_roster_column_filter();
+					apply_roster_column_filter(column, { value, label: value }, false);
+				});
+			}
+
+			header.appendChild(cell);
+		});
+
+		if (active_filter) {
+			const clear_button = document.createElement("button");
+			clear_button.type = "button";
+			clear_button.className = "btn btn-default btn-sm hrms-roster-empty-result-header__clear";
+			clear_button.textContent = __("清除筛选");
+			clear_button.addEventListener("click", () => clear_roster_column_filter());
+			header.appendChild(clear_button);
+		}
+
+		if (!existing) wrapper.insertBefore(header, panel?.nextSibling || wrapper.firstChild);
 	}
 
 	function hide_native_roster_field_filters(listview) {
@@ -487,39 +552,6 @@
 		apply_single_roster_filter(get_active_roster_card());
 	}
 
-	function clear_roster_search_and_filters(listview, show_alert) {
-		sessionStorage.removeItem(ROSTER_COLUMN_FILTER_STORAGE_KEY);
-
-		if (listview?.filter_area?.get_filters?.()?.length) {
-			listview.filter_area.clear_filters();
-		}
-		if (listview) {
-			listview.search_term = "";
-		}
-		clear_roster_native_search_input(listview);
-		apply_single_roster_filter(get_active_roster_card());
-
-		if (show_alert) {
-			frappe.show_alert({
-				message: __("已清除搜索与筛选，已恢复{0}", [__(get_active_roster_card().label)]),
-				indicator: "green",
-			});
-		}
-	}
-
-	function clear_roster_native_search_input(listview) {
-		listview?.search_field?.set_value?.("");
-		listview?.search_field?.$input?.val?.("");
-		listview?.$search_input?.val?.("");
-
-		const page_wrapper = listview?.page?.wrapper?.[0] || listview?.page?.wrapper?.get?.(0);
-		const wrapper = page_wrapper || get_list_wrapper(listview);
-		const search_input = wrapper?.querySelector(
-			".list-search input, .search-bar input, .search-input input, input[type=\"search\"]",
-		);
-		if (search_input) search_input.value = "";
-	}
-
 	function get_stored_roster_column_filter() {
 		try {
 			return JSON.parse(sessionStorage.getItem(ROSTER_COLUMN_FILTER_STORAGE_KEY) || "null");
@@ -606,6 +638,17 @@
 		listview.start = 0;
 		listview.refresh();
 		update_roster_filter_status(listview);
+	}
+
+	function bind_roster_row_decorations(listview) {
+		if (listview.__hrmsRosterRowDecorationsBound) return;
+		listview.__hrmsRosterRowDecorationsBound = true;
+		const original_after_render = listview.after_render;
+		listview.after_render = function (...args) {
+			const result = original_after_render?.apply(this, args);
+			normalise_roster_list_cells(this);
+			return result;
+		};
 	}
 
 	function build_roster_route_options(filters, search) {
@@ -695,7 +738,7 @@ function hide_native_filter_controls() {
 		const page_wrapper = listview?.page?.wrapper?.[0] || listview?.page?.wrapper?.get?.(0);
 		if (!page_wrapper) return;
 
-		const unused_labels = ["列表视图", "List View", "已保存的筛选器", "Saved Filters"];
+		const allowed_labels = ["添加员工", "表单导入", "导出"];
 		const toolbar = page_wrapper.querySelector(".page-actions, .list-view-actions, .list-actions") || page_wrapper;
 
 		toolbar.querySelectorAll("button, [role='button'], .btn").forEach((control) => {
@@ -709,10 +752,16 @@ function hide_native_filter_controls() {
 				.replace(/\s+/g, " ")
 				.trim();
 
-			if (unused_labels.some((label) => control_text === label || control_text.startsWith(`${label} `))) {
+			if (!allowed_labels.some((label) => control_text === label || control_text.startsWith(`${label} `))) {
 				control.classList.add("hrms-roster-toolbar-control-hidden");
 				control.setAttribute("aria-hidden", "true");
 			}
+		});
+
+		page_wrapper.querySelectorAll(".list-search-form, .list-search, .list-search-input, input[type='search'], input[placeholder*='搜索']").forEach((control) => {
+			const container = control.closest(".list-search-form, .list-search, .search-bar, .form-group, .input-group") || control;
+			container.classList.add("hrms-roster-toolbar-control-hidden");
+			container.setAttribute("aria-hidden", "true");
 		});
 	}
 
@@ -736,7 +785,7 @@ function hide_native_filter_controls() {
 
 	function format_roster_employee_code_display(value, doc) {
 		doc = doc || {};
-		const display_value = doc.custom_employee_code || doc.employee_number || value || "";
+		const display_value = doc.custom_employee_code || value || "";
 		return frappe.utils.escape_html(display_value);
 	}
 
@@ -764,20 +813,89 @@ function hide_native_filter_controls() {
 		});
 
 		Array.from(wrapper.querySelectorAll(".list-row")).forEach((row, row_index) => {
+			row.querySelectorAll(".list-row-activity").forEach((activity) => activity.remove());
 			const cells = Array.from(row.querySelectorAll(".list-row-col"));
+			const doc = listview?.data?.[row_index];
+			const employee_name_cell = get_roster_employee_name_cell(cells, doc);
+			if (employee_name_cell && doc) {
+				prepend_roster_employee_photo(employee_name_cell, doc.image, doc.employee_name);
+			}
 			cells.forEach((cell, column_index) => {
 				const text = (cell.textContent || "").trim();
-				if (employee_code_indexes.has(column_index) && /^HR-EMP-\d+$/i.test(text)) {
-					const doc = listview?.data?.[row_index];
-					if (doc) {
-						cell.textContent = doc.custom_employee_code || doc.employee_number || text;
-					}
+				if (employee_code_indexes.has(column_index) && doc?.custom_employee_code) {
+					cell.textContent = doc.custom_employee_code;
 				}
 				if (department_indexes.has(column_index) && /\s+-\s+[^-]+$/.test(text)) {
 					cell.textContent = text.replace(/\s+-\s+[^-]+$/, "").trim();
 				}
 			});
 		});
+	}
+
+	function get_roster_employee_name_cell(cells, doc) {
+		if (!doc) return null;
+		const by_fieldname = cells.find(
+			(cell) =>
+				cell.dataset.fieldname === "employee_name" ||
+				Boolean(cell.querySelector('[data-fieldname="employee_name"]')),
+		);
+		if (by_fieldname) return by_fieldname;
+
+		const employee_name = String(doc.employee_name || "").trim();
+		return cells.find((cell) => (cell.textContent || "").trim() === employee_name) || null;
+	}
+
+	function prepend_roster_employee_photo(cell, image_url, employee_name) {
+		cell.querySelector(".hrms-roster-photo-frame")?.remove();
+
+		const photo = document.createElement("span");
+		photo.className = "hrms-roster-photo-frame";
+		photo.title = employee_name || __("员工照片");
+		photo.style.cssText =
+			"align-items:center;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:50%;box-sizing:border-box;display:inline-flex;flex:0 0 18px;height:18px;justify-content:center;max-height:18px;max-width:18px;min-height:18px;min-width:18px;overflow:hidden;width:18px;";
+		const url = String(image_url || "").trim();
+		if (url) {
+			const image = document.createElement("img");
+			image.src = url;
+			image.alt = "";
+			image.style.cssText = "display:block;height:100%;max-height:100%;max-width:100%;object-fit:cover;width:100%;";
+			image.addEventListener("error", () => {
+				image.remove();
+				append_roster_default_avatar(photo);
+			});
+			photo.append(image);
+		} else {
+			append_roster_default_avatar(photo);
+		}
+		const checkbox_container = cell.querySelector(".list-row-checkbox")?.closest(".level-item");
+		const employee_name_container = checkbox_container?.parentElement;
+		if (employee_name_container) {
+			employee_name_container.classList.add("hrms-roster-employee-name-cell");
+			employee_name_container.style.cssText += "display:flex;align-items:center;gap:7px;min-width:0;";
+			checkbox_container.insertAdjacentElement("afterend", photo);
+			return;
+		}
+
+		cell.classList.add("hrms-roster-employee-name-cell");
+		cell.prepend(photo);
+	}
+
+	function append_roster_default_avatar(photo) {
+		photo.classList.add("hrms-roster-photo-frame--default");
+		const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		svg.setAttribute("viewBox", "0 0 20 20");
+		svg.setAttribute("aria-hidden", "true");
+		svg.style.cssText = "display:block;height:100%;width:100%;";
+		const head = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+		head.setAttribute("cx", "10");
+		head.setAttribute("cy", "7");
+		head.setAttribute("r", "3.2");
+		head.setAttribute("fill", "#9da7b2");
+		const shoulders = document.createElementNS("http://www.w3.org/2000/svg", "path");
+		shoulders.setAttribute("d", "M3.3 18c.5-3.9 3.1-6.1 6.7-6.1s6.2 2.2 6.7 6.1z");
+		shoulders.setAttribute("fill", "#9da7b2");
+		svg.append(head, shoulders);
+		photo.append(svg);
 	}
 
 	// Frappe's default ListView opens the native Employee form when a row is

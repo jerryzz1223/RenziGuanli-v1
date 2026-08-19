@@ -32,7 +32,7 @@ for (const marker of [
 	'"lock_status": "已锁定"',
 	"def generate_payroll_input_records(company: str, payroll_month: str, attendance_lock_version: str)",
 	"def generate_payroll_settlement_records(company: str, payroll_month: str, attendance_lock_version: str)",
-	"def import_payroll_variable_workbook(file_url: str, payroll_month: str = \"\", company: str = \"\", attendance_lock_version: str = \"\")",
+	"def import_payroll_variable_workbook(file_url: str, payroll_month: str = \"\", company: str = \"\", attendance_lock_version: str = \"\", source_type: str = \"\")",
 	"def delete_payroll_variable_import_batch(batch_name: str, company: str = \"\", attendance_lock_version: str = \"\")",
 	"完整薪资结算表只能用于预览核对",
 	"source_trace_json",
@@ -53,7 +53,8 @@ for (const forbidden of [
 
 for (const marker of [
 	"data-company",
-	"data-lock-version",
+	"data-attendance-dependency",
+	"get_payroll_attendance_dependency",
 	"scope_args(extra = {})",
 	"company: this.company",
 	"attendance_lock_version: this.attendance_lock_version",

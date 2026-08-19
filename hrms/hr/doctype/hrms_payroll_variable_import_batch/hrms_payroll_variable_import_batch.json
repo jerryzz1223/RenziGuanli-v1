@@ -9,11 +9,20 @@
   "payroll_month",
   "company",
   "attendance_lock_version",
+  "source_type",
   "source_file",
   "status",
   "variable_rows",
   "imported_by",
   "imported_on",
+  "reviewed_by",
+  "reviewed_on",
+  "confirmed_by",
+  "confirmed_on",
+  "voided_by",
+  "voided_on",
+  "void_reason",
+  "replacement_batch",
   "notes"
  ],
  "fields": [
@@ -40,18 +49,24 @@
    "reqd": 1
   },
   {
+   "fieldname": "source_type",
+   "fieldtype": "Link",
+   "label": "来源类型",
+   "options": "HRMS Payroll Variable Source Type"
+  },
+  {
    "fieldname": "source_file",
    "fieldtype": "Attach",
    "in_list_view": 1,
    "label": "来源文件"
   },
   {
-   "default": "已导入",
+   "default": "待审核",
    "fieldname": "status",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "状态",
-   "options": "预览\n已导入\n已生成薪资输入"
+   "options": "待解析\n待审核\n已确认\n已驳回\n已作废"
   },
   {
    "default": "0",
@@ -69,6 +84,14 @@
    "fieldtype": "Datetime",
    "label": "导入时间"
   },
+  {"fieldname": "reviewed_by", "fieldtype": "Data", "label": "审核人"},
+  {"fieldname": "reviewed_on", "fieldtype": "Datetime", "label": "审核时间"},
+  {"fieldname": "confirmed_by", "fieldtype": "Data", "label": "确认入账人"},
+  {"fieldname": "confirmed_on", "fieldtype": "Datetime", "label": "确认入账时间"},
+  {"fieldname": "voided_by", "fieldtype": "Data", "label": "作废人"},
+  {"fieldname": "voided_on", "fieldtype": "Datetime", "label": "作废时间"},
+  {"fieldname": "void_reason", "fieldtype": "Small Text", "label": "作废原因"},
+  {"fieldname": "replacement_batch", "fieldtype": "Link", "label": "替代批次", "options": "HRMS Payroll Variable Import Batch"},
   {
    "fieldname": "notes",
    "fieldtype": "Small Text",

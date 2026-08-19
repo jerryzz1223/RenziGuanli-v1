@@ -13,28 +13,28 @@ function mustInclude(source, marker) {
 
 const page = read("hrms/hr/page/payroll_input_center/payroll_input_center.js");
 for (const marker of [
-	"process_steps",
-	"薪酬实施步骤",
-	"点击哪一步，下方只显示该步",
+	"workspace_areas",
+	"本月数据状态",
+	"各区域可按需进入",
 	"is-selected",
 	"process_state_for",
 	"update_process_guide_status",
 	"process_status_from_salary_architecture",
-	"process_status_from_workflow",
-	"data-process-route",
-	'route: "salary-rules"',
+	"process_status_from_runbook",
+	"data-area-route",
 	'route: "salary-assignments"',
-	'route: "attendance-pay-rules"',
-	'route: "data-closure"',
+	'route: "variables"',
+	'key: "salary-rules"',
+	'key: "attendance-pay-rules"',
 	"load_salary_assignment_step",
 	"load_attendance_pay_rules",
-	"核对人事基础资料",
-	"前往人事 · 员工花名册",
+	"这里只显示参与本月算薪的人数范围",
+	"打开员工花名册",
+	"查看已发布薪资架构",
+	'frappe.set_route("salary-architecture")',
 	'frappe.set_route("List", "Employee")',
-	"确认并锁定本步",
-	"解锁并使后续步骤失效",
+	"人员范围正常",
 	"payroll-formulas",
-	"payroll-config-items",
 	"payroll-advanced",
 	"list_payroll_configuration_items",
 	"filter_payroll_configuration_items",
@@ -78,9 +78,9 @@ for (const marker of [
 
 const css = read("hrms/hr/page/payroll_input_center/payroll_input_center.css");
 for (const marker of [
-	".hrms-payroll-process-guide",
-	".hrms-payroll-process-step.is-selected",
-	".hrms-payroll-lock-panel",
+	".hrms-payroll-area-navigation",
+	".hrms-payroll-area-card.is-selected",
+	".hrms-payroll-personnel-summary",
 	".hrms-payroll-attendance-rule-grid",
 	".hrms-payroll-step-purpose",
 	".hrms-payroll-step-kicker",
@@ -91,7 +91,7 @@ for (const marker of [
 }
 
 const guide = read("docs/payroll/薪酬配置中心操作指南.md");
-for (const marker of ["七步操作顺序", "独立步骤跳转", "只读预览", "规则修改要求", "最低验收案例"]) {
+for (const marker of ["数据区域与按需入口", "人员范围只看统计", "试算时统一校验", "规则修改要求", "最低验收案例"]) {
 	mustInclude(guide, marker);
 }
 

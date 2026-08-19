@@ -48,6 +48,12 @@ REQUIRED_DINGTALK_FIELDS = (
 	"approval_status",
 )
 
+REQUIRED_MONTHLY_SUMMARY_FIELDS = (
+	"punch_time",
+	"employee_name",
+	"punch_type",
+)
+
 EXCEPTION_MESSAGES = {
 	"INVALID_PUNCH_TIME": "补卡时间无法解析",
 	"OUTSIDE_ATTENDANCE_MONTH": "补卡时间不属于当前处理月份",
@@ -69,6 +75,12 @@ EXCEPTION_MESSAGES = {
 	"OFFLINE_CONFIRMER_REQUIRED": "线下补录必须填写确认人",
 	"OFFLINE_ENTRY_REQUIRES_CONFIRMATION": "线下补录不能作为钉钉记录自动计入",
 }
+
+# These are closed DingTalk outcomes, not records waiting for a reviewer.  The
+# original upload remains attached to its import batch, but there is no
+# attendance-processing record to review or carry into the monthly result.
+AUTO_EXCLUDED_APPROVAL_RESULTS = {"审批未通过", "审批不通过", "未通过", "已拒绝", "拒绝", "驳回", "已驳回"}
+AUTO_EXCLUDED_APPROVAL_STATUSES = {"终止", "已终止", "已撤销", "撤销"}
 
 FORMER_EMPLOYEE_STATUSES = {
 	"已离职",
@@ -96,7 +108,7 @@ def department_match_key(value: Any) -> str:
 class MissedPunchRules:
 	"""Configurable decisions that must not be hidden in upload code."""
 
-	business_punch_types: tuple[str, ...] = ("因公补卡",)
+	business_punch_types: tuple[str, ...] = ("因公补卡", "因公打卡")
 	approved_results: tuple[str, ...] = ("审批通过",)
 	ended_statuses: tuple[str, ...] = ("已结束",)
 	require_approved: bool = True
@@ -117,7 +129,7 @@ class MissedPunchRules:
 
 
 def precheck_missed_punch_structure(headers: Sequence[Any]) -> dict[str, Any]:
-	"""Return a non-mutating structure check for a DingTalk export header row."""
+	"""Recognize either a DingTalk approval export or HR's monthly register."""
 
 	available = {_text(header): header for header in headers if _text(header)}
 	mapping = {}
@@ -125,7 +137,12 @@ def precheck_missed_punch_structure(headers: Sequence[Any]) -> dict[str, Any]:
 		matched = next((available[_text(alias)] for alias in aliases if _text(alias) in available), None)
 		if matched is not None:
 			mapping[fieldname] = matched
-	missing = [fieldname for fieldname in REQUIRED_DINGTALK_FIELDS if fieldname not in mapping]
+	is_monthly_summary = (
+		all(fieldname in mapping for fieldname in REQUIRED_MONTHLY_SUMMARY_FIELDS)
+		and not any(fieldname in mapping for fieldname in ("source_id", "approval_no", "approval_result", "approval_status"))
+	)
+	required = REQUIRED_MONTHLY_SUMMARY_FIELDS if is_monthly_summary else REQUIRED_DINGTALK_FIELDS
+	missing = [fieldname for fieldname in required if fieldname not in mapping]
 	recognized_headers = {_text(header) for header in mapping.values()}
 	unknown = [header for header in headers if _text(header) and _text(header) not in recognized_headers]
 	return {
@@ -134,6 +151,9 @@ def precheck_missed_punch_structure(headers: Sequence[Any]) -> dict[str, Any]:
 		"field_mapping": mapping,
 		"missing_required_fields": missing,
 		"unknown_fields": unknown,
+		"source_kind": "monthly_summary" if is_monthly_summary else "dingtalk",
+		"source_kind_label": "人资月度汇总表" if is_monthly_summary else "钉钉审批明细",
+		"batch_review_note": "月度汇总表不要求逐行补造钉钉审批编号；以原文件、工作表和行号追溯。" if is_monthly_summary else "",
 	}
 
 
@@ -150,9 +170,9 @@ def process_missed_punch_rows(
 ) -> dict[str, Any]:
 	"""Standardize uploaded rows into one user-facing ``processed_rows`` dataset.
 
-	Explicit business-punch exclusions remain in the upload layer's immutable raw
-	rows. Every uncertain row remains in ``processed_rows`` with unified review
-	fields and zero downstream effect until a human approves it.
+	Explicit business-punch and closed-approval exclusions remain in the upload
+	layer's immutable raw rows. Every uncertain row (including ``审批中``) remains
+	in ``processed_rows`` with unified review fields until a human approves it.
 	"""
 
 	_normalize_attendance_month(attendance_month)
@@ -179,7 +199,7 @@ def process_missed_punch_rows(
 			department_mapping=department_map,
 			rules=active_rules,
 		)
-		if "BUSINESS_PUNCH_EXCLUDED" in record["rule_codes"]:
+		if record["auto_excluded"]:
 			excluded_source_rows += 1
 			continue
 		approval_no = record["approval_no"]
@@ -200,7 +220,9 @@ def process_missed_punch_rows(
 		_finalize_record(record, active_rules)
 
 	status = (
-		"待处理异常"
+		"已确认"
+		if input_rows and not processed_rows and excluded_source_rows == len(input_rows)
+		else "待处理异常"
 		if any(record["review_status"] == "待审核" for record in processed_rows) or not structure["is_valid"]
 		else "待确认"
 	)
@@ -249,6 +271,9 @@ def _standardize_row(
 	manual_confirmed = _bool_value(_first_value(source, "manual_confirmed"))
 	resolved_source_file = _text(_first_value(source, "source_file")) or _text(default_source_file)
 	resolved_source_sheet = _text(_first_value(source, "source_sheet")) or _text(default_source_sheet)
+	resolved_source_row = _integer_value(_first_value(source, "source_row"), default_source_row)
+	if source_kind == "monthly_summary" and not source_id:
+		source_id = f"monthly-summary:{resolved_source_sheet}:{resolved_source_row}"
 	if not resolved_source_file:
 		_append_code(exception_codes, "SOURCE_FILE_MISSING")
 	if not resolved_source_sheet:
@@ -257,9 +282,14 @@ def _standardize_row(
 	if parsed_punch_time is None:
 		_append_code(exception_codes, "INVALID_PUNCH_TIME")
 	elif parsed_punch_time.strftime("%Y-%m") != attendance_month:
-		_append_code(exception_codes, "OUTSIDE_ATTENDANCE_MONTH")
+		if source_kind == "monthly_summary":
+			_append_code(rule_codes, "OUTSIDE_ATTENDANCE_MONTH_EXCLUDED")
+		else:
+			_append_code(exception_codes, "OUTSIDE_ATTENDANCE_MONTH")
 	if punch_type in rules.business_punch_types:
 		_append_code(rule_codes, "BUSINESS_PUNCH_EXCLUDED")
+	if _is_auto_excluded_approval(approval_result, approval_status):
+		_append_code(rule_codes, "CLOSED_APPROVAL_EXCLUDED")
 
 	if source_kind == "offline":
 		if not manual_reason:
@@ -267,7 +297,7 @@ def _standardize_row(
 		if not confirmed_by:
 			_append_code(exception_codes, "OFFLINE_CONFIRMER_REQUIRED")
 		_append_code(exception_codes, "OFFLINE_ENTRY_REQUIRES_CONFIRMATION")
-	else:
+	elif source_kind == "dingtalk":
 		if not source_id:
 			_append_code(exception_codes, "SOURCE_ID_MISSING")
 		if not approval_no:
@@ -281,6 +311,7 @@ def _standardize_row(
 		raw_employee_code,
 		raw_employee_name,
 		raw_department,
+		parsed_punch_time,
 		by_code=by_code,
 		by_name=by_name,
 		has_directory=has_directory,
@@ -295,7 +326,7 @@ def _standardize_row(
 	return {
 		"source_file": resolved_source_file,
 		"source_sheet": resolved_source_sheet,
-		"source_row": _integer_value(_first_value(source, "source_row"), default_source_row),
+		"source_row": resolved_source_row,
 		"source_kind": source_kind,
 		"source_id": source_id,
 		"approval_no": approval_no,
@@ -332,6 +363,7 @@ def _standardize_row(
 		"review_note": "",
 		"review_history": [],
 		"eligible_for_downstream": False,
+		"auto_excluded": bool(rule_codes),
 		"duplicate_of_source_row": None,
 		"original_value": deepcopy(dict(source)),
 		"_parsed_punch_time": parsed_punch_time,
@@ -342,6 +374,7 @@ def _resolve_employee(
 	raw_code: str,
 	raw_name: str,
 	raw_department: str,
+	event_datetime: datetime | None,
 	*,
 	by_code: Mapping[str, list[dict[str, Any]]],
 	by_name: Mapping[str, list[dict[str, Any]]],
@@ -380,7 +413,14 @@ def _resolve_employee(
 		if mapped_department and department and department_match_key(mapped_department) != department_match_key(department):
 			_append_code(exception_codes, "DEPARTMENT_CONFLICT")
 		if _normalized_status(employment_status) in FORMER_EMPLOYEE_STATUSES:
-			if rules.former_employee_policy == "exception":
+			joining = _parse_datetime(matched.get("date_of_joining"))
+			relieving = _parse_datetime(matched.get("relieving_date"))
+			outside_employment = bool(
+				(event_datetime and joining and event_datetime.date() < joining.date())
+				or (event_datetime and relieving and event_datetime.date() > relieving.date())
+			)
+			former_without_dated_proof = not relieving
+			if rules.former_employee_policy == "exception" and (outside_employment or former_without_dated_proof):
 				_append_code(exception_codes, "FORMER_EMPLOYEE_REQUIRES_CONFIRMATION")
 	else:
 		employee_code = raw_code
@@ -407,10 +447,12 @@ def _employee_indexes(employee_directory):
 		return by_code, by_name, False
 	for item in employee_directory:
 		employee = {
-			"employee_code": _directory_value(item, "employee_code", "custom_employee_code", "employee_number", "工号", "name"),
+			"employee_code": _directory_value(item, "employee_code", "custom_employee_code", "工号"),
 			"employee_name": _directory_value(item, "employee_name", "姓名", "employee_full_name"),
 			"department": normalize_department_name(_directory_value(item, "department", "部门")),
 			"employment_status": _directory_value(item, "employment_status", "custom_personnel_status", "status", "工作性质"),
+			"date_of_joining": _directory_value(item, "date_of_joining", "入职日期"),
+			"relieving_date": _directory_value(item, "relieving_date", "离职日期"),
 		}
 		if employee["employee_code"]:
 			by_code[employee["employee_code"]].append(employee)
@@ -462,6 +504,14 @@ def _finalize_record(record, rules):
 		record["eligible_for_downstream"] = True
 		record["red_apples"] = rules.red_apples_per_record
 		record["amount"] = rules.amount_per_record
+
+
+def _is_auto_excluded_approval(approval_result: str, approval_status: str) -> bool:
+	"""Return whether DingTalk has already closed this record as unusable.
+
+	``审批中`` is intentionally absent: it stays visible for human review.
+	"""
+	return approval_result in AUTO_EXCLUDED_APPROVAL_RESULTS or approval_status in AUTO_EXCLUDED_APPROVAL_STATUSES
 
 
 def summarize_missed_punch_rows(processed_rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -636,6 +686,8 @@ def _normalize_attendance_month(value):
 
 def _source_kind(value):
 	normalized = _text(value).lower()
+	if normalized in {"monthly_summary", "monthly-register", "人资月度汇总表", "月度汇总表"}:
+		return "monthly_summary"
 	if normalized in {"offline", "manual", "线下", "人工", "人工补录"}:
 		return "offline"
 	return "dingtalk"

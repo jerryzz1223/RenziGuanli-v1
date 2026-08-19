@@ -37,7 +37,6 @@ for (const marker of [
 const pageJs = read("hrms/hr/page/payroll_input_center/payroll_input_center.js");
 for (const marker of [
 	"薪资结算字段映射",
-	"刷新字段映射",
 	"list_payroll_field_mappings",
 	"ensure_default_payroll_field_mappings",
 	"upsert_payroll_field_mapping",
@@ -47,6 +46,21 @@ for (const marker of [
 	"对应规则",
 ]) {
 	mustInclude(pageJs, marker, `Payroll rule page is missing field mapping marker: ${marker}`);
+}
+
+const salaryRulesStart = pageJs.indexOf("\tload_salary_rules() {");
+const salaryRulesEnd = pageJs.indexOf("\n\tformat_attendance_rule_parameters", salaryRulesStart);
+const salaryRulesView = pageJs.slice(salaryRulesStart, salaryRulesEnd);
+for (const marker of [
+	"专业设置：查看全部薪酬项目",
+	"data-payroll-item-summary",
+	"data-payroll-item-catalog",
+	"高级设置：项目来源规则与字段映射",
+	"data-payroll-field-mapping-table",
+	"data-refresh-field-mappings",
+	"data-edit-field-mapping",
+]) {
+	if (salaryRulesView.includes(marker)) throw new Error(`Payroll rules view must not display mapping configuration: ${marker}`);
 }
 
 const mappingJson = read("hrms/hr/doctype/hrms_payroll_field_mapping/hrms_payroll_field_mapping.json");

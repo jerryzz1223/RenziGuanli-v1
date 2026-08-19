@@ -142,6 +142,7 @@ import {
 } from "@ionic/vue"
 
 import { FeatherIcon, createResource, LoadingIndicator, debounce } from "frappe-ui"
+import { TIME_WITH_MERIDIEM_FORMAT } from "@/utils/timeFormats"
 
 import TabButtons from "@/components/TabButtons.vue"
 import EmployeeCheckinItem from "@/components/EmployeeCheckinItem.vue"
@@ -293,7 +294,7 @@ const openRequestModal = async (request) => {
 	selectedRequest.value = request
 	selectedRequest.value.doctype = "Employee Checkin"
 	selectedRequest.value.date = request.time
-	selectedRequest.value.formatted_time = dayjs(request.time).format("HH:mm a")
+	selectedRequest.value.formatted_time = dayjs(request.time).format(TIME_WITH_MERIDIEM_FORMAT)
 	selectedRequest.value.formatted_latitude = `${Number(request.latitude).toFixed(5)}°`
 	selectedRequest.value.formatted_longitude = `${Number(request.longitude).toFixed(5)}°`
 	isRequestModalOpen.value = true

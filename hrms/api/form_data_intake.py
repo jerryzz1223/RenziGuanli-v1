@@ -100,7 +100,7 @@ FORM_IMPORT_PROFILES = [
 		"key": EMPLOYEE_ROSTER_TEMPLATE_KEY,
 		"module": "人事",
 		"label": "员工花名册",
-		"description": "员工主档、联系方式、教育和合同保险基础资料。此表通过现有智能花名册导入直接写入 Employee。",
+		"description": "员工主档、联系方式、教育和合同保险基础资料。此表通过现有智能花名册直接导入员工主档。",
 		"source_sheets": ["花名册"],
 		"processing_target": "员工主档（直接导入）",
 		"entry_mode": "employee_roster",
@@ -633,7 +633,7 @@ def _employee_by_code(company, employee_code):
 	if not employee_code:
 		return ""
 	filters = {"company": company, "status": "Active"}
-	for fieldname in ("custom_employee_code", "employee_number"):
+	for fieldname in ("custom_employee_code",):
 		if frappe.db.has_column("Employee", fieldname):
 			value = frappe.db.get_value("Employee", {**filters, fieldname: employee_code}, "name")
 			if value:
@@ -872,7 +872,7 @@ def create_form_import_template_file(template_key: str):
 def preview_form_import(file_url: str, template_key: str, company: str):
 	profile = _profile_or_throw(template_key)
 	if profile.get("entry_mode") == "employee_roster":
-		return {"entry_mode": "employee_roster", "redirect_route": "employee-roster-import", "message": _("员工花名册需要使用智能花名册导入，以便安全写入 Employee 主档。")}
+		return {"entry_mode": "employee_roster", "redirect_route": "employee-roster-import", "message": _("员工花名册需要使用智能花名册导入，以便安全导入员工主档。")}
 	if not company or not frappe.db.exists("Company", company):
 		frappe.throw(_("请选择有效公司"))
 	plan = _read_plan(file_url, profile)

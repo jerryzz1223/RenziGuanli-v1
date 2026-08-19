@@ -40,6 +40,16 @@ class PayrollFormulaEngineTest(unittest.TestCase):
 		self.assertEqual(result["social_security_company"], 1256.82)
 		self.assertEqual(len(trace), len(FORMULA_TEMPLATES))
 
+	def test_certificate_and_multi_skill_allowance_is_a_bonus_not_hourly_salary(self):
+		result, _trace = evaluate_formula_set(FORMULA_TEMPLATES, {
+			"base_salary": 2770,
+			"function_allowance": 30,
+			"certificate_skill_allowance": 150,
+			"full_attendance_bonus": 200,
+		})
+		self.assertEqual(result["salary_subtotal"], 2800)
+		self.assertEqual(result["subsidy_bonus_total"], 350)
+
 	def test_rejects_unsafe_python(self):
 		with self.assertRaises(FormulaError):
 			evaluate_formula("__import__('os').system('id')", {})

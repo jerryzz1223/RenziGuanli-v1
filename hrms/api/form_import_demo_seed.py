@@ -326,7 +326,6 @@ def _seed_roster():
 		"first_name": ROSTER_EMPLOYEE_CODE,
 		"employee_name": ROSTER_EMPLOYEE_CODE,
 		"custom_employee_code": ROSTER_EMPLOYEE_CODE,
-		"employee_number": ROSTER_EMPLOYEE_CODE,
 		"company": TEST_COMPANY,
 		"department": TEST_DEPARTMENT,
 		"designation": TEST_DESIGNATION,
@@ -336,7 +335,6 @@ def _seed_roster():
 		"gender": "Male",
 		"cell_number": "13900000099",
 		"status": "Active",
-		"naming_series": "HR-EMP-",
 	}
 	workbook = Workbook()
 	sheet = workbook.active

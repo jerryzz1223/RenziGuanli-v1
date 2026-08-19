@@ -3,27 +3,40 @@
 
 import frappe
 from frappe import _
-from frappe.model.naming import set_name_by_naming_series
-from frappe.utils import add_years, cint, get_link_to_form, getdate
+from frappe.utils import add_years, cint, cstr, get_link_to_form, getdate
 
 from erpnext.setup.doctype.employee.employee import Employee
 
 
 class EmployeeMaster(Employee):
-	def autoname(self):
-		naming_method = frappe.db.get_single_value("HR Settings", "emp_created_by")
-		if not naming_method:
-			frappe.throw(_("Please setup Employee Naming System in Human Resource > HR Settings"))
-		else:
-			if naming_method == "Naming Series":
-				set_name_by_naming_series(self)
-			elif naming_method == "Employee Number":
-				self.name = self.employee_number
-			elif naming_method == "Full Name":
-				self.set_employee_name()
-				self.name = self.employee_name
+	def validate(self):
+		self._apply_company_employee_code()
+		return super().validate()
 
+	def autoname(self):
+		# Employee.name is a Frappe link key, but it is also what standard Link
+		# controls display.  Use the company's work number as that key so no HR
+		# user ever has to identify a person through Frappe's HR-EMP naming series.
+		self._apply_company_employee_code()
+		self.name = self.custom_employee_code
 		self.employee = self.name
+
+	def _apply_company_employee_code(self):
+		code = cstr(self.get("custom_employee_code")).strip()
+		if not code:
+			frappe.throw(_("请填写公司员工号；员工档案不再使用系统自动编号。"))
+		if not self.is_new() and self.has_value_changed("custom_employee_code"):
+			frappe.throw(_("公司员工号创建后不可直接修改；请由管理员执行员工编号迁移以同步所有关联单据。"))
+
+		# Keep ERPNext's legacy field in sync only for third-party schema
+		# compatibility.  It is neither a naming source nor a business lookup key.
+		self.custom_employee_code = code
+		if self.meta.has_field("employee_number"):
+			self.employee_number = code
+
+		existing = frappe.db.get_value("Employee", {"custom_employee_code": code}, "name")
+		if existing and existing != self.name:
+			frappe.throw(_("公司员工号 {0} 已被员工档案 {1} 使用。").format(code, existing))
 
 
 def validate_onboarding_process(doc, method=None):

@@ -135,13 +135,15 @@ if (api.includes("if _is_blank_value(raw_value) and field.get(\"required\")")) {
 	throw new Error("导入值解析不能把字段中心所有必填项当作逐行必填项，否则空白的可选档案字段会导致整行失败。");
 }
 
-mustInclude(
-	api,
-	"if _is_employee_import_required_field(fieldname, field) and fieldname in meta_fields and _is_blank_value(values.get(fieldname))",
-	"导入行校验必须只校验首版最小导入字段。",
-);
+for (const marker of [
+	"_is_employee_import_required_field(fieldname, field)",
+	"fieldname in meta_fields",
+	"fieldname not in deferred_fields",
+]) {
+	mustInclude(api, marker, `导入行校验必须只校验首版最小导入字段，并支持暂缓填写：${marker}`);
+}
 
-mustInclude(api, '"employee_code": ("custom_employee_code", "employee_number")', "工号必须保持为跨模块稳定匹配键。");
+mustInclude(api, '"employee_code": ("custom_employee_code",)', "工号必须保持为跨模块稳定匹配键。");
 
 for (const marker of [
 	'"出生年月": "date_of_birth"',
@@ -168,6 +170,9 @@ for (const marker of [
 	"导入映射设置",
 	"批量添加员工",
 	"批量修改信息",
+	"覆盖当前花名册",
+	"start-replace",
+	"frappe.confirm",
 	"导入花名册",
 	"上传文件",
 	"匹配表头",
@@ -184,10 +189,51 @@ for (const marker of [
 	"按身份证",
 	"按手机号",
 	"下载失败行",
+	"下载错误行及修改建议",
+	"download-preview-failed",
+	"Excel 位置",
+	"修改方法",
+	"编辑本行",
+	"edit-error-row",
+	"row_overrides",
+	"保存并重新校验",
+	"仅显示需要人工校正的数据",
+	"暂不填写时可输入“-”",
+	'fieldtype: "Data"',
+	"继续导入其他花名册",
+	"当前内容",
+	"仅显示需要人工校正的数据",
 	"render_result",
 ]) {
 	mustInclude(importJs, marker, `Import page missing behavior: ${marker}`);
 }
+
+const restartHandler = importJs.match(/if \(action === "restart"\) \{([\s\S]*?)\n\t\t\}/)?.[1] || "";
+if (!restartHandler.includes('state.mode = "";') || !restartHandler.includes('state.match_by = "employee_code";') || !restartHandler.includes("render_landing();")) {
+	throw new Error("继续导入必须先回到新增/修改方式选择页，不能沿用上一次导入模式。");
+}
+
+mustInclude(api, "_get_employee_roster_preview_code", "预览列表必须使用业务工号，而不是 Frappe 内部 Employee 名称。");
+mustInclude(api, '"employee_code": _get_employee_roster_preview_code(values, existing)', "预览列表必须返回员工工号。");
+
+for (const marker of ["_excel_cell_reference", "_employee_import_fix_suggestion", "_is_employee_import_deferred_placeholder", "EMPLOYEE_IMPORT_NON_DEFERRABLE_FIELDS", '"suggestion"', '"excel_cell"', "row_overrides"]) {
+	mustInclude(api, marker, `错误行必须提供定位与修改建议：${marker}`);
+}
+
+for (const marker of [
+	'"replace"',
+	"_get_employee_roster_replace_candidates",
+	'"archived"',
+	'doc.status = "Left"',
+]) {
+	mustInclude(api, marker, `覆盖当前花名册缺少安全同步行为：${marker}`);
+}
+
+mustInclude(
+	api,
+	'if mode == "insert":\n\t\t\treturn "skip", existing',
+	"后续新增人员时，已有工号必须跳过，不能覆盖现有资料。",
+);
 
 if (importJs.includes("下一步将接入批量写入员工资料。当前已完成文件上传和表头匹配。")) {
 	throw new Error("导入第二步不能停留在占位提示，必须调用后端导入并进入结果页。");

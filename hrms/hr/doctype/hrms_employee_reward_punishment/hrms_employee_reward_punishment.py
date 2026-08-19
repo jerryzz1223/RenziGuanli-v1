@@ -36,13 +36,13 @@ def get_reward_punishment_context(employee: str, rule: str = "", occurred_on: st
 	frappe.has_permission("HRMS Employee Reward Punishment", "read", throw=True)
 	employee_fields = ["employee_name", "company", "department", "designation"]
 	employee_meta = frappe.get_meta("Employee")
-	for fieldname in ("custom_employee_code", "employee_number"):
+	for fieldname in ("custom_employee_code",):
 		if employee_meta.has_field(fieldname):
 			employee_fields.append(fieldname)
 	context = frappe.db.get_value("Employee", employee, employee_fields, as_dict=True)
 	if not context:
 		frappe.throw(_("员工 {0} 不存在。").format(employee))
-	context.employee_code = context.get("custom_employee_code") or context.get("employee_number") or employee
+	context.employee_code = context.get("custom_employee_code") or ""
 	rule_doc = frappe.get_doc("HRMS Reward Punishment Rule", rule) if rule else None
 	if rule_doc and (rule_doc.company != context.company or not rule_doc.enabled):
 		frappe.throw(_("所选奖惩条例不属于该员工公司或已停用。"))
@@ -113,14 +113,14 @@ class HRMSEmployeeRewardPunishment(Document):
 			return
 		employee_fields = ["employee_name", "company", "department", "designation"]
 		employee_meta = frappe.get_meta("Employee")
-		for fieldname in ("custom_employee_code", "employee_number"):
+		for fieldname in ("custom_employee_code",):
 			if employee_meta.has_field(fieldname):
 				employee_fields.append(fieldname)
 		employee = frappe.db.get_value("Employee", self.employee, employee_fields, as_dict=True)
 		if not employee:
 			frappe.throw(_("员工 {0} 不存在。").format(self.employee))
 		self.employee_code = (
-			employee.get("custom_employee_code") or employee.get("employee_number") or self.employee
+			employee.get("custom_employee_code") or ""
 		)
 		self.employee_code_display = self.employee_code
 		self.employee_name = employee.employee_name
