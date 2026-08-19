@@ -918,9 +918,18 @@
 			return;
 		}
 		sidebar.dataset.hrmsUnifiedSidebar = signature;
+		var sidebar_collapsed = window.localStorage.getItem("hrms-unified-sidebar:collapsed") === "1";
+		document.body.classList.toggle("hrms-unified-sidebar-collapsed", sidebar_collapsed);
 
 		var body = [
 			'<div class="hrms-unified-sidebar">',
+			'<button type="button" class="hrms-unified-sidebar-collapse" data-hrms-unified-sidebar-collapse aria-expanded="',
+			sidebar_collapsed ? "false" : "true",
+			'" title="',
+			escape_html(sidebar_collapsed ? "展开菜单" : "收起菜单"),
+			'"><span aria-hidden="true">',
+			sidebar_collapsed ? "›" : "‹",
+			"</span></button>",
 			'<button type="button" class="hrms-unified-sidebar-app" data-hrms-route="',
 			escape_html(module.route),
 			'">',
@@ -930,7 +939,6 @@
 			'<span class="hrms-unified-sidebar-app__text"><strong>',
 			escape_html(module.label),
 			'</strong><small>人资管理系统</small></span>',
-			'<span class="hrms-unified-sidebar-app__chevron">⌄</span>',
 			"</button>",
 			'<div class="hrms-unified-sidebar-list">',
 		];
@@ -987,6 +995,20 @@
 				navigate_hrms_sidebar(link.getAttribute("data-hrms-route"));
 			});
 		});
+
+		var collapse_button = sidebar.querySelector("[data-hrms-unified-sidebar-collapse]");
+		if (collapse_button) {
+			collapse_button.addEventListener("click", function (event) {
+				event.preventDefault();
+				event.stopPropagation();
+				var collapsed = !document.body.classList.contains("hrms-unified-sidebar-collapsed");
+				document.body.classList.toggle("hrms-unified-sidebar-collapsed", collapsed);
+				window.localStorage.setItem("hrms-unified-sidebar:collapsed", collapsed ? "1" : "0");
+				collapse_button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+				collapse_button.setAttribute("title", collapsed ? "展开菜单" : "收起菜单");
+				collapse_button.querySelector("span").textContent = collapsed ? "›" : "‹";
+			});
+		}
 
 		sidebar.querySelectorAll("[data-hrms-sidebar-section]").forEach(function (section) {
 			var trigger = section.querySelector(".hrms-unified-sidebar-section__button");

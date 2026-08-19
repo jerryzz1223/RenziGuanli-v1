@@ -68,6 +68,7 @@ SINGLETON_MONTHLY_VARIABLE_TYPES = {
 }
 
 DEFAULT_PAYROLL_VARIABLE_SOURCE_TYPES = [
+	{"source_code": "attendance_final", "source_name": "考勤终稿 / 全勤奖", "purpose": "锁定后的出勤、工时与全勤奖计算基础", "required_fields": "由考勤假期模块锁定终稿自动提供", "template_notes": "本页不上传；《7月全勤奖》仅用于核对自动计算结果或处理人工例外，不能重复直接计薪。", "target_area": "考勤继承"},
 	{"source_code": "salary_change", "source_name": "薪资异动", "purpose": "底薪、职能/职务津贴与总薪资异动", "required_for_payroll": 1, "required_fields": "工号、姓名、生效日期、调整后薪资", "template_notes": "在员工定薪区域审核；只有已批准且已生效的记录参与试算。", "target_area": "员工定薪"},
 	{"source_code": "certificate_skill", "source_name": "证书/多能工津贴", "purpose": "证书奖励与多能工奖励", "required_fields": "工号或姓名、证书津贴/多能工津贴", "template_notes": "一人可生成多条月度增项。"},
 	{"source_code": "proposal", "source_name": "提案改善", "purpose": "改善提案奖金", "required_fields": "奖励人、奖金金额", "template_notes": "多个奖励人时必须在预览后分配到每人。"},
@@ -75,7 +76,7 @@ DEFAULT_PAYROLL_VARIABLE_SOURCE_TYPES = [
 	{"source_code": "dormitory", "source_name": "宿舍水电", "purpose": "宿舍费、水费、电费与当月扣款", "required_fields": "工号或姓名、实收/当月扣款", "template_notes": "金额作为扣项进入当月计算。"},
 	{"source_code": "reward_punishment", "source_name": "奖惩", "purpose": "奖励或惩处金额", "required_fields": "受奖惩人、金额、奖惩性质", "template_notes": "审核时确认奖励为增项、惩处为减项。"},
 	{"source_code": "education", "source_name": "学历补贴", "purpose": "按学历资格发放月度补贴", "required_fields": "工号或姓名、学历类别、补贴金额", "template_notes": "需审核学历资格与金额。"},
-	{"source_code": "housing_allowance", "source_name": "住房补贴", "purpose": "租房/住房补贴", "required_fields": "工号或姓名、补贴金额", "template_notes": "仅已确认资格与金额参与计算。"},
+	{"source_code": "housing_allowance", "source_name": "住房补贴", "purpose": "租房资格基础数据或已算好的住房补贴金额", "required_fields": "一阶：工号、姓名、户籍/租房/购房/宿舍状态、入离职信息；二阶：工号、姓名、住房补贴", "template_notes": "优先上传一阶基础数据，由系统按租房补贴规则计算；识别到《7月住房补贴》这类已含金额的二阶表时，仅校验后确认使用。不要从全勤奖核对表重复写入。"},
 	{"source_code": "social_insurance", "source_name": "社保", "purpose": "个人与公司社保承担", "required_for_payroll": 1, "required_fields": "工号或姓名、个人承担、公司承担", "template_notes": "未参保员工应明确标记停缴/不参保。"},
 	{"source_code": "housing_fund", "source_name": "公积金", "purpose": "个人与公司公积金承担", "required_fields": "工号或姓名、个人承担、公司承担", "template_notes": "未缴纳员工应明确保留零申报说明。"},
 ]
@@ -1076,6 +1077,7 @@ RAW_PAYROLL_SOURCE_LABELS = {
 	"reward_punishment": "奖惩提报单",
 	"education": "学历补贴",
 	"housing_allowance": "住房补贴",
+	"housing_allowance_base": "住房补贴一阶基础数据",
 	"attendance_bonus": "全勤奖（考勤终稿自动继承）",
 	"housing_fund": "公积金",
 	"social_insurance": "社保",
@@ -1107,6 +1109,8 @@ def _raw_payroll_source_kind(sheet):
 		return "attendance_bonus"
 	if "住房补贴" in headers and "工号" in headers and "姓名" in headers:
 		return "housing_allowance"
+	if {"工号", "姓名"}.issubset(headers) and headers & {"是否非苏州户籍", "是否在苏州租房", "是否在苏州购房", "是否住公司宿舍"}:
+		return "housing_allowance_base"
 	if "公积金账号" in headers and "公司承担" in headers and "个人承担" in headers:
 		return "housing_fund"
 	if "社保基数" in headers and "个人合计承担10.5%+5" in headers:
@@ -1184,6 +1188,8 @@ def _raw_payroll_source_rows(sheet, source_kind):
 		return _salary_change_form_rows(sheet)
 	if source_kind == "housing_allowance":
 		return _repeated_employee_amount_rows(sheet, "住房补贴")
+	if source_kind == "housing_allowance_base":
+		return [row for row in _rows_as_dicts(sheet) if _is_employee_source_row(row)]
 	if source_kind == "attendance_bonus":
 		return _repeated_employee_amount_rows(sheet, "全勤奖")
 	if source_kind != "continuing_service":
@@ -1226,6 +1232,84 @@ def _raw_payroll_source_rows(sheet, source_kind):
 				if _is_employee_source_row(item):
 					items.append(item)
 	return items
+
+
+HOUSING_ALLOWANCE_BASE_FIELDS = (
+	"是否非苏州户籍", "是否在苏州租房", "是否在苏州购房", "是否住公司宿舍",
+)
+
+
+def _housing_yes_no(row, field):
+	"""Read an explicit yes/no value without treating a blank as ``否``."""
+	value = _normalise(_first(row, field))
+	if value in {"是", "1", "yes", "y", "true"}:
+		return True
+	if value in {"否", "0", "no", "n", "false"}:
+		return False
+	return None
+
+
+def _housing_allowance_calculation(row, payroll_month, company):
+	"""Turn a housing *eligibility* row into an auditable second-level amount.
+
+	The source workbook records facts, not a payroll amount.  This intentionally
+	keeps the policy in ``WELFARE_RENTAL_SUBSIDY`` so a rule change takes effect
+	through the rule centre and every generated row retains its source facts.
+	"""
+	parameters = (
+		_effective_rule_config("WELFARE_RENTAL_SUBSIDY", payroll_month, company)["parameters"]
+		if company
+		else _rule_parameters(_default_rule("WELFARE_RENTAL_SUBSIDY").get("parameters_json"))
+	)
+	missing = [field for field in HOUSING_ALLOWANCE_BASE_FIELDS if _housing_yes_no(row, field) is None]
+	if missing:
+		return {
+			"amount": 0,
+			"excluded": False,
+			"error": "一阶数据缺少或无法识别：{0}（请填写是/否）".format("、".join(missing)),
+			"reason": "无法计算住房补贴",
+			"mode": "一阶数据系统计算",
+		}
+
+	if not _housing_yes_no(row, "是否非苏州户籍"):
+		reason = "苏州户籍，不符合租房补贴资格"
+	elif not _housing_yes_no(row, "是否在苏州租房"):
+		reason = "未标记为在苏州租房，不符合租房补贴资格"
+	elif _housing_yes_no(row, "是否在苏州购房"):
+		reason = "已在苏州购房，不符合租房补贴资格"
+	elif _housing_yes_no(row, "是否住公司宿舍"):
+		reason = "住公司宿舍，按宿舍规则处理，不计住房补贴"
+	else:
+		reason = ""
+	if reason:
+		return {"amount": 0, "excluded": True, "error": "", "reason": reason, "mode": "一阶数据系统计算"}
+
+	join_date = _date_or_none(_first(row, "入职日期"))
+	leave_date = _date_or_none(_first(row, "离职日期"))
+	try:
+		year, month = [int(value) for value in payroll_month.split("-")]
+	except (AttributeError, ValueError):
+		return {"amount": 0, "excluded": False, "error": "薪资月份无效，无法计算住房补贴", "reason": "无法计算住房补贴", "mode": "一阶数据系统计算"}
+
+	if leave_date and getdate(leave_date).year == year and getdate(leave_date).month == month:
+		full_attendance = _housing_yes_no(row, "离职当月是否满勤")
+		if full_attendance is None:
+			return {"amount": 0, "excluded": False, "error": "离职当月需填写“离职当月是否满勤”（是/否）", "reason": "无法计算住房补贴", "mode": "一阶数据系统计算"}
+		amount = flt(parameters.get("resignation_full_attendance")) if full_attendance else 0
+		reason = "离职当月满勤，按离职规则计算" if full_attendance else "离职当月未满勤，不计住房补贴"
+		return {"amount": amount, "excluded": not bool(amount), "error": "", "reason": reason, "mode": "一阶数据系统计算"}
+
+	if join_date and getdate(join_date).year == year and getdate(join_date).month == month:
+		join_day = getdate(join_date).day
+		if join_day <= 10:
+			amount = flt(parameters.get("before_or_on_day_10"))
+		elif join_day <= 20:
+			amount = flt(parameters.get("day_11_to_20"))
+		else:
+			amount = flt(parameters.get("after_or_on_day_21"))
+		return {"amount": amount, "excluded": not bool(amount), "error": "", "reason": "入职当月 {0} 日，按入职日期规则计算".format(join_day), "mode": "一阶数据系统计算"}
+
+	return {"amount": flt(parameters.get("before_or_on_day_10")), "excluded": False, "error": "", "reason": "符合住房补贴资格，按正常月度规则计算", "mode": "一阶数据系统计算"}
 
 
 def _salary_change_form_rows(sheet):
@@ -1344,14 +1428,11 @@ def _raw_variable_entries(source_kind, row):
 	if source_kind == "attendance_bonus":
 		return [("全勤奖", _amount_for_type(row, "全勤奖"))]
 	if source_kind == "dormitory":
-		# In the original dormitory form, "当月扣款" is the actual payroll
-		# deduction (accommodation plus water/electricity), while "租房补贴" is
-		# an earning.  They must stay separate so the final pay matches the
-		# legacy settlement sheet rather than silently losing the subsidy.
-		return [
-			("住房补贴", flt(_first(row, "租房补贴"))),
-			("水电费及扣款", _amount_for_type(row, "宿舍扣款")),
-		]
+		# Housing subsidy has one dedicated monthly source.  The legacy dormitory
+		# form contains a convenience "租房补贴" column, but importing it here as
+		# well would make the same subsidy payable twice.  Keep this source limited
+		# to its actual accommodation/water/electricity deduction.
+		return [("水电费及扣款", _amount_for_type(row, "宿舍扣款"))]
 	if source_kind == "reward_punishment":
 		return [(_reward_punishment_variable_type(row), _amount_for_type(row, "其他奖金"))]
 	if source_kind == "housing_fund":
@@ -2710,7 +2791,10 @@ def list_payroll_variable_source_types():
 		frappe.get_doc({"doctype": VARIABLE_SOURCE_TYPE_DOCTYPE, **item}).insert(ignore_permissions=True, ignore_if_duplicate=True)
 	rows = frappe.get_all(
 		VARIABLE_SOURCE_TYPE_DOCTYPE,
-		filters={"enabled": 1},
+		# Salary changes belong to the preceding employee-salary step.  Full
+		# attendance is calculated from the locked attendance final.  Neither is a
+		# monthly-upload card; the housing allowance workbook remains independent.
+		filters={"enabled": 1, "source_code": ["not in", ["salary_change", "attendance_bonus"]]},
 		fields=["name", "source_code", "source_name", "purpose", "required_for_payroll", "enabled", "sort_order", "required_fields", "template_notes", "target_area"],
 		order_by="sort_order asc, source_name asc",
 		limit_page_length=200,
@@ -3397,7 +3481,7 @@ def create_employee_salary_change(**kwargs):
 
 
 @frappe.whitelist()
-def update_employee_salary_change(name: str = "", company: str = "", employee: str = "", values=None):
+def update_employee_salary_change(name: str = "", company: str = "", employee: str = "", values: str | dict | None = None):
 	"""Save one row from the employee-salary web table.
 
 	Employee, department and post stay owned by the roster.  This endpoint only
@@ -3411,6 +3495,15 @@ def update_employee_salary_change(name: str = "", company: str = "", employee: s
 		except (TypeError, ValueError) as exc:
 			frappe.throw(_("填写内容无法识别：{0}").format(exc))
 	values = values or {}
+	if not isinstance(values, dict):
+		frappe.throw(_("填写内容格式不正确"))
+	# Some form integrations submit nested JSON one level deeper.  Decode that
+	# shape explicitly so changed values are never silently ignored.
+	if isinstance(values.get("values"), str) and len(values) == 1:
+		try:
+			values = json.loads(values["values"] or "{}")
+		except (TypeError, ValueError) as exc:
+			frappe.throw(_("填写内容无法识别：{0}").format(exc))
 	if not isinstance(values, dict):
 		frappe.throw(_("填写内容格式不正确"))
 	if not name:
@@ -3928,6 +4021,63 @@ def create_employee_salary_change_template_file():
 		is_private=1,
 	)
 	return {"file_url": file_doc.file_url, "file_name": file_doc.file_name}
+
+
+@frappe.whitelist()
+def create_housing_allowance_base_data_template_file(company: str, payroll_month: str = ""):
+	"""Create the first-level housing-eligibility template used for system calculation."""
+	from openpyxl import Workbook
+	from openpyxl.styles import Alignment, Font, PatternFill
+	from frappe.utils.file_manager import save_file
+
+	company = _require_company(company)
+	payroll_month = _workflow_month(payroll_month or datetime.today().strftime("%Y-%m"))
+	rule = _effective_rule_config("WELFARE_RENTAL_SUBSIDY", payroll_month, company)
+	parameters = rule["parameters"]
+	workbook = Workbook()
+	sheet = workbook.active
+	sheet.title = "住房补贴一阶数据"
+	headers = [
+		"工号", "姓名", "部门", "是否非苏州户籍", "是否在苏州租房", "是否在苏州购房",
+		"是否住公司宿舍", "入职日期", "离职日期", "离职当月是否满勤", "备注",
+	]
+	sheet.append(headers)
+	# A sample makes the yes/no convention unambiguous, but is marked so it cannot
+	# accidentally be imported as a real employee.
+	sheet.append(["示例工号", "示例（导入前删除本行）", "", "是", "是", "否", "否", "2026-07-08", "", "", "仅示例"])
+	header_fill = PatternFill("solid", fgColor="D9EAF7")
+	for cell in sheet[1]:
+		cell.fill = header_fill
+		cell.font = Font(bold=True)
+		cell.alignment = Alignment(horizontal="center", vertical="center")
+	for index, header in enumerate(headers, start=1):
+		sheet.column_dimensions[sheet.cell(1, index).column_letter].width = min(max(len(header) + 8, 16), 28)
+
+	notes = workbook.create_sheet("填写说明")
+	notes.append(["字段", "填写规则"])
+	for cell in notes[1]:
+		cell.fill = header_fill
+		cell.font = Font(bold=True)
+	for field in ("是否非苏州户籍", "是否在苏州租房", "是否在苏州购房", "是否住公司宿舍"):
+		notes.append([field, "必填，只能填写“是”或“否”。系统据此判断资格；空白会作为错误阻断确认。"])
+	notes.append(["入职日期", "格式 yyyy-mm-dd；仅入职当月用于计算：10 日及以前 {0} 元、11–20 日 {1} 元、21 日及以后 {2} 元。".format(flt(parameters.get("before_or_on_day_10")), flt(parameters.get("day_11_to_20")), flt(parameters.get("after_or_on_day_21")))])
+	notes.append(["离职日期 / 离职当月是否满勤", "离职当月必须填写满勤“是/否”；满勤 {0} 元，未满勤 0 元。".format(flt(parameters.get("resignation_full_attendance")))])
+	notes.append(["不符合资格", "苏州户籍、未在苏州租房、已在苏州购房或住公司宿舍的人员会保留明细并自动标为“不参与计算”。"])
+	notes.append(["二阶表识别", "若上传表已含“住房补贴”金额列，系统不重复计算，只校验员工与金额后直接进入待确认明细。"])
+	notes.append(["规则快照", "{0}；{1}".format(rule.get("source"), rule.get("rule_name"))])
+	notes.column_dimensions["A"].width = 28
+	notes.column_dimensions["B"].width = 96
+
+	output = BytesIO()
+	workbook.save(output)
+	file_doc = save_file(
+		f"{payroll_month}-住房补贴一阶数据模板-{datetime.today().strftime('%Y%m%d%H%M%S')}.xlsx",
+		output.getvalue(),
+		None,
+		None,
+		is_private=1,
+	)
+	return {"file_url": file_doc.file_url, "file_name": file_doc.file_name, "rule": rule}
 
 
 def _employee_salary_change_import_rows(workbook, payroll_month):
@@ -4692,9 +4842,31 @@ def _payroll_variable_preview_row(company, sheet_name, source_kind, row, variabl
 	}
 
 
+def _housing_base_preview_row(company, payroll_month, sheet_name, row):
+	calculation = _housing_allowance_calculation(row, payroll_month, company)
+	preview = _payroll_variable_preview_row(
+		company,
+		sheet_name,
+		"housing_allowance_base",
+		row,
+		"住房补贴",
+		calculation["amount"],
+		calculation.get("error") or "",
+	)
+	preview.update(
+		{
+			"calculation_mode": calculation["mode"],
+			"calculation_reason": calculation["reason"],
+			"participation_status": "不参与计算" if calculation["excluded"] else "待确认",
+		}
+	)
+	return preview
+
+
 @frappe.whitelist()
 def preview_payroll_variable_workbook(file_url: str, company: str = "", payroll_month: str = ""):
 	company = _require_company(company) if company else ""
+	payroll_month = _workflow_month(payroll_month or datetime.today().strftime("%Y-%m"))
 	workbook = _load_workbook(file_url)
 	sheets = []
 	preview_rows = []
@@ -4717,10 +4889,29 @@ def preview_payroll_variable_workbook(file_url: str, company: str = "", payroll_
 				"row_count": len(rows),
 				"mapped_rows": 0,
 				"review_rows": len(rows),
-				"note": "全勤奖由考勤终稿锁定结果自动继承，薪酬端不重复导入。",
+				"note": "全勤奖由考勤终稿锁定结果和全勤规则自动计算，薪酬端不重复导入。",
 			})
 			continue
-		if source_kind == "salary_change":
+		if source_kind == "housing_allowance_base":
+			mapped_rows = 0
+			review_rows = 0
+			for row in rows:
+				preview = _housing_base_preview_row(company, payroll_month, sheet.title, row)
+				preview_rows.append(preview)
+				mapped_rows += 1 if not preview.get("participation_status") == "不参与计算" and preview["validation_status"] != "错误" else 0
+				review_rows += 1 if preview["validation_status"] == "错误" else 0
+			sheet_note = "已识别为一阶基础数据：系统将按当前租房补贴规则生成二阶应发金额；不符合资格者会保留明细但不参与计算。"
+		elif source_kind == "housing_allowance":
+			entries = [entry for row in rows for entry in _raw_variable_entries(source_kind, row)]
+			mapped_rows = sum(1 for _variable_type, amount in entries if flt(amount))
+			review_rows = 0
+			for row in rows:
+				for variable_type, amount in _raw_variable_entries(source_kind, row):
+					preview = _payroll_variable_preview_row(company, sheet.title, source_kind, row, variable_type, amount)
+					preview.update({"calculation_mode": "二阶金额直用", "calculation_reason": "已检测到“住房补贴”金额列，仅校验员工与金额，确认后直接参与计算", "participation_status": "待确认"})
+					preview_rows.append(preview)
+			sheet_note = "已识别为二阶数据：已含住房补贴金额，不重新计算；通过校验并确认后直接使用。"
+		elif source_kind == "salary_change":
 			mapped_rows = sum(1 for row in rows if _first(row, "工号", "姓名"))
 			review_rows = 0
 			for row in rows:
@@ -4752,7 +4943,7 @@ def preview_payroll_variable_workbook(file_url: str, company: str = "", payroll_
 			"row_count": len(rows),
 			"mapped_rows": mapped_rows,
 			"review_rows": review_rows,
-			"note": "提案改善有多个奖励人，需先分配各人金额" if review_rows else "",
+			"note": sheet_note if source_kind in {"housing_allowance_base", "housing_allowance"} else ("提案改善有多个奖励人，需先分配各人金额" if review_rows else ""),
 		})
 	for sheet_name in PAYROLL_VARIABLE_SHEETS:
 		sheet = _matching_sheet(workbook, sheet_name)
@@ -4777,7 +4968,7 @@ def preview_payroll_variable_workbook(file_url: str, company: str = "", payroll_
 		"warning_rows": sum(1 for row in preview_rows if row["validation_status"] == "警告"),
 		"error_rows": sum(1 for row in preview_rows if row["validation_status"] == "错误"),
 		"blocked": bool(blocked_sources),
-		"blocked_message": "全勤奖由已锁定考勤终稿自动继承，请勿在薪酬模块重复导入。" if blocked_sources else "",
+		"blocked_message": "全勤奖由已锁定考勤终稿和全勤规则自动计算，请勿在薪酬模块重复导入。" if blocked_sources else "",
 	}
 
 
@@ -4849,7 +5040,7 @@ def import_payroll_variable_workbook(file_url: str, payroll_month: str = "", com
 	if any(_raw_payroll_source_kind(workbook[sheet_name]) == "salary_change" for sheet_name in workbook.sheetnames):
 		frappe.throw(_("薪资异动属于“员工定薪”，请在员工定薪区域完成预览、审核与批准；月度增减项不会直接写入员工定薪。"))
 	if any(_raw_payroll_source_kind(workbook[sheet_name]) == "attendance_bonus" for sheet_name in workbook.sheetnames):
-		frappe.throw(_("全勤奖由已锁定考勤终稿自动继承，请勿在薪酬模块重复导入。"))
+		frappe.throw(_("全勤奖由已锁定考勤终稿和全勤规则自动计算，请勿在薪酬模块重复导入。"))
 	invalidation = _invalidate_unconfirmed_payroll_trial(
 		company, payroll_month, reason=_("新增月度增减项导入批次")
 	)
@@ -4862,12 +5053,21 @@ def import_payroll_variable_workbook(file_url: str, payroll_month: str = "", com
 			"attendance_lock_version": attendance_lock_version,
 			"source_type": batch_source_type,
 			"source_file": file_url,
+			"is_selected": 1,
 			"status": "待审核",
 			"imported_by": frappe.session.user,
 			"imported_on": now_datetime(),
 		}
 	)
 	batch.insert(ignore_permissions=True)
+	if batch_source_type and _doctype_has_field(VARIABLE_BATCH_DOCTYPE, "is_selected"):
+		for name in frappe.get_all(
+			VARIABLE_BATCH_DOCTYPE,
+			filters={"company": company, "payroll_month": payroll_month, "source_type": batch_source_type, "name": ["!=", batch.name]},
+			pluck="name",
+			limit_page_length=1000,
+		):
+			frappe.db.set_value(VARIABLE_BATCH_DOCTYPE, name, "is_selected", 0, update_modified=False)
 
 	created = []
 	salary_changes = []
@@ -4883,6 +5083,34 @@ def import_payroll_variable_workbook(file_url: str, payroll_month: str = "", com
 		handled_source_kinds.add(source_kind)
 		rows = _raw_payroll_source_rows(sheet, source_kind)
 		if source_kind == "salary_change":
+			continue
+		if source_kind == "housing_allowance_base":
+			for row in rows:
+				calculation = _housing_allowance_calculation(row, payroll_month, company)
+				entry = dict(row)
+				entry["金额"] = calculation["amount"]
+				entry["备注"] = "{0}；{1}".format(calculation["mode"], calculation["reason"])
+				name = _insert_variable(
+					batch.name,
+					company,
+					payroll_month,
+					attendance_lock_version,
+					f"{sheet.title}（一阶数据系统计算）",
+					entry,
+					"住房补贴",
+					calculation["amount"],
+					True,
+					validation_note=calculation.get("error") or "",
+				)
+				if name:
+					created.append(name)
+					if calculation["excluded"]:
+						frappe.db.set_value(
+							VARIABLE_RECORD_DOCTYPE,
+							name,
+							{"excluded": 1, "review_status": "已剔除", "validation_status": "通过", "validation_message": calculation["reason"]},
+							update_modified=False,
+						)
 			continue
 		if source_kind == "proposal":
 			for row in rows:
@@ -4930,7 +5158,10 @@ def import_payroll_variable_workbook(file_url: str, payroll_month: str = "", com
 			batch.source_type = inferred_source_type
 	if batch_source_type and handled_source_kinds:
 		selected_code = frappe.db.get_value(VARIABLE_SOURCE_TYPE_DOCTYPE, batch_source_type, "source_code") or batch_source_type
-		if selected_code not in handled_source_kinds:
+		accepted_source_kinds = {selected_code}
+		if selected_code == "housing_allowance":
+			accepted_source_kinds.add("housing_allowance_base")
+		if not accepted_source_kinds.intersection(handled_source_kinds):
 			actual_labels = "、".join(RAW_PAYROLL_SOURCE_LABELS.get(code, code) for code in sorted(handled_source_kinds))
 			selected_label = frappe.db.get_value(VARIABLE_SOURCE_TYPE_DOCTYPE, batch_source_type, "source_name") or batch_source_type
 			frappe.throw(_("所选来源类型为“{0}”，但文件识别为“{1}”，请更正选择后重新上传。").format(selected_label, actual_labels))
@@ -4970,31 +5201,160 @@ def list_payroll_variable_import_batches(company: str, payroll_month: str = "", 
 	batches = frappe.get_all(
 		VARIABLE_BATCH_DOCTYPE,
 		filters=filters,
-		fields=["name", "company", "payroll_month", "attendance_lock_version", "source_type", "source_file", "status", "variable_rows", "imported_by", "imported_on", "reviewed_by", "reviewed_on", "confirmed_by", "confirmed_on", "voided_by", "voided_on", "void_reason", "replacement_batch", "notes", "modified"],
+		fields=["name", "company", "payroll_month", "attendance_lock_version", "source_type", "source_file", "is_selected", "status", "variable_rows", "imported_by", "imported_on", "reviewed_by", "reviewed_on", "confirmed_by", "confirmed_on", "voided_by", "voided_on", "void_reason", "replacement_batch", "notes", "modified"],
 		order_by="imported_on desc, modified desc",
 		limit_page_length=int(page_length or 20),
 	)
-	batches = [batch for batch in batches if not str(batch.source_file or "").startswith("attendance-processing-final:")]
+	# Keep obsolete pre-workflow uploads out of the current source checklist.
+	# They have no mapped source type, use the retired “已导入” state and contain
+	# no rows; showing them alongside the ten current source files makes the
+	# monthly checklist look as if it has extra inputs.  The documents remain in
+	# the database for audit and can still be reached from the DocType list.
+	batches = [
+		batch for batch in batches
+		if not str(batch.source_file or "").startswith("attendance-processing-final:")
+		and not (not batch.source_type and batch.status == "已导入" and not cint(batch.variable_rows))
+	]
 	for batch in batches:
 		rows = frappe.get_all(
 			VARIABLE_RECORD_DOCTYPE,
 			filters={"company": company, "payroll_month": batch.payroll_month, "import_batch": batch.name},
-			fields=["source_sheet", "review_status", "validation_status", "excluded"],
+			fields=["source_sheet", "review_status", "validation_status", "validation_message", "excluded", "employee", "employee_code", "employee_name"],
 			limit_page_length=1000,
 		)
 		source_sheets = sorted({row.source_sheet for row in rows if row.source_sheet})
+		active_rows = [row for row in rows if not row.excluded]
+		unmatched_rows = [row for row in active_rows if not row.employee]
+		unmatched_people = {
+			row.employee_code or _normalise(row.employee_name) or _("未提供员工标识")
+			for row in unmatched_rows
+		}
+		unmatched_reasons = defaultdict(int)
+		for row in unmatched_rows:
+			reason = row.validation_message or _("无法匹配员工花名册")
+			unmatched_reasons[reason] += 1
 		batch["source_file_label"] = _source_file_label(batch.source_file)
 		batch["source_type_label"] = source_labels.get(str(batch.source_type or ""), batch.source_type or _("未分类"))
 		batch["source_sheets"] = "、".join(source_sheets)
 		batch["actual_variable_rows"] = len(rows)
-		batch["error_rows"] = sum(1 for row in rows if row.validation_status == "错误" and not row.excluded)
-		batch["warning_rows"] = sum(1 for row in rows if row.validation_status == "警告" and not row.excluded)
-		batch["confirmed_rows"] = sum(1 for row in rows if row.review_status == "已确认" and not row.excluded)
+		batch["included_rows"] = len(active_rows)
+		batch["excluded_rows"] = len(rows) - len(active_rows)
+		batch["matched_rows"] = sum(1 for row in active_rows if row.employee)
+		batch["unmatched_rows"] = len(unmatched_rows)
+		batch["unmatched_people"] = len(unmatched_people)
+		batch["unmatched_reason_summary"] = [
+			{"reason": reason, "count": count}
+			for reason, count in sorted(unmatched_reasons.items(), key=lambda item: (-item[1], item[0]))
+		]
+		batch["error_rows"] = sum(1 for row in active_rows if row.validation_status == "错误")
+		batch["warning_rows"] = sum(1 for row in active_rows if row.validation_status == "警告")
+		batch["confirmed_rows"] = sum(1 for row in active_rows if row.review_status == "已确认")
 		batch["can_confirm_empty"] = int(batch.status == "待审核" and not rows and bool(batch.source_type) and "已识别来源：" in str(batch.notes or ""))
 		batch["can_confirm"] = int(batch.status == "待审核" and not batch["error_rows"] and (bool(rows) or batch["can_confirm_empty"]))
 		batch["can_delete"] = int(batch.status not in {"已确认", "已作废"})
 		batch["can_void"] = int(batch.status == "已确认")
 	return batches
+
+
+@frappe.whitelist()
+def select_payroll_variable_import_batch(batch_name: str, company: str = "", payroll_month: str = ""):
+	"""Choose one version of a monthly source for the top editing workspace.
+
+	The selection is deliberately scoped to one company, month and source type so
+	a newer upload never leaves two versions of (for example) social insurance
+	looking active at the same time.
+	"""
+	if not batch_name or not frappe.db.exists(VARIABLE_BATCH_DOCTYPE, batch_name):
+		frappe.throw(_("导入批次不存在"))
+	batch = frappe.get_doc(VARIABLE_BATCH_DOCTYPE, batch_name)
+	company = _require_company(company or batch.company)
+	if batch.company != company or (payroll_month and batch.payroll_month != payroll_month):
+		frappe.throw(_("导入批次与当前公司或月份不一致。"))
+	if not batch.source_type:
+		frappe.throw(_("历史未分类批次不能作为本月使用版本，请重新按来源类型导入。"))
+	if batch.status == "已作废":
+		frappe.throw(_("已作废批次不能作为本月使用版本。"))
+	if not _doctype_has_field(VARIABLE_BATCH_DOCTYPE, "is_selected"):
+		frappe.throw(_("系统尚未更新“本月选定版本”字段，请完成站点迁移后重试。"))
+	for name in frappe.get_all(
+		VARIABLE_BATCH_DOCTYPE,
+		filters={"company": company, "payroll_month": batch.payroll_month, "source_type": batch.source_type},
+		pluck="name",
+		limit_page_length=1000,
+	):
+		frappe.db.set_value(VARIABLE_BATCH_DOCTYPE, name, "is_selected", int(name == batch.name), update_modified=False)
+	frappe.db.commit()
+	return {"batch": batch.name, "source_type": batch.source_type, "message": _("已选择 {0} 作为本月使用版本，可在上方编辑明细。 ").format(_source_file_label(batch.source_file))}
+
+
+@frappe.whitelist()
+def create_editable_payroll_variable_batch_version(batch_name: str, company: str = "", payroll_month: str = ""):
+	"""Clone a confirmed source into a new auditable, editable monthly version."""
+	if not batch_name or not frappe.db.exists(VARIABLE_BATCH_DOCTYPE, batch_name):
+		frappe.throw(_("导入批次不存在"))
+	source_batch = frappe.get_doc(VARIABLE_BATCH_DOCTYPE, batch_name)
+	company = _require_company(company or source_batch.company)
+	if source_batch.company != company or (payroll_month and source_batch.payroll_month != payroll_month):
+		frappe.throw(_("导入批次与当前公司或月份不一致。"))
+	if source_batch.status != "已确认" or not source_batch.source_type:
+		frappe.throw(_("仅已确认且已分类的来源版本可以复制后编辑。"))
+	if not _doctype_has_field(VARIABLE_BATCH_DOCTYPE, "is_selected"):
+		frappe.throw(_("系统尚未更新“本月选定版本”字段，请完成站点迁移后重试。"))
+
+	invalidation = _invalidate_unconfirmed_payroll_trial(
+		company, source_batch.payroll_month, reason=_("基于已确认来源创建可编辑版本")
+	)
+	editable_batch = frappe.get_doc({
+		"doctype": VARIABLE_BATCH_DOCTYPE,
+		"company": company,
+		"payroll_month": source_batch.payroll_month,
+		"attendance_lock_version": source_batch.attendance_lock_version,
+		"source_type": source_batch.source_type,
+		"source_file": source_batch.source_file,
+		"is_selected": 1,
+		"status": "待审核",
+		"imported_by": frappe.session.user,
+		"imported_on": now_datetime(),
+		"notes": _("基于已确认批次 {0} 创建的可编辑版本；原批次保持不变。").format(source_batch.name),
+	})
+	editable_batch.insert(ignore_permissions=True)
+	for name in frappe.get_all(
+		VARIABLE_BATCH_DOCTYPE,
+		filters={"company": company, "payroll_month": source_batch.payroll_month, "source_type": source_batch.source_type, "name": ["!=", editable_batch.name]},
+		pluck="name",
+		limit_page_length=1000,
+	):
+		frappe.db.set_value(VARIABLE_BATCH_DOCTYPE, name, "is_selected", 0, update_modified=False)
+
+	rows = frappe.get_all(VARIABLE_RECORD_DOCTYPE, filters={"import_batch": source_batch.name}, fields=["*"], limit_page_length=100000)
+	for row in rows:
+		values = {
+			"doctype": VARIABLE_RECORD_DOCTYPE,
+			"import_batch": editable_batch.name,
+			"company": company,
+			"payroll_month": source_batch.payroll_month,
+			"attendance_lock_version": source_batch.attendance_lock_version,
+			"employee": row.employee,
+			"employee_code": row.employee_code,
+			"employee_name": row.employee_name,
+			"department": row.department,
+			"variable_type": row.variable_type,
+			"amount": row.amount,
+			"review_status": "已剔除" if row.excluded else "待审核",
+			"validation_status": row.validation_status,
+			"validation_message": row.validation_message,
+			"excluded": row.excluded,
+			"source_sheet": row.source_sheet,
+			"remarks": row.remarks,
+			"raw_row_json": row.raw_row_json,
+			"source_trace_json": row.source_trace_json,
+			"source_hash": row.source_hash,
+		}
+		frappe.get_doc(values).insert(ignore_permissions=True)
+	editable_batch.variable_rows = len(rows)
+	editable_batch.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {"batch": editable_batch.name, "source_type": editable_batch.source_type, "rows": len(rows), "invalidated_trial": invalidation, "message": _("当前数据已解锁，请在上方完成修改后确认并锁定。")}
 
 
 def _assert_no_singleton_variable_conflicts(batch, rows):
@@ -5071,7 +5431,7 @@ def confirm_payroll_variable_import_batch(batch_name: str, company: str = "", pa
 		batch.notes = _("已人工确认来源文件本月无数据；保留批次和原文件用于追溯。")
 	batch.save(ignore_permissions=True)
 	frappe.db.commit()
-	message = _("已确认该来源本月无数据，批次与原文件已留痕。") if not active else _("{0} 条月度增减项已确认入账，将参与下次薪资试算。").format(len(active))
+	message = _("已确认该来源本月无数据并锁定，原文件已留痕。") if not active else _("{0} 条月度增减项已确认并锁定，将参与下次薪资计算。").format(len(active))
 	return {"batch": batch.name, "status": batch.status, "confirmed_rows": len(active), "invalidated_trial": invalidation, "message": message}
 
 
@@ -5241,8 +5601,11 @@ def update_payroll_variable_record(
 	if not name or not frappe.db.exists(VARIABLE_RECORD_DOCTYPE, name):
 		frappe.throw(_("薪资变量记录不存在"))
 
-	resolved_employee = employee if employee and frappe.db.exists("Employee", employee) else None
-	resolved_employee = resolved_employee or _employee_lookup(employee_code, employee_name)
+	# When HR selects an employee in the correction dialog, the source form's
+	# stale code/name must not win on save.  Otherwise the Link looks resolved
+	# but the next validation still reports the original unmatched identifier.
+	selected_employee = employee if employee and frappe.db.exists("Employee", employee) else None
+	resolved_employee = selected_employee or _employee_lookup(employee_code, employee_name)
 	if not resolved_employee:
 		frappe.throw(_("请先选择或填写可匹配到员工档案的员工。"))
 
@@ -5258,8 +5621,8 @@ def update_payroll_variable_record(
 		company, doc.payroll_month, reason=_("人工修正月度增减项明细")
 	)
 	doc.employee = resolved_employee
-	doc.employee_code = employee_code or employee_context.get("employee_code") or resolved_employee
-	doc.employee_name = employee_name or employee_context.get("employee_name")
+	doc.employee_code = employee_context.get("employee_code") if selected_employee else (employee_code or employee_context.get("employee_code") or resolved_employee)
+	doc.employee_name = employee_context.get("employee_name") if selected_employee else (employee_name or employee_context.get("employee_name"))
 	doc.department = _department_lookup(department) or employee_context.get("department")
 	if variable_type:
 		doc.variable_type = variable_type
@@ -5292,8 +5655,25 @@ def _variable_totals(company, payroll_month, attendance_lock_version=""):
 	identity = {}
 	sources = defaultdict(list)
 	allowed_versions = {attendance_lock_version, _monthly_variable_scope(payroll_month), ""}
+	selected_batch_by_source = {}
+	batch_source_by_name = {}
+	if _doctype_has_field(VARIABLE_BATCH_DOCTYPE, "is_selected"):
+		for batch in frappe.get_all(
+			VARIABLE_BATCH_DOCTYPE,
+			filters={"company": company, "payroll_month": payroll_month, "status": "已确认"},
+			fields=["name", "source_type", "is_selected"],
+			limit_page_length=100000,
+		):
+			if batch.source_type:
+				batch_source_by_name[batch.name] = batch.source_type
+				if batch.is_selected:
+					selected_batch_by_source[batch.source_type] = batch.name
 	for row in frappe.get_all(VARIABLE_RECORD_DOCTYPE, filters=filters, fields=["*"]):
 		if str(row.get("attendance_lock_version") or "") not in allowed_versions:
+			continue
+		source_type = batch_source_by_name.get(row.get("import_batch"))
+		selected_batch = selected_batch_by_source.get(source_type)
+		if source_type and selected_batch and selected_batch != row.get("import_batch"):
 			continue
 		_assert_row_company(row, company, _("薪资变量"))
 		key = _employee_identity_key(row)
@@ -5566,23 +5946,25 @@ def _validate_sources_step(company, payroll_month, attendance_lock_version):
 	pending_batch_filters = {"company": company, "payroll_month": payroll_month, "status": ["in", ["待解析", "待审核"]]}
 	if _doctype_has_field(VARIABLE_BATCH_DOCTYPE, "source_type"):
 		pending_batch_filters["source_type"] = ["!=", "salary_change"]
-	pending_batch_rows = _workflow_rows(VARIABLE_BATCH_DOCTYPE, pending_batch_filters, ["attendance_lock_version", "source_file"])
+	pending_batch_rows = _workflow_rows(VARIABLE_BATCH_DOCTYPE, pending_batch_filters, ["attendance_lock_version", "source_file", "is_selected"])
 	pending_batches = len([
 		row for row in pending_batch_rows
 		if str(row.get("attendance_lock_version") or "") in allowed_versions
 		and not str(row.get("source_file") or "").startswith("attendance-processing-final:")
+		and cint(row.get("is_selected"))
 	])
 	if pending_batches:
 		blockers.append("仍有 {0} 个月度增减项批次待审核/确认入账。".format(pending_batches))
 	confirmed_batch_rows = _workflow_rows(
 		VARIABLE_BATCH_DOCTYPE,
 		{"company": company, "payroll_month": payroll_month, "status": "已确认"},
-		["name", "attendance_lock_version", "source_type", "source_file", "variable_rows", "confirmed_by", "confirmed_on", "notes"],
+		["name", "attendance_lock_version", "source_type", "source_file", "variable_rows", "confirmed_by", "confirmed_on", "notes", "is_selected"],
 	)
 	confirmed_batch_rows = [
 		row for row in confirmed_batch_rows
 		if str(row.get("attendance_lock_version") or "") in allowed_versions
 		and not str(row.get("source_file") or "").startswith("attendance-processing-final:")
+		and (not row.get("source_type") or cint(row.get("is_selected")))
 	]
 	confirmed_source_types = {str(row.get("source_type") or "") for row in confirmed_batch_rows}
 	required_sources = [
@@ -5968,8 +6350,30 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 		name = existing.get(key)
 		if name:
 			doc = frappe.get_doc(MONTHLY_ATTENDANCE_DOCTYPE, name)
-			doc.update(values)
-			doc.save(ignore_permissions=True)
+			# This adapter is called while the payroll page reads its attendance
+			# dependency.  Re-saving an identical locked summary changes Frappe's
+			# ``modified`` timestamp and makes users with that summary open receive a
+			# false "modified after you opened it" conflict.  Preserve the original
+			# lock audit data and only write when the actual payroll-facing snapshot
+			# differs.
+			values["locked_by"] = doc.locked_by or values["locked_by"]
+			values["locked_on"] = doc.locked_on or values["locked_on"]
+			numeric_fields = {
+				"standard_hours", "actual_attendance_hours", "adjusted_working_hours",
+				"overtime_1_5_hours", "overtime_2_hours", "overtime_3_hours",
+				"absent_hours", "large_night_shift_count", "small_night_shift_count",
+				"green_apples", "red_apples", "apple_reward_amount",
+				"red_apple_penalty", "full_attendance_deduction",
+			}
+			changed = any(
+				flt(doc.get(fieldname)) != flt(value)
+				if fieldname in numeric_fields
+				else str(doc.get(fieldname) or "") != str(value or "")
+				for fieldname, value in values.items()
+			)
+			if changed:
+				doc.update(values)
+				doc.save(ignore_permissions=True)
 		else:
 			frappe.get_doc({"doctype": MONTHLY_ATTENDANCE_DOCTYPE, **values}).insert(ignore_permissions=True)
 		created_or_updated += 1
@@ -5980,10 +6384,54 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 		{"company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version, "source_file": batch_source},
 		"name",
 	)
+	# Page initialization can request the same dependency more than once.  A
+	# locked snapshot is immutable, so when the mirrored batch already contains
+	# the same full-attendance results there is nothing to rewrite.  Besides being
+	# faster, this prevents a harmless refresh from changing the batch timestamp.
+	expected_bonus_by_employee = {
+		_text(row.get("employee_code")) or _text(row.get("employee_name")): flt(row.get("full_attendance_award"))
+		for row in rows
+		if _text(row.get("employee_code")) or _text(row.get("employee_name"))
+	}
+	if batch_name:
+		existing_bonus_rows = frappe.get_all(
+			VARIABLE_RECORD_DOCTYPE,
+			filters={"import_batch": batch_name, "source_sheet": "考勤终稿锁定快照", "variable_type": "全勤奖"},
+			fields=["employee_code", "employee_name", "amount", "review_status", "excluded"],
+			limit_page_length=100000,
+		)
+		existing_bonus_by_employee = {
+			_text(row.employee_code) or _text(row.employee_name): row
+			for row in existing_bonus_rows
+			if _text(row.employee_code) or _text(row.employee_name)
+		}
+		if (
+			len(existing_bonus_by_employee) == len(expected_bonus_by_employee)
+			and all(
+				key in existing_bonus_by_employee
+				and flt(existing_bonus_by_employee[key].amount) == amount
+				and existing_bonus_by_employee[key].review_status == "已确认"
+				and not existing_bonus_by_employee[key].excluded
+				for key, amount in expected_bonus_by_employee.items()
+			)
+		):
+			return {"synced": False, "reason": "already_current", "attendance_rows": created_or_updated, "variable_rows": len(existing_bonus_rows), "attendance_lock_version": attendance_lock_version}
 	if batch_name:
 		frappe.db.delete(VARIABLE_RECORD_DOCTYPE, {"import_batch": batch_name})
-		batch = frappe.get_doc(VARIABLE_BATCH_DOCTYPE, batch_name)
-		batch.status = "已确认"
+		# Do not save a stale document object here.  This adapter can be called by
+		# parallel page-load requests, and a direct update keeps the immutable
+		# attendance cache from raising a misleading "has been modified" error.
+		frappe.db.set_value(
+			VARIABLE_BATCH_DOCTYPE,
+			batch_name,
+			{
+				"status": "已确认",
+				"imported_on": now_datetime(),
+				"confirmed_by": frappe.session.user,
+				"confirmed_on": now_datetime(),
+			},
+			update_modified=False,
+		)
 	else:
 		batch = frappe.get_doc({
 			"doctype": VARIABLE_BATCH_DOCTYPE,
@@ -5999,23 +6447,30 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 			"notes": "由考勤处理中心已锁定终稿自动同步；不允许编辑原始考勤事实。",
 		})
 		batch.insert(ignore_permissions=True)
+		batch_name = batch.name
 	variable_rows = 0
 	for row in rows:
 		base_row = {"工号": _text(row.get("employee_code")), "姓名": _text(row.get("employee_name")), "部门": _text(row.get("department"))}
-		# Only attendance-derived pay is inherited here. Housing allowance is
-		# owned by the payroll monthly-additions workflow; copying it from this
-		# snapshot as well would pay the same source twice.
+		# The approved source register defines full attendance as a result of the
+		# locked attendance final and the configured rule.  It is inherited here,
+		# rather than being uploaded again as a monthly source file.
 		for variable_type, amount, allow_zero in (
 			("全勤奖", flt(row.get("full_attendance_award")), True),
 		):
-			name = _insert_variable(batch.name, company, payroll_month, attendance_lock_version, "考勤终稿锁定快照", base_row, variable_type, amount, allow_zero, review_status="已确认")
+			name = _insert_variable(batch_name, company, payroll_month, attendance_lock_version, "考勤终稿锁定快照", base_row, variable_type, amount, allow_zero, review_status="已确认")
 			if name:
 				variable_rows += 1
-	batch.variable_rows = variable_rows
-	batch.imported_on = now_datetime()
-	batch.confirmed_by = frappe.session.user
-	batch.confirmed_on = now_datetime()
-	batch.save(ignore_permissions=True)
+	frappe.db.set_value(
+		VARIABLE_BATCH_DOCTYPE,
+		batch_name,
+		{
+			"variable_rows": variable_rows,
+			"imported_on": now_datetime(),
+			"confirmed_by": frappe.session.user,
+			"confirmed_on": now_datetime(),
+		},
+		update_modified=False,
+	)
 	frappe.db.commit()
 	return {"synced": True, "attendance_rows": created_or_updated, "variable_rows": variable_rows, "attendance_lock_version": attendance_lock_version}
 
@@ -6945,13 +7400,14 @@ def get_payroll_month_runbook(company: str, payroll_month: str, attendance_lock_
 	variable_batch_rows = frappe.get_all(
 		VARIABLE_BATCH_DOCTYPE,
 		filters={"company": company, "payroll_month": payroll_month},
-		fields=["status", "attendance_lock_version", "source_file"],
+		fields=["status", "attendance_lock_version", "source_file", "source_type", "is_selected"],
 		limit_page_length=10000,
 	)
 	variable_batch_rows = [
 		row for row in variable_batch_rows
 		if str(row.attendance_lock_version or "") in allowed_variable_versions
 		and not str(row.source_file or "").startswith("attendance-processing-final:")
+		and (not row.source_type or cint(row.is_selected))
 	]
 	confirmed_variable_batch_count = sum(1 for row in variable_batch_rows if row.status == "已确认")
 	pending_variable_batch_count = sum(1 for row in variable_batch_rows if row.status in {"待解析", "待审核", "已导入"})

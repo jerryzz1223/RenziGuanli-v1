@@ -27,11 +27,17 @@ class PayrollInputCenter {
 		this.employee_salary_change_import_preview = null;
 		this.salaryChangeImportBatches = [];
 		this.data_closure_file_url = "";
-		this.payroll_month = frappe.datetime.str_to_obj(frappe.datetime.get_today()).toISOString().slice(0, 7);
 		this.company = this.get_context_company();
+		this.payroll_month = this.get_saved_payroll_month(this.company);
 		this.attendance_lock_version = "";
 		this.attendance_dependency = null;
 		this.variable_source_catalog = [];
+		this.variable_import_preview = null;
+		this.bulk_variable_import_queue = Promise.resolve();
+		this.bulk_variable_import_results = [];
+		// 明细始终在对应的来源卡片内展开，避免用户误以为要到下方批次档案操作。
+		this.open_source_card_code = "";
+		this.editing_source_card_code = "";
 		this.can_edit_payroll_rules = false;
 		this.show_all_settlement_details = false;
 		this.pending_config_anchor = "";
@@ -70,11 +76,14 @@ class PayrollInputCenter {
 		this.active_process_step = this.process_step_for(this.active_tab);
 		this.last_route_refresh_at = 0;
 		this.cache_ttl = 30_000;
+		// Keep this shared, lightweight dependency outside the rendered page.
+		// Otherwise a late response recreates a large editable table and flashes.
+		this.attendance_dependency_cache = new Map();
+		this.attendance_dependency_requests = new Map();
 	}
 
 	show() {
 		this.page.clear_inner_toolbar?.();
-		this.page.set_primary_action(__("导入月度增减项"), () => this.route_to_tab("variables"));
 		this.activate(true);
 		this.render();
 		this.load_active_tab();
@@ -90,6 +99,7 @@ class PayrollInputCenter {
 	activate(initial = false) {
 		this.bind_route_events();
 		this.bind_company_context();
+		this.bind_table_controls();
 		if (!initial) this.refresh_from_route("", true);
 	}
 
@@ -102,6 +112,99 @@ class PayrollInputCenter {
 			window.removeEventListener("hrms:route-change", this.handle_hrms_route_change);
 			this.route_events_bound = false;
 		}
+		if (this.table_controls_bound) {
+			this.wrapper.removeEventListener("click", this.handle_table_control_click);
+			this.wrapper.removeEventListener("input", this.handle_table_control_input);
+			this.table_control_observer?.disconnect();
+			this.table_controls_bound = false;
+		}
+	}
+
+	bind_table_controls() {
+		if (this.table_controls_bound) return;
+		this.table_controls_bound = true;
+		this.handle_table_control_click = (event) => {
+			const button = event.target.closest("[data-table-sort]");
+			if (!button || !this.wrapper.contains(button)) return;
+			const table = button.closest("table");
+			if (!table) return;
+			const column = Number(button.dataset.tableSort);
+			const direction = table.dataset.sortColumn === String(column) && table.dataset.sortDirection === "asc" ? "desc" : "asc";
+			this.sort_table_rows(table, column, direction);
+		};
+		this.handle_table_control_input = (event) => {
+			const input = event.target.closest("[data-table-column-search]");
+			if (!input || !this.wrapper.contains(input)) return;
+			this.filter_table_rows(input.closest("table"));
+		};
+		this.wrapper.addEventListener("click", this.handle_table_control_click);
+		this.wrapper.addEventListener("input", this.handle_table_control_input);
+		this.table_control_observer = new MutationObserver(() => this.decorate_table_controls());
+		this.table_control_observer.observe(this.wrapper, { childList: true, subtree: true });
+		this.decorate_table_controls();
+	}
+
+	decorate_table_controls() {
+		this.wrapper.querySelectorAll("table.table").forEach((table) => {
+			if (table.dataset.tableControlsReady || !table.tHead?.rows.length) return;
+			Array.from(table.tHead.rows[0].cells).forEach((header, index) => {
+				const label = header.textContent.trim();
+				if (!label || [__("操作"), __("选择")].includes(label)) return;
+				header.innerHTML = `<div class="hrms-payroll-table-column-head"><button class="btn btn-link btn-xs" type="button" data-table-sort="${index}" title="${this.escape(__("按{0}排序", [label]))}"><span>${this.escape(label)}</span><i aria-hidden="true">↕</i></button><input class="form-control input-xs" type="search" data-table-column-search="${index}" placeholder="${this.escape(__("搜索"))}" aria-label="${this.escape(__("搜索{0}", [label]))}"></div>`;
+			});
+			table.dataset.tableControlsReady = "1";
+			this.prioritize_table_rows(table);
+		});
+	}
+
+	prioritize_table_rows(table) {
+		if (!table?.tBodies.length || table.dataset.tablePriorityApplied) return;
+		const priority = (row) => {
+			const value = row.innerText || "";
+			if (/错误|异常|未匹配/.test(value)) return 0;
+			if (/待修改|待纠错/.test(value)) return 1;
+			if (/警告/.test(value)) return 2;
+			if (/待审核|待确认/.test(value)) return 3;
+			if (/已确认/.test(value)) return 5;
+			return 4;
+		};
+		const rows = Array.from(table.tBodies[0].rows).map((row, index) => ({ row, index }));
+		rows.sort((left, right) => priority(left.row) - priority(right.row) || left.index - right.index);
+		rows.forEach(({ row }) => table.tBodies[0].appendChild(row));
+		table.dataset.tablePriorityApplied = "1";
+	}
+
+	sort_table_rows(table, column, direction) {
+		if (!table?.tBodies.length) return;
+		const rows = Array.from(table.tBodies[0].rows).filter((row) => row.cells.length > column);
+		const numeric = (value) => Number(String(value || "").replace(/[￥,，\s]/g, ""));
+		rows.sort((left, right) => {
+			const leftValue = left.cells[column]?.innerText.trim() || "";
+			const rightValue = right.cells[column]?.innerText.trim() || "";
+			const leftNumber = numeric(leftValue);
+			const rightNumber = numeric(rightValue);
+			const result = leftValue && rightValue && Number.isFinite(leftNumber) && Number.isFinite(rightNumber)
+				? leftNumber - rightNumber
+				: leftValue.localeCompare(rightValue, "zh-Hans-CN", { numeric: true, sensitivity: "base" });
+			return direction === "asc" ? result : -result;
+		});
+		rows.forEach((row) => table.tBodies[0].appendChild(row));
+		table.dataset.sortColumn = String(column);
+		table.dataset.sortDirection = direction;
+		table.querySelectorAll("[data-table-sort]").forEach((button) => {
+			const active = Number(button.dataset.tableSort) === column;
+			button.classList.toggle("is-sorted", active);
+			button.querySelector("i").textContent = active ? (direction === "asc" ? "↑" : "↓") : "↕";
+		});
+	}
+
+	filter_table_rows(table) {
+		if (!table?.tBodies.length) return;
+		const filters = Array.from(table.querySelectorAll("[data-table-column-search]")).map((input) => ({ column: Number(input.dataset.tableColumnSearch), value: input.value.trim().toLocaleLowerCase() })).filter((item) => item.value);
+		Array.from(table.tBodies[0].rows).forEach((row) => {
+			if (!row.cells.length) return;
+			row.hidden = !filters.every((filter) => (row.cells[filter.column]?.innerText || "").toLocaleLowerCase().includes(filter.value));
+		});
 	}
 
 	get_context_company() {
@@ -112,6 +215,129 @@ class PayrollInputCenter {
 		);
 	}
 
+	default_payroll_month() {
+		return frappe.datetime.str_to_obj(frappe.datetime.get_today()).toISOString().slice(0, 7);
+	}
+
+	payroll_month_storage_key(company = this.company) {
+		return `hrms.payroll-input-center.month.${company || "default"}`;
+	}
+
+	get_saved_payroll_month(company = this.company) {
+		try {
+			const month = window.localStorage?.getItem(this.payroll_month_storage_key(company));
+			if (/^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || ""))) return month;
+		} catch (_ignore) {
+			// Private browsing or a browser policy can disable local storage; use the
+			// current month without preventing the payroll page from opening.
+		}
+		return this.default_payroll_month();
+	}
+
+	remember_payroll_month(month = this.payroll_month, company = this.company) {
+		try {
+			window.localStorage?.setItem(this.payroll_month_storage_key(company), month);
+		} catch (_ignore) {
+			// The selected month remains available for the current page session.
+		}
+	}
+
+	escape(value) {
+		return frappe.utils.escape_html(String(value ?? ""));
+	}
+
+	format_payroll_month(month = this.payroll_month) {
+		const [year, value] = String(month || "").split("-");
+		const monthNumber = Number(value);
+		return Number.isInteger(monthNumber) && monthNumber >= 1 && monthNumber <= 12 ? `${year}年${monthNumber}月` : "--";
+	}
+
+	set_payroll_month(month) {
+		if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(month || "")) || month === this.payroll_month) return;
+		if (!this.confirm_salary_changes_saved()) return false;
+		this.payroll_month = month;
+		this.remember_payroll_month(month);
+		this.attendance_lock_version = "";
+		this.attendance_dependency = null;
+		this.process_readiness = {};
+		this.payroll_workflow = null;
+		this.month_runbook = null;
+		this.render();
+		this.load_active_tab();
+		return true;
+	}
+
+	has_unsaved_salary_changes() {
+		return Boolean(this.wrapper.querySelector('[data-salary-change-row][data-salary-change-dirty="1"]'));
+	}
+
+	confirm_salary_changes_saved() {
+		if (!this.has_unsaved_salary_changes()) return true;
+		frappe.show_alert({ message: __("员工定薪存在未保存的修改，请先点击该行“保存”"), indicator: "orange" });
+		return false;
+	}
+
+	shift_payroll_month(offset) {
+		const [year, month] = this.payroll_month.split("-").map(Number);
+		const date = new Date(year, month - 1 + Number(offset || 0), 1);
+		const next = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+		this.set_payroll_month(next);
+	}
+
+	render_month_control() {
+		return `
+			<div class="hrms-payroll-month-control" aria-label="${this.escape(__("处理月份"))}">
+				<span>${this.escape(__("处理月份"))}</span>
+				<div class="hrms-payroll-month-switcher">
+					<button class="btn btn-default btn-sm" type="button" data-month-shift="-1" title="${this.escape(__("上一个月"))}" aria-label="${this.escape(__("上一个月"))}">‹</button>
+					<button class="btn btn-default btn-sm hrms-payroll-month-current" type="button" data-open-month-picker title="${this.escape(__("选择处理月份"))}">${this.escape(this.format_payroll_month())}</button>
+					<button class="btn btn-default btn-sm" type="button" data-month-shift="1" title="${this.escape(__("下一个月"))}" aria-label="${this.escape(__("下一个月"))}">›</button>
+				</div>
+			</div>
+		`;
+	}
+
+	open_month_picker() {
+		let pickerYear = Number(this.payroll_month.slice(0, 4)) || new Date().getFullYear();
+		const months = Array.from({ length: 12 }, (_unused, index) => index + 1);
+		const dialog = new frappe.ui.Dialog({
+			title: __("选择处理月份"),
+			fields: [{ fieldname: "month_picker", fieldtype: "HTML" }],
+		});
+		const renderPicker = () => {
+			const activeMonth = this.payroll_month;
+			dialog.fields_dict.month_picker.$wrapper.html(`
+				<div class="hrms-payroll-month-picker">
+					<div class="hrms-payroll-month-picker__year">
+						<button class="btn btn-default btn-sm" type="button" data-picker-year="-1" aria-label="${this.escape(__("上一年"))}">‹</button>
+						<strong>${this.escape(String(pickerYear))}${this.escape(__("年"))}</strong>
+						<button class="btn btn-default btn-sm" type="button" data-picker-year="1" aria-label="${this.escape(__("下一年"))}">›</button>
+					</div>
+					<div class="hrms-payroll-month-picker__months">
+						${months.map((month) => {
+							const value = `${pickerYear}-${String(month).padStart(2, "0")}`;
+							return `<button class="btn btn-default btn-sm ${value === activeMonth ? "active" : ""}" type="button" data-picker-month="${value}">${this.escape(__("{0}月", [month]))}</button>`;
+						}).join("")}
+					</div>
+					<button class="btn btn-link btn-sm" type="button" data-picker-current>${this.escape(__("回到本月"))}</button>
+				</div>
+			`);
+			dialog.$wrapper.find("[data-picker-year]").on("click", (event) => {
+				pickerYear += Number(event.currentTarget.dataset.pickerYear);
+				renderPicker();
+			});
+			dialog.$wrapper.find("[data-picker-month]").on("click", (event) => {
+				if (this.set_payroll_month(event.currentTarget.dataset.pickerMonth)) dialog.hide();
+			});
+			dialog.$wrapper.find("[data-picker-current]").on("click", () => {
+				const today = frappe.datetime.str_to_obj(frappe.datetime.get_today());
+				if (this.set_payroll_month(today.toISOString().slice(0, 7))) dialog.hide();
+			});
+		};
+		dialog.show();
+		renderPicker();
+	}
+
 	bind_company_context() {
 		if (this.company_context_bound) return;
 		this.company_context_bound = true;
@@ -119,7 +345,9 @@ class PayrollInputCenter {
 			if (!this.is_active()) return;
 			const company = event?.detail?.company || this.get_context_company();
 			if (!company || company === this.company) return;
+			if (!this.confirm_salary_changes_saved()) return;
 			this.company = company;
+			this.payroll_month = this.get_saved_payroll_month(company);
 			this.attendance_lock_version = "";
 			this.attendance_dependency = null;
 			this.process_readiness = {};
@@ -137,7 +365,9 @@ class PayrollInputCenter {
 		ready.then((company) => {
 			if (!this.is_active()) return;
 			if (!company || company === this.company) return;
+			if (!this.confirm_salary_changes_saved()) return;
 			this.company = company;
+			this.payroll_month = this.get_saved_payroll_month(company);
 			this.attendance_lock_version = "";
 			this.attendance_dependency = null;
 			this.process_readiness = {};
@@ -175,9 +405,14 @@ class PayrollInputCenter {
 	refresh_from_route(tab = "", force = false) {
 		const next_tab = this.resolve_tab(tab || this.tab_from_current_route());
 		const has_body = Boolean(this.body());
+		if (next_tab !== this.active_tab && !this.confirm_salary_changes_saved()) {
+			frappe.set_route("payroll-input-center", this.active_tab);
+			return;
+		}
 		if (next_tab === this.active_tab && has_body) {
 			if (!force || Date.now() - this.last_route_refresh_at < this.cache_ttl) return;
 			this.last_route_refresh_at = Date.now();
+			this.load_attendance_dependency();
 			this.load_active_tab();
 			return;
 		}
@@ -269,39 +504,10 @@ class PayrollInputCenter {
 
 	render() {
 		this.wrapper.innerHTML = `
-			<div class="hrms-payroll-input-center">
-				<div class="hrms-payroll-input-head">
-					<div>
-						<h2>${frappe.utils.escape_html(__("薪酬管理中心"))}</h2>
-						<p>${frappe.utils.escape_html(__("按数据状态处理本月工资；只在试算时统一校验。"))}</p>
-					</div>
-					<div class="hrms-payroll-input-controls">
-						<input class="form-control" data-company data-company-context readonly aria-readonly="true" title="${frappe.utils.escape_html(__("请在顶部公司切换器中切换公司"))}" placeholder="${frappe.utils.escape_html(__("公司"))}" value="${frappe.utils.escape_html(this.company || "")}">
-						<input class="form-control" type="month" data-month value="${frappe.utils.escape_html(this.payroll_month)}">
-						<div class="hrms-payroll-attendance-dependency is-loading" data-attendance-dependency>${frappe.utils.escape_html(__("正在自动读取考勤假期终稿…"))}</div>
-						<button class="btn btn-default" data-upload>${frappe.utils.escape_html(__("导入月度增减项"))}</button>
-					</div>
-				</div>
-				${this.render_workspace_navigation()}
+			<div class="hrms-payroll-input-center hrms-payroll-calculation-only">
 				<div data-payroll-body></div>
 			</div>
 		`;
-		this.wrapper.querySelector("[data-upload]").addEventListener("click", () => this.route_to_tab("variables"));
-		this.wrapper.querySelector("[data-month]").addEventListener("change", (event) => {
-			this.payroll_month = event.target.value;
-			this.attendance_lock_version = "";
-			this.attendance_dependency = null;
-			this.process_readiness = {};
-			this.payroll_workflow = null;
-			this.month_runbook = null;
-			this.render_attendance_dependency();
-			this.load_attendance_dependency();
-			this.load_active_tab();
-		});
-		this.wrapper.querySelectorAll("[data-area-route]").forEach((button) => {
-			button.addEventListener("click", () => this.route_to_tab(button.dataset.areaRoute));
-		});
-		this.render_attendance_dependency();
 		this.load_attendance_dependency();
 	}
 
@@ -320,18 +526,70 @@ class PayrollInputCenter {
 			: `<strong>${frappe.utils.escape_html(__("缺少考勤终稿"))}</strong><span>${frappe.utils.escape_html(dependency.message || __("请先在考勤假期完成并锁定本月考勤终稿"))}</span>`;
 	}
 
-	load_attendance_dependency() {
-		if (!this.company || !this.payroll_month) return;
-		frappe.call({
-			method: "hrms.api.payroll_input.get_payroll_attendance_dependency",
-			args: { company: this.company, payroll_month: this.payroll_month },
-			callback: (response) => {
-				this.attendance_dependency = response.message || { ready: false };
-				this.attendance_lock_version = this.attendance_dependency.attendance_lock_version || "";
-				this.render_attendance_dependency();
-				this.load_active_tab();
-			},
+	attendance_dependency_key(company = this.company, payroll_month = this.payroll_month) {
+		return `${company || ""}::${payroll_month || ""}`;
+	}
+
+	apply_attendance_dependency(dependency, company = this.company, payroll_month = this.payroll_month) {
+		// Ignore a request that completed after the user switched its calculation
+		// scope; stale locks must never overwrite the current company/month.
+		if (company !== this.company || payroll_month !== this.payroll_month) return;
+		this.attendance_dependency = dependency || { ready: false };
+		this.attendance_lock_version = this.attendance_dependency.attendance_lock_version || "";
+		this.render_attendance_dependency();
+		this.update_attendance_dependent_controls();
+	}
+
+	update_attendance_dependent_controls() {
+		const available = Boolean(this.attendance_lock_version);
+		this.wrapper.querySelectorAll("[data-requires-attendance-lock]").forEach((button) => {
+			button.disabled = !available;
+			button.title = available
+				? button.dataset.attendanceReadyTitle || ""
+				: __("请先在考勤假期完成并锁定本月考勤终稿");
 		});
+	}
+
+	load_attendance_dependency({ force = false } = {}) {
+		if (!this.company || !this.payroll_month) return Promise.resolve(null);
+		const company = this.company;
+		const payroll_month = this.payroll_month;
+		const key = this.attendance_dependency_key(company, payroll_month);
+		const cached = this.attendance_dependency_cache.get(key);
+		if (!force && cached && Date.now() - cached.loaded_at < this.cache_ttl) {
+			this.apply_attendance_dependency(cached.value, company, payroll_month);
+			return Promise.resolve(cached.value);
+		}
+		const pending = this.attendance_dependency_requests.get(key);
+		if (pending) return pending;
+
+		const request = frappe
+			.call({
+				method: "hrms.api.payroll_input.get_payroll_attendance_dependency",
+				args: { company, payroll_month },
+			})
+			.then((response) => {
+				const dependency = response.message || { ready: false };
+				this.attendance_dependency_cache.set(key, { value: dependency, loaded_at: Date.now() });
+				this.apply_attendance_dependency(dependency, company, payroll_month);
+				return dependency;
+			});
+		const clear_request = () => this.attendance_dependency_requests.delete(key);
+		// Frappe's request wrapper is thenable but some supported versions do not
+		// implement Promise.prototype.finally.  Use the two-argument form of then
+		// so page initialization stays compatible with both implementations.
+		const settled_request = request.then(
+			(value) => {
+				clear_request();
+				return value;
+			},
+			(error) => {
+				clear_request();
+				throw error;
+			},
+		);
+		this.attendance_dependency_requests.set(key, settled_request);
+		return settled_request;
 	}
 
 	body() {
@@ -350,6 +608,9 @@ class PayrollInputCenter {
 	}
 
 	load_active_tab() {
+		// Background refreshes (for example, the attendance dependency response)
+		// must not rebuild this editable table over a user's pending changes.
+		if (this.has_unsaved_salary_changes()) return;
 		if (this.active_tab === "monthly-workbench") {
 			this.load_monthly_workbench();
 			return;
@@ -414,14 +675,105 @@ class PayrollInputCenter {
 	}
 
 	open_uploader() {
+		if (!this.selected_payroll_source?.source_code) {
+			frappe.msgprint(__("请先在“本月数据来源清单”中点击对应来源的“上传”，再选择一张 Excel。"));
+			return;
+		}
 		new frappe.ui.FileUploader({
 			folder: "Home/Attachments",
+			allow_multiple: false,
 			restrictions: { allowed_file_types: [".xlsx"] },
 			on_success: (file) => {
 				this.file_url = file.file_url;
+				this.variable_import_preview = null;
 				this.preview_payroll_variable_workbook();
 			},
 		});
+	}
+
+	open_bulk_variable_uploader() {
+		if (!this.variable_source_catalog?.length) {
+			frappe.msgprint(__("来源配置尚未加载完成，请稍后再试。"));
+			return;
+		}
+		this.bulk_variable_import_queue = Promise.resolve();
+		this.bulk_variable_import_results = [];
+		frappe.show_alert({
+			message: __("可一次选择多张 Excel；系统会逐张识别来源并依次导入。薪资异动和全勤奖会自动跳过。"),
+			indicator: "blue",
+		});
+		new frappe.ui.FileUploader({
+			folder: "Home/Attachments",
+			allow_multiple: true,
+			restrictions: { allowed_file_types: [".xlsx"] },
+			on_success: (file) => {
+				this.bulk_variable_import_queue = this.bulk_variable_import_queue
+					.then(() => this.import_bulk_variable_file(file))
+					.catch((error) => {
+						const label = file.file_name || file.name || __("未命名文件");
+						this.bulk_variable_import_results.push({ file: label, status: "failed" });
+						frappe.show_alert({
+							message: __("{0} 未导入。请在对应来源卡使用单项上传检查表头和数据。", [label]),
+							indicator: "red",
+						});
+						console.error("Bulk payroll-variable import failed", error);
+					});
+			},
+		});
+	}
+
+	import_bulk_variable_file(file) {
+		const fileUrl = file.file_url;
+		const fileLabel = file.file_name || file.name || fileUrl;
+		return frappe
+			.call({
+				method: "hrms.api.payroll_input.preview_payroll_variable_workbook",
+				args: { file_url: fileUrl, company: this.company, payroll_month: this.payroll_month },
+				freeze: true,
+				freeze_message: __("正在识别 {0}...", [fileLabel]),
+			})
+			.then((response) => {
+				const preview = response.message || {};
+				const sourceKinds = [...new Set((preview.sheets || []).map((sheet) => sheet.source_kind).filter(Boolean))];
+				const blockedKinds = sourceKinds.filter((kind) => ["salary_change", "attendance_bonus"].includes(kind));
+				const importKinds = sourceKinds.filter((kind) => !["salary_change", "attendance_bonus"].includes(kind));
+				if (preview.blocked || blockedKinds.length || !importKinds.length) {
+					const reason = blockedKinds.includes("salary_change")
+						? __("薪资异动应在员工定薪处理")
+						: __("全勤奖由考勤终稿自动继承");
+					this.bulk_variable_import_results.push({ file: fileLabel, status: "skipped", reason });
+					frappe.show_alert({ message: __("已跳过 {0}：{1}。", [fileLabel, reason]), indicator: "orange" });
+					return null;
+				}
+				if (importKinds.length !== 1) {
+					this.bulk_variable_import_results.push({ file: fileLabel, status: "skipped", reason: "ambiguous" });
+					frappe.show_alert({ message: __("已跳过 {0}：一个文件只能对应一个月度来源。", [fileLabel]), indicator: "orange" });
+					return null;
+				}
+				const sourceCode = importKinds[0] === "housing_allowance_base" ? "housing_allowance" : importKinds[0];
+				const source = (this.variable_source_catalog || []).find((item) => (item.source_code || item.name) === sourceCode && item.target_area === "月度增减项");
+				if (!source) {
+					this.bulk_variable_import_results.push({ file: fileLabel, status: "skipped", reason: "unconfigured" });
+					frappe.show_alert({ message: __("已跳过 {0}：未找到对应的启用来源配置。", [fileLabel]), indicator: "orange" });
+					return null;
+				}
+				return frappe.call({
+					method: "hrms.api.payroll_input.import_payroll_variable_workbook",
+					args: this.scope_args({ file_url: fileUrl, source_type: sourceCode }),
+					freeze: true,
+					freeze_message: __("正在导入 {0}...", [fileLabel]),
+				});
+			})
+			.then((response) => {
+				if (!response) return;
+				const result = response.message || {};
+				this.bulk_variable_import_results.push({ file: fileLabel, status: "imported", batch: result.batch });
+				frappe.show_alert({
+					message: __("已导入 {0}，请在对应来源卡预览、纠错并确认。", [fileLabel]),
+					indicator: "orange",
+				});
+				this.load_import_batches();
+			});
 	}
 
 	open_salary_structure_uploader() {
@@ -502,40 +854,136 @@ class PayrollInputCenter {
 	}
 
 	route_to_tab(tab) {
+		if (this.resolve_tab(tab) !== this.active_tab && !this.confirm_salary_changes_saved()) return false;
 		this.active_tab = this.resolve_tab(tab);
 		this.active_process_step = this.process_step_for(this.active_tab);
 		frappe.set_route("payroll-input-center", this.active_tab);
 		this.render();
 		this.load_active_tab();
+		return true;
 	}
 
 	load_monthly_workbench() {
-		const hasLockedAttendance = Boolean(this.attendance_lock_version);
 		this.body().innerHTML = `
-			<div class="hrms-payroll-runbook-head hrms-payroll-step-head">
-				<div>
-					<span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("实时校验与计算"))}</span>
-					<h3>${frappe.utils.escape_html(__("本月薪资试算"))}</h3>
-					<p>${frappe.utils.escape_html(__("系统自动继承考勤假期锁定终稿，并只汇总已确认入账的月度增减项。"))}</p>
-				</div>
-				<div class="hrms-payroll-action-group">
-					<button class="btn btn-default btn-sm" data-workbench-action="refresh">${frappe.utils.escape_html(__("刷新状态"))}</button>
-					<button class="btn btn-default btn-sm" data-workbench-action="import">${frappe.utils.escape_html(__("导入本月资料"))}</button>
-					<button class="btn btn-primary btn-sm" data-workbench-action="generate-input" ${hasLockedAttendance ? "" : "disabled"} title="${frappe.utils.escape_html(hasLockedAttendance ? __("按自动继承的终稿生成") : __("请先在考勤假期完成并锁定本月考勤终稿"))}">${frappe.utils.escape_html(__("生成薪资输入表"))}</button>
-					<button class="btn btn-primary btn-sm" data-workbench-action="generate-settlement" ${hasLockedAttendance ? "" : "disabled"} title="${frappe.utils.escape_html(hasLockedAttendance ? __("按自动继承的终稿试算") : __("请先在考勤假期完成并锁定本月考勤终稿"))}">${frappe.utils.escape_html(__("试算本月工资"))}</button>
-				</div>
-			</div>
-			<div class="hrms-payroll-scope-notice">
-				<strong>${frappe.utils.escape_html(__("结算范围"))}</strong>
-				<span data-workbench-scope>${frappe.utils.escape_html(this.company || __("未选择公司"))} / ${frappe.utils.escape_html(this.payroll_month)} / ${frappe.utils.escape_html(hasLockedAttendance ? __("已自动继承锁定考勤终稿") : __("缺少锁定考勤终稿"))}</span>
-			</div>
-			<div data-workbench-cards></div>
-			<div data-workbench-runbook></div>
+			<div data-payroll-calculation-table></div>
 		`;
-		this.body().querySelectorAll("[data-workbench-action]").forEach((button) => {
-			button.addEventListener("click", () => this.handle_workbench_action(button.dataset.workbenchAction));
+		frappe.call({
+			method: "hrms.api.payroll_input.list_payroll_settlement_records",
+			args: this.scope_args({ page_length: 500 }),
+			callback: (response) => {
+				const target = this.wrapper.querySelector("[data-payroll-calculation-table]");
+				if (!target) return;
+				this.render_monthly_calculation_table(target, response.message || []);
+			},
 		});
-		this.refresh_monthly_workbench();
+	}
+
+	calculation_column_storage_key() {
+		return `hrms.payroll-input-center.calculation-columns.${this.company || "default"}`;
+	}
+
+	default_calculation_column_fields() {
+		return [...this.fixed_calculation_column_fields(), ...this.settlement_columns(false).map((column) => column.field)];
+	}
+
+	fixed_calculation_column_fields() {
+		return ["employee_name", "employee_code", "department"];
+	}
+
+	selected_calculation_column_fields(columns) {
+		const available = new Set(columns.map((column) => column.field));
+		const fixed = this.fixed_calculation_column_fields().filter((field) => available.has(field));
+		try {
+			const saved = JSON.parse(window.localStorage?.getItem(this.calculation_column_storage_key()) || "null");
+			if (Array.isArray(saved)) return [...new Set([...fixed, ...saved.filter((field) => available.has(field))])];
+		} catch (_ignore) {
+			// The table remains usable when browser storage is unavailable.
+		}
+		return [...new Set([...fixed, ...this.default_calculation_column_fields().filter((field) => available.has(field))])];
+	}
+
+	remember_calculation_column_fields(fields) {
+		try {
+			window.localStorage?.setItem(this.calculation_column_storage_key(), JSON.stringify(fields));
+		} catch (_ignore) {
+			// Keep the selection for the current render even if storage is disabled.
+		}
+	}
+
+	render_monthly_calculation_table(target, rows) {
+		const allColumns = this.settlement_columns(true);
+		const selectedFields = this.selected_calculation_column_fields(allColumns);
+		const selectedFieldSet = new Set(selectedFields);
+		const columns = allColumns.filter((column) => selectedFieldSet.has(column.field));
+		target.innerHTML = `
+			<div class="hrms-payroll-input-list-head hrms-payroll-calculation-toolbar">
+				<div class="text-muted">${frappe.utils.escape_html(__("已显示 {0} / {1} 个项目；选择会自动保存，并在下月及刷新后继续使用。", [columns.length, allColumns.length]))}</div>
+				<div class="hrms-payroll-action-group">
+					<button class="btn btn-default btn-sm" data-select-calculation-columns>${frappe.utils.escape_html(__("选择项目"))}</button>
+					<button class="btn btn-default btn-sm" data-select-all-calculation-columns>${frappe.utils.escape_html(__("全选"))}</button>
+					<button class="btn btn-default btn-sm" data-clear-calculation-columns>${frappe.utils.escape_html(__("清除"))}</button>
+					<button class="btn btn-primary btn-sm" data-export-calculation-excel ${columns.length ? "" : "disabled"}>${frappe.utils.escape_html(__("导出 Excel"))}</button>
+				</div>
+			</div>
+			<div data-calculation-table-content>${columns.length
+				? this.render_table("薪资计算表", columns.map((column) => column.label), rows, (row) => columns.map((column) => this.format_settlement_cell(row, column)))
+				: `<div class="text-muted hrms-payroll-empty-selection">${frappe.utils.escape_html(__("尚未选择显示项目。请点击“选择项目”或“全选”。"))}</div>`}</div>
+		`;
+		target.querySelector("[data-select-calculation-columns]")?.addEventListener("click", () => this.open_calculation_column_selector(target, rows, allColumns));
+		target.querySelector("[data-select-all-calculation-columns]")?.addEventListener("click", () => {
+			this.remember_calculation_column_fields(allColumns.map((column) => column.field));
+			this.render_monthly_calculation_table(target, rows);
+		});
+		target.querySelector("[data-clear-calculation-columns]")?.addEventListener("click", () => {
+			this.remember_calculation_column_fields(this.fixed_calculation_column_fields());
+			this.render_monthly_calculation_table(target, rows);
+		});
+		target.querySelector("[data-export-calculation-excel]")?.addEventListener("click", () => this.export_calculation_excel(rows, columns));
+	}
+
+	open_calculation_column_selector(target, rows, columns) {
+		const selected = new Set(this.selected_calculation_column_fields(columns));
+		const fixed = new Set(this.fixed_calculation_column_fields());
+		const dialog = new frappe.ui.Dialog({
+			title: __("选择薪资计算显示项目"),
+			fields: [{ fieldname: "columns", fieldtype: "HTML" }],
+			primary_action_label: __("保存显示项目"),
+			primary_action: () => {
+				const fields = [...fixed, ...Array.from(dialog.$wrapper.find("[data-calculation-column]:checked")).map((input) => input.dataset.calculationColumn)];
+				this.remember_calculation_column_fields(fields);
+				dialog.hide();
+				this.render_monthly_calculation_table(target, rows);
+			},
+		});
+		dialog.show();
+		dialog.fields_dict.columns.$wrapper.html(`
+			<div class="hrms-payroll-column-selector-actions">
+				<button class="btn btn-default btn-sm" type="button" data-selector-select-all>${frappe.utils.escape_html(__("全选"))}</button>
+				<button class="btn btn-default btn-sm" type="button" data-selector-clear>${frappe.utils.escape_html(__("清除"))}</button>
+			</div>
+			<div class="hrms-payroll-column-selector">${columns.map((column) => `<label><input type="checkbox" data-calculation-column="${frappe.utils.escape_html(column.field)}" ${selected.has(column.field) ? "checked" : ""} ${fixed.has(column.field) ? "disabled" : ""}> ${frappe.utils.escape_html(__(column.label))}${fixed.has(column.field) ? ` <small>${frappe.utils.escape_html(__("固定"))}</small>` : ""}</label>`).join("")}</div>
+		`);
+		dialog.$wrapper.find("[data-selector-select-all]").on("click", () => dialog.$wrapper.find("[data-calculation-column]:not(:disabled)").prop("checked", true));
+		dialog.$wrapper.find("[data-selector-clear]").on("click", () => dialog.$wrapper.find("[data-calculation-column]:not(:disabled)").prop("checked", false));
+	}
+
+	export_calculation_excel(rows, columns) {
+		if (!columns.length) return;
+		const cell = (value) => {
+			const text = String(value ?? "");
+			const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
+			return `<td>${frappe.utils.escape_html(safe)}</td>`;
+		};
+		const workbook = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body><table><thead><tr>${columns.map((column) => `<th>${frappe.utils.escape_html(__(column.label))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => cell(this.format_settlement_cell(row, column))).join("")}</tr>`).join("")}</tbody></table></body></html>`;
+		const blob = new Blob(["\ufeff", workbook], { type: "application/vnd.ms-excel;charset=utf-8" });
+		const link = document.createElement("a");
+		link.href = URL.createObjectURL(blob);
+		link.download = `${__("薪资计算表")}_${this.payroll_month || ""}.xls`;
+		link.style.display = "none";
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+		setTimeout(() => URL.revokeObjectURL(link.href), 0);
 	}
 
 	render_project_map_items() {
@@ -659,7 +1107,7 @@ class PayrollInputCenter {
 				<h3>${frappe.utils.escape_html(__("月工资表"))}</h3>
 				<div>
 					<button class="btn btn-default btn-sm" data-refresh-dependencies>${frappe.utils.escape_html(__("刷新来源状态"))}</button>
-					<button class="btn btn-primary btn-sm" data-generate-monthly ${hasLockedAttendance ? "" : "disabled"} title="${frappe.utils.escape_html(hasLockedAttendance ? __("生成薪资结算表") : __("请先在考勤假期完成并锁定本月考勤终稿"))}">${frappe.utils.escape_html(__("生成薪资结算表"))}</button>
+					<button class="btn btn-primary btn-sm" data-generate-monthly data-requires-attendance-lock data-attendance-ready-title="${frappe.utils.escape_html(__("生成薪资结算表"))}" ${hasLockedAttendance ? "" : "disabled"} title="${frappe.utils.escape_html(hasLockedAttendance ? __("生成薪资结算表") : __("请先在考勤假期完成并锁定本月考勤终稿"))}">${frappe.utils.escape_html(__("生成薪资结算表"))}</button>
 				</div>
 			</div>
 			<div class="text-muted">
@@ -1011,9 +1459,9 @@ class PayrollInputCenter {
 			<div data-salary-change-import-batches></div>
 			<div data-salary-changes></div>
 		`;
-		this.body().querySelector("[data-download-salary-change-template]").addEventListener("click", () => this.download_employee_salary_change_template());
-		this.body().querySelector("[data-import-salary-change]").addEventListener("click", () => this.open_employee_salary_change_import());
-		this.body().querySelector("[data-open-published-architecture]").addEventListener("click", () => frappe.set_route("salary-architecture"));
+		this.body().querySelector("[data-download-salary-change-template]").addEventListener("click", () => { if (this.confirm_salary_changes_saved()) this.download_employee_salary_change_template(); });
+		this.body().querySelector("[data-import-salary-change]").addEventListener("click", () => { if (this.confirm_salary_changes_saved()) this.open_employee_salary_change_import(); });
+		this.body().querySelector("[data-open-published-architecture]").addEventListener("click", () => { if (this.confirm_salary_changes_saved()) frappe.set_route("salary-architecture"); });
 		frappe.call({
 			method: "hrms.api.payroll_input.get_salary_architecture_workbench",
 			args: { company: this.company, payroll_month: this.payroll_month },
@@ -1036,7 +1484,8 @@ class PayrollInputCenter {
 		});
 	}
 
-	exclude_employee_from_payroll(employee) {
+	exclude_employee_from_payroll(employee, row = null) {
+		if (row && !this.confirm_salary_changes_saved()) return;
 		frappe.confirm(__("确认该员工本月不参与薪资计算？此操作不会删除原有定薪，恢复参与后会继续使用此前已批准的定薪。"), () => {
 		frappe.call({ method: "hrms.api.payroll_input.set_employee_payroll_participation", args: { employee, company: this.company, payroll_month: this.payroll_month, participates: 0 }, freeze: true, freeze_message: __("正在更新本月参与范围..."), callback: () => { frappe.show_alert({ message: __("已标记为本月不参与计算"), indicator: "green" }); this.process_readiness = {}; this.load_salary_assignment_step(); } });
 		});
@@ -1988,7 +2437,7 @@ class PayrollInputCenter {
 		target.innerHTML = `<section class="hrms-payroll-salary-grid"><div class="hrms-payroll-project-map-head"><div><h3>${escape(__("员工定薪表"))}</h3><p>${escape(__("下拉只显示当前薪资架构版本的数字等级。选择数字后，系统会带入底薪、职能津贴和全薪；仍可按员工实际情况手工覆盖。证书和多能工津贴按月进入奖金，不参与加班、缺勤工时单价。"))}</p></div><span class="hrms-payroll-template-status">${escape(__("共 {0} 人", [salaryRows.length]))}</span></div><div class="hrms-payroll-filter-row"><input class="form-control input-sm" data-salary-change-search placeholder="${escape(__("搜索姓名、工号、部门、工作性质或状态"))}"></div><div class="table-responsive"><table class="table table-bordered table-sm hrms-payroll-editable-table"><thead><tr><th>${escape(__("姓名 / 工号"))}</th><th>${escape(__("部门"))}</th><th>${escape(__("工作性质"))}</th><th>${escape(__("异动原因"))}</th><th>${escape(__("生效日期"))}</th><th>${escape(__("等级"))}</th><th>${escape(__("底薪"))}</th><th>${escape(__("职能津贴"))}</th><th>${escape(__("证书津贴"))}</th><th>${escape(__("多能工津贴"))}</th><th>${escape(__("社保"))}</th><th>${escape(__("公积金"))}</th><th>${escape(__("薪资小计"))}</th><th>${escape(__("状态"))}</th><th>${escape(__("操作"))}</th></tr></thead><tbody>${salaryRows.map((row) => {
 			const statuses = row.is_new ? ["草稿", "待审核"] : ["草稿", "待审核", "已批准", "已作废"];
 			const participationAction = !Number(row.base_salary) ? `<button class="btn btn-default btn-xs" data-exclude-payroll="${escape(row.employee)}">${escape(__("本月不参与计算"))}</button>` : "";
-			return `<tr data-salary-change-row data-search="${escape([row.employee_name, row.employee_code, row.department, row.employment_type, row.change_reason, row.status].filter(Boolean).join(" ").toLowerCase())}" data-salary-change-name="${escape(row.name)}" data-salary-change-employee="${escape(row.employee)}"><td><strong>${escape(row.employee_name)}</strong><small>${escape(row.employee_code)}</small></td><td>${escape(row.department)}</td><td><span class="hrms-payroll-employment-stage">${escape(row.employment_type || "-")}</span></td><td>${escape(row.change_reason || "-")}</td><td><input class="form-control input-sm" type="date" data-salary-change-field="effective_date" value="${escape(row.effective_date)}"></td><td>${salaryGradeSelect(row.salary_grade)}</td><td>${moneyInput("base_salary", row.base_salary, { required: true })}</td><td>${moneyInput("function_allowance", row.function_allowance)}</td><td>${moneyInput("certificate_allowance", row.certificate_allowance)}</td><td>${moneyInput("multi_skill_allowance", row.multi_skill_allowance)}</td><td>${contributionToggle("social_insurance_enabled", row.social_insurance_enabled, row.contribution_default || "")}</td><td>${contributionToggle("housing_fund_enabled", row.housing_fund_enabled, row.contribution_default || "")}</td><td><output data-salary-change-total>${escape(row.full_salary || 0)}</output></td><td><select class="form-control input-sm" data-salary-change-field="status">${statuses.map((status) => `<option value="${escape(status)}" ${row.status === status ? "selected" : ""}>${escape(__(status))}</option>`).join("")}</select></td><td><button class="btn btn-primary btn-xs" data-save-salary-change>${escape(__("保存"))}</button>${participationAction}</td></tr>`;
+			return `<tr data-salary-change-row data-search="${escape([row.employee_name, row.employee_code, row.department, row.employment_type, row.change_reason, row.status].filter(Boolean).join(" ").toLowerCase())}" data-salary-change-name="${escape(row.name)}" data-salary-change-employee="${escape(row.employee)}"><td><strong>${escape(row.employee_name)}</strong><small>${escape(row.employee_code)}</small></td><td>${escape(row.department)}</td><td><span class="hrms-payroll-employment-stage">${escape(row.employment_type || "-")}</span></td><td>${escape(row.change_reason || "-")}</td><td><input class="form-control input-sm" type="date" data-salary-change-field="effective_date" value="${escape(row.effective_date)}"></td><td>${salaryGradeSelect(row.salary_grade)}</td><td>${moneyInput("base_salary", row.base_salary, { required: true })}</td><td>${moneyInput("function_allowance", row.function_allowance)}</td><td>${moneyInput("certificate_allowance", row.certificate_allowance)}</td><td>${moneyInput("multi_skill_allowance", row.multi_skill_allowance)}</td><td>${contributionToggle("social_insurance_enabled", row.social_insurance_enabled, row.contribution_default || "")}</td><td>${contributionToggle("housing_fund_enabled", row.housing_fund_enabled, row.contribution_default || "")}</td><td><output data-salary-change-total>${escape(row.full_salary || 0)}</output></td><td><select class="form-control input-sm" data-salary-change-field="status">${statuses.map((status) => `<option value="${escape(status)}" ${row.status === status ? "selected" : ""}>${escape(__(status))}</option>`).join("")}</select></td><td><button class="btn btn-primary btn-xs" data-save-salary-change>${escape(__("保存"))}</button><small class="hrms-payroll-save-state" data-salary-change-save-state>${escape(__("已保存"))}</small>${participationAction}</td></tr>`;
 		}).join("")}</tbody></table></div></section>`;
 		target.querySelector("[data-salary-change-search]")?.addEventListener("input", (event) => {
 			const query = String(event.target.value || "").trim().toLowerCase();
@@ -2003,22 +2452,74 @@ class PayrollInputCenter {
 				field.classList.toggle("is-required", field.dataset.salaryChangeField === "base_salary" && !Number(field.value));
 				field.closest(".hrms-payroll-money-field")?.querySelector(".hrms-payroll-required-hint")?.toggleAttribute("hidden", Number(field.value) > 0);
 				refreshTotal();
+				this.refresh_salary_change_dirty_state(row);
 			}));
+			row.querySelectorAll('[data-salary-change-field="effective_date"], [data-salary-change-field="social_insurance_enabled"], [data-salary-change-field="housing_fund_enabled"], [data-salary-change-field="status"]').forEach((field) => field.addEventListener("change", () => this.refresh_salary_change_dirty_state(row)));
 			row.querySelector('[data-salary-change-field="salary_grade"]')?.addEventListener("change", (event) => {
 				const grade = this.assignableSalaryGrades.find((item) => item.name === event.target.value);
-				if (!grade) return;
-				row.querySelector('[data-salary-change-field="base_salary"]').value = grade.base_salary;
-				row.querySelector('[data-salary-change-field="function_allowance"]').value = grade.function_allowance;
+				if (grade) {
+					row.querySelector('[data-salary-change-field="base_salary"]').value = grade.base_salary;
+					row.querySelector('[data-salary-change-field="function_allowance"]').value = grade.function_allowance;
+				}
 				refreshTotal();
+				this.refresh_salary_change_dirty_state(row);
 			});
 			row.querySelector("[data-save-salary-change]")?.addEventListener("click", () => this.save_employee_salary_change_row(row));
+			row.dataset.salaryChangeSnapshot = JSON.stringify(this.salary_change_values(row));
+			this.set_salary_change_dirty_state(row, false);
 		});
-		target.querySelectorAll("[data-exclude-payroll]").forEach((button) => button.addEventListener("click", () => this.exclude_employee_from_payroll(button.dataset.excludePayroll)));
+		target.querySelectorAll("[data-exclude-payroll]").forEach((button) => button.addEventListener("click", () => this.exclude_employee_from_payroll(button.dataset.excludePayroll, button.closest("[data-salary-change-row]"))));
+	}
+
+	salary_change_values(row) {
+		const values = {};
+		row.querySelectorAll("[data-salary-change-field]").forEach((field) => {
+			values[field.dataset.salaryChangeField] = field.type === "checkbox" ? Number(field.checked) : field.value;
+		});
+		return values;
+	}
+
+	set_salary_change_dirty_state(row, dirty, state = "") {
+		row.dataset.salaryChangeDirty = dirty ? "1" : "0";
+		row.classList.toggle("is-unsaved", dirty);
+		const button = row.querySelector("[data-save-salary-change]");
+		const indicator = row.querySelector("[data-salary-change-save-state]");
+		if (state === "saving") {
+			if (button) {
+				button.disabled = true;
+				button.textContent = __("保存中…");
+			}
+			if (indicator) indicator.textContent = __("保存中");
+			return;
+		}
+		if (button) {
+			button.disabled = false;
+			button.textContent = __("保存");
+		}
+		if (indicator) indicator.textContent = dirty ? __("未保存") : __("已保存");
+	}
+
+	refresh_salary_change_dirty_state(row) {
+		this.set_salary_change_dirty_state(row, JSON.stringify(this.salary_change_values(row)) !== (row.dataset.salaryChangeSnapshot || ""));
+	}
+
+	salary_change_save_error_message(error) {
+		const response = error?.responseJSON || error || {};
+		const rawMessages = response._server_messages || response.message;
+		const readMessage = (value) => {
+			if (typeof value === "string") {
+				try { return readMessage(JSON.parse(value)); } catch (_ignore) { return value; }
+			}
+			if (Array.isArray(value)) return value.map(readMessage).filter(Boolean).join("；");
+			if (value && typeof value === "object") return value.message || value._message || "";
+			return "";
+		};
+		return readMessage(rawMessages) || __("员工定薪保存失败，请检查必填项、权限或网络后重试");
 	}
 
 	save_employee_salary_change_row(row) {
-		const values = {};
-		row.querySelectorAll("[data-salary-change-field]").forEach((field) => { values[field.dataset.salaryChangeField] = field.type === "checkbox" ? Number(field.checked) : field.value; });
+		if (row.dataset.salaryChangeSaving === "1") return;
+		const values = this.salary_change_values(row);
 		if (!Number(values.base_salary)) {
 			const baseSalary = row.querySelector('[data-salary-change-field="base_salary"]');
 			baseSalary?.classList.add("is-required");
@@ -2026,18 +2527,32 @@ class PayrollInputCenter {
 			frappe.show_alert({ message: __("请填写底薪后再保存"), indicator: "red" });
 			return;
 		}
+		row.dataset.salaryChangeSaving = "1";
+		this.set_salary_change_dirty_state(row, true, "saving");
 		frappe.call({
 			method: "hrms.api.payroll_input.update_employee_salary_change",
-			args: { name: row.dataset.salaryChangeName, employee: row.dataset.salaryChangeEmployee, company: this.company, values },
-			freeze: true,
-			freeze_message: __("正在保存员工定薪..."),
+			args: { name: row.dataset.salaryChangeName, employee: row.dataset.salaryChangeEmployee, company: this.company, values: JSON.stringify(values) },
 			callback: (response) => {
 				const result = response.message || {};
+				if (!result.name) {
+					row.dataset.salaryChangeSaving = "";
+					this.set_salary_change_dirty_state(row, true);
+					frappe.show_alert({ message: __("保存未完成，请重试"), indicator: "red" });
+					return;
+				}
+				row.dataset.salaryChangeName = result.name;
 				row.querySelector("[data-salary-change-total]").textContent = result.full_salary ?? row.querySelector("[data-salary-change-total]").textContent;
+				row.dataset.salaryChangeSnapshot = JSON.stringify(this.salary_change_values(row));
+				row.dataset.salaryChangeSaving = "";
+				this.set_salary_change_dirty_state(row, false);
 				frappe.show_alert({ message: __("员工定薪已保存"), indicator: "green" });
-				this.load_employee_salary_changes();
 				this.process_readiness = {};
 				this.load_salary_architecture_overview();
+			},
+			error: (error) => {
+				row.dataset.salaryChangeSaving = "";
+				this.set_salary_change_dirty_state(row, true);
+				frappe.show_alert({ message: this.salary_change_save_error_message(error), indicator: "red" });
 			},
 		});
 	}
@@ -2147,44 +2662,47 @@ class PayrollInputCenter {
 		});
 	}
 
-	render_variable_import(result = null) {
-		const selectedSourceLabel = this.selected_payroll_source?.label || "";
+	render_variable_import() {
 		this.body().innerHTML = `
 			<div class="hrms-payroll-input-list-head hrms-payroll-step-head">
 				<div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("唯一补充数据入口"))}</span><h3>${frappe.utils.escape_html(__("月度增减项"))}</h3><p>${frappe.utils.escape_html(__("先上传并解析校验，再人工纠错与审核；只有明确确认入账的数据才参与本月薪资计算。"))}</p></div>
-				<button class="btn btn-default btn-sm" data-maintain-source-types>${frappe.utils.escape_html(__("维护来源类型"))}</button>
-			</div>
-			<div class="hrms-payroll-review-flow" aria-label="月度增减项处理流程">
-				${["上传文件", "解析与字段校验", "预览并人工纠错", "审核确认入账", "参与薪资计算"].map((label, index) => `<span><b>${index + 1}</b>${frappe.utils.escape_html(__(label))}</span>`).join("")}
+				<div class="hrms-payroll-action-group"><button class="btn btn-primary btn-sm" data-calculate-monthly-payroll>${frappe.utils.escape_html(__("薪资计算"))}</button><button class="btn btn-default btn-sm" data-bulk-variable-upload>${frappe.utils.escape_html(__("批量导入表格"))}</button><button class="btn btn-default btn-sm" data-maintain-source-types>${frappe.utils.escape_html(__("维护来源类型"))}</button></div>
 			</div>
 			<div class="hrms-payroll-input-panel">
-				<div class="hrms-payroll-input-list-head"><div><h3>${frappe.utils.escape_html(__("本月数据来源清单"))}</h3><div class="text-muted">${frappe.utils.escape_html(__("来源、用途、必填性、字段与模板说明由管理员维护；薪资异动仍在独立的员工定薪区域审核。"))}</div></div></div>
+				<div class="hrms-payroll-input-list-head"><div><h3>${frappe.utils.escape_html(__("本月数据来源清单"))}</h3><div class="text-muted">${frappe.utils.escape_html(__("此处只维护月度奖金、补贴、扣款与社保公积金；薪资异动请在“员工定薪”处理。"))}</div></div><button class="btn btn-default btn-sm" data-go-employee-salary>${frappe.utils.escape_html(__("前往员工定薪"))}</button></div>
 				<div class="hrms-payroll-variable-source-grid" data-variable-source-catalog><div class="text-muted">${frappe.utils.escape_html(__("正在读取来源配置…"))}</div></div>
 			</div>
-			<div class="hrms-payroll-input-panel">
-				<div class="hrms-payroll-upload-box" data-upload-zone>
-					<strong>${frappe.utils.escape_html(selectedSourceLabel ? __("上传 {0}", [selectedSourceLabel]) : __("选择来源后上传月度增减项 Excel"))}</strong>
-					<span>${frappe.utils.escape_html(__("上传后只生成预览和待审核批次，不会直接计薪，也不会覆盖或改写已锁定考勤终稿。"))}</span>
-					<button class="btn btn-primary btn-sm">${frappe.utils.escape_html(__("选择文件"))}</button>
-				</div>
-				<div data-preview>${result ? this.render_preview(result) : `<div class="text-muted">${frappe.utils.escape_html(__("上传后会展示记录明细、错误/警告及原因；确认导入仅形成待审核数据。"))}</div>`}</div>
-			</div>
-			<div class="hrms-payroll-input-panel">
-				<div class="hrms-payroll-input-list-head">
-					<h3>${frappe.utils.escape_html(__("导入批次"))}</h3>
-					<div class="text-muted">${frappe.utils.escape_html(__("保留来源文件、导入人、时间与审核状态；待审核批次修正无误后才能确认入账。"))}</div>
-				</div>
-				<div data-import-batch-table></div>
-			</div>
-			<div data-variable-table></div>
 		`;
-		this.body().querySelector("[data-upload-zone]").addEventListener("click", () => this.open_uploader());
+		this.body().querySelector("[data-go-employee-salary]")?.addEventListener("click", () => this.route_to_tab("salary-assignments"));
+		this.body().querySelector("[data-calculate-monthly-payroll]")?.addEventListener("click", () => this.calculate_monthly_payroll());
+		this.body().querySelector("[data-bulk-variable-upload]")?.addEventListener("click", () => this.open_bulk_variable_uploader());
 		this.body().querySelector("[data-maintain-source-types]").addEventListener("click", () => frappe.set_route("List", "HRMS Payroll Variable Source Type"));
-		const importButton = this.body().querySelector("[data-import]");
-		if (importButton) importButton.addEventListener("click", () => this.import_payroll_variable_workbook());
 		this.load_variable_source_catalog();
 		this.load_import_batches();
-		this.load_variables();
+	}
+
+	calculate_monthly_payroll() {
+		if (!this.ensure_payroll_generation_scope(__("薪资计算"))) return;
+		frappe
+			.call({
+				method: "hrms.api.payroll_input.generate_payroll_input_records",
+				args: this.scope_args(),
+				freeze: true,
+				freeze_message: __("正在生成薪资输入表..."),
+			})
+			.then(() => frappe.call({
+				method: "hrms.api.payroll_input.generate_payroll_settlement_records",
+				args: this.scope_args(),
+				freeze: true,
+				freeze_message: __("正在进行薪资计算..."),
+			}))
+			.then(() => {
+				frappe.show_alert({ message: __("薪资计算完成"), indicator: "green" });
+				this.route_to_tab("monthly-workbench");
+			})
+			.catch((error) => {
+				console.error("Monthly payroll calculation failed", error);
+			});
 	}
 
 	load_variable_source_catalog() {
@@ -2199,17 +2717,49 @@ class PayrollInputCenter {
 	}
 
 	render_variable_source_catalog(target) {
-		target.innerHTML = (this.variable_source_catalog || []).map((source) => {
+		const sources = this.variable_source_catalog || [];
+		const openSourceCode = this.open_source_card_code;
+		const openSource = sources.find((item) => (item.source_code || item.name) === openSourceCode);
+		const openBatch = (this.variable_import_batches || []).find((batch) => batch.source_type === openSourceCode && Number(batch.is_selected));
+		const openPreview = this.variable_import_preview?._source_code === openSourceCode ? this.variable_import_preview : null;
+		const openReviewPending = openBatch?.status === "待审核";
+		const isEditingSource = this.editing_source_card_code === openSourceCode && Boolean(openBatch) && openBatch.status !== "已确认";
+		const sourceCards = sources.map((source) => {
 			const code = source.source_code || source.name;
 			const salaryTarget = source.target_area === "员工定薪";
-			return `<article class="hrms-payroll-variable-source ${this.selected_payroll_source?.source_code === code ? "is-selected" : ""}">
+			const inheritedTarget = source.target_area === "考勤继承";
+			const selectedBatch = (this.variable_import_batches || []).find((batch) => batch.source_type === code && Number(batch.is_selected));
+			const previewResult = this.variable_import_preview?._source_code === code ? this.variable_import_preview : null;
+			const selectedFile = selectedBatch?.source_file_label || selectedBatch?.source_file || "-";
+			const reviewPending = selectedBatch?.status === "待审核";
+			const selectedState = selectedBatch?.status === "已确认" ? __("已确认") : reviewPending ? __("待审核/待纠错") : (selectedBatch?.status || __("未上传"));
+			const selectedSummary = selectedBatch
+				? `<div class="hrms-payroll-source-card-summary"><div><span class="hrms-payroll-status-pill is-${selectedBatch.status === "已确认" ? "ready" : "pending"}">${frappe.utils.escape_html(selectedState)}</span></div><small class="text-success" title="${frappe.utils.escape_html(selectedFile)}">${frappe.utils.escape_html(selectedFile)}</small><small>${frappe.utils.escape_html(__("{0} 条 · 匹配 {1} · 待处理 {2}", [selectedBatch.actual_variable_rows ?? selectedBatch.variable_rows ?? 0, selectedBatch.matched_rows || 0, selectedBatch.unmatched_rows || 0]))}</small></div>`
+				: (!salaryTarget && !inheritedTarget ? `<div class="hrms-payroll-source-card-summary is-empty"><span class="hrms-payroll-status-pill is-pending">${frappe.utils.escape_html(__("未上传"))}</span><small>${frappe.utils.escape_html(__("点击卡片即可上传"))}</small></div>` : "");
+			const actions = salaryTarget
+				? `<button class="btn btn-default btn-xs" data-select-variable-source="${frappe.utils.escape_html(code)}" data-source-target="salary">${frappe.utils.escape_html(__("前往员工定薪"))}</button>`
+				: inheritedTarget
+					? `<button class="btn btn-default btn-xs" data-select-variable-source="${frappe.utils.escape_html(code)}" data-source-target="attendance">${frappe.utils.escape_html(__("由考勤终稿继承"))}</button>`
+					: selectedBatch
+						? `<button class="btn btn-default btn-xs" data-upload-source-version="${frappe.utils.escape_html(code)}">${frappe.utils.escape_html(__("替换文件"))}</button><button class="btn btn-primary btn-xs" data-edit-source-card="${frappe.utils.escape_html(code)}" ${selectedBatch.status === "已确认" ? `data-create-editable-source-card="${frappe.utils.escape_html(selectedBatch.name)}"` : ""}>${frappe.utils.escape_html(__(selectedBatch.status === "已确认" ? "修改" : "编辑"))}</button>`
+						: previewResult
+							? `<button class="btn btn-default btn-xs" data-select-variable-source="${frappe.utils.escape_html(code)}" data-source-target="variables">${frappe.utils.escape_html(__("上传"))}</button>`
+							: `<button class="btn btn-primary btn-xs" data-select-variable-source="${frappe.utils.escape_html(code)}" data-source-target="variables">${frappe.utils.escape_html(__("上传"))}</button>`;
+			return `<article class="hrms-payroll-variable-source ${this.selected_payroll_source?.source_code === code ? "is-selected" : ""}" data-open-source-card="${frappe.utils.escape_html(code)}" tabindex="0" role="group" aria-label="${frappe.utils.escape_html(__("打开{0}明细", [source.source_name || code]))}">
 				<div><strong>${frappe.utils.escape_html(source.source_name || code)}</strong><span class="${source.required_for_payroll ? "is-required" : ""}">${frappe.utils.escape_html(source.required_for_payroll ? __("必填/必须明确状态") : __("按需"))}</span></div>
 				<p>${frappe.utils.escape_html(source.purpose || "-")}</p>
-				<small><b>${frappe.utils.escape_html(__("导入字段"))}：</b>${frappe.utils.escape_html(source.required_fields || "-")}</small>
-				<small><b>${frappe.utils.escape_html(__("模板说明"))}：</b>${frappe.utils.escape_html(source.template_notes || "-")}</small>
-				<button class="btn btn-default btn-xs" data-select-variable-source="${frappe.utils.escape_html(code)}" data-source-target="${salaryTarget ? "salary" : "variables"}">${frappe.utils.escape_html(salaryTarget ? __("前往员工定薪") : __("选择并上传"))}</button>
+				${selectedSummary}
+				<div class="hrms-payroll-action-group">${actions}${code === "housing_allowance" ? `<button class="btn btn-default btn-xs" data-download-housing-base-template>${frappe.utils.escape_html(__("下载一阶模板"))}</button>` : ""}</div>
 			</article>`;
 		}).join("") || `<div class="text-muted">${frappe.utils.escape_html(__("暂无启用的来源类型，请由管理员维护。"))}</div>`;
+		const detailPanel = openSource && (openPreview || openBatch)
+			? `<section class="hrms-payroll-source-detail-panel" data-source-detail-panel>
+				<div class="hrms-payroll-batch-detail-head"><div><strong>${frappe.utils.escape_html(openPreview ? __("本次文件预览：{0}", [openSource.source_name || openSourceCode]) : __("本月数据明细：{0}", [openSource.source_name || openSourceCode]))}</strong><small>${frappe.utils.escape_html(openPreview ? __("导入后请检查数据，再点击“确认并锁定”。") : isEditingSource ? __("修改完成后点击“确认并锁定”；确认后本次数据不可再直接编辑。") : openBatch?.status === "已确认" ? __("当前数据已确认并锁定；如需调整，请点击左侧“修改”。") : __("请检查明细后点击“确认并锁定”。"))}</small></div></div>
+				${openPreview ? `<div class="hrms-payroll-source-card-preview" data-source-card-preview>${this.render_preview(openPreview)}</div>` : `<div data-source-card-records="${frappe.utils.escape_html(openBatch.name)}" data-source-card-editable="${isEditingSource ? "1" : "0"}"><div class="text-muted">${frappe.utils.escape_html(__("正在加载本月版本明细…"))}</div></div>`}
+				<div class="hrms-payroll-source-detail-footer">${isEditingSource ? `<span class="hrms-payroll-inline-edit-note">${frappe.utils.escape_html(__("修改后自动保存"))}</span>` : ""}${openReviewPending ? `<button class="btn btn-primary btn-sm" data-confirm-source-card="${frappe.utils.escape_html(openBatch.name)}" data-confirm-empty="${Number(openBatch.can_confirm_empty || 0)}" ${openBatch.can_confirm ? "" : "disabled"}>${frappe.utils.escape_html(openBatch.can_confirm_empty ? __("确认无数据并锁定") : __("确认并锁定"))}</button>` : ""}${openBatch?.status === "已确认" ? `<span class="text-success">${frappe.utils.escape_html(__("已确认并锁定"))}</span>` : ""}<button class="btn btn-default btn-sm" data-collapse-source-detail>${frappe.utils.escape_html(__("收起明细"))}</button></div>
+			</section>`
+			: "";
+		target.innerHTML = `<div class="hrms-payroll-variable-source-workspace ${detailPanel ? "is-detail-open" : ""}"><div class="hrms-payroll-variable-source-grid">${sourceCards}</div>${detailPanel}</div>`;
 		target.querySelectorAll("[data-select-variable-source]").forEach((button) => {
 			button.addEventListener("click", () => {
 				if (button.dataset.sourceTarget === "salary") {
@@ -2217,18 +2767,161 @@ class PayrollInputCenter {
 					this.route_to_tab("salary-assignments");
 					return;
 				}
+				if (button.dataset.sourceTarget === "attendance") {
+					frappe.show_alert({ message: __("考勤终稿由考勤假期模块锁定后自动继承；全勤奖依据终稿和全勤规则计算，无需在此上传。"), indicator: "blue" });
+					return;
+				}
 				const source = this.variable_source_catalog.find((item) => (item.source_code || item.name) === button.dataset.selectVariableSource);
 				this.selected_payroll_source = source ? { ...source, label: source.source_name, source_code: source.source_code || source.name } : null;
+				this.variable_import_preview = null;
+				this.open_source_card_code = button.dataset.selectVariableSource;
+				this.editing_source_card_code = "";
 				this.render_variable_source_catalog(target);
+				const selectedBatch = (this.variable_import_batches || []).find((batch) => batch.source_type === this.selected_payroll_source?.source_code && Number(batch.is_selected));
+				if (!selectedBatch) this.open_uploader();
+			});
+		});
+		target.querySelectorAll("[data-open-source-card]").forEach((card) => {
+			const openCard = () => {
+				const code = card.dataset.openSourceCard;
+				const source = this.variable_source_catalog.find((item) => (item.source_code || item.name) === code);
+				this.selected_payroll_source = source ? { ...source, label: source.source_name, source_code: source.source_code || source.name } : null;
+				const selectedBatch = (this.variable_import_batches || []).find((batch) => batch.source_type === code && Number(batch.is_selected));
+				const preview = this.variable_import_preview?._source_code === code;
+				if (selectedBatch || preview) {
+					const closing = this.open_source_card_code === code;
+					this.open_source_card_code = closing ? "" : code;
+					if (closing) this.editing_source_card_code = "";
+					this.render_variable_source_catalog(target);
+				} else if (!source?.target_area) {
+					this.variable_import_preview = null;
+					this.open_source_card_code = code;
+					this.open_uploader();
+				}
+			};
+			card.addEventListener("click", (event) => {
+				if (event.target.closest("button, select, input, label, a")) return;
+				openCard();
+			});
+			card.addEventListener("keydown", (event) => {
+				if (event.key === "Enter" || event.key === " ") {
+					event.preventDefault();
+					openCard();
+				}
+			});
+		});
+		target.querySelectorAll("[data-upload-source-version]").forEach((button) => {
+			button.addEventListener("click", () => {
+				const source = this.variable_source_catalog.find((item) => (item.source_code || item.name) === button.dataset.uploadSourceVersion);
+				this.selected_payroll_source = source ? { ...source, label: source.source_name, source_code: source.source_code || source.name } : null;
+				this.variable_import_preview = null;
+				this.open_source_card_code = "";
+				this.editing_source_card_code = "";
 				this.open_uploader();
 			});
+		});
+		target.querySelectorAll("[data-confirm-source-card]").forEach((button) => {
+			button.addEventListener("click", () => this.confirm_import_batch(button.dataset.confirmSourceCard, Number(button.dataset.confirmEmpty || 0)));
+		});
+		target.querySelectorAll("[data-revoke-source-confirmation]").forEach((button) => {
+			button.addEventListener("click", () => this.void_import_batch(button.dataset.revokeSourceConfirmation, true));
+		});
+		target.querySelectorAll("[data-create-editable-source-card]").forEach((button) => {
+			button.addEventListener("click", (event) => {
+				event.stopPropagation();
+				this.create_editable_batch_version(button.dataset.createEditableSourceCard);
+			});
+		});
+		target.querySelectorAll("[data-edit-source-card]").forEach((button) => {
+			button.addEventListener("click", (event) => {
+				event.stopPropagation();
+				if (button.dataset.createEditableSourceCard) return;
+				this.open_source_card_code = button.dataset.editSourceCard;
+				this.editing_source_card_code = button.dataset.editSourceCard;
+				this.render_variable_source_catalog(target);
+			});
+		});
+		target.querySelectorAll("[data-use-source-card-version]").forEach((button) => {
+			button.addEventListener("click", () => {
+				const selectedVersion = target.querySelector(`[data-source-card-version-select="${button.dataset.useSourceCardVersion}"]`)?.value;
+				if (selectedVersion) this.select_import_batch_version(selectedVersion);
+			});
+		});
+		target.querySelectorAll("[data-collapse-source-detail]").forEach((button) => {
+			button.addEventListener("click", () => {
+				this.open_source_card_code = "";
+				this.editing_source_card_code = "";
+				this.render_variable_source_catalog(target);
+			});
+		});
+		target.querySelectorAll("[data-finish-source-edit]").forEach((button) => {
+			button.addEventListener("click", () => {
+				this.editing_source_card_code = "";
+				this.render_variable_source_catalog(target);
+			});
+		});
+		target.querySelectorAll("[data-download-housing-base-template]").forEach((button) => {
+			button.addEventListener("click", (event) => {
+				event.stopPropagation();
+				this.download_housing_allowance_base_template();
+			});
+		});
+		target.querySelectorAll("[data-source-card-records]").forEach((details) => {
+			this.load_source_card_records(details.dataset.sourceCardRecords, details);
+		});
+		target.querySelectorAll("[data-import]").forEach((button) => {
+			button.addEventListener("click", () => this.import_payroll_variable_workbook());
+		});
+	}
+
+	download_housing_allowance_base_template() {
+		frappe.call({
+			method: "hrms.api.payroll_input.create_housing_allowance_base_data_template_file",
+			args: { company: this.company, payroll_month: this.payroll_month },
+			freeze: true,
+			freeze_message: __("正在生成住房补贴一阶数据模板..."),
+			callback: (response) => {
+				const file_url = response.message?.file_url;
+				if (file_url) window.open(file_url, "_blank");
+			},
+		});
+	}
+
+	create_editable_batch_version(batch_name) {
+		frappe.call({
+			method: "hrms.api.payroll_input.create_editable_payroll_variable_batch_version",
+			args: { batch_name, company: this.company, payroll_month: this.payroll_month },
+			freeze: true,
+			freeze_message: __("正在解锁当前数据…"),
+			callback: (response) => {
+				const sourceCode = response.message?.source_type || "";
+				this.open_source_card_code = sourceCode;
+				this.editing_source_card_code = sourceCode;
+				frappe.show_alert({ message: response.message?.message || __("当前数据已解锁，请完成修改后确认并锁定"), indicator: "green" });
+				this.load_import_batches();
+			},
+		});
+	}
+
+	load_source_card_records(batch_name, target) {
+		frappe.call({
+			method: "hrms.api.payroll_input.list_payroll_variable_records",
+			args: this.scope_args({ import_batch: batch_name, page_length: 5000 }),
+			callback: (response) => {
+				if (target?.isConnected) this.render_variable_records(target, response.message || [], { editable: target.dataset.sourceCardEditable === "1" });
+			},
 		});
 	}
 
 	render_preview(result) {
 		const rows = result.preview_rows || [];
+		const housingRows = rows.filter((row) => ["housing_allowance", "housing_allowance_base"].includes(row.source_kind));
+		const hasHousingBase = housingRows.some((row) => row.calculation_mode === "一阶数据系统计算");
+		const hasHousingDirect = housingRows.some((row) => row.calculation_mode === "二阶金额直用");
 		return `
 			${result.blocked ? `<div class="alert alert-warning">${frappe.utils.escape_html(result.blocked_message || __("该文件不允许在月度增减项中导入"))}</div>` : ""}
+			${hasHousingBase ? `<div class="alert alert-info"><strong>${frappe.utils.escape_html(__("已识别住房补贴一阶数据"))}</strong> ${frappe.utils.escape_html(__("系统会按当前租房补贴规则生成二阶应发金额；资格不符合者保留为不参与计算。"))}</div>` : ""}
+			${hasHousingDirect ? `<div class="alert alert-info"><strong>${frappe.utils.escape_html(__("已识别住房补贴二阶数据"))}</strong> ${frappe.utils.escape_html(__("文件已含金额，系统只校验员工与金额；确认后直接参与薪资计算。"))}</div>` : ""}
 			<div class="hrms-payroll-preview-summary"><strong>${frappe.utils.escape_html(__("解析预览"))}</strong><span class="is-valid">${frappe.utils.escape_html(__("通过 {0}", [result.valid_rows || 0]))}</span><span class="is-warning">${frappe.utils.escape_html(__("警告 {0}", [result.warning_rows || 0]))}</span><span class="is-error">${frappe.utils.escape_html(__("错误 {0}", [result.error_rows || 0]))}</span></div>
 			<table class="table table-bordered">
 				<thead><tr><th>${frappe.utils.escape_html(__("工作表"))}</th><th>${frappe.utils.escape_html(__("状态"))}</th><th>${frappe.utils.escape_html(__("行数"))}</th><th>${frappe.utils.escape_html(__("可导入"))}</th></tr></thead>
@@ -2240,7 +2933,7 @@ class PayrollInputCenter {
 									<td>${frappe.utils.escape_html(sheet.sheet_name)}</td>
 									<td>${sheet.found ? frappe.utils.escape_html(__("已找到")) : frappe.utils.escape_html(__("缺失"))}</td>
 									<td>${frappe.utils.escape_html(sheet.row_count || 0)}</td>
-									<td>${frappe.utils.escape_html(sheet.mapped_rows || 0)}${sheet.review_rows ? `<small class="text-warning d-block">${frappe.utils.escape_html(sheet.note || __("需分配金额后导入"))}</small>` : ""}</td>
+									<td>${frappe.utils.escape_html(sheet.mapped_rows || 0)}${sheet.note ? `<small class="${sheet.review_rows ? "text-warning" : "text-muted"} d-block">${frappe.utils.escape_html(sheet.note)}</small>` : ""}</td>
 								</tr>
 							`,
 						)
@@ -2248,8 +2941,8 @@ class PayrollInputCenter {
 				</tbody>
 			</table>
 			<div class="hrms-payroll-table-wrap"><table class="table table-bordered hrms-payroll-input-table">
-				<thead><tr><th>${frappe.utils.escape_html(__("工作表"))}</th><th>${frappe.utils.escape_html(__("工号/姓名"))}</th><th>${frappe.utils.escape_html(__("增减项目"))}</th><th>${frappe.utils.escape_html(__("金额"))}</th><th>${frappe.utils.escape_html(__("校验"))}</th><th>${frappe.utils.escape_html(__("原因"))}</th></tr></thead>
-				<tbody>${rows.length ? rows.slice(0, 100).map((row) => `<tr class="is-${row.validation_status === "错误" ? "error" : row.validation_status === "警告" ? "warning" : "valid"}"><td>${frappe.utils.escape_html(row.sheet_name || "")}</td><td>${frappe.utils.escape_html(row.employee_code || row.employee_name || "")}</td><td>${frappe.utils.escape_html(row.variable_type || "")}</td><td>${frappe.utils.escape_html(this.format_money(row.amount))}</td><td>${frappe.utils.escape_html(row.validation_status || "")}</td><td>${frappe.utils.escape_html(row.validation_message || "-")}</td></tr>`).join("") : `<tr><td colspan="6" class="text-muted">${frappe.utils.escape_html(__("没有解析出可导入记录"))}</td></tr>`}</tbody>
+				<thead><tr><th>${frappe.utils.escape_html(__("工作表"))}</th><th>${frappe.utils.escape_html(__("工号/姓名"))}</th><th>${frappe.utils.escape_html(__("增减项目"))}</th><th>${frappe.utils.escape_html(__("金额"))}</th><th>${frappe.utils.escape_html(__("计算方式"))}</th><th>${frappe.utils.escape_html(__("校验 / 参与"))}</th><th>${frappe.utils.escape_html(__("原因"))}</th></tr></thead>
+				<tbody>${rows.length ? rows.slice(0, 100).map((row) => `<tr class="is-${row.validation_status === "错误" ? "error" : row.validation_status === "警告" ? "warning" : "valid"}"><td>${frappe.utils.escape_html(row.sheet_name || "")}</td><td>${frappe.utils.escape_html(row.employee_code || row.employee_name || "")}</td><td>${frappe.utils.escape_html(row.variable_type || "")}</td><td>${frappe.utils.escape_html(this.format_money(row.amount))}</td><td>${frappe.utils.escape_html(row.calculation_mode || "-")}</td><td>${frappe.utils.escape_html(row.participation_status || row.validation_status || "")}</td><td>${frappe.utils.escape_html(row.calculation_reason || row.validation_message || "-")}</td></tr>`).join("") : `<tr><td colspan="7" class="text-muted">${frappe.utils.escape_html(__("没有解析出可导入记录"))}</td></tr>`}</tbody>
 			</table></div>
 			${rows.length > 100 ? `<div class="text-muted">${frappe.utils.escape_html(__("预览显示前 100 条；导入后可在明细中查看全部记录。"))}</div>` : ""}
 			<div class="hrms-payroll-confirm-note">${frappe.utils.escape_html(__("此按钮仅把记录导入为“待审核”，不会参与薪资计算。"))}</div>
@@ -2265,10 +2958,19 @@ class PayrollInputCenter {
 				freeze: true,
 				freeze_message: __("正在预览薪资变量..."),
 			})
-			.then((response) => this.render_variable_import(response.message || {}));
+			.then((response) => {
+				this.variable_import_preview = { ...(response.message || {}), _source_code: this.selected_payroll_source?.source_code || "" };
+				this.open_source_card_code = this.selected_payroll_source?.source_code || "";
+				const target = this.wrapper.querySelector("[data-variable-source-catalog]");
+				if (target) this.render_variable_source_catalog(target);
+			});
 	}
 
 	import_payroll_variable_workbook() {
+		if (!this.file_url || !this.selected_payroll_source?.source_code) {
+			frappe.msgprint(__("请从对应来源卡重新选择文件并完成预览。"));
+			return;
+		}
 		frappe
 			.call({
 				method: "hrms.api.payroll_input.import_payroll_variable_workbook",
@@ -2279,8 +2981,9 @@ class PayrollInputCenter {
 			.then(() => {
 				frappe.show_alert({ message: __("已形成待审核批次；请修正异常后确认入账。"), indicator: "orange" });
 				this.file_url = "";
+				this.variable_import_preview = null;
+				this.open_source_card_code = "";
 				this.load_import_batches();
-				this.load_variables();
 			});
 	}
 
@@ -2289,9 +2992,11 @@ class PayrollInputCenter {
 			method: "hrms.api.payroll_input.list_payroll_variable_import_batches",
 			args: this.scope_args(),
 			callback: (response) => {
+				this.variable_import_batches = response.message || [];
 				const target = this.wrapper.querySelector("[data-import-batch-table]");
-				if (!target) return;
-				this.render_import_batches(target, response.message || []);
+				if (target) this.render_import_batches(target, this.variable_import_batches);
+				const catalog = this.wrapper.querySelector("[data-variable-source-catalog]");
+				if (catalog) this.render_variable_source_catalog(catalog);
 			},
 		});
 	}
@@ -2314,7 +3019,7 @@ class PayrollInputCenter {
 							<th class="text-center" style="width:42px">${frappe.utils.escape_html(__("选择"))}</th>
 							<th>${frappe.utils.escape_html(__("来源类型"))}</th>
 							<th>${frappe.utils.escape_html(__("来源文件"))}</th>
-							<th>${frappe.utils.escape_html(__("记录/异常"))}</th>
+							<th>${frappe.utils.escape_html(__("记录 / 匹配 / 异常"))}</th>
 							<th>${frappe.utils.escape_html(__("导入追溯"))}</th>
 							<th>${frappe.utils.escape_html(__("状态"))}</th>
 							<th>${frappe.utils.escape_html(__("操作"))}</th>
@@ -2328,10 +3033,15 @@ class PayrollInputCenter {
 										<td class="text-center"><input type="checkbox" data-select-import-batch="${frappe.utils.escape_html(row.name)}" ${row.can_delete ? "" : "disabled"} title="${frappe.utils.escape_html(row.can_delete ? __("选择待删除批次") : __("已确认批次必须保留追溯"))}"></td>
 										<td>${frappe.utils.escape_html(row.source_type_label || row.source_type || __("未分类"))}</td>
 										<td>${frappe.utils.escape_html(row.source_file_label || row.source_file || "")}</td>
-										<td><strong>${frappe.utils.escape_html(String(row.actual_variable_rows ?? row.variable_rows ?? 0))}</strong><small class="d-block text-muted">${frappe.utils.escape_html(__("错误 {0} / 警告 {1}", [row.error_rows || 0, row.warning_rows || 0]))}</small></td>
+										<td>
+											<strong>${frappe.utils.escape_html(String(row.actual_variable_rows ?? row.variable_rows ?? 0))}</strong>
+											<small class="d-block text-muted">${frappe.utils.escape_html(__("已匹配 {0} / 未匹配 {1} / 不参与 {2}", [row.matched_rows || 0, row.unmatched_rows || 0, row.excluded_rows || 0]))}</small>
+											${row.unmatched_rows ? `<small class="d-block text-danger">${frappe.utils.escape_html(__("未匹配 {0} 条（{1} 人）", [row.unmatched_rows, row.unmatched_people || row.unmatched_rows]))}</small>` : ""}
+											<small class="d-block text-muted">${frappe.utils.escape_html(__("错误 {0} / 警告 {1}", [row.error_rows || 0, row.warning_rows || 0]))}</small>
+										</td>
 										<td>${frappe.utils.escape_html(row.imported_by || "")}<small class="d-block text-muted">${frappe.utils.escape_html(row.imported_on || "")}</small>${row.confirmed_by ? `<small class="d-block">${frappe.utils.escape_html(__("确认：{0} · {1}", [row.confirmed_by, row.confirmed_on || ""]))}</small>` : ""}${row.voided_by ? `<small class="d-block text-danger">${frappe.utils.escape_html(__("作废：{0} · {1}", [row.voided_by, row.voided_on || ""]))}</small><small class="d-block text-muted">${frappe.utils.escape_html(row.void_reason || "")}</small>` : ""}</td>
 										<td><span class="hrms-payroll-status-pill is-${row.status === "已确认" ? "ready" : "pending"}">${frappe.utils.escape_html(row.status || "")}</span></td>
-										<td><div class="hrms-payroll-action-group">${row.status === "待审核" ? `<button class="btn btn-primary btn-xs" data-confirm-import-batch="${frappe.utils.escape_html(row.name)}" data-confirm-empty="${row.can_confirm_empty ? 1 : 0}" ${row.can_confirm ? "" : "disabled"} title="${frappe.utils.escape_html(row.can_confirm ? (row.can_confirm_empty ? __("确认该来源本月无数据并保留文件追溯") : __("确认后参与下次试算")) : __("请先修正或剔除错误记录"))}">${frappe.utils.escape_html(row.can_confirm_empty ? __("确认无数据") : __("确认入账"))}</button>` : ""}${row.can_void ? `<button class="btn btn-warning btn-xs" data-void-import-batch="${frappe.utils.escape_html(row.name)}">${frappe.utils.escape_html(__("作废"))}</button>` : ""}${row.can_delete ? `<button class="btn btn-danger btn-xs" data-delete-import-batch="${frappe.utils.escape_html(row.name)}">${frappe.utils.escape_html(__("删除"))}</button>` : ""}</div></td>
+										<td><div class="hrms-payroll-action-group">${row.is_selected ? `<span class="text-success">${frappe.utils.escape_html(__("当前版本"))}</span>` : ""}${row.can_delete || row.can_void ? `<button class="btn btn-danger btn-xs" data-remove-import-batch="${frappe.utils.escape_html(row.name)}" data-batch-status="${frappe.utils.escape_html(row.status || "")}">${frappe.utils.escape_html(row.can_void ? __("删除版本") : __("删除"))}</button>` : ""}</div></td>
 									</tr>
 								`).join("")
 								: `<tr><td colspan="7" class="text-muted">${frappe.utils.escape_html(__("暂无导入批次"))}</td></tr>`
@@ -2343,11 +3053,11 @@ class PayrollInputCenter {
 		target.querySelectorAll("[data-delete-import-batch]").forEach((button) => {
 			button.addEventListener("click", () => this.delete_import_batch(button.dataset.deleteImportBatch));
 		});
-		target.querySelectorAll("[data-confirm-import-batch]").forEach((button) => {
-			button.addEventListener("click", () => this.confirm_import_batch(button.dataset.confirmImportBatch, Number(button.dataset.confirmEmpty || 0)));
-		});
-		target.querySelectorAll("[data-void-import-batch]").forEach((button) => {
-			button.addEventListener("click", () => this.void_import_batch(button.dataset.voidImportBatch));
+		target.querySelectorAll("[data-remove-import-batch]").forEach((button) => {
+			button.addEventListener("click", () => {
+				if (button.dataset.batchStatus === "已确认") this.void_import_batch(button.dataset.removeImportBatch);
+				else this.delete_import_batch(button.dataset.removeImportBatch);
+			});
 		});
 		const selectAll = target.querySelector("[data-select-all-import-batches]");
 		selectAll?.addEventListener("change", () => {
@@ -2383,28 +3093,46 @@ class PayrollInputCenter {
 		if (button) button.disabled = !selected.length;
 	}
 
+	select_import_batch_version(batch_name) {
+		frappe.call({
+			method: "hrms.api.payroll_input.select_payroll_variable_import_batch",
+			args: { batch_name, company: this.company, payroll_month: this.payroll_month },
+			freeze: true,
+			freeze_message: __("正在选择本月使用版本…"),
+			callback: (response) => {
+				const batch = (this.variable_import_batches || []).find((item) => item.name === batch_name);
+				const source = this.variable_source_catalog.find((item) => (item.source_code || item.name) === batch?.source_type);
+				if (source) {
+					this.selected_payroll_source = { ...source, label: source.source_name, source_code: source.source_code || source.name };
+					this.open_source_card_code = batch?.source_type || "";
+				}
+				frappe.show_alert({ message: response.message?.message || __("已选择本月使用版本"), indicator: "green" });
+				this.load_import_batches();
+			},
+		});
+	}
+
 	confirm_import_batch(batch_name, confirm_empty = 0) {
 		const prompt = confirm_empty
-			? __("确认该来源本月无数据？系统会保留来源文件、导入人和确认时间作为追溯，但不会产生计薪记录。")
-			: __("确认将该批次入账？确认后记录将参与下次薪资试算，并保留为不可直接删除的追溯批次。");
+			? __("确认该来源本月无数据并锁定？系统会保留来源文件、导入人和确认时间作为追溯，但不会产生计薪记录。")
+			: __("确认并锁定当前数据？锁定后会参与下次薪资计算；如需调整，请点击“修改”后重新确认。");
 		frappe.confirm(prompt, () => {
 			frappe.call({
 				method: "hrms.api.payroll_input.confirm_payroll_variable_import_batch",
 				args: { batch_name, company: this.company, payroll_month: this.payroll_month, confirm_empty },
 				freeze: true,
-				freeze_message: __("正在确认入账…"),
+				freeze_message: __("正在确认并锁定…"),
 				callback: (response) => {
-					frappe.show_alert({ message: response.message?.message || __("月度增减项已确认入账"), indicator: "green" });
+					frappe.show_alert({ message: response.message?.message || __("月度增减项已确认并锁定"), indicator: "green" });
 					this.load_import_batches();
-					this.load_variables();
 				},
 			});
 		});
 	}
 
-	void_import_batch(batch_name) {
+	void_import_batch(batch_name, revoke_confirmation = false) {
 		frappe.prompt(
-			[{ fieldname: "reason", fieldtype: "Small Text", label: __("作废原因"), reqd: 1 }],
+			[{ fieldname: "reason", fieldtype: "Small Text", label: revoke_confirmation ? __("撤销原因") : __("作废原因"), reqd: 1 }],
 			(values) => {
 				frappe.call({
 					method: "hrms.api.payroll_input.void_payroll_variable_import_batch",
@@ -2414,12 +3142,11 @@ class PayrollInputCenter {
 					callback: (response) => {
 						frappe.show_alert({ message: response.message?.message || __("批次已留痕作废"), indicator: "orange" });
 						this.load_import_batches();
-						this.load_variables();
 					},
 				});
 			},
-			__("作废已确认批次"),
-			__("确认作废")
+			revoke_confirmation ? __("撤销确认") : __("作废已确认批次"),
+			revoke_confirmation ? __("确认撤销") : __("确认作废")
 		);
 	}
 
@@ -2439,37 +3166,56 @@ class PayrollInputCenter {
 					args: this.scope_args({ batch_names: JSON.stringify(batch_names) }),
 					freeze: true,
 					freeze_message: __("正在清理所选导入批次..."),
-					callback: (response) => {
+				}).then((response) => {
 						const result = response.message || {};
+						if (!result.deleted_batches?.length) {
+							frappe.msgprint({ title: __("删除未完成"), indicator: "orange", message: __("系统未返回已删除批次，请刷新后确认状态。") });
+							this.load_import_batches();
+							return;
+						}
 						frappe.show_alert({
 							message: result.message || __("导入批次已删除；旧薪资输入表和未确认试算已失效，请重新生成。"),
 							indicator: "orange",
 						});
 						this.load_import_batches();
-						this.load_variables();
-					},
-				});
+					}).catch((error) => {
+						console.error("Delete payroll-variable batches failed", error);
+						frappe.msgprint({
+							title: __("删除失败"),
+							indicator: "red",
+							message: __("批次没有被删除。请确认它仍是“待审核”状态；若问题持续，请刷新页面后重试。"),
+						});
+						this.load_import_batches();
+					});
 			},
 		);
 	}
 
-	load_variables() {
-		frappe.call({
-			method: "hrms.api.payroll_input.list_payroll_variable_records",
-			// One source such as social security or provident fund may generate
-			// multiple rows per employee.  Load the complete monthly review set so
-			// the UI never hides the tail of a valid import batch.
-			args: this.scope_args({ page_length: 5000 }),
-			callback: (response) => {
-				const target = this.wrapper.querySelector("[data-variable-table]");
-				if (!target) return;
-				this.render_variable_records(target, response.message || []);
-			},
-		});
-	}
-
-	render_variable_records(target, rows) {
+	render_variable_records(target, rows, options = {}) {
+		const editable = Boolean(options.editable);
+		const readOnly = !editable;
+		const inlineInput = (field, value, type = "text") => `<input class="form-control input-sm hrms-payroll-inline-input" type="${type}" data-inline-variable-field="${field}" value="${frappe.utils.escape_html(String(value ?? ""))}">`;
+		const attention_priority = (row) => {
+			if (row.excluded) return 5;
+			if (!row.employee || row.validation_status === "错误") return 0;
+			if (["待修改", "待纠错"].includes(row.review_status)) return 1;
+			if (row.validation_status === "警告") return 2;
+			if (row.review_status !== "已确认") return 3;
+			return 4;
+		};
+		const orderedRows = rows
+			.map((row, index) => ({ row, index }))
+			.sort((left, right) => attention_priority(left.row) - attention_priority(right.row) || left.index - right.index)
+			.map((item) => item.row);
+		const unmatchedRows = rows.filter((row) => !row.employee && !row.excluded);
+		const unmatchedPeople = new Set(unmatchedRows.map((row) => row.employee_code || row.employee_name || row.name));
+		const reasons = [...new Set(unmatchedRows.map((row) => row.validation_message).filter(Boolean))];
 		target.innerHTML = `
+			<div class="hrms-payroll-batch-detail-head">
+				<div><strong>${frappe.utils.escape_html(options.title || __("该来源导入明细"))}</strong><small>${frappe.utils.escape_html(readOnly ? __("预览模式；点击左侧卡片的“编辑”后可直接修改。") : __("编辑模式；姓名、工号、部门等基础信息只读，仅项目和金额可修改并自动保存。"))}</small></div>
+				<div class="hrms-payroll-batch-detail-metrics"><span>${frappe.utils.escape_html(__("共 {0} 条", [rows.length]))}</span><span class="${unmatchedRows.length ? "is-error" : "is-valid"}">${frappe.utils.escape_html(__("未匹配 {0} 条（{1} 人）", [unmatchedRows.length, unmatchedPeople.size]))}</span></div>
+			</div>
+			${reasons.length ? `<div class="alert alert-warning hrms-payroll-unmatched-reasons"><strong>${frappe.utils.escape_html(__("未匹配原因"))}</strong>${reasons.map((reason) => `<span>${frappe.utils.escape_html(reason)}</span>`).join("")}</div>` : ""}
 			<div class="hrms-payroll-table-wrap">
 				<table class="table table-bordered hrms-payroll-input-table">
 					<thead>
@@ -2480,39 +3226,97 @@ class PayrollInputCenter {
 							<th>${frappe.utils.escape_html(__("员工匹配"))}</th>
 							<th>${frappe.utils.escape_html(__("变量类型"))}</th>
 							<th>${frappe.utils.escape_html(__("金额"))}</th>
-							<th>${frappe.utils.escape_html(__("校验/原因"))}</th>
+							<th>${frappe.utils.escape_html(__("校验 / 未匹配原因"))}</th>
 							<th>${frappe.utils.escape_html(__("审核状态"))}</th>
-							<th>${frappe.utils.escape_html(__("操作"))}</th>
+							${readOnly ? "" : `<th>${frappe.utils.escape_html(__("操作"))}</th>`}
 						</tr>
 					</thead>
 					<tbody>
 						${
 							rows.length
-								? rows.map((row) => `
-									<tr>
+								? orderedRows.map((row) => `
+									<tr class="hrms-payroll-variable-row is-priority-${attention_priority(row)}" ${editable ? `data-inline-variable-record="${frappe.utils.escape_html(row.name)}"` : ""}>
 										<td>${frappe.utils.escape_html(row.employee_name || "")}</td>
 										<td>${frappe.utils.escape_html(row.employee_code || "")}</td>
 										<td>${frappe.utils.escape_html(row.department || "")}</td>
 										<td>${row.employee ? `<span class="text-success">${frappe.utils.escape_html(__("已匹配"))}</span><small class="d-block text-muted">${frappe.utils.escape_html(row.employee)}</small>` : `<span class="text-danger">${frappe.utils.escape_html(__("未匹配"))}</span>`}</td>
-										<td>${frappe.utils.escape_html(row.variable_type || "")}</td>
-										<td>${frappe.utils.escape_html(this.format_money(row.amount))}</td>
+										<td>${editable ? `<select class="form-control input-sm hrms-payroll-inline-input" data-inline-variable-field="variable_type">${this.render_variable_type_options(row.variable_type)}</select>` : frappe.utils.escape_html(row.variable_type || "")}</td>
+										<td>${editable ? inlineInput("amount", row.amount, "number") : frappe.utils.escape_html(this.format_money(row.amount))}</td>
 										<td>${frappe.utils.escape_html(row.validation_status || "-")}<small class="d-block ${row.validation_status === "错误" ? "text-danger" : "text-muted"}">${frappe.utils.escape_html(row.validation_message || row.source_sheet || "-")}</small></td>
-										<td>${frappe.utils.escape_html(row.excluded ? __("已剔除") : (row.review_status || __("待审核")))}</td>
-										<td><div class="hrms-payroll-action-group"><button class="btn btn-default btn-xs" data-edit-variable-record="${frappe.utils.escape_html(row.name)}" ${row.review_status === "已确认" ? "disabled" : ""}>${frappe.utils.escape_html(__("编辑"))}</button>${row.review_status !== "已确认" ? `<button class="btn btn-default btn-xs" data-toggle-variable-record="${frappe.utils.escape_html(row.name)}" data-excluded="${row.excluded ? 0 : 1}">${frappe.utils.escape_html(row.excluded ? __("恢复") : __("剔除"))}</button>` : ""}</div></td>
+										<td>${frappe.utils.escape_html(row.excluded ? __("不参与计算") : (row.review_status || __("待审核")))}</td>
+										${readOnly ? "" : `<td><div class="hrms-payroll-action-group"><span class="hrms-payroll-inline-save-state" data-inline-variable-save-state="${frappe.utils.escape_html(row.name)}">${frappe.utils.escape_html(__("等待修改"))}</span>${row.review_status !== "已确认" ? `<button class="btn btn-default btn-xs" data-toggle-variable-record="${frappe.utils.escape_html(row.name)}" data-excluded="${row.excluded ? 0 : 1}">${frappe.utils.escape_html(row.excluded ? __("恢复参与计算") : __("不参与计算"))}</button>` : ""}</div></td>`}
 									</tr>
 								`).join("")
-								: `<tr><td colspan="9" class="text-muted">${frappe.utils.escape_html(__("薪资变量记录暂无数据"))}</td></tr>`
+								: `<tr><td colspan="${readOnly ? 8 : 9}" class="text-muted">${frappe.utils.escape_html(__("薪资变量记录暂无数据"))}</td></tr>`
 						}
 					</tbody>
 				</table>
 			</div>
 		`;
-		target.querySelectorAll("[data-edit-variable-record]").forEach((button) => {
-			const row = rows.find((item) => item.name === button.dataset.editVariableRecord);
-			button.addEventListener("click", () => this.edit_variable_record(row));
+		if (readOnly) return;
+		target.querySelectorAll("[data-inline-variable-record]").forEach((rowElement) => {
+			const row = rows.find((item) => item.name === rowElement.dataset.inlineVariableRecord);
+			rowElement.querySelectorAll("[data-inline-variable-field]").forEach((input) => {
+				input.addEventListener("input", () => this.queue_inline_variable_save(row, rowElement));
+				input.addEventListener("change", () => this.queue_inline_variable_save(row, rowElement));
+			});
 		});
 		target.querySelectorAll("[data-toggle-variable-record]").forEach((button) => {
 			button.addEventListener("click", () => this.toggle_variable_record(button.dataset.toggleVariableRecord, Number(button.dataset.excluded)));
+		});
+	}
+
+	render_variable_type_options(selected) {
+		return "全勤奖\n住房补贴\n学历补贴\n宿舍扣款\n社保个人\n公积金个人\n其他奖金\n其他扣款\n底薪\n职能津贴\n职务津贴\n证书津贴\n多能工津贴\n证书及多能工津贴\n全薪\n薪资小计\n生产奖\n提案改善奖\n继续服务奖\n苹果树\n所得税\n年终奖所得税\n水电费及扣款\n社保公司\n公积金公司\n已发福利\n夜班津贴\n迟到金额+全勤奖扣款\n离职薪资结算"
+			.split("\n")
+			.map((value) => `<option value="${frappe.utils.escape_html(value)}" ${value === selected ? "selected" : ""}>${frappe.utils.escape_html(__(value))}</option>`)
+			.join("");
+	}
+
+	queue_inline_variable_save(row, rowElement) {
+		if (!row?.name || !rowElement?.isConnected) return;
+		this.inline_variable_save_timers ||= new Map();
+		window.clearTimeout(this.inline_variable_save_timers.get(row.name));
+		const saveState = rowElement.querySelector(`[data-inline-variable-save-state="${row.name}"]`);
+		if (saveState) saveState.textContent = __("待保存");
+		this.inline_variable_save_timers.set(row.name, window.setTimeout(() => this.save_inline_variable_record(row, rowElement), 550));
+	}
+
+	save_inline_variable_record(row, rowElement) {
+		const values = {};
+		rowElement.querySelectorAll("[data-inline-variable-field]").forEach((input) => {
+			values[input.dataset.inlineVariableField] = input.value;
+		});
+		const saveState = rowElement.querySelector(`[data-inline-variable-save-state="${row.name}"]`);
+		if (saveState) saveState.textContent = __("保存中…");
+		frappe.call({
+			method: "hrms.api.payroll_input.update_payroll_variable_record",
+			args: {
+				name: row.name,
+				employee: "",
+				employee_code: row.employee_code || "",
+				employee_name: row.employee_name || "",
+				department: row.department || "",
+				variable_type: values.variable_type || row.variable_type,
+				amount: values.amount ?? row.amount,
+				source_sheet: row.source_sheet || "",
+				remarks: row.remarks || "",
+			},
+			callback: (response) => {
+				this.inline_variable_save_timers?.delete(row.name);
+				Object.assign(row, response.message || {});
+				if (saveState?.isConnected) {
+					saveState.textContent = __("已保存");
+					saveState.classList.add("is-saved");
+				}
+			},
+			error: () => {
+				this.inline_variable_save_timers?.delete(row.name);
+				if (saveState?.isConnected) {
+					saveState.textContent = __("保存失败");
+					saveState.classList.add("is-error");
+				}
+			},
 		});
 	}
 
@@ -2522,7 +3326,6 @@ class PayrollInputCenter {
 			args: { name, excluded },
 			callback: () => {
 				this.load_import_batches();
-				this.load_variables();
 			},
 		});
 	}
@@ -2555,7 +3358,6 @@ class PayrollInputCenter {
 							message: response.message?.message || __("薪资变量明细已保存；同月份薪资输入表已清空，请重新生成；结算表不会自动删除。"),
 							indicator: "green",
 						});
-						this.load_variables();
 						this.load_import_batches();
 					},
 				});
@@ -2572,7 +3374,7 @@ class PayrollInputCenter {
 					<h3>${frappe.utils.escape_html(__("薪资输入表"))}</h3>
 					<div class="text-muted">${frappe.utils.escape_html(__("按员工花名册、考勤终稿和福利扣款来源生成计薪输入，先核对工时和变量，再进入结算。"))}</div>
 				</div>
-				<button class="btn btn-primary btn-sm" data-generate ${hasLockedAttendance ? "" : "disabled"} title="${frappe.utils.escape_html(hasLockedAttendance ? __("生成薪资输入表") : __("请先在考勤假期完成并锁定本月考勤终稿"))}">${frappe.utils.escape_html(__("生成薪资输入表"))}</button>
+				<button class="btn btn-primary btn-sm" data-generate data-requires-attendance-lock data-attendance-ready-title="${frappe.utils.escape_html(__("生成薪资输入表"))}" ${hasLockedAttendance ? "" : "disabled"} title="${frappe.utils.escape_html(hasLockedAttendance ? __("生成薪资输入表") : __("请先在考勤假期完成并锁定本月考勤终稿"))}">${frappe.utils.escape_html(__("生成薪资输入表"))}</button>
 			</div>
 			<div data-input-cards></div>
 			<div class="hrms-payroll-filter-row">

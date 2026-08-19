@@ -11,6 +11,7 @@
   "attendance_lock_version",
   "source_type",
   "source_file",
+  "is_selected",
   "status",
   "variable_rows",
   "imported_by",
@@ -59,6 +60,12 @@
    "fieldtype": "Attach",
    "in_list_view": 1,
    "label": "来源文件"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_selected",
+   "fieldtype": "Check",
+   "label": "本月选定版本"
   },
   {
    "default": "待审核",

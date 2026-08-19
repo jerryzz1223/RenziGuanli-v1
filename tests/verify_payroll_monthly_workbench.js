@@ -17,28 +17,30 @@ const page = read("hrms/hr/page/payroll_input_center/payroll_input_center.js");
 for (const marker of [
 	"monthly-workbench",
 	"本月算薪",
-	"核算规则",
-	"render_workspace_navigation",
-	"本月数据状态",
 	"load_monthly_workbench",
-	"get_payroll_month_runbook",
-	"生成薪资输入表",
-	"试算本月工资",
-	"ensure_payroll_generation_scope",
-	"缺少薪资试算前置条件",
-	"请先在考勤假期完成并锁定本月考勤终稿",
-	"process_status_from_runbook",
-	"process_readiness",
-	"缺少锁定考勤终稿",
-	"确认本月结算",
-	"confirm_payroll_settlement_records",
-	"考勤终稿由考勤假期自动提供",
+	"data-payroll-calculation-table",
+	"list_payroll_settlement_records",
+	"薪资计算表",
+	"settlement_columns(true)",
+	"data-select-calculation-columns",
+	"calculation_column_storage_key",
+	"data-select-all-calculation-columns",
+	"data-clear-calculation-columns",
+	"data-export-calculation-excel",
+	"export_calculation_excel",
+	"fixed_calculation_column_fields",
+	'"employee_name", "employee_code", "department"',
 ]) {
 	mustInclude(page, marker);
 }
 
 if (page.includes("primary_tabs") || page.includes("hrms-payroll-input-tabs")) {
 	throw new Error("Duplicate payroll primary navigation must not be rendered.");
+}
+
+const monthlyWorkbench = page.slice(page.indexOf("\tload_monthly_workbench() {"), page.indexOf("\n\trender_project_map_items() {"));
+for (const marker of ["data-workbench-cards", "data-workbench-runbook", "data-workbench-action", "hrms-payroll-runbook-head"]) {
+	if (monthlyWorkbench.includes(marker)) throw new Error(`Monthly calculation view must only render its table: ${marker}`);
 }
 
 const api = read("hrms/api/payroll_input.py");

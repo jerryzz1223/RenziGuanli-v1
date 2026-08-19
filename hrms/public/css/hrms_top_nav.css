@@ -588,7 +588,7 @@ body.hrms-module-shell > .body-sidebar-container,
 body.hrms-module-shell .body-sidebar-container {
 	background: var(--fg-color, #fff);
 	border-right: 1px solid var(--border-color, #e5e7eb);
-	overflow-y: auto;
+	overflow: visible;
 }
 
 @media (min-width: 768px) {
@@ -848,7 +848,9 @@ body.hrms-module-shell .body-sidebar-container {
 	flex-direction: column;
 	gap: 6px;
 	min-height: 100%;
+	overflow-y: auto;
 	padding: 12px 10px;
+	position: relative;
 }
 
 .hrms-unified-sidebar button {
@@ -1012,6 +1014,63 @@ body.hrms-sidebar-reordering * {
 
 .hrms-unified-sidebar-section.is-collapsed .hrms-unified-sidebar-section__chevron {
 	transform: rotate(-90deg);
+}
+
+.hrms-unified-sidebar-collapse {
+	align-items: center;
+	background: var(--fg-color, #fff);
+	border: 1px solid var(--border-color, #e5e7eb) !important;
+	border-radius: 50%;
+	color: var(--text-muted, #6b7280);
+	display: flex;
+	box-shadow: 0 2px 6px rgba(15, 23, 42, .12);
+	height: 26px;
+	justify-content: center;
+	padding: 0;
+	position: absolute;
+	right: -13px;
+	top: 36px;
+	transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
+	width: 26px;
+	z-index: 2;
+}
+
+.hrms-unified-sidebar-collapse:hover {
+	background: var(--control-bg, #f3f4f6);
+	border-color: #9fb8aa !important;
+	color: var(--text-color, #374151);
+	transform: translateX(1px);
+}
+
+.hrms-unified-sidebar-collapse span {
+	font-size: 18px;
+	line-height: 18px;
+}
+
+@media (min-width: 768px) {
+	body.hrms-module-shell.hrms-unified-sidebar-collapsed > .body-sidebar-container,
+	body.hrms-module-shell.hrms-unified-sidebar-collapsed .body-sidebar-container {
+		flex: 0 0 58px !important;
+		min-width: 58px !important;
+		width: 58px !important;
+	}
+
+	body.hrms-module-shell.hrms-unified-sidebar-collapsed .hrms-unified-sidebar-app {
+		justify-content: center;
+		padding-left: 0;
+		padding-right: 0;
+	}
+
+	body.hrms-module-shell.hrms-unified-sidebar-collapsed .hrms-unified-sidebar-app__text,
+	body.hrms-module-shell.hrms-unified-sidebar-collapsed .hrms-unified-sidebar-app__chevron,
+	body.hrms-module-shell.hrms-unified-sidebar-collapsed .hrms-unified-sidebar-list {
+		display: none;
+	}
+
+	body.hrms-module-shell.hrms-unified-sidebar-collapsed .hrms-unified-sidebar-collapse {
+		right: -13px;
+		top: 26px;
+	}
 }
 
 /* 人事异动草稿保留创建信息，避免“最近编辑”与创建记录混在一起。 */

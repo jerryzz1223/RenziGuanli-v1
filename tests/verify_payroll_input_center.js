@@ -38,7 +38,7 @@ if (pageJson.name !== "payroll-input-center" || pageJson.title !== "薪资输入
 
 for (const marker of [
 	"frappe.pages[\"payroll-input-center\"]",
-	"导入月度增减项",
+	"月度增减项",
 	"open_payroll_import_selector",
 	"open_source_form_import_selector",
 	"variable_source_catalog",
@@ -78,8 +78,10 @@ for (const marker of [
 	"应扣前置合计",
 	"window.hrmsCompanyContext?.getCurrentCompany?.()",
 	"hrms:company-context-changed",
-	"data-company-context",
-	"readonly",
+	"get_context_company",
+	"预览模式",
+	"data-inline-variable-record",
+	"queue_inline_variable_save",
 ]) {
 	mustInclude(pageJs, marker, `Payroll input center page is missing marker: ${marker}`);
 }

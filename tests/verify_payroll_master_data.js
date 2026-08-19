@@ -91,6 +91,12 @@ for (const marker of [
 	"本月不参与计算",
 	"data-exclude-payroll",
 	"const missingDifference",
+	"data-salary-change-save-state",
+	"confirm_salary_changes_saved",
+	"values: JSON.stringify(values)",
+	"员工定薪保存失败",
+	"get_saved_payroll_month",
+	"remember_payroll_month",
 ]) {
 	mustInclude(pageJs, marker, `Payroll center page is missing master-data marker: ${marker}`);
 }
