@@ -2783,9 +2783,16 @@ def _default_variable_source_rows():
 def list_payroll_variable_source_types():
 	"""List administrator-maintainable monthly payroll source definitions."""
 	defaults = _default_variable_source_rows()
+	# Attendance final is a system-provided, read-only source.  It is displayed
+	# with the other payroll inputs, but is not a source type an administrator
+	# can maintain.  In particular, do not persist its ``考勤继承`` display
+	# marker in target_area: older sites only allow the two editable areas in
+	# that Select field and reject the whole catalog on first load.
+	system_sources = [item for item in defaults if item["source_code"] == "attendance_final"]
+	editable_defaults = [item for item in defaults if item["source_code"] != "attendance_final"]
 	if not _doctype_exists(VARIABLE_SOURCE_TYPE_DOCTYPE):
 		return defaults
-	for item in defaults:
+	for item in editable_defaults:
 		if frappe.db.exists(VARIABLE_SOURCE_TYPE_DOCTYPE, item["source_code"]):
 			continue
 		frappe.get_doc({"doctype": VARIABLE_SOURCE_TYPE_DOCTYPE, **item}).insert(ignore_permissions=True, ignore_if_duplicate=True)
@@ -2794,12 +2801,12 @@ def list_payroll_variable_source_types():
 		# Salary changes belong to the preceding employee-salary step.  Full
 		# attendance is calculated from the locked attendance final.  Neither is a
 		# monthly-upload card; the housing allowance workbook remains independent.
-		filters={"enabled": 1, "source_code": ["not in", ["salary_change", "attendance_bonus"]]},
+		filters={"enabled": 1, "source_code": ["not in", ["attendance_final", "salary_change", "attendance_bonus"]]},
 		fields=["name", "source_code", "source_name", "purpose", "required_for_payroll", "enabled", "sort_order", "required_fields", "template_notes", "target_area"],
 		order_by="sort_order asc, source_name asc",
 		limit_page_length=200,
 	)
-	return rows
+	return system_sources + rows
 
 
 def _attendance_scope_filters(company, attendance_month, attendance_lock_version):

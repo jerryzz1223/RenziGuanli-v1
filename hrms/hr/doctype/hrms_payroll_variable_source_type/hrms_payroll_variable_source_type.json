@@ -16,10 +16,10 @@
   {"default": "0", "fieldname": "sort_order", "fieldtype": "Int", "label": "显示顺序"},
   {"fieldname": "required_fields", "fieldtype": "Small Text", "label": "导入必填字段"},
   {"fieldname": "template_notes", "fieldtype": "Small Text", "label": "模板/字段说明"},
-  {"default": "月度增减项", "fieldname": "target_area", "fieldtype": "Select", "label": "维护区域", "options": "月度增减项\n员工定薪\n考勤继承"}
+  {"default": "月度增减项", "fieldname": "target_area", "fieldtype": "Select", "label": "维护区域", "options": "月度增减项\n员工定薪"}
  ],
  "links": [],
- "modified": "2026-08-18 00:00:00.000000",
+ "modified": "2026-08-19 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "HR",
  "name": "HRMS Payroll Variable Source Type",
