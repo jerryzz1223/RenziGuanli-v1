@@ -123,15 +123,17 @@ class CrossDepartmentSupportPage {
 			}
 			const escape = (value) => frappe.utils.escape_html(String(value || "—"));
 			const sample = (preview.rows || []).slice(0, 12);
+			const canImport = Boolean(preview.can_import);
 			body.html(`
-				<div class="cross-department-support-page__import-summary ${preview.failed ? "text-danger" : "text-success"}">
+				<div class="cross-department-support-page__import-summary ${preview.failed ? "text-warning" : "text-success"}">
 					${__("已读取 {0} 行；通过 {1} 行；错误 {2} 行。", [preview.total || 0, (preview.total || 0) - (preview.failed || 0), preview.failed || 0])}
 				</div>
+				${preview.failed ? `<div class="alert alert-warning">${__("异常行也可导入为“待复核、不可派”记录；可在维护台账中补齐员工或岗位等信息后直接编辑。")}</div>` : ""}
 				<table class="table table-bordered table-sm"><thead><tr><th>${__("Excel 行")}</th><th>${__("部门")}</th><th>${__("姓名")}</th><th>${__("可支援部门")}</th><th>${__("可支援岗位")}</th><th>${__("结果")}</th></tr></thead>
-				<tbody>${sample.map((row) => `<tr><td>${escape(row.row_number)}</td><td>${escape(row.source_department)}</td><td>${escape(row.employee_name)}</td><td>${escape(row.support_department)}</td><td>${escape(row.support_designation)}</td><td>${row.errors?.length ? `<span class="text-danger">${escape(row.errors.join("；"))}</span>` : `<span class="text-success">${escape(row.action)}</span>`}</td></tr>`).join("")}</tbody></table>
+				<tbody>${sample.map((row) => `<tr><td>${escape(row.row_number)}</td><td>${escape(row.source_department)}</td><td>${escape(row.employee_name)}</td><td>${escape(row.support_department)}</td><td>${escape(row.support_designation)}</td><td>${row.errors?.length ? `<span class="text-warning">${escape(row.action)}：${escape(row.errors.join("；"))}</span>` : `<span class="text-success">${escape(row.action)}</span>`}</td></tr>`).join("")}</tbody></table>
 				${(preview.rows || []).length > sample.length ? `<p class="text-muted">${__("仅显示前 12 行预览。")}</p>` : ""}
 			`);
-			dialog.set_primary_action(preview.can_import ? __("确认导入") : __("重新选择文件"), preview.can_import ? import_file : select_file);
+			dialog.set_primary_action(canImport ? (preview.failed ? __("导入并保留异常") : __("确认导入")) : __("重新选择文件"), canImport ? import_file : select_file);
 		}
 
 		function select_file() {
@@ -166,7 +168,8 @@ class CrossDepartmentSupportPage {
 				.then((response) => {
 					const result = response.message || {};
 					dialog.hide();
-					frappe.show_alert({ message: __("已新增 {0} 条支援能力，跳过 {1} 条已有记录。", [result.inserted || 0, result.skipped || 0]), indicator: "green" });
+					const pendingText = result.pending_review ? __("；其中 {0} 条为待复核记录，可在维护台账中编辑。", [result.pending_review]) : "";
+					frappe.show_alert({ message: __("已新增 {0} 条支援能力，跳过 {1} 条已有记录{2}", [result.inserted || 0, result.skipped || 0, pendingText]), indicator: "green" });
 					this.search();
 				});
 		}

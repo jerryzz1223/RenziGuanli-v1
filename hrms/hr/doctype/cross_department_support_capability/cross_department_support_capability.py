@@ -30,6 +30,11 @@ IMPORT_HEADER_ALIASES = {
 }
 IMPORT_REQUIRED_FIELDS = {"employee_name", "support_department", "support_designation"}
 IMPORT_STATUS_VALUES = {"有效", "待复核", "暂停", "失效"}
+CAPABILITY_REQUIRED_FIELD_LABELS = {
+	"employee": _("员工"),
+	"support_department": _("可支援部门"),
+	"support_designation": _("可支援岗位"),
+}
 
 
 class CrossDepartmentSupportCapability(Document):
@@ -38,6 +43,21 @@ class CrossDepartmentSupportCapability(Document):
 	def validate(self):
 		if self.valid_from and self.valid_until and getdate(self.valid_from) > getdate(self.valid_until):
 			frappe.throw(_("有效开始日期不能晚于有效截止日期。"))
+
+		missing = [fieldname for fieldname in CAPABILITY_REQUIRED_FIELD_LABELS if not self.get(fieldname)]
+		if missing:
+			# Import exceptions are deliberately saved as inactive review records so
+			# an HR user can complete them in the ledger rather than re-uploading a
+			# whole spreadsheet. They must never be made dispatchable prematurely.
+			if self.qualification_status == "有效" or self.is_active:
+				frappe.throw(_("启用支援能力前请补齐：{0}。").format("、".join(CAPABILITY_REQUIRED_FIELD_LABELS[field] for field in missing)))
+			self.is_active = 0
+		else:
+			# Once an imported exception has been completed, remove the transient
+			# import warning. The HR user still explicitly decides whether to set it
+			# to 有效 and 可派.
+			if not self.is_new() and self.import_validation_note:
+				self.import_validation_note = ""
 
 		if self.qualification_status != "有效":
 			self.is_active = 0
@@ -188,7 +208,17 @@ def _support_import_plan(file_url: str):
 		rows.append(row)
 
 	failed = sum(bool(row["errors"]) for row in rows)
-	return {"sheet_name": sheet.title, "header_row": header_row, "rows": rows, "total": len(rows), "failed": failed, "can_import": bool(rows) and not failed}
+	for row in rows:
+		if row["errors"] and not row["action"].startswith("跳过"):
+			row["action"] = _("待复核（可导入）")
+	return {
+		"sheet_name": sheet.title,
+		"header_row": header_row,
+		"rows": rows,
+		"total": len(rows),
+		"failed": failed,
+		"can_import": bool(rows),
+	}
 
 
 @frappe.whitelist()
@@ -238,30 +268,45 @@ def import_cross_department_support_capabilities(file_url: str):
 
 	plan = _support_import_plan(file_url)
 	if not plan["can_import"]:
-		frappe.throw(_("导入前请先修正所有错误行。"))
+		frappe.throw(_("未读取到可导入的名单行。"))
 
 	inserted = 0
 	skipped = 0
+	pending_review = 0
 	for row in plan["rows"]:
 		if row["action"].startswith("跳过"):
 			skipped += 1
 			continue
+		needs_review = bool(row["errors"])
 		doc = frappe.get_doc({
 			"doctype": "Cross Department Support Capability",
-			"employee": row["employee"],
-			"support_department": row["support_department_name"],
-			"support_designation": row["support_designation_name"],
-			"qualification_status": row["qualification_status"],
-			"is_active": 1 if row["qualification_status"] == "有效" else 0,
+			"employee": row.get("employee") or None,
+			# Keep the spreadsheet values visible when the employee could not be
+			# matched. HR can then select the correct employee directly in the
+			# imported record.
+			"employee_name": row.get("employee_name") or None,
+			"source_department": row.get("source_department_name") or None,
+			"support_department": row.get("support_department_name") or row.get("support_department") or None,
+			"support_designation": row.get("support_designation_name") or row.get("support_designation") or None,
+			"qualification_status": "待复核" if needs_review else row["qualification_status"],
+			"is_active": 0 if needs_review else 1 if row["qualification_status"] == "有效" else 0,
 			"qualified_on": row.get("qualified_on") or None,
 			"valid_from": row.get("valid_from") or None,
 			"valid_until": row.get("valid_until") or None,
 			"remarks": row.get("remarks") or None,
+			"import_validation_note": _("Excel 第 {0} 行待修正：{1}").format(row["row_number"], "；".join(row["errors"])) if needs_review else None,
 		})
 		doc.insert()
 		inserted += 1
+		pending_review += needs_review
 
-	return {"inserted": inserted, "skipped": skipped, "total": len(plan["rows"]), "imported_on": nowdate()}
+	return {
+		"inserted": inserted,
+		"skipped": skipped,
+		"pending_review": pending_review,
+		"total": len(plan["rows"]),
+		"imported_on": nowdate(),
+	}
 
 
 @frappe.whitelist()
