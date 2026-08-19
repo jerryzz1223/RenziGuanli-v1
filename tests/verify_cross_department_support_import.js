@@ -19,6 +19,9 @@ for (const marker of [
 	'"is_active": 0 if needs_review',
 	'"import_validation_note"',
 	"启用支援能力前请补齐",
+	'frappe.db.get_value("Employee", row.get("employee"), "department")',
+	'"source_department": source_department or None',
+	'"Excel 原部门：{0}"',
 ]) {
 	assert(api.includes(marker), `Missing partial-import safeguard: ${marker}`);
 }

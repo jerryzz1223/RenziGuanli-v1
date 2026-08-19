@@ -278,6 +278,15 @@ def import_cross_department_support_capabilities(file_url: str):
 			skipped += 1
 			continue
 		needs_review = bool(row["errors"])
+		raw_source_department = row.get("source_department_name") or ""
+		# source_department is a Link field fetched from Employee. Never write a
+		# display-only Excel department into it: legacy department names (such as
+		# 品保课) may not exist in the current Department master and would make
+		# Frappe reject the whole import.
+		source_department = frappe.db.get_value("Employee", row.get("employee"), "department") if row.get("employee") else ""
+		import_note_parts = list(row["errors"])
+		if raw_source_department and not _resolve_link("Department", raw_source_department):
+			import_note_parts.append(_("Excel 原部门：{0}").format(raw_source_department))
 		doc = frappe.get_doc({
 			"doctype": "Cross Department Support Capability",
 			"employee": row.get("employee") or None,
@@ -285,7 +294,7 @@ def import_cross_department_support_capabilities(file_url: str):
 			# matched. HR can then select the correct employee directly in the
 			# imported record.
 			"employee_name": row.get("employee_name") or None,
-			"source_department": row.get("source_department_name") or None,
+			"source_department": source_department or None,
 			"support_department": row.get("support_department_name") or row.get("support_department") or None,
 			"support_designation": row.get("support_designation_name") or row.get("support_designation") or None,
 			"qualification_status": "待复核" if needs_review else row["qualification_status"],
@@ -294,7 +303,7 @@ def import_cross_department_support_capabilities(file_url: str):
 			"valid_from": row.get("valid_from") or None,
 			"valid_until": row.get("valid_until") or None,
 			"remarks": row.get("remarks") or None,
-			"import_validation_note": _("Excel 第 {0} 行待修正：{1}").format(row["row_number"], "；".join(row["errors"])) if needs_review else None,
+			"import_validation_note": _("Excel 第 {0} 行待修正：{1}").format(row["row_number"], "；".join(import_note_parts)) if needs_review else None,
 		})
 		doc.insert()
 		inserted += 1
