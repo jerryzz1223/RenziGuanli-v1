@@ -113,6 +113,33 @@
 	min-width: 130px;
 }
 
+.hrms-payroll-global-scope {
+	align-items: center;
+	background: #f6fbf8;
+	border: 1px solid #d9eee1;
+	border-radius: 8px;
+	display: flex;
+	gap: 18px;
+	justify-content: space-between;
+	margin: 0 0 12px;
+	padding: 10px 14px;
+}
+
+.hrms-payroll-global-scope > div:first-child {
+	display: grid;
+	gap: 2px;
+}
+
+.hrms-payroll-global-scope strong {
+	color: var(--text-color, #1f2937);
+	font-size: 14px;
+}
+
+.hrms-payroll-global-scope small {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+}
+
 .hrms-payroll-month-control {
 	display: grid;
 	flex: 0 0 auto;
@@ -2670,6 +2697,11 @@
 
 	.hrms-payroll-month-switcher .btn {
 		width: auto;
+	}
+
+	.hrms-payroll-global-scope {
+		align-items: flex-start;
+		flex-direction: column;
 	}
 
 	.hrms-payroll-variable-source-grid {

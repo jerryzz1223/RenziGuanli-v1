@@ -297,6 +297,13 @@ class PayrollInputCenter {
 		`;
 	}
 
+	bind_month_control() {
+		this.wrapper.querySelectorAll("[data-month-shift]").forEach((button) => {
+			button.addEventListener("click", () => this.shift_payroll_month(Number(button.dataset.monthShift)));
+		});
+		this.wrapper.querySelector("[data-open-month-picker]")?.addEventListener("click", () => this.open_month_picker());
+	}
+
 	open_month_picker() {
 		let pickerYear = Number(this.payroll_month.slice(0, 4)) || new Date().getFullYear();
 		const months = Array.from({ length: 12 }, (_unused, index) => index + 1);
@@ -505,9 +512,18 @@ class PayrollInputCenter {
 	render() {
 		this.wrapper.innerHTML = `
 			<div class="hrms-payroll-input-center hrms-payroll-calculation-only">
+				<section class="hrms-payroll-global-scope" aria-label="${this.escape(__("薪资核算范围"))}">
+					<div>
+						<span class="hrms-payroll-step-kicker">${this.escape(__("薪资核算范围"))}</span>
+						<strong>${this.escape(__("选择一次，整个薪资模块共用"))}</strong>
+						<small>${this.escape(__("切换月份后，人员范围、员工定薪、月度增减项、试算和发放都会同步切换。"))}</small>
+					</div>
+					${this.render_month_control()}
+				</section>
 				<div data-payroll-body></div>
 			</div>
 		`;
+		this.bind_month_control();
 		this.load_attendance_dependency();
 	}
 

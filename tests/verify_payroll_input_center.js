@@ -82,6 +82,10 @@ for (const marker of [
 	"预览模式",
 	"data-inline-variable-record",
 	"queue_inline_variable_save",
+	"hrms-payroll-global-scope",
+	"选择一次，整个薪资模块共用",
+	"bind_month_control",
+	"remember_payroll_month",
 ]) {
 	mustInclude(pageJs, marker, `Payroll input center page is missing marker: ${marker}`);
 }
