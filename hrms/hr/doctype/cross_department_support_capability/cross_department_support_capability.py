@@ -83,6 +83,17 @@ def _format_import_value(value) -> str:
 	return cstr(value).strip()
 
 
+def _safe_import_date(value, field_label: str, errors: list[str]):
+	"""Keep malformed spreadsheet dates from stopping a staging import."""
+	if not value:
+		return None
+	try:
+		return getdate(value)
+	except Exception:
+		errors.append(_("{0}格式无效：{1}").format(field_label, _format_import_value(value)))
+		return None
+
+
 def _get_import_file_content(file_url: str) -> bytes:
 	file_name = frappe.db.get_value("File", {"file_url": file_url}, "name")
 	if not file_name:
@@ -277,14 +288,21 @@ def import_cross_department_support_capabilities(file_url: str):
 		if row["action"].startswith("跳过"):
 			skipped += 1
 			continue
-		needs_review = bool(row["errors"])
+		review_errors = list(row["errors"])
+		qualified_on = _safe_import_date(row.get("qualified_on"), _("考核通过日期"), review_errors)
+		valid_from = _safe_import_date(row.get("valid_from"), _("有效开始日期"), review_errors)
+		valid_until = _safe_import_date(row.get("valid_until"), _("有效截止日期"), review_errors)
+		if valid_from and valid_until and valid_from > valid_until:
+			review_errors.append(_("有效开始日期不能晚于有效截止日期。"))
+			valid_until = None
+		needs_review = bool(review_errors)
 		raw_source_department = row.get("source_department_name") or ""
 		# source_department is a Link field fetched from Employee. Never write a
 		# display-only Excel department into it: legacy department names (such as
 		# 品保课) may not exist in the current Department master and would make
 		# Frappe reject the whole import.
 		source_department = frappe.db.get_value("Employee", row.get("employee"), "department") if row.get("employee") else ""
-		import_note_parts = list(row["errors"])
+		import_note_parts = review_errors
 		if raw_source_department and not _resolve_link("Department", raw_source_department):
 			import_note_parts.append(_("Excel 原部门：{0}").format(raw_source_department))
 		doc = frappe.get_doc({
@@ -299,13 +317,16 @@ def import_cross_department_support_capabilities(file_url: str):
 			"support_designation": row.get("support_designation_name") or row.get("support_designation") or None,
 			"qualification_status": "待复核" if needs_review else row["qualification_status"],
 			"is_active": 0 if needs_review else 1 if row["qualification_status"] == "有效" else 0,
-			"qualified_on": row.get("qualified_on") or None,
-			"valid_from": row.get("valid_from") or None,
-			"valid_until": row.get("valid_until") or None,
+			"qualified_on": qualified_on,
+			"valid_from": valid_from,
+			"valid_until": valid_until,
 			"remarks": row.get("remarks") or None,
 			"import_validation_note": _("Excel 第 {0} 行待修正：{1}").format(row["row_number"], "；".join(import_note_parts)) if needs_review else None,
 		})
-		doc.insert()
+		# This directory is a query-oriented staging ledger. A record with an
+		# unresolved employee or blank target fields must still be retained for
+		# later correction in the maintenance ledger.
+		doc.insert(ignore_mandatory=True, ignore_links=True)
 		inserted += 1
 		pending_review += needs_review
 

@@ -70,6 +70,7 @@ class CrossDepartmentSupportPage {
 			fieldname: "include_unavailable",
 			label: __("显示不可派人员"),
 			fieldtype: "Check",
+			default: 1,
 			change: () => this.search(),
 		});
 		filters.append(this.department.$wrapper, this.designation.$wrapper, this.employee.$wrapper, this.show_unavailable.$wrapper);

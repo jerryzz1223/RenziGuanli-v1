@@ -22,6 +22,8 @@ for (const marker of [
 	'frappe.db.get_value("Employee", row.get("employee"), "department")',
 	'"source_department": source_department or None',
 	'"Excel 原部门：{0}"',
+	"def _safe_import_date",
+	"doc.insert(ignore_mandatory=True, ignore_links=True)",
 ]) {
 	assert(api.includes(marker), `Missing partial-import safeguard: ${marker}`);
 }
@@ -29,5 +31,6 @@ for (const marker of [
 for (const marker of ["异常行也可导入", "导入并保留异常", "待复核记录，可在维护台账中编辑"]) {
 	assert(page.includes(marker), `Missing import-review UI guidance: ${marker}`);
 }
+assert(page.includes('fieldname: "include_unavailable"') && page.includes("default: 1"), "The query page must show imported review records by default");
 
 console.log("cross department support partial import contract passed");
