@@ -17,6 +17,14 @@ frappe.ui.form.on("HR Settings", {
 				},
 			};
 		});
+		if (!(frm.doc.attendance_final_excel_fields || []).length) {
+			frm.add_custom_button(__("初始化终稿 Excel 表头"), () => {
+				frappe.call({
+					method: "hrms.api.attendance_processing_center.seed_attendance_final_excel_fields",
+					callback: () => frm.reload_doc(),
+				});
+			}, __("考勤设置"));
+		}
 	},
 });
 

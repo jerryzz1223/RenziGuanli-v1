@@ -71,7 +71,7 @@ for (const marker of [
 	mustInclude(api, marker, `Payroll linkage API must use real source doctype: ${marker}`);
 }
 
-for (const marker of ["在职", "正式", "试用", "待补基础资料", "底薪", "薪资小计", "生效日期", "异动原因", "结算覆盖率", "公司实际负担总计", "待生成工资条"]) {
+for (const marker of ["在职", "正式", "试用", "待补基础资料", "底薪", "薪资小计", "生效日期", "结算覆盖率", "公司实际负担总计", "待生成工资条"]) {
 	mustInclude(pageJs, marker, `Payroll linked page is missing visible business field: ${marker}`);
 }
 

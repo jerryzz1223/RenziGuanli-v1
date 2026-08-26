@@ -95,9 +95,11 @@ for (const marker of [
 	"render_attendance_rule_editor",
 	"open_attendance_rule_editor",
 	"data-attendance-rule-editor-area",
-	"大夜班每次津贴",
+	"深夜班每次津贴",
+	"深夜班上班时间",
+	"deep_night_shift_start",
 	"大夜班上班时间",
-	"large_night_shift_start",
+	"small_night_shift_start",
 	"点击设置",
 ]) {
 	mustInclude(pageJs + api, marker, `Attendance rule inline editor is missing marker: ${marker}`);

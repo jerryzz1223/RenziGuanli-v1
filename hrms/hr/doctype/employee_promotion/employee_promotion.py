@@ -73,7 +73,7 @@ class EmployeePromotion(Document):
 				frappe.throw(_("转正通过时必须同步更新员工转正状态和转正日期"))
 			details = {row.fieldname: str(row.new or "").strip() for row in self.promotion_details}
 			if details.get("custom_is_confirmed") != "是" or not details.get("final_confirmation_date"):
-				frappe.throw(_("转正通过时，员工转正状态必须设为“是”并填写转正日期"))
+				frappe.throw(_("转正通过时，必须同步填写是否转正和转正日期"))
 		elif self.promotion_details:
 			frappe.throw(_("转正不通过不会变更员工档案，请移除转正/晋升调整项目"))
 

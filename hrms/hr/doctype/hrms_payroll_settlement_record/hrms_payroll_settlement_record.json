@@ -32,6 +32,7 @@
   "weekend_overtime_pay",
   "holiday_overtime_pay",
   "overtime_pay_total",
+  "deep_night_shift_count",
   "large_night_shift_count",
   "small_night_shift_count",
   "night_shift_allowance",
@@ -221,9 +222,15 @@
   },
   {
    "default": "0",
-   "fieldname": "overtime_pay_total",
-   "fieldtype": "Currency",
-   "label": "加班费小计"
+  "fieldname": "overtime_pay_total",
+  "fieldtype": "Currency",
+  "label": "加班费小计"
+ },
+  {
+   "default": "0",
+   "fieldname": "deep_night_shift_count",
+   "fieldtype": "Float",
+   "label": "深夜班次数"
   },
   {
    "default": "0",

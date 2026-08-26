@@ -187,6 +187,13 @@
 	white-space: nowrap;
 }
 
+.hrms-org-builder-hint {
+	color: #087a4a;
+	display: block;
+	font-size: 11px;
+	margin-top: 3px;
+}
+
 .hrms-org-filter label {
 	color: #667085;
 	display: block;
@@ -323,6 +330,34 @@
 	text-align: center;
 	width: 180px;
 	z-index: 1;
+}
+
+/* Tree builder feedback: only real, live-data nodes are draggable. */
+.hrms-org-node[draggable="true"] {
+	cursor: grab;
+}
+
+.hrms-org-node[draggable="true"]::after {
+	color: #667085;
+	content: "⠿";
+	font-size: 15px;
+	position: absolute;
+	right: 7px;
+	top: 5px;
+}
+
+.hrms-org-node.is-dragging {
+	opacity: 0.42;
+}
+
+.hrms-org-node.is-drop-target {
+	background: #e8f7ef;
+	box-shadow: 0 0 0 3px #4ba66b;
+}
+
+.hrms-org-node--employee {
+	border-color: #6b7280;
+	min-width: 132px;
 }
 
 .hrms-org-node.active {

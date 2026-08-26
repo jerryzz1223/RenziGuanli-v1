@@ -88,6 +88,7 @@ for marker in (
 	"monthly_final_outputs",
 	"_monthly_snapshot_version",
 	"_processing_state_hash",
+	"_restore_daily_exception_lines_from_source",
 	"MONTHLY_SUPPORT_SOURCE_TYPES",
 	"MONTHLY_SUPPORT_SOURCE_CONFIG",
 	"monthly_support_precheck",
@@ -117,6 +118,7 @@ for marker in (
 	"include_in_downstream",
 	"downstream_eligible",
 	"def _confirmed_downstream_eligible",
+	'review_status = row.get("review_status") or ("待审核" if row.get("exception_codes") else "无需审核")',
 	'"eligible_for_downstream": 1 if downstream_eligible else 0',
 	'row.review_status == "待审核"',
 	"included_rows",
@@ -203,9 +205,21 @@ for marker in (
 if "if batch.status == \"已确认\":" not in confirm_body:
 	raise AssertionError("Confirmed sources must reject duplicate confirmation and require an auditable correction path.")
 
-# Batch upload may register and process the five attendance sources, but it must never
-# auto-confirm an exception. A reviewer keeps the final decision in the
-# exception queue, source by source.
+# Once a source is confirmed, unresolved records remain available for audit but
+# must not overwrite the confirmed card status merely because they still have a
+# pending review status.
+slot_start = api.find("def _slot_payload(")
+slot_end = api.find("\ndef _refresh_batch_review_status", slot_start)
+slot_body = api[slot_start:] if slot_end == -1 else api[slot_start:slot_end]
+require(
+	slot_body,
+	"if batch.status == \"已确认\"",
+	"Confirmed sources with excluded pending records must display as confirmed.",
+)
+
+# Batch upload applies every valid source immediately. Invalid rows remain
+# traceable and excluded from downstream calculation without a separate
+# confirmation step.
 bulk_start = api.find("def bulk_import_and_process_sources(")
 bulk_end = api.find("\n@frappe.whitelist()", bulk_start + 1)
 bulk_body = api[bulk_start:] if bulk_end == -1 else api[bulk_start:bulk_end]
@@ -214,11 +228,15 @@ for marker in (
 	"批量导入未开始",
 	"process_source_slot",
 	"process_monthly_support_file",
+	"不需要逐类审批",
 ):
 	require(bulk_body, marker, f"Batch import contract missing: {marker}")
-for forbidden in ("confirm_source_result(", "confirm_monthly_support_file("):
-	if forbidden in bulk_body:
-		raise AssertionError(f"Batch import must not auto-confirm source data: {forbidden}")
+
+process_start = api.find("def process_source_slot(")
+process_end = api.find("\n@frappe.whitelist()", process_start + 1)
+process_body = api[process_start:] if process_end == -1 else api[process_start:process_end]
+for marker in ('batch.status = "已确认"', "wait for a second source-confirmation"):
+	require(process_body, marker, f"One-step source processing missing: {marker}")
 
 # Full-attendance and special-hours files are attendance-only one-time
 # imports.  Their validation errors remain traceable on the source result, but
@@ -240,6 +258,8 @@ finalization_end = api.find("\n\nFINAL_SIGNED_COLUMNS", finalization_start)
 finalization_body = api[finalization_start:finalization_end]
 for marker in ('"import_error_count"', '"pending_exception_count": 0', '"can_confirm": False'):
 	require(finalization_body, marker, f"Monthly import validation visibility missing: {marker}")
+if 'slot["status"] == "已确认" and not cint(slot.get("exception_count"))' in finalization_body:
+	raise AssertionError("Confirmed main sources must not be blocked by retained audit rows.")
 
 # Every callable API must authorize before accessing the batch/record data.
 for method in (
@@ -254,6 +274,18 @@ for method in (
 	if start == -1 or "_require_processing_manager()" not in body:
 		raise AssertionError(f"{method} must enforce processing-manager permission.")
 
+exceptions_start = api.find("def list_processing_exceptions(")
+exceptions_end = api.find("\n\n@frappe.whitelist()", exceptions_start)
+exceptions_body = api[exceptions_start:] if exceptions_end == -1 else api[exceptions_start:exceptions_end]
+for marker in ("page_start", "limit_start=page_start", "limit_page_length=page_length"):
+	require(exceptions_body, marker, f"Exception queue pagination is incomplete: {marker}")
+
+bulk_start = api.find("def bulk_update_processing_records(")
+bulk_end = api.find("\n\n@frappe.whitelist()", bulk_start)
+bulk_body = api[bulk_start:] if bulk_end == -1 else api[bulk_start:bulk_end]
+for marker in ("page_start", "page_length = 20", "current_page_ids", "issubset(current_page_ids)"):
+	require(bulk_body, marker, f"Current-page bulk processing guard is incomplete: {marker}")
+
 for marker in (
 	"one employee per row",
 	"standard_hours",
@@ -263,7 +295,7 @@ for marker in (
 	"holiday_overtime_hours",
 	"ATTENDANCE_DATE_DUPLICATE",
 	"EMPLOYEE_CODE_NAME_CONFLICT",
-	"SHIFT_MISSING",
+	"BLANK_SHIFT_SOURCE",
 	"CLOCK_IN_MISSING",
 	"CLOCK_OUT_MISSING",
 	"_department_key",

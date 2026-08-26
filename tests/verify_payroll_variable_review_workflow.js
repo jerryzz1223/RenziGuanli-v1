@@ -12,9 +12,9 @@ const source = JSON.parse(read("hrms/hr/doctype/hrms_payroll_variable_source_typ
 
 for (const marker of [
 	"DEFAULT_PAYROLL_VARIABLE_SOURCE_TYPES", "list_payroll_variable_source_types", "preview_rows",
-	'"status": "待审核"', "confirm_payroll_variable_import_batch", "set_payroll_variable_record_excluded",
+	'"status": "待确认"', "confirm_payroll_variable_import_batch", "confirm_all_payroll_variable_import_batches", "confirm_all_payroll_welfare_sources", "set_payroll_variable_record_excluded",
 	"delete_payroll_variable_import_batches", "void_payroll_variable_import_batch", "can_confirm_empty", "_repeated_employee_amount_rows",
-	"_assert_no_singleton_variable_conflicts", "_payroll_run_snapshot", "required_for_payroll",
+	"_assert_no_singleton_variable_conflicts", "prior_batch.source_type == batch.source_type", "_payroll_run_snapshot", "required_for_payroll",
 	'filters["review_status"] = "已确认"', 'filters["excluded"] = 0', "MONTHLY_VARIABLE_SCOPE_PREFIX",
 	"unmatched_rows", "unmatched_people", "unmatched_reason_summary", '"attendance_bonus"',
 	"select_payroll_variable_import_batch", "create_editable_payroll_variable_batch_version", "is_selected",
@@ -22,11 +22,11 @@ for (const marker of [
 	"一阶数据系统计算", "二阶金额直用", "WELFARE_RENTAL_SUBSIDY",
 ]) include(api, marker);
 for (const marker of [
-	"唯一补充数据入口", "本月数据来源清单",
-	"导入为待审核", "确认入账", "维护来源类型", "data-toggle-variable-record",
-	"data-select-import-batch", "删除所选批次", "清空本月未确认", "确认无数据",
+	"唯一补充数据入口", "本月数据来源清单", "本月导入批次",
+	"录入数据", "确认入账", "维护来源类型", "data-toggle-variable-record",
+	"data-import-batch-table", "data-select-import-batch", "一键确认全部", "confirm_all_import_batches", "data-confirm-all-welfare-sources", "confirm_all_welfare_sources", "删除所选批次", "清空本月未确认", "确认本月无数据",
 	"作废已确认批次", "员工匹配", "select_payroll_variable_import_batch",
-	"data-open-source-card", "打开{0}明细", "收起明细", "待审核/待纠错", "allow_multiple: false", "data-source-card-preview", "data-source-card-records", "data-source-card-editable", "data-collapse-source-detail", "data-finish-source-edit", "修改后自动保存", "data-inline-variable-record", "queue_inline_variable_save", "data-confirm-source-card", "data-upload-source-version", "data-edit-source-card", "data-create-editable-source-card", "确认并锁定", "已确认并锁定", "当前数据已确认并锁定", "未匹配原因", "不参与计算", "本月数据明细", "点击卡片即可上传", "data-table-sort", "data-table-column-search", "prioritize_table_rows", "orderedRows",
+	"data-open-source-card", "打开{0}明细", "收起明细", "待确认 / 有异常可修改", "allow_multiple: false", "data-source-card-preview", "data-source-card-records", "data-source-card-editable", "data-collapse-source-detail", "data-finish-source-edit", "修改后自动保存", "data-inline-variable-record", "queue_inline_variable_save", "data-edit-variable-record", "data-confirm-source-card", "data-upload-source-version", "data-edit-source-card", "data-create-editable-source-card", "确认入账", "已确认入账", "当前数据已确认入账", "未匹配原因", "不参与计算", "本月数据明细", "暂无本月明细", "hrms-payroll-variable-source-state", "data-table-sort", "data-table-column-search", "prioritize_table_rows", "orderedRows",
 	"批量导入表格", "open_bulk_variable_uploader", "import_bulk_variable_file", "薪资异动应在员工定薪处理", "全勤奖由考勤终稿自动继承",
 	"data-calculate-monthly-payroll", "calculate_monthly_payroll", "薪资计算完成", "正在进行薪资计算...",
 	"data-download-housing-base-template", "下载一阶模板", "已识别住房补贴一阶数据", "已识别住房补贴二阶数据", "计算方式",
@@ -37,8 +37,8 @@ if (!api.includes("全勤奖由已锁定考勤终稿和全勤规则自动计算"
 }
 
 const attendanceSync = api.slice(api.indexOf("def sync_locked_attendance_final_to_payroll"), api.indexOf("def generate_payroll_input_records"));
-if (attendanceSync.includes('(\"住房补贴\", flt(row.get(\"housing_allowance\"))')) {
-	throw new Error("Housing allowance must only enter payroll through the confirmed monthly-additions batch");
+if (!attendanceSync.includes('(\"住房补贴\", flt(row.get(\"housing_allowance\"))')) {
+	throw new Error("Housing allowance must be inherited from the locked attendance final");
 }
 
 const batchFields = new Set(batch.fields.map((field) => field.fieldname));

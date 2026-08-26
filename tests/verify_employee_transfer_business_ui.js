@@ -148,6 +148,14 @@ for (const marker of [
 ]) {
 	assert(transferPy.includes(marker), `人事异动后端缺少业务校验: ${marker}`);
 }
+for (const marker of ['"employment_type": "工作性质"', "工作性质调整"]) {
+	assert(transferPy.includes(marker), `工作性质异动缺少统一字段：${marker}`);
+}
+assert(!transferPy.includes("custom_personnel_status"), "异动页不应保留人员状态字段。");
+assert(!propertyUpdate.includes("custom_personnel_status"), "异动编辑器不应保留人员状态选择器。");
+for (const marker of ["growth_records", "_get_employee_growth_records", "工作性质调整"]) {
+	assert(employeeApi.includes(marker) || detailJs.includes(marker), `成长记录未包含工作性质调整：${marker}`);
+}
 for (const forbidden of ["CROSS_COMPANY_TRANSFER_TYPE", "copy_employee_for_cross_company_transfer", "validate_company_change"] ) {
 	assert(!transferPy.includes(forbidden), `人事异动后端仍残留首版停用流程: ${forbidden}`);
 }

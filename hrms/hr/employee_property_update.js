@@ -88,7 +88,7 @@ frappe.ui.form.on(cur_frm.doctype, {
 						!exclude_field_types.includes(d.fieldtype) &&
 						!exclude_fields.includes(d.fieldname) &&
 						!d.hidden &&
-						!d.read_only &&
+						(!d.read_only || allowed_fieldnames.includes(d.fieldname)) &&
 						(!allowed_fieldnames.length || allowed_fieldnames.includes(d.fieldname))
 					) {
 						allowed_fields.push({
@@ -414,7 +414,7 @@ var get_transfer_property_card_config = function (field) {
 		designation: __("部门不变，仅调整员工岗位"),
 		grade: __("调整员工职级"),
 		reports_to: __("调整直属上级"),
-		employment_type: __("调整全职、实习、外包等工作性质"),
+		employment_type: __("调整工作性质（实习、试用、全职、外包、返聘）"),
 		custom_direct_indirect: __("调整直接或间接人员属性"),
 		custom_is_confirmed: __("调整员工转正状态"),
 	};
@@ -711,8 +711,8 @@ var render_transfer_property_control = function (frm, table, row, $panel, can_ed
 		parent: $field.find(".hrms-transfer-property-target"),
 		df: {
 			fieldname: `target_${row.name}`,
-			fieldtype: employee_field.fieldtype,
-			options: employee_field.options || "",
+			fieldtype: row.fieldname === "employment_type" ? "Select" : employee_field.fieldtype,
+			options: row.fieldname === "employment_type" ? TRANSFER_WORK_NATURE_OPTIONS.join("\n") : employee_field.options || "",
 			label: __("变更后"),
 			reqd: 1,
 			change: handle_change,

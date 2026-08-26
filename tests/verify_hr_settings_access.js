@@ -60,13 +60,12 @@ for (const marker of [
 
 for (const marker of [
 	'frappe.pages["hrms-developer-center"]',
-	'case "models": route("hrms-model-center")',
-	'frappe.set_route("List", "Page")',
-	'route("hrms-access-center")',
+	'openSettings("字段管理中心")',
+	'create_employment_type_from_developer_center',
 	"get_hrms_developer_configuration_map",
-	"可配置业务逻辑地图",
-	"./scripts/hrms-local.sh migrate",
-	"业务配置与受控开发通道",
+	"字段字典与引用范围",
+	"基础字典：可新增的业务取值",
+	"面向业务管理员的开发中心",
 ]) {
 	assert(developerPageJs.includes(marker), `Developer center missing controlled tooling: ${marker}`);
 }

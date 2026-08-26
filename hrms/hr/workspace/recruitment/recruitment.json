@@ -6,7 +6,7 @@
    "label": "Department Wise Openings"
   }
  ],
- "content": "[{\"id\":\"5vtWWuFVl5\",\"type\":\"chart\",\"data\":{\"chart_name\":\"Department Wise Openings\",\"col\":12}},{\"id\":\"ZEoAw35RfK\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"B0A1wqOP8R\",\"type\":\"quick_list\",\"data\":{\"quick_list_name\":\"Interviews (This Week)\",\"col\":6}},{\"id\":\"BSfCSxeOZN\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"ouzRaGAJJl\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Masters &amp; Reports</b></span>\",\"col\":12}},{\"id\":\"0akZyj1E4k\",\"type\":\"card\",\"data\":{\"card_name\":\"Jobs\",\"col\":4}},{\"id\":\"3Q-ITUYR-W\",\"type\":\"card\",\"data\":{\"card_name\":\"Interviews\",\"col\":4}},{\"id\":\"06gIuB5svR\",\"type\":\"card\",\"data\":{\"card_name\":\"Appointment\",\"col\":4}},{\"id\":\"Q4msp7F8vF\",\"type\":\"card\",\"data\":{\"card_name\":\"Reports\",\"col\":4}}]",
+ "content": "[{\"id\":\"5vtWWuFVl5\",\"type\":\"chart\",\"data\":{\"chart_name\":\"Department Wise Openings\",\"col\":8}},{\"id\":\"B0A1wqOP8R\",\"type\":\"quick_list\",\"data\":{\"quick_list_name\":\"Interviews (This Week)\",\"col\":4}},{\"id\":\"ouzRaGAJJl\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Masters &amp; Reports</b></span>\",\"col\":12}},{\"id\":\"0akZyj1E4k\",\"type\":\"card\",\"data\":{\"card_name\":\"Jobs\",\"col\":3}},{\"id\":\"3Q-ITUYR-W\",\"type\":\"card\",\"data\":{\"card_name\":\"Interviews\",\"col\":3}},{\"id\":\"06gIuB5svR\",\"type\":\"card\",\"data\":{\"card_name\":\"Appointment\",\"col\":3}},{\"id\":\"Q4msp7F8vF\",\"type\":\"card\",\"data\":{\"card_name\":\"Reports\",\"col\":3}}]",
  "creation": "2022-08-20 13:28:59.962164",
  "custom_blocks": [],
  "docstatus": 0,

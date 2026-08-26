@@ -26,6 +26,8 @@ class TestHRMSDataCleanupLog(UnitTestCase):
 
 	def tearDown(self):
 		for doctype in (
+			"HRMS Attendance Processing Record",
+			"HRMS Attendance Import Batch",
 			"HRMS Business Process Record",
 			"HRMS Form Import Row",
 			"HRMS Form Import Batch",
@@ -107,3 +109,39 @@ class TestHRMSDataCleanupLog(UnitTestCase):
 				confirm=preview["confirmation_text"],
 				plan_token=preview["plan_token"],
 			)
+
+	def test_attendance_cleanup_removes_processing_records_before_import_batches(self):
+		batch = frappe.get_doc(
+			{
+				"doctype": "HRMS Attendance Import Batch",
+				"company": self.company,
+				"attendance_month": "2026-08",
+				"source_file": "/files/cleanup-attendance-test.xlsx",
+				"status": "待处理",
+			}
+		).insert(ignore_permissions=True)
+		record = frappe.get_doc(
+			{
+				"doctype": "HRMS Attendance Processing Record",
+				"company": self.company,
+				"attendance_month": "2026-08",
+				"import_batch": batch.name,
+				"source_type": "attendance_draft",
+				"employee_code": "CLEANUP-TEST",
+				"employee_name": "Cleanup Test",
+				"review_status": "待审核",
+			}
+		).insert(ignore_permissions=True)
+
+		preview = preview_company_data_cleanup(self.company, ["attendance"])
+		self.assertEqual(preview["count"], 2)
+
+		execute_company_data_cleanup(
+			self.company,
+			["attendance"],
+			confirm=preview["confirmation_text"],
+			plan_token=preview["plan_token"],
+		)
+
+		self.assertFalse(frappe.db.exists("HRMS Attendance Processing Record", record.name))
+		self.assertFalse(frappe.db.exists("HRMS Attendance Import Batch", batch.name))

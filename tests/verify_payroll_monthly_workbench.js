@@ -39,21 +39,35 @@ if (page.includes("primary_tabs") || page.includes("hrms-payroll-input-tabs")) {
 }
 
 const monthlyWorkbench = page.slice(page.indexOf("\tload_monthly_workbench() {"), page.indexOf("\n\trender_project_map_items() {"));
-for (const marker of ["data-workbench-cards", "data-workbench-runbook", "data-workbench-action", "hrms-payroll-runbook-head"]) {
-	if (monthlyWorkbench.includes(marker)) throw new Error(`Monthly calculation view must only render its table: ${marker}`);
+for (const marker of [
+	"data-payroll-dashboard-content",
+	"get_payroll_home_dashboard",
+	"render_payroll_home_dashboard",
+	"薪资成本构成",
+	"部门成本占比",
+	"暂无上月结算数据",
+]) {
+	mustInclude(monthlyWorkbench, marker);
 }
 
 const api = read("hrms/api/payroll_input.py");
 for (const marker of [
 	"def get_payroll_month_runbook(company: str, payroll_month: str, attendance_lock_version: str):",
+	"def get_payroll_home_dashboard(company: str, payroll_month: str = \"\", attendance_lock_version: str = \"\"):",
+	"def _previous_payroll_month(payroll_month):",
+	'"previous_summary": previous',
+	'"composition": composition',
+	'"departments": departments',
 	"def confirm_payroll_settlement_records(company: str, payroll_month: str, attendance_lock_version: str):",
 	'"readiness_areas": readiness_areas',
 	'readiness_area("master", "人员范围"',
 	'readiness_area("sources", "月度增减项"',
 	"_attendance_scope_filters(company, payroll_month, attendance_lock_version)",
-	"status\": \"已批准\"",
-	"无法生成薪资输入表：以下员工缺少本月有效且已批准的薪资异动",
-	"无法试算：以下员工缺少本月有效且已批准的薪资异动",
+	"status\": [\"!=\", \"已作废\"]",
+	"无法生成薪资输入表：以下员工缺少本月有效定薪",
+	"无法试算：以下员工缺少本月有效定薪",
+	"_employee_population_labels",
+	"包含不在锁定考勤终稿中的员工",
 	"薪资确认前，锁定考勤、薪资输入表和薪资结算表人数必须一致",
 	"仍有 {0} 条福利/扣款来源待确认，不能确认薪资结算",
 ]) {

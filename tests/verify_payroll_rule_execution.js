@@ -30,8 +30,17 @@ for (const marker of [
 	'"calculation_rules": calculation_rules',
 	"attendance_full_deduction",
 	"def save_attendance_pay_rule",
+	"deep_night_shift_start",
+	"_apply_attendance_rule_parameters",
+	"def _attendance_rule_formula_overrides",
+	"full_salary_hourly_rate",
+	"weekday_overtime_pay",
+	"full_attendance_deduction",
+	"attendance_processing_center._final_calculation(row)",
 	"large_night_shift_start",
-	"大夜班结束时间应为次日时间",
+	"small_night_shift_start",
+	"_night_shift_ranges_overlap",
+	"_locked_night_shift_matches",
 ]) {
 	requireMarker(api, marker);
 }
@@ -46,8 +55,8 @@ for (const marker of [
 	"计算公式",
 	"公式已保存并进入下一次试算",
 	"data-attendance-rule-editor-area",
-	"大夜班每次津贴",
-	"大夜班上班时间",
+	"深夜班每次津贴",
+	"深夜班上班时间",
 ]) {
 	requireMarker(page, marker);
 }

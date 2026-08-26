@@ -44,6 +44,8 @@
   "attendance_settings_section",
   "allow_employee_checkin_from_mobile_app",
   "allow_geolocation_tracking",
+  "attendance_final_excel_section",
+  "attendance_final_excel_fields",
   "tenure_tab",
   "employee_exit_settings_section",
   "exit_questionnaire_web_form",
@@ -298,6 +300,19 @@
    "fieldname": "attendance_settings_section",
    "fieldtype": "Section Break",
    "label": "Attendance Settings"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "attendance_final_excel_section",
+   "fieldtype": "Section Break",
+   "label": "考勤终稿 Excel 配置"
+  },
+  {
+   "description": "每行绑定一个内置终稿字段。可修改 Excel 一级/二级表头；同一组字段使用相同一级表头即可自动合并。关闭一行会恢复该字段默认表头，不会删除计算列。保存后从下一次生成的终稿生效。",
+   "fieldname": "attendance_final_excel_fields",
+   "fieldtype": "Table",
+   "label": "终稿 Excel 表头字段",
+   "options": "HRMS Attendance Final Excel Field"
   },
   {
    "default": "0",

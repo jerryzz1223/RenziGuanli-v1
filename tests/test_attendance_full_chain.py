@@ -22,7 +22,10 @@ import unittest
 from copy import deepcopy
 from pathlib import Path
 
-from openpyxl import load_workbook
+try:
+	from openpyxl import load_workbook
+except ModuleNotFoundError:
+	load_workbook = None
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -132,6 +135,7 @@ def _monthly_support_precheck(workbook_path: Path, required_headers: tuple[str, 
 	return {"is_valid": bool(matches) and sum(item["record_count"] for item in matches) > 0, "matches": matches, "record_count": sum(item["record_count"] for item in matches)}
 
 
+@unittest.skipUnless(load_workbook is not None, "openpyxl is unavailable")
 class AttendanceFullChainAcceptanceTest(unittest.TestCase):
 	@classmethod
 	def setUpClass(cls):

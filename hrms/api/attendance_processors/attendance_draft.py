@@ -37,8 +37,15 @@ NUMERIC_FIELDS = {
 	"work_injury_hours": ("工伤(小时)",),
 	"rest_arrangement_hours": ("排休(小时)",),
 	"absence_hours": ("旷工(小时)",),
-	"clock_in_missing_count": ("上班未打卡次数",),
-	"clock_out_missing_count": ("下班未打卡次数",),
+	# This unitless source marker is evidence for review, never payroll hours.
+	"absence_marker_count": ("旷工", "旷工_2"),
+	# Different DingTalk reports express the same fact either as a count or as
+	# a per-day "缺卡" marker.  Both are source facts; neither is inferred from
+	# a blank clock-time cell.
+	"clock_in_missing_count": ("上班未打卡次数", "上班缺卡"),
+	"clock_out_missing_count": ("下班未打卡次数", "下班缺卡"),
+	"late_count": ("迟到次数",),
+	"early_count": ("早退次数",),
 }
 
 IDENTITY_FIELDS = {
@@ -62,9 +69,11 @@ EXCEPTION_MESSAGES = {
 	"EMPLOYEE_NOT_FOUND": "员工工号未匹配到员工目录。",
 	"EMPLOYEE_NAME_AMBIGUOUS": "姓名匹配到多个员工工号。",
 	"INVALID_NUMERIC_VALUE": "工时或次数字段不是有效数字。",
-	"SHIFT_MISSING": "班次为空，需要确认是否为入职前、离职后或人工补录记录。",
 	"CLOCK_IN_MISSING": "钉钉明确存在上班未打卡记录。",
 	"CLOCK_OUT_MISSING": "钉钉明确存在下班未打卡记录。",
+	"LATE_MARKED": "钉钉明确标记迟到，需要核对请假或主管说明。",
+	"EARLY_MARKED": "钉钉明确标记早退，需要核对请假或主管说明。",
+	"ABSENCE_MARKED": "钉钉明确标记旷工；来源未提供小时数，须人工核验后才能影响薪资。",
 	"SOURCE_FILE_MISSING": "来源文件定位为空。",
 	"SOURCE_SHEET_MISSING": "来源工作表定位为空。",
 	"SOURCE_ROW_MISSING": "来源行号为空。",
@@ -74,29 +83,64 @@ EXCEPTION_MESSAGES = {
 REQUIRED_FIELDS = ("employee_code", "employee_name", "attendance_date")
 _MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 _DATE_RE = re.compile(r"^(?:(\d{4})|(?:\d{2}))(?:-|/)(\d{1,2})(?:-|/)(\d{1,2})")
-_TIME_RE = re.compile(r"(?:^|\s)([01]?\d|2[0-3]):([0-5]\d)")
+
+# These switches are intentionally limited to reviewed, built-in detectors.
+# Human-readable custom rules can enable or disable one of these detectors, but
+# no user-entered formula is executed against attendance or payroll data.
+DEFAULT_EXCEPTION_POLICY = {
+	"missing_punch": True,
+	"late": True,
+	"early": True,
+	"absence_marker": True,
+}
+
+# These fields are persisted for every daily source row.  Keeping the mapping
+# here lets current and historic batches use the same date-level explanation,
+# even when an older batch was created before ``exception_lines`` was stored.
+ATTENDANCE_DETAIL_EXCEPTION_FIELDS = (
+	("CLOCK_IN_MISSING", "clock_in_missing"),
+	("CLOCK_OUT_MISSING", "clock_out_missing"),
+	("LATE_MARKED", "late_count"),
+	("EARLY_MARKED", "early_count"),
+	("ABSENCE_MARKED", "absence_marker_count"),
+)
 
 
-def _time_minutes(value: Any) -> int | None:
-	match = _TIME_RE.search(_text(value))
-	if not match:
-		return None
-	return int(match.group(1)) * 60 + int(match.group(2))
-
-
-def _matches_large_night_shift(row: Mapping[str, Any], rule: Mapping[str, Any] | None) -> bool:
-	"""Match one overnight shift from the configured start/end time.
-
-	A row is counted only when both clock times are available, so an incomplete
-	DingTalk record never overwrites the manually supplied night-shift count.
-	"""
-	start = _time_minutes((rule or {}).get("large_night_shift_start"))
-	end = _time_minutes((rule or {}).get("large_night_shift_end"))
-	clock_in = _time_minutes(_value(row, ("上班时间", "上班打卡", "上班打卡时间", "clock_in")))
-	clock_out = _time_minutes(_value(row, ("下班时间", "下班打卡", "下班打卡时间", "clock_out")))
-	if start is None or end is None or clock_in is None or clock_out is None or start <= end:
+def _is_positive_exception_marker(value: Any) -> bool:
+	if value in (None, "", False):
 		return False
-	return clock_in >= start and clock_out <= end
+	if value is True:
+		return True
+	try:
+		return Decimal(str(value)) > 0
+	except (InvalidOperation, TypeError, ValueError):
+		return str(value).strip().lower() not in {"0", "否", "false", "no"}
+
+
+def exception_lines_from_attendance_details(attendance_details: Iterable[Mapping[str, Any]], exception_codes: Iterable[str]) -> list[dict[str, Any]]:
+	"""Return only the daily rows that actually triggered an attendance alert.
+
+	``attendance_details`` intentionally retains a whole month for audit and
+	processing results.  It must never be used as the exception-date list: a
+	person with one early leave would otherwise appear to have an issue on every
+	day of the month.  This helper also repairs the display payload for historic
+	batches that predate the persisted ``exception_lines`` field.
+	"""
+	active_codes = set(exception_codes or ())
+	if not active_codes:
+		return []
+	lines = []
+	for detail in attendance_details or ():
+		if not isinstance(detail, Mapping):
+			continue
+		line_codes = [
+			code
+			for code, fieldname in ATTENDANCE_DETAIL_EXCEPTION_FIELDS
+			if code in active_codes and _is_positive_exception_marker(detail.get(fieldname))
+		]
+		if line_codes:
+			lines.append({**dict(detail), "exception_codes": line_codes})
+	return lines
 
 
 def precheck_attendance_draft_structure(headers: Sequence[Any]) -> dict[str, Any]:
@@ -123,28 +167,71 @@ def precheck_attendance_draft_structure(headers: Sequence[Any]) -> dict[str, Any
 def flatten_dingtalk_headers(top_row: Sequence[Any], second_row: Sequence[Any]) -> list[str]:
 	"""Flatten the two header rows used by ``每日明细（钉钉导出）``."""
 	headers = []
+	seen: Counter[str] = Counter()
 	for top, second in zip(top_row, second_row):
 		parent, child = _text(top), _text(second)
 		if parent == "请假" and child:
-			headers.append(f"请假/{child}")
+			header = f"请假/{child}"
 		elif parent and child and parent != child:
-			headers.append(f"{parent}/{child}")
+			header = f"{parent}/{child}"
 		else:
-			headers.append(parent or child)
+			header = parent or child
+		if header:
+			seen[header] += 1
+			headers.append(header if seen[header] == 1 else f"{header}_{seen[header]}")
+		else:
+			headers.append("")
 	return headers
+
+
+def dingtalk_daily_header_location(sheet: Any, *, max_header_row: int = 12) -> dict[str, Any] | None:
+	"""Locate a DingTalk daily-attendance table by its headers, not its sheet name.
+
+	DingTalk exports vary by tenant and report type.  Some put the two-row table
+	header at rows 1--2 (``每日明细``), while the ``每日统计`` export places a
+	report title and generation time above the same table at rows 3--4.  A
+	workbook is accepted only when the required identity fields can be mapped.
+	"""
+	rows = sheet.iter_rows(min_row=1, max_row=max_header_row, values_only=True)
+	preview = list(rows)
+	for index in range(len(preview) - 1):
+		headers = flatten_dingtalk_headers(preview[index], preview[index + 1])
+		structure = precheck_attendance_draft_structure(headers)
+		if structure["is_valid"]:
+			return {
+				"header_row": index + 1,
+				"data_start_row": index + 3,
+				"headers": headers,
+				"structure": structure,
+			}
+	return None
+
+
+def find_dingtalk_daily_sheet(workbook: Any) -> Any | None:
+	"""Return the most likely daily-attendance sheet using its table structure.
+
+	The name is only a tie-breaker.  This keeps exports such as ``每日统计``
+	compatible without allowing an unrelated worksheet to pass the check.
+	"""
+	candidates = []
+	for position, sheet in enumerate(workbook.worksheets):
+		location = dingtalk_daily_header_location(sheet)
+		if not location:
+			continue
+		title = _text(sheet.title)
+		name_priority = 2 if title in {"每日明细（钉钉导出）", "每日明细"} else 1 if "每日" in title else 0
+		candidates.append((name_priority, -position, sheet))
+	return max(candidates, default=(0, 0, None))[2]
 
 
 def rows_from_dingtalk_daily_sheet(sheet: Any, *, source_file: str = "") -> list[dict[str, Any]]:
 	"""Read an openpyxl worksheet without depending on Frappe."""
-	values = sheet.iter_rows(values_only=True)
-	try:
-		top_row = next(values)
-		second_row = next(values)
-	except StopIteration:
+	location = dingtalk_daily_header_location(sheet)
+	if not location:
 		return []
-	headers = flatten_dingtalk_headers(top_row, second_row)
+	headers = location["headers"]
 	rows = []
-	for source_row, values_row in enumerate(values, start=3):
+	for source_row, values_row in enumerate(sheet.iter_rows(min_row=location["data_start_row"], values_only=True), start=location["data_start_row"]):
 		if not any(value not in (None, "") for value in values_row):
 			continue
 		row = {header: values_row[index] if index < len(values_row) else None for index, header in enumerate(headers) if header}
@@ -160,7 +247,7 @@ def process_attendance_draft_rows(
 	source_file: str = "",
 	source_sheet: str = "每日明细（钉钉导出）",
 	employee_directory: Iterable[Mapping[str, Any]] | None = None,
-	night_shift_rule: Mapping[str, Any] | None = None,
+	exception_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
 	"""Aggregate a DingTalk daily-detail export into one employee dataset."""
 	if not _MONTH_RE.fullmatch(_text(attendance_month)):
@@ -168,6 +255,7 @@ def process_attendance_draft_rows(
 	input_rows = [dict(row) for row in raw_rows]
 	structure = precheck_attendance_draft_structure(_ordered_headers(input_rows))
 	employee_index = _build_employee_index(employee_directory)
+	policy = {**DEFAULT_EXCEPTION_POLICY, **{key: bool(value) for key, value in (exception_policy or {}).items() if key in DEFAULT_EXCEPTION_POLICY}}
 	date_counts = Counter()
 	for row in input_rows:
 		code = _value(row, IDENTITY_FIELDS["employee_code"])
@@ -182,8 +270,11 @@ def process_attendance_draft_rows(
 			groups[code].append(row)
 		else:
 			missing_code_rows.append(row)
-	for index, row in enumerate(missing_code_rows, start=1):
-		groups[f"__missing__{index}"].append(row)
+	# Employee code is the import contract's primary key. DingTalk can also
+	# export shared location/device accounts in the 姓名 column. Those entries
+	# have a UserId but no employee code and must never become a fake employee
+	# exception once per calendar day. Keep their count for audit, but exclude
+	# them from employee aggregation and the employee exception queue.
 
 	processed_rows = [
 		_aggregate_employee_rows(
@@ -194,25 +285,37 @@ def process_attendance_draft_rows(
 			structure=structure,
 			employee_index=employee_index,
 			date_counts=date_counts,
-			night_shift_rule=night_shift_rule,
+			exception_policy=policy,
 		)
 		for _key, rows in sorted(groups.items(), key=lambda item: _group_sort_key(item[1]))
 	]
 	exception_rows = sum(1 for row in processed_rows if row["review_status"] == REVIEW_PENDING)
+	exception_events = sum(len(row.get("exception_events") or []) for row in processed_rows)
+	lifecycle_excluded_shift_rows = sum(len(row.get("data_quality_events") or []) for row in processed_rows)
 	return {
 		"status": "待处理异常" if exception_rows else "待确认",
 		"structure_precheck": structure,
 		"processed_rows": processed_rows,
+		"data_quality": {
+			"excluded_missing_employee_code_rows": len(missing_code_rows),
+			"excluded_missing_employee_code_accounts": _source_account_summaries(missing_code_rows),
+			"lifecycle_excluded_blank_shift_rows": lifecycle_excluded_shift_rows,
+			"notice": "工号为空的来源行不作为员工考勤处理；已保留为来源数据质量统计。",
+		},
 		"metrics": {
 			"source_rows": len(input_rows),
+			"eligible_employee_source_rows": len(input_rows) - len(missing_code_rows),
+			"excluded_missing_employee_code_rows": len(missing_code_rows),
+			"excluded_missing_employee_code_accounts": len(_source_account_summaries(missing_code_rows)),
 			"processed_rows": len(processed_rows),
 			"exception_rows": exception_rows,
+			"exception_events": exception_events,
 			"eligible_rows": sum(1 for row in processed_rows if row["eligible_for_downstream"]),
 		},
 	}
 
 
-def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_sheet, structure, employee_index, date_counts, night_shift_rule=None):
+def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_sheet, structure, employee_index, date_counts, exception_policy=None):
 	first = rows[0]
 	raw_code = _value(first, IDENTITY_FIELDS["employee_code"])
 	names = {_value(row, IDENTITY_FIELDS["employee_name"]) for row in rows if _value(row, IDENTITY_FIELDS["employee_name"])}
@@ -228,11 +331,12 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		_add_code(codes, "EMPLOYEE_DEPARTMENT_CONFLICT")
 	name = next(iter(names), "")
 	department = next(iter(departments), "")
-	resolved_code, resolved_name, resolved_department = _resolve_employee(raw_code, name, department, employee_index, codes)
+	resolved_code, resolved_name, resolved_department, employee = _resolve_employee(raw_code, name, department, employee_index, codes)
 	totals = {field: Decimal("0") for field in NUMERIC_FIELDS}
 	source_rows = []
 	attendance_details = []
-	matched_large_night_shifts = 0
+	exception_events = []
+	data_quality_events = []
 	for row in rows:
 		row_number = _source_row(row)
 		date_value = _value(row, IDENTITY_FIELDS["attendance_date"])
@@ -245,8 +349,15 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			_add_code(codes, "ATTENDANCE_MONTH_MISMATCH")
 		elif raw_code and date_counts[(raw_code, parsed_date)] > 1:
 			_add_code(codes, "ATTENDANCE_DATE_DUPLICATE")
-		if not _value(row, IDENTITY_FIELDS["shift"]):
-			_add_code(codes, "SHIFT_MISSING")
+		shift = _value(row, IDENTITY_FIELDS["shift"])
+		if not shift:
+			if _is_outside_employment_period(parsed_date, employee):
+				data_quality_events.append(_data_quality_event("BLANK_SHIFT_OUTSIDE_EMPLOYMENT", parsed_date, row_number))
+			else:
+				# A blank class is retained as an import-quality note.  It is not
+				# evidence of missing attendance or an instruction to recreate a
+				# DingTalk schedule in HRMS.
+				data_quality_events.append(_data_quality_event("BLANK_SHIFT_SOURCE", parsed_date, row_number))
 		if not _text(row.get("source_file") or source_file):
 			_add_code(codes, "SOURCE_FILE_MISSING")
 		if not _text(row.get("source_sheet") or source_sheet):
@@ -255,16 +366,17 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			_add_code(codes, "SOURCE_ROW_MISSING")
 		row_clock_in_missing = Decimal("0")
 		row_clock_out_missing = Decimal("0")
-		matched_large_night = _matches_large_night_shift(row, night_shift_rule)
+		row_late_count = Decimal("0")
+		row_early_count = Decimal("0")
+		row_absence_marker_count = Decimal("0")
+		row_absence_hours = Decimal("0")
 		for fieldname, aliases in NUMERIC_FIELDS.items():
-			# A configured time-window is more precise than a pre-filled total on
-			# the same daily row.  Rows without complete times retain the source total.
-			if fieldname == "large_night_shifts" and matched_large_night:
-				continue
 			value, exists = _field_value(row, aliases)
 			if not exists or _is_blank(value):
 				continue
-			number = _decimal(value)
+			number = _source_marker_number(value) if fieldname in {
+				"clock_in_missing_count", "clock_out_missing_count", "late_count", "early_count", "absence_marker_count",
+			} else _decimal(value)
 			if number is None:
 				_add_code(codes, "INVALID_NUMERIC_VALUE")
 				continue
@@ -273,9 +385,30 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 				row_clock_in_missing = number
 			elif fieldname == "clock_out_missing_count":
 				row_clock_out_missing = number
-		if matched_large_night:
-			totals["large_night_shifts"] += Decimal("1")
-			matched_large_night_shifts += 1
+			elif fieldname == "late_count":
+				row_late_count = number
+			elif fieldname == "early_count":
+				row_early_count = number
+			elif fieldname == "absence_marker_count":
+				row_absence_marker_count = number
+			elif fieldname == "absence_hours":
+				row_absence_hours = number
+		if exception_policy.get("missing_punch", True):
+			if row_clock_in_missing > 0:
+				_add_code(codes, "CLOCK_IN_MISSING")
+				exception_events.append(_exception_event("CLOCK_IN_MISSING", parsed_date, row_number, row_clock_in_missing))
+			if row_clock_out_missing > 0:
+				_add_code(codes, "CLOCK_OUT_MISSING")
+				exception_events.append(_exception_event("CLOCK_OUT_MISSING", parsed_date, row_number, row_clock_out_missing))
+		if exception_policy.get("late", True) and row_late_count > 0:
+			_add_code(codes, "LATE_MARKED")
+			exception_events.append(_exception_event("LATE_MARKED", parsed_date, row_number, row_late_count))
+		if exception_policy.get("early", True) and row_early_count > 0:
+			_add_code(codes, "EARLY_MARKED")
+			exception_events.append(_exception_event("EARLY_MARKED", parsed_date, row_number, row_early_count))
+		if exception_policy.get("absence_marker", True) and row_absence_marker_count > 0:
+			_add_code(codes, "ABSENCE_MARKED")
+			exception_events.append(_exception_event("ABSENCE_MARKED", parsed_date, row_number, row_absence_marker_count))
 		source_rows.append({
 			"source_file": _text(row.get("source_file") or source_file),
 			"source_sheet": _text(row.get("source_sheet") or source_sheet),
@@ -289,23 +422,29 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			"clock_out": _text(_value(row, ("下班时间", "下班打卡", "下班打卡时间", "clock_out"))),
 			"clock_in_missing": _display_number(row_clock_in_missing),
 			"clock_out_missing": _display_number(row_clock_out_missing),
+			"late_count": _display_number(row_late_count),
+			"early_count": _display_number(row_early_count),
+			"absence_marker_count": _display_number(row_absence_marker_count),
+			"absence_hours": _display_number(row_absence_hours),
 			"source_row": row_number,
 		})
-	if totals["clock_in_missing_count"] > 0:
-		_add_code(codes, "CLOCK_IN_MISSING")
-	if totals["clock_out_missing_count"] > 0:
-		_add_code(codes, "CLOCK_OUT_MISSING")
+	# The review screen remains employee-centred, but a reviewer needs to see
+	# precisely which original daily rows caused the review.  These lines are a
+	# display/audit projection only; all their values come directly from DingTalk.
+	exception_lines = exception_lines_from_attendance_details(attendance_details, codes)
 	proposed = {
 		"employee_code": resolved_code or raw_code,
 		"employee_name": resolved_name or name,
 		"department": resolved_department or department,
 		**{field: _display_number(value) for field, value in totals.items()},
 		"night_shift_matching": {
-			"large_night_shift_start": _text((night_shift_rule or {}).get("large_night_shift_start")),
-			"large_night_shift_end": _text((night_shift_rule or {}).get("large_night_shift_end")),
-			"matched_large_night_shifts": matched_large_night_shifts,
+			"mode": "source_only",
+			"matched_large_night_shifts": 0,
 		},
 		"attendance_details": attendance_details,
+		"exception_lines": exception_lines,
+		"exception_events": exception_events,
+		"data_quality_events": data_quality_events,
 		"source_row_count": len(rows),
 	}
 	review_status = REVIEW_PENDING if codes else REVIEW_NOT_REQUIRED
@@ -318,6 +457,8 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		"proposed_value": proposed,
 		"confirmed_value": None,
 		"original_value": {"rows": deepcopy(rows), "source_rows": source_rows},
+		"exception_events": exception_events,
+		"data_quality_events": data_quality_events,
 		"exception_codes": codes,
 		"exception_message": "；".join(EXCEPTION_MESSAGES[code] for code in codes),
 		"review_status": review_status,
@@ -345,7 +486,13 @@ def _build_employee_index(employee_directory):
 		department = normalize_department_name(_value(raw, ("department", "部门")))
 		if not code:
 			continue
-		employee = {"employee_code": code, "employee_name": name, "department": department}
+		employee = {
+			"employee_code": code,
+			"employee_name": name,
+			"department": department,
+			"date_of_joining": raw.get("date_of_joining"),
+			"relieving_date": raw.get("relieving_date"),
+		}
 		by_code[code] = employee
 		if name:
 			by_name[_name_key(name)].append(employee)
@@ -354,24 +501,59 @@ def _build_employee_index(employee_directory):
 
 def _resolve_employee(code, name, department, employee_index, codes):
 	if employee_index is None:
-		return code, name, department
+		return code, name, department, None
 	by_code, by_name = employee_index
 	if code:
 		employee = by_code.get(code)
 		if not employee:
 			_add_code(codes, "EMPLOYEE_NOT_FOUND")
-			return code, name, department
+			return code, name, department, None
 		if name and employee["employee_name"] and _name_key(name) != _name_key(employee["employee_name"]):
 			_add_code(codes, "EMPLOYEE_NAME_MISMATCH")
 		if department and employee["department"] and _department_key(department) != _department_key(employee["department"]):
 			_add_code(codes, "EMPLOYEE_DEPARTMENT_MISMATCH")
-		return employee["employee_code"], employee["employee_name"] or name, employee["department"] or department
+		return employee["employee_code"], employee["employee_name"] or name, employee["department"] or department, employee
 	if name:
 		matches = by_name.get(_name_key(name), [])
 		if len(matches) == 1:
-			return matches[0]["employee_code"], matches[0]["employee_name"], matches[0]["department"] or department
+			return matches[0]["employee_code"], matches[0]["employee_name"], matches[0]["department"] or department, matches[0]
 		_add_code(codes, "EMPLOYEE_NAME_AMBIGUOUS" if len(matches) > 1 else "EMPLOYEE_NOT_FOUND")
-	return code, name, department
+	return code, name, department, None
+
+
+def _date_only(value: Any) -> date | None:
+	if isinstance(value, datetime):
+		return value.date()
+	if isinstance(value, date):
+		return value
+	text = _text(value)
+	if not text:
+		return None
+	try:
+		return date.fromisoformat(text[:10])
+	except ValueError:
+		return None
+
+
+def _is_outside_employment_period(attendance_date: str, employee: Mapping[str, Any] | None) -> bool:
+	"""Suppress blank-shift reviews only when the roster proves the date is out of scope."""
+	day = _date_only(attendance_date)
+	if not day or not employee:
+		return False
+	joined_on = _date_only(employee.get("date_of_joining"))
+	relieved_on = _date_only(employee.get("relieving_date"))
+	return bool((joined_on and day < joined_on) or (relieved_on and day > relieved_on))
+
+
+def _exception_event(code: str, attendance_date: str, source_row: int | None, count: Decimal | None = None) -> dict[str, Any]:
+	event = {"code": code, "attendance_date": attendance_date or "", "source_row": source_row}
+	if count is not None:
+		event["count"] = _display_number(count)
+	return event
+
+
+def _data_quality_event(code: str, attendance_date: str, source_row: int | None) -> dict[str, Any]:
+	return {"code": code, "attendance_date": attendance_date or "", "source_row": source_row}
 
 
 def _ordered_headers(rows):
@@ -384,16 +566,44 @@ def _ordered_headers(rows):
 	return headers
 
 
+def _source_account_summaries(rows):
+	"""Summarise source-only accounts without promoting them to employees."""
+	accounts: dict[tuple[str, str, str], dict[str, Any]] = {}
+	for row in rows:
+		name = _value(row, IDENTITY_FIELDS["employee_name"])
+		user_id = _value(row, ("UserId", "user_id", "dingtalk_user_id"))
+		department = _value(row, IDENTITY_FIELDS["department"])
+		key = (user_id, name, department)
+		account = accounts.setdefault(
+			key,
+			{
+				"source_account_name": name or "未命名来源账号",
+				"source_user_id": user_id,
+				"source_department": department,
+				"row_count": 0,
+				"source_rows": [],
+			},
+		)
+		account["row_count"] += 1
+		if len(account["source_rows"]) < 3:
+			account["source_rows"].append(_source_row(row))
+	return sorted(accounts.values(), key=lambda item: (item["source_account_name"], item["source_user_id"]))
+
+
 def _group_sort_key(rows):
 	row = rows[0]
 	return (_value(row, IDENTITY_FIELDS["department"]), _value(row, IDENTITY_FIELDS["employee_code"]), _value(row, IDENTITY_FIELDS["employee_name"]))
 
 
 def _field_value(row, aliases):
+	first_present = None
 	for alias in aliases:
 		if alias in row:
-			return row[alias], True
-	return None, False
+			if first_present is None:
+				first_present = row[alias]
+			if not _is_blank(row[alias]):
+				return row[alias], True
+	return first_present, first_present is not None
 
 
 def _value(row, aliases):
@@ -436,6 +646,19 @@ def _decimal(value):
 	except (InvalidOperation, ValueError):
 		return None
 	return number if number.is_finite() else None
+
+
+def _source_marker_number(value):
+	"""Read DingTalk's count columns without treating a blank time as a marker."""
+	number = _decimal(value)
+	if number is not None:
+		return number
+	text = _text(value).strip().lower()
+	if text in {"是", "yes", "true", "y", "√", "缺卡"}:
+		return Decimal("1")
+	if text in {"否", "no", "false", "n", "×", "-"}:
+		return Decimal("0")
+	return None
 
 
 def _display_number(value):
@@ -481,6 +704,8 @@ def _add_code(codes, code):
 __all__ = [
 	"EXCEPTION_MESSAGES",
 	"NUMERIC_FIELDS",
+	"dingtalk_daily_header_location",
+	"find_dingtalk_daily_sheet",
 	"flatten_dingtalk_headers",
 	"precheck_attendance_draft_structure",
 	"process_attendance_draft_rows",

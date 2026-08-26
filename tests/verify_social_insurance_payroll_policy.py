@@ -19,7 +19,14 @@ assert "def _social_insurance_payroll_policy" in PAYROLL
 assert "This intentionally does not infer non-participation from\n\tprobation status." in PAYROLL
 assert "SOCIAL_INSURANCE_VARIABLE_TYPES" in PAYROLL
 assert '"social_insurance_policy": social_insurance_policy' in PAYROLL
-assert 'this.get_personnel_status_display(header.custom_personnel_status || "未设置")' in DETAIL
-assert 'field.fieldname === "custom_personnel_status"' in DETAIL
+assert 'this.get_employment_type_display(header)' in DETAIL
+assert 'field.fieldname === "employment_type"' in DETAIL
+assert "PAYROLL_WELFARE_SOURCE_DOCTYPE" in EMPLOYEE_FIELDS
+assert "PAYROLL_SOCIAL_INSURANCE_SOURCE_TYPES" in EMPLOYEE_FIELDS
+assert "_get_employee_payroll_social_insurance_items(doc)" in EMPLOYEE_FIELDS
+assert '"社保个人"' in EMPLOYEE_FIELDS
+assert "compact=True" in EMPLOYEE_FIELDS
+assert "if (row.compact)" in DETAIL
+assert 'tab_label === "工资社保" ? "" : this.render_add_field_hint()' in DETAIL
 
 print("social-insurance payroll policy verified")

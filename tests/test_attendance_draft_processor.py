@@ -7,6 +7,11 @@ import sys
 import unittest
 from pathlib import Path
 
+try:
+	from openpyxl import load_workbook
+except ModuleNotFoundError:
+	load_workbook = None
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROCESSOR_PATH = PROJECT_ROOT / "hrms" / "api" / "attendance_processors" / "attendance_draft.py"
@@ -24,7 +29,40 @@ def _processor():
 processor = _processor()
 
 
+class _FakeWorksheet:
+	def __init__(self, title, rows):
+		self.title = title
+		self._rows = rows
+
+	def iter_rows(self, min_row=1, max_row=None, values_only=False):
+		end = max_row or len(self._rows)
+		yield from self._rows[min_row - 1 : end]
+
+
+class _FakeWorkbook:
+	def __init__(self, sheets):
+		self.worksheets = sheets
+
+
 class AttendanceDraftProcessorContractTest(unittest.TestCase):
+	def test_daily_statistics_export_is_detected_by_headers_not_worksheet_name(self):
+		sheet = _FakeWorksheet("每日统计", [
+			("每日统计配置版 统计日期：2026-07-01 至 2026-07-31",),
+			("报表生成时间：2026-08-20 09:56",),
+			("姓名", "工号", "日期", "实际部门", "班次", "标准工时", "实际出勤（小时）", "请假"),
+			("", "", "", "", "", "", "", "事假(小时)"),
+			("张三", "E-001", "26-07-01 星期三", "工程课", "白班", 8, 8, 0),
+		])
+
+		location = processor.dingtalk_daily_header_location(sheet)
+		rows = processor.rows_from_dingtalk_daily_sheet(sheet, source_file="daily.xlsx")
+
+		self.assertEqual(location["header_row"], 3)
+		self.assertIs(processor.find_dingtalk_daily_sheet(_FakeWorkbook([sheet])), sheet)
+		self.assertEqual(rows[0]["source_row"], 5)
+		self.assertEqual(rows[0]["工号"], "E-001")
+		self.assertEqual(rows[0]["请假/事假(小时)"], 0)
+
 	def test_structure_and_single_employee_result_contract(self):
 		rows = [
 			{
@@ -71,6 +109,23 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(len(row["original_value"]["source_rows"]), 2)
 		self.assertEqual([item["attendance_date"] for item in row["processed_value"]["attendance_details"]], ["2026-06-01", "2026-06-02"])
 
+	def test_missing_employee_code_source_accounts_do_not_become_employee_exceptions(self):
+		rows = [
+			{"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课", "班次": "白班", "标准工时": 8, "source_row": 3},
+			{"姓名": "车间二楼放料", "工号": "", "UserId": "station-001", "日期": "26-06-01", "实际部门": "连续课", "班次": "未排班", "source_row": 4},
+			{"姓名": "车间二楼放料", "工号": "", "UserId": "station-001", "日期": "26-06-02", "实际部门": "连续课", "班次": "未排班", "source_row": 5},
+		]
+
+		result = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")
+
+		self.assertEqual(result["metrics"]["source_rows"], 3)
+		self.assertEqual(result["metrics"]["eligible_employee_source_rows"], 1)
+		self.assertEqual(result["metrics"]["excluded_missing_employee_code_rows"], 2)
+		self.assertEqual(result["metrics"]["excluded_missing_employee_code_accounts"], 1)
+		self.assertEqual(result["metrics"]["processed_rows"], 1)
+		self.assertEqual(result["processed_rows"][0]["employee_name"], "张三")
+		self.assertEqual(result["data_quality"]["excluded_missing_employee_code_accounts"][0]["source_account_name"], "车间二楼放料")
+
 	def test_duplicate_dates_and_identity_conflicts_enter_review_without_loss(self):
 		rows = [
 			{"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课", "班次": "白班", "标准工时": 8, "source_file": "a.xlsx", "source_sheet": "每日明细（钉钉导出）", "source_row": 3},
@@ -83,7 +138,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		row = result["processed_rows"][0]
 		self.assertEqual(row["review_status"], "待审核")
 		self.assertFalse(row["eligible_for_downstream"])
-		self.assertTrue({"ATTENDANCE_DATE_DUPLICATE", "EMPLOYEE_CODE_NAME_CONFLICT", "EMPLOYEE_DEPARTMENT_CONFLICT", "SHIFT_MISSING", "INVALID_NUMERIC_VALUE"}.issubset(row["exception_codes"]))
+		self.assertTrue({"ATTENDANCE_DATE_DUPLICATE", "EMPLOYEE_CODE_NAME_CONFLICT", "EMPLOYEE_DEPARTMENT_CONFLICT", "INVALID_NUMERIC_VALUE"}.issubset(row["exception_codes"]))
 
 	def test_explicit_dingtalk_missing_punch_counts_enter_the_shared_review_queue(self):
 		rows = [{
@@ -98,9 +153,76 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertTrue({"CLOCK_IN_MISSING", "CLOCK_OUT_MISSING"}.issubset(row["exception_codes"]))
 		self.assertEqual(row["review_status"], "待审核")
 		self.assertFalse(row["eligible_for_downstream"])
-		self.assertEqual(row["processed_value"]["attendance_details"], [{"attendance_date": "2026-06-01", "shift": "白班", "clock_in": "08:01", "clock_out": "17:30", "clock_in_missing": 1, "clock_out_missing": 2, "source_row": 3}])
+		self.assertEqual(row["processed_value"]["attendance_details"], [{
+			"attendance_date": "2026-06-01", "shift": "白班", "clock_in": "08:01", "clock_out": "17:30",
+			"clock_in_missing": 1, "clock_out_missing": 2, "late_count": 0, "early_count": 0,
+			"absence_marker_count": 0, "absence_hours": 0, "source_row": 3,
+		}])
 
-	def test_large_night_shift_uses_configured_cross_day_time_window(self):
+	def test_daily_statistics_missing_card_markers_are_source_facts(self):
+		rows = [{
+			"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课", "班次": "夜班",
+			"上班缺卡": "是", "下班缺卡": 1, "source_row": 5,
+		}]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")["processed_rows"][0]
+
+		self.assertEqual(row["processed_value"]["clock_in_missing_count"], 1)
+		self.assertEqual(row["processed_value"]["clock_out_missing_count"], 1)
+		self.assertEqual(row["processed_value"]["exception_lines"], [{
+			"attendance_date": "2026-06-01", "shift": "夜班", "clock_in": "", "clock_out": "",
+			"clock_in_missing": 1, "clock_out_missing": 1, "late_count": 0, "early_count": 0,
+			"absence_marker_count": 0, "absence_hours": 0, "source_row": 5,
+			"exception_codes": ["CLOCK_IN_MISSING", "CLOCK_OUT_MISSING"],
+		}])
+
+	def test_daily_late_early_and_unitless_absence_markers_are_review_events_not_payroll_hours(self):
+		rows = [
+			{"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课", "班次": "白班", "迟到次数": 1, "旷工": 1, "source_row": 3},
+			{"姓名": "张三", "工号": "E-001", "日期": "26-06-02", "实际部门": "工程课", "班次": "白班", "早退次数": 1, "source_row": 4},
+		]
+		result = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")
+		row = result["processed_rows"][0]
+
+		self.assertEqual(row["processed_value"]["late_count"], 1)
+		self.assertEqual(row["processed_value"]["early_count"], 1)
+		self.assertEqual(row["processed_value"]["absence_marker_count"], 1)
+		self.assertEqual(row["processed_value"]["absence_hours"], 0)
+		self.assertTrue({"LATE_MARKED", "EARLY_MARKED", "ABSENCE_MARKED"}.issubset(row["exception_codes"]))
+		self.assertEqual(result["metrics"]["exception_events"], 3)
+		self.assertEqual([event["attendance_date"] for event in row["exception_events"]], ["2026-06-01", "2026-06-01", "2026-06-02"])
+
+	def test_historic_attendance_details_restore_only_actual_exception_dates(self):
+		lines = processor.exception_lines_from_attendance_details([
+			{"attendance_date": "2026-06-01", "early_count": 0, "clock_in_missing": 0, "clock_out_missing": 0, "late_count": 0, "absence_marker_count": 0, "source_row": 3},
+			{"attendance_date": "2026-06-02", "early_count": 1, "clock_in_missing": 0, "clock_out_missing": 0, "late_count": 0, "absence_marker_count": 0, "source_row": 4},
+			{"attendance_date": "2026-06-03", "early_count": 0, "clock_in_missing": 0, "clock_out_missing": 1, "late_count": 0, "absence_marker_count": 0, "source_row": 5},
+		], ["EARLY_MARKED", "CLOCK_OUT_MISSING"])
+
+		self.assertEqual([(line["attendance_date"], line["exception_codes"]) for line in lines], [
+			("2026-06-02", ["EARLY_MARKED"]),
+			("2026-06-03", ["CLOCK_OUT_MISSING"]),
+		])
+
+	def test_blank_shift_outside_known_employment_period_is_data_quality_only(self):
+		rows = [
+			{"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课", "班次": "", "source_row": 3},
+			{"姓名": "张三", "工号": "E-001", "日期": "26-06-11", "实际部门": "工程课", "班次": "", "source_row": 4},
+			{"姓名": "张三", "工号": "E-001", "日期": "26-06-21", "实际部门": "工程课", "班次": "", "source_row": 5},
+		]
+		roster = [{"employee_code": "E-001", "employee_name": "张三", "department": "工程课", "date_of_joining": "2026-06-10", "relieving_date": "2026-06-20"}]
+		result = processor.process_attendance_draft_rows(rows, attendance_month="2026-06", employee_directory=roster, source_file="sample.xlsx", source_sheet="每日统计")
+		row = result["processed_rows"][0]
+
+		self.assertEqual(row["exception_codes"], [])
+		self.assertEqual(row["exception_events"], [])
+		self.assertEqual([event["attendance_date"] for event in row["data_quality_events"]], ["2026-06-01", "2026-06-11", "2026-06-21"])
+		self.assertEqual(result["data_quality"]["lifecycle_excluded_blank_shift_rows"], 3)
+
+	def test_duplicate_dingtalk_headers_do_not_overwrite_the_first_column(self):
+		headers = processor.flatten_dingtalk_headers(("姓名", "旷工", "旷工"), ("", "", ""))
+		self.assertEqual(headers, ["姓名", "旷工", "旷工_2"])
+
+	def test_large_night_shift_uses_only_the_dingtalk_export_value(self):
 		rows = [
 			{
 				"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课", "班次": "夜班", "标准工时": 8,
@@ -113,17 +235,11 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 				"source_file": "sample.xlsx", "source_sheet": "每日明细（钉钉导出）", "source_row": 4,
 			},
 		]
-		row = processor.process_attendance_draft_rows(
-			rows,
-			attendance_month="2026-06",
-			night_shift_rule={"large_night_shift_start": "20:00", "large_night_shift_end": "08:00"},
-		)["processed_rows"][0]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")["processed_rows"][0]
 
-		# The complete DingTalk record is matched as one large night shift instead
-		# of trusting its wrong source total.  The incomplete record keeps its
-		# already confirmed source count.
-		self.assertEqual(row["processed_value"]["large_night_shifts"], 2)
-		self.assertEqual(row["processed_value"]["night_shift_matching"]["matched_large_night_shifts"], 1)
+		# HRMS does not use clock times or a local rule to replace DingTalk's count.
+		self.assertEqual(row["processed_value"]["large_night_shifts"], 10)
+		self.assertEqual(row["processed_value"]["night_shift_matching"]["mode"], "source_only")
 
 	def test_department_group_and_section_suffixes_are_the_same_department(self):
 		rows = [{
@@ -149,10 +265,9 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(row["department"], "工程课")
 		self.assertEqual(row["processed_value"]["department"], "工程课")
 
+	@unittest.skipUnless(load_workbook is not None, "openpyxl is unavailable")
 	@unittest.skipUnless(REAL_WORKBOOK.exists(), "Local real DingTalk sample is unavailable")
 	def test_real_dingtalk_sample_has_5820_source_rows_and_194_employee_results(self):
-		from openpyxl import load_workbook
-
 		book = load_workbook(REAL_WORKBOOK, data_only=True, read_only=True)
 		rows = processor.rows_from_dingtalk_daily_sheet(book["每日明细（钉钉导出）"], source_file=str(REAL_WORKBOOK))
 		result = processor.process_attendance_draft_rows(rows, attendance_month="2026-06", source_file=str(REAL_WORKBOOK))

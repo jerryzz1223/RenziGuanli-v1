@@ -32,6 +32,10 @@ DATA_CLEANUP_MODULES = OrderedDict(
 					"HRMS Attendance Lock Audit",
 					"HRMS Attendance Month Lock",
 					"HRMS Attendance Day Check",
+					# Processing records retain the review state and link back to the
+					# import batch.  They must be removed before the parent batch,
+					# otherwise a roster cleanup is blocked by Frappe link validation.
+					"HRMS Attendance Processing Record",
 					"HRMS Attendance Import Batch",
 				),
 			},
@@ -107,6 +111,35 @@ DATA_CLEANUP_MODULES = OrderedDict(
 			},
 		),
 	)
+)
+
+# These company-scoped operational DocTypes have no deletion hooks and are not
+# submittable.  Removing a large import one document at a time causes Frappe to
+# perform thousands of identical link-cleanup checks in the web request.  The
+# explicit cleanup order above already removes their dependent records first,
+# so they can be deleted safely in bounded SQL batches.  Employee and ERPNext
+# workflow documents deliberately remain on the normal document-delete path.
+BULK_CLEANUP_DOCTYPES = frozenset(
+	{
+		"HRMS Attendance Exception",
+		"HRMS Apple Reward Record",
+		"HRMS Attendance Leave Evidence",
+		"HRMS Monthly Attendance Summary",
+		"HRMS Attendance Department Confirmation",
+		"HRMS Attendance Lock Audit",
+		"HRMS Attendance Month Lock",
+		"HRMS Attendance Day Check",
+		"HRMS Attendance Processing Record",
+		"HRMS Attendance Import Batch",
+		"HRMS Payroll Settlement Record",
+		"HRMS Payroll Input Record",
+		"HRMS Payroll Variable Record",
+		"HRMS Payroll Welfare Source Record",
+		"HRMS Payroll Variable Import Batch",
+		"HRMS Form Import Row",
+		"HRMS Business Process Record",
+		"HRMS Form Import Batch",
+	}
 )
 
 LINKED_COMPANY_FIELDS = {
@@ -251,6 +284,28 @@ def _selected_records(all_records, module_keys):
 			selected.setdefault(doctype, [])
 			selected[doctype].extend(name for name in names if name not in selected[doctype])
 	return selected
+
+
+def _bulk_delete_cleanup_docs(doctype, names):
+	"""Delete exact operational records in small SQL batches.
+
+	The method is intentionally limited to ``BULK_CLEANUP_DOCTYPES``.  It also
+	removes any child-table rows first, preserving the ordinary database shape
+	without imposing thousands of per-document deletion requests on a large
+	roster reset.
+	"""
+	if not names:
+		return 0
+	meta = frappe.get_meta(doctype)
+	deleted = 0
+	for offset in range(0, len(names), 500):
+		batch_names = names[offset : offset + 500]
+		for table_field in meta.get_table_fields():
+			if frappe.db.exists("DocType", table_field.options):
+				frappe.db.delete(table_field.options, {"parent": ["in", batch_names]})
+		frappe.db.delete(doctype, {"name": ["in", batch_names]})
+		deleted += len(batch_names)
+	return deleted
 
 
 def _plan_token(company, module_keys, records):
@@ -526,8 +581,17 @@ def execute_company_data_cleanup(
 	deleted = OrderedDict()
 	savepoint = "hrms_company_data_cleanup"
 	frappe.db.savepoint(savepoint)
+	# Frappe normally enqueues a dynamic-link cleanup job for every ordinary
+	# document deletion.  A roster reset can contain hundreds of employees, so
+	# that approach fills the shared queue before the transaction completes.
+	# Maintenance cleanup performs the same link cleanup synchronously instead.
+	previous_in_test = frappe.in_test
+	frappe.in_test = True
 	try:
 		for doctype, names in records.items():
+			if doctype in BULK_CLEANUP_DOCTYPES:
+				deleted[doctype] = _bulk_delete_cleanup_docs(doctype, names)
+				continue
 			deleted[doctype] = 0
 			for name in names:
 				doc = frappe.get_doc(doctype, name)
@@ -553,6 +617,8 @@ def execute_company_data_cleanup(
 	except Exception:
 		frappe.db.rollback(save_point=savepoint)
 		raise
+	finally:
+		frappe.in_test = previous_in_test
 	return {
 		"company": company,
 		"count": sum(deleted.values()),

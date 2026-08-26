@@ -33,7 +33,7 @@ function configure_confirmation_interview(frm) {
 		frm.doc.custom_is_confirmation_interview ||
 		frm.doc.custom_confirmation_result ||
 		(frm.doc.promotion_details || []).some((detail) =>
-			["custom_is_confirmed", "final_confirmation_date"].includes(detail.fieldname),
+			["employment_type", "custom_is_confirmed", "final_confirmation_date"].includes(detail.fieldname),
 		),
 	);
 

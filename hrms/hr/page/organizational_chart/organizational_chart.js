@@ -41,7 +41,9 @@ class HybridOrganizationChart {
 		this.mode = null;
 		this.report_data = null;
 		this.report_loading = false;
-		this.source_mode = "workbook_snapshot";
+		// Live is the only editable source.  The original workbook remains a
+		// comparison view, never the default hierarchy users accidentally edit.
+		this.source_mode = "live";
 		this.fullscreen_bound = false;
 	}
 
@@ -134,6 +136,7 @@ class HybridOrganizationChart {
 						<div>
 							<strong class="hrms-org-toolbar-title">${__("部门层级与人员归属")}</strong>
 							<small class="hrms-org-source" data-source-label>${__("正在读取组织架构来源...")}</small>
+							<small class="hrms-org-builder-hint">${__("实时组织：拖动部门、岗位或人员到目标节点，即同步部门、岗位与花名册。")}</small>
 						</div>
 						<div class="hrms-org-search">
 							<input class="form-control" data-search placeholder="${__("搜索部门、员工、岗位")}" />
@@ -357,6 +360,14 @@ class HybridOrganizationChart {
 			"input",
 			frappe.utils.debounce((event) => this.filter_tree(event.target.value), 180),
 		);
+		this.wrapper.addEventListener("dragstart", (event) => this.handle_drag_start(event));
+		this.wrapper.addEventListener("dragover", (event) => this.handle_drag_over(event));
+		this.wrapper.addEventListener("dragleave", (event) => this.handle_drag_leave(event));
+		this.wrapper.addEventListener("drop", (event) => this.handle_drop(event));
+		this.wrapper.addEventListener("dragend", () => {
+			this.dragged_node_id = null;
+			this.clear_drag_targets();
+		});
 	}
 
 	handle_action(action, element) {
@@ -380,6 +391,67 @@ class HybridOrganizationChart {
 			);
 		}
 		if (action === "open-person") this.show_person_detail(this.read_person_payload(element));
+	}
+
+	handle_drag_start(event) {
+		const node = event.target.closest("[data-node-id][draggable='true']");
+		if (!node || this.source_mode !== "live") return;
+		this.dragged_node_id = node.dataset.nodeId;
+		event.dataTransfer.effectAllowed = "move";
+		event.dataTransfer.setData("application/x-hrms-org-node", node.dataset.nodeId);
+		node.classList.add("is-dragging");
+	}
+
+	handle_drag_over(event) {
+		const target = event.target.closest("[data-node-id]");
+		if (!target || this.source_mode !== "live") return;
+		const sourceId = event.dataTransfer?.getData("application/x-hrms-org-node") || this.dragged_node_id;
+		const source = event.dataTransfer?.types?.includes("application/x-hrms-org-node");
+		if (!source || target.classList.contains("is-dragging") || !this.is_supported_drop(sourceId, target.dataset.nodeId)) return;
+		event.preventDefault();
+		event.dataTransfer.dropEffect = "move";
+		this.clear_drag_targets();
+		target.classList.add("is-drop-target");
+	}
+
+	handle_drag_leave(event) {
+		const target = event.target.closest("[data-node-id]");
+		if (target && !target.contains(event.relatedTarget)) target.classList.remove("is-drop-target");
+	}
+
+	handle_drop(event) {
+		const target = event.target.closest("[data-node-id]");
+		const sourceId = event.dataTransfer?.getData("application/x-hrms-org-node") || this.dragged_node_id;
+		if (!target || !sourceId || this.source_mode !== "live" || !this.is_supported_drop(sourceId, target.dataset.nodeId)) return;
+		event.preventDefault();
+		this.clear_drag_targets();
+		if (sourceId === target.dataset.nodeId) return;
+		frappe
+			.call({
+				method: "hrms.hr.page.organizational_chart.organizational_chart.move_organization_node",
+				args: { node_id: sourceId, target_node_id: target.dataset.nodeId, company: this.company },
+				freeze: true,
+				freeze_message: __("正在同步组织关系..."),
+			})
+			.then((response) => {
+				frappe.show_alert({ message: response.message?.message || __("组织关系已同步"), indicator: "green" });
+				this.load_tree();
+			})
+			.catch(() => this.clear_drag_targets());
+	}
+
+	clear_drag_targets() {
+		this.wrapper.querySelectorAll(".is-dragging, .is-drop-target").forEach((node) => {
+			node.classList.remove("is-dragging", "is-drop-target");
+		});
+	}
+
+	is_supported_drop(sourceId, targetId) {
+		const sourceType = String(sourceId || "").split(":", 1)[0];
+		const targetType = String(targetId || "").split(":", 1)[0];
+		if (sourceType === "department") return ["department", "company", "company_leadership"].includes(targetType);
+		if (sourceType === "employee") return ["employee", "department", "work_level", "position_group"].includes(targetType);
+		return sourceType === "position_group" && targetType === "position_group";
 	}
 
 	load_tree() {
@@ -530,6 +602,7 @@ class HybridOrganizationChart {
 		const has_children = children.length > 0;
 		const department = this.get_node_department(node);
 		const editable = ["department", "work_level", "position_group"].includes(node.node_type);
+		const movable = this.source_mode === "live" && ["department", "position_group", "employee"].includes(node.node_type);
 		return `
 			<li class="${collapsed ? "is-collapsed" : ""}">
 				<div
@@ -537,6 +610,8 @@ class HybridOrganizationChart {
 					data-node-id="${frappe.utils.escape_html(node.node_id)}"
 					data-node-type="${frappe.utils.escape_html(node.node_type)}"
 					data-search-text="${frappe.utils.escape_html(this.node_search_text(node))}"
+					draggable="${movable ? "true" : "false"}"
+					title="${movable ? frappe.utils.escape_html(__("可拖动到目标节点，保存真实组织关系")) : ""}"
 				>
 					<div class="hrms-org-node-bar"></div>
 					${
@@ -558,7 +633,11 @@ class HybridOrganizationChart {
 						<span>${frappe.utils.escape_html(node.title || "")}</span>
 						${this.render_node_lines(node)}
 						${this.render_vacancy_marker(node)}
-						<small>${__("编制")} ${frappe.utils.escape_html(String(node.planned_headcount || 0))} · ${__("现有")} ${frappe.utils.escape_html(String(node.current_headcount || 0))} · ${__("空缺")} ${frappe.utils.escape_html(String(node.vacancy_count || 0))}</small>
+						${
+							node.node_type === "employee"
+								? `<small>${frappe.utils.escape_html([node.work_level, node.department].filter(Boolean).join(" · "))}</small>`
+								: `<small>${__("编制")} ${frappe.utils.escape_html(String(node.planned_headcount || 0))} · ${__("现有")} ${frappe.utils.escape_html(String(node.current_headcount || 0))} · ${__("空缺")} ${frappe.utils.escape_html(String(node.vacancy_count || 0))}</small>`
+						}
 					</div>
 					${has_children ? `<button class="hrms-org-node-toggle" data-action="toggle-node" data-toggle-node="${frappe.utils.escape_html(node.node_id)}">${collapsed ? "+" : "-"}</button>` : ""}
 				</div>

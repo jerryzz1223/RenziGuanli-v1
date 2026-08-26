@@ -15,6 +15,9 @@ class CrossDepartmentSupportPage {
 		this.page = page;
 		this.wrapper = page.main[0];
 		this.rows = [];
+		this.page_number = 1;
+		this.page_length = 10;
+		this.total_pages = 1;
 	}
 
 	show() {
@@ -28,6 +31,7 @@ class CrossDepartmentSupportPage {
 		this.add_filters();
 		this.apply_route_filters();
 		this.bind_events();
+		this.load_filter_options();
 		this.search();
 	}
 
@@ -35,10 +39,15 @@ class CrossDepartmentSupportPage {
 		$(this.wrapper).html(`
 			<div class="cross-department-support-page">
 				<div class="cross-department-support-page__intro">
-					<div><h4>${__("快速查询可派人员")}</h4><p>${__("选择需要支援的部门和岗位，例如：连续课 / 收料员；系统只显示资格有效且在有效期内的人员。")}</p></div>
-					<div class="cross-department-support-page__intro-actions"><button class="btn btn-default" data-action="open-import">${__("导入初始名单")}</button><button class="btn btn-primary" data-action="search">${__("查询")}</button></div>
+					<div><h4>${__("查询支援人员")}</h4><p>${__("可按原部门/岗位、可支援部门/岗位或姓名/工号查询；每项均可直接输入，并从下拉匹配项中选择。")}</p></div>
+					<div class="cross-department-support-page__intro-actions"><button class="btn btn-default" data-action="open-import">${__("导入初始名单")}</button></div>
 				</div>
-				<div class="cross-department-support-page__filters" data-filters></div>
+				<div class="cross-department-support-page__filters" data-filters>
+					<div class="cross-department-support-page__filter-group"><div class="cross-department-support-page__filter-label">${__("原部门 / 岗位查询")}</div><div class="cross-department-support-page__filter-fields" data-filter-group="source"></div></div>
+					<div class="cross-department-support-page__filter-group"><div class="cross-department-support-page__filter-label">${__("可支援部门 / 岗位查询")}</div><div class="cross-department-support-page__filter-fields" data-filter-group="support"></div></div>
+					<div class="cross-department-support-page__filter-group"><div class="cross-department-support-page__filter-label">${__("姓名 / 工号查询")}</div><div class="cross-department-support-page__filter-fields" data-filter-group="employee"></div></div>
+					<div class="cross-department-support-page__filter-actions"><div data-filter-group="availability"></div><button class="btn btn-primary" data-action="search">${__("查询")}</button></div>
+				</div>
 				<div class="cross-department-support-page__summary" data-summary></div>
 				<div class="cross-department-support-page__results" data-results></div>
 			</div>
@@ -47,33 +56,74 @@ class CrossDepartmentSupportPage {
 
 	add_filters() {
 		const filters = $(this.wrapper).find("[data-filters]");
+		const reset_to_first_page = () => {
+			this.page_number = 1;
+		};
+		this.source_department = this.page.add_field({
+			fieldname: "source_department",
+			label: __("原部门"),
+			fieldtype: "Autocomplete",
+			options: [],
+			change: reset_to_first_page,
+		});
+		this.source_designation = this.page.add_field({
+			fieldname: "source_designation",
+			label: __("原岗位"),
+			fieldtype: "Autocomplete",
+			options: [],
+			change: reset_to_first_page,
+		});
 		this.department = this.page.add_field({
 			fieldname: "support_department",
-			label: __("需要支援的部门"),
-			fieldtype: "Data",
-			change: () => this.search(),
+			label: __("可支援部门"),
+			fieldtype: "Autocomplete",
+			options: [],
+			change: reset_to_first_page,
 		});
 		this.designation = this.page.add_field({
 			fieldname: "support_designation",
-			label: __("需要支援的岗位"),
-			fieldtype: "Data",
-			change: () => this.search(),
+			label: __("可支援岗位"),
+			fieldtype: "Autocomplete",
+			options: [],
+			change: reset_to_first_page,
 		});
 		this.employee = this.page.add_field({
-			fieldname: "employee",
-			label: __("指定员工（可选）"),
-			fieldtype: "Link",
-			options: "Employee",
-			change: () => this.search(),
+			fieldname: "employee_keyword",
+			label: __("姓名或工号"),
+			fieldtype: "Autocomplete",
+			options: [],
+			change: reset_to_first_page,
 		});
 		this.show_unavailable = this.page.add_field({
 			fieldname: "include_unavailable",
-			label: __("显示不可派人员"),
+			label: __("同时显示不可派人员"),
 			fieldtype: "Check",
 			default: 1,
-			change: () => this.search(),
+			change: reset_to_first_page,
 		});
-		filters.append(this.department.$wrapper, this.designation.$wrapper, this.employee.$wrapper, this.show_unavailable.$wrapper);
+		filters.find("[data-filter-group='source']").append(this.source_department.$wrapper, this.source_designation.$wrapper);
+		filters.find("[data-filter-group='support']").append(this.department.$wrapper, this.designation.$wrapper);
+		filters.find("[data-filter-group='employee']").append(this.employee.$wrapper);
+		filters.find("[data-filter-group='availability']").append(this.show_unavailable.$wrapper);
+	}
+
+	load_filter_options() {
+		frappe.call({
+			method: "hrms.hr.doctype.cross_department_support_capability.cross_department_support_capability.get_support_filter_options",
+		}).then((response) => {
+			const options = response.message || {};
+			this.set_autocomplete_options(this.source_department, options.source_departments || []);
+			this.set_autocomplete_options(this.source_designation, options.source_designations || []);
+			this.set_autocomplete_options(this.department, options.support_departments || []);
+			this.set_autocomplete_options(this.designation, options.support_designations || []);
+			this.set_autocomplete_options(this.employee, options.employees || []);
+		});
+	}
+
+	set_autocomplete_options(control, options) {
+		control.df.options = options;
+		control.set_data?.(options);
+		if (control.awesomplete) control.awesomplete.list = options;
 	}
 
 	apply_route_filters() {
@@ -85,9 +135,17 @@ class CrossDepartmentSupportPage {
 	bind_events() {
 		$(this.wrapper).on("click", "[data-action='search']", () => this.search());
 		$(this.wrapper).on("click", "[data-action='open-import']", () => this.open_import_dialog());
+		$(this.wrapper).on("click", "[data-action='previous-page']", () => this.go_to_page(this.page_number - 1));
+		$(this.wrapper).on("click", "[data-action='next-page']", () => this.go_to_page(this.page_number + 1));
 		$(this.wrapper).on("click", "[data-capability]", (event) => {
 			frappe.set_route("Form", "Cross Department Support Capability", event.currentTarget.dataset.capability);
 		});
+	}
+
+	go_to_page(page_number) {
+		if (page_number < 1 || page_number > this.total_pages) return;
+		this.page_number = page_number;
+		this.search();
 	}
 
 	download_import_template() {
@@ -181,10 +239,14 @@ class CrossDepartmentSupportPage {
 
 	search() {
 		const args = {
+			source_department: this.source_department?.get_value() || "",
+			source_designation: this.source_designation?.get_value() || "",
 			support_department: this.department?.get_value() || "",
 			support_designation: this.designation?.get_value() || "",
-			employee: this.employee?.get_value() || "",
+			employee_keyword: this.employee?.get_value() || "",
 			include_unavailable: this.show_unavailable?.get_value() || 0,
+			page: this.page_number,
+			page_length: this.page_length,
 		};
 		frappe.call({
 			method: "hrms.hr.doctype.cross_department_support_capability.cross_department_support_capability.get_available_support_candidates",
@@ -194,6 +256,8 @@ class CrossDepartmentSupportPage {
 		}).then((response) => {
 			const result = response.message || {};
 			this.rows = result.rows || [];
+			this.page_number = result.page || 1;
+			this.total_pages = result.total_pages || 1;
 			this.render_results(result.count || 0);
 		});
 	}
@@ -213,16 +277,26 @@ class CrossDepartmentSupportPage {
 				<thead><tr><th>${__("姓名 / 工号")}</th><th>${__("原部门 / 岗位")}</th><th>${__("可支援部门")}</th><th>${__("可支援岗位")}</th><th>${__("状态")}</th><th>${__("有效期")}</th><th>${__("备注")}</th></tr></thead>
 				<tbody>${this.rows.map((row) => this.render_row(row)).join("")}</tbody>
 			</table>
+			${this.render_pagination(count)}
 		`);
 	}
 
+	render_pagination(count) {
+		if (count <= this.page_length) return "";
+		return `<div class="cross-department-support-page__pagination">
+			<span class="text-muted">${__("第 {0} / {1} 页，共 {2} 名", [this.page_number, this.total_pages, count])}</span>
+			<div><button class="btn btn-default btn-sm" data-action="previous-page" ${this.page_number === 1 ? "disabled" : ""}>${__("上一页")}</button><button class="btn btn-default btn-sm" data-action="next-page" ${this.page_number === this.total_pages ? "disabled" : ""}>${__("下一页")}</button></div>
+		</div>`;
+	}
+
 	render_row(row) {
-		const escape = (value) => frappe.utils.escape_html(value || "—");
+		const escape = (value) => frappe.utils.escape_html(value || "");
+		const two_lines = (primary, secondary, emphasize = false) => `${primary ? (emphasize ? `<strong>${escape(primary)}</strong>` : escape(primary)) : ""}${secondary ? `${primary ? "<br>" : ""}<small class="text-muted">${escape(secondary)}</small>` : ""}`;
 		const period = row.valid_from || row.valid_until ? `${escape(row.valid_from || __("不限"))} ~ ${escape(row.valid_until || __("不限"))}` : __("长期有效");
 		const indicator = row.availability === "可派" ? "green" : "gray";
 		return `<tr class="pointer" data-capability="${escape(row.name)}">
-			<td><strong>${escape(row.employee_name)}</strong><br><small class="text-muted">${escape(row.employee_code)}</small></td>
-			<td>${escape(row.source_department)}<br><small class="text-muted">${escape(row.source_designation)}</small></td>
+			<td>${two_lines(row.employee_name, row.employee_code, true)}</td>
+			<td>${two_lines(row.source_department, row.source_designation)}</td>
 			<td>${escape(row.support_department)}</td><td>${escape(row.support_designation)}</td>
 			<td><span class="indicator-pill ${indicator}">${escape(row.availability)}</span><br><small class="text-muted">${escape(row.qualification_status)}</small></td>
 			<td>${period}</td><td>${escape(row.remarks)}</td>

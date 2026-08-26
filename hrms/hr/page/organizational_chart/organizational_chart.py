@@ -1075,6 +1075,23 @@ def get_hybrid_node_detail(
 			"actions": {"can_open_employee": frappe.has_permission("Employee", "read", employee)},
 		}
 
+	if node_type == "employee" and employee and frappe.db.exists("Employee", employee):
+		doc = frappe.get_cached_doc("Employee", employee)
+		manager_name = ""
+		if getattr(doc, "reports_to", None):
+			manager_name = frappe.db.get_value("Employee", doc.reports_to, "employee_name") or doc.reports_to
+		return {
+			"node_type": "employee",
+			"node_id": node_id,
+			"employee": employee,
+			"title": doc.employee_name or employee,
+			"subtitle": doc.designation or _("员工"),
+			"metrics": {"employee_count": 1, "current_headcount": 1},
+			"employees": [_employee_row(doc)],
+			"relationships": {"reports_to": {"name": doc.reports_to, "label": manager_name} if manager_name else None},
+			"actions": {"can_open_employee": frappe.has_permission("Employee", "read", employee)},
+		}
+
 	return {
 		"node_type": node_type,
 		"node_id": node_id,
@@ -1171,7 +1188,7 @@ def update_employee_group(
 	if new_value and not frappe.db.exists(link_doctype, new_value):
 		frappe.throw(_("{0} {1} 不存在。").format(_(link_doctype), new_value))
 
-	employee_names = [person.get("employee") for person in group.get("people", []) if person.get("employee")]
+	employee_names = [person.get("employee") for person in _collect_node_people(group) if person.get("employee")]
 	updated = []
 	for employee_name in employee_names:
 		doc = frappe.get_doc("Employee", employee_name)
@@ -1183,6 +1200,93 @@ def update_employee_group(
 		updated.append(employee_name)
 
 	return {"node_id": node_id, "fieldname": fieldname, "new_value": new_value, "updated": updated}
+
+
+@frappe.whitelist()
+def move_organization_node(node_id: str, target_node_id: str, company: str | None = None):
+	"""Persist a tree-builder move in the same records used by Department and Employee.
+
+	There is intentionally no visual-only canvas state: a department move writes
+	``parent_department``; a person move writes department/职级/岗位 or 直接上级;
+	a position move writes the position's parent.  Therefore the Department list,
+	employee archive, and chart always read the same hierarchy.
+	"""
+	company = _normalize_yongxin_company(company)
+	node_type = _node_type_from_id(node_id)
+	target_type = _node_type_from_id(target_node_id)
+	if not node_id or not target_node_id or node_id == target_node_id:
+		frappe.throw(_("请选择不同的有效节点。"))
+
+	if node_type == "department":
+		department = _node_value(node_id)
+		if target_type not in {"department", "company", "company_leadership"}:
+			frappe.throw(_("部门只能拼接到公司根节点或另一个部门下。"))
+		if not frappe.db.exists("Department", department):
+			frappe.throw(_("部门不存在。"))
+		doc = frappe.get_doc("Department", department)
+		doc.check_permission("write")
+		parent = _node_value(target_node_id) if target_type == "department" else ""
+		if parent and not frappe.db.exists("Department", parent):
+			frappe.throw(_("请先将该分管节点导入为部门后再拼接。"))
+		if parent == doc.name or _would_create_department_loop(doc.name, parent):
+			frappe.throw(_("不能把部门移动到自己或自己的下级部门。"))
+		if parent:
+			parent_doc = frappe.get_doc("Department", parent)
+			if parent_doc.company != doc.company:
+				frappe.throw(_("不能跨公司调整部门层级。"))
+		doc.parent_department = parent
+		doc.save(ignore_permissions=False)
+		return {"message": _("部门层级已同步到部门管理。"), "updated": [doc.name]}
+
+	if node_type == "employee":
+		employee = _node_value(node_id)
+		if not frappe.db.exists("Employee", employee):
+			frappe.throw(_("员工不存在。"))
+		doc = frappe.get_doc("Employee", employee)
+		doc.check_permission("write")
+		if company and doc.company != company:
+			frappe.throw(_("不能跨公司调整员工归属。"))
+		if target_type == "employee":
+			manager = _node_value(target_node_id)
+			if manager == doc.name or not frappe.db.exists("Employee", manager):
+				frappe.throw(_("直接上级无效。"))
+			if _would_create_employee_reporting_loop(doc.name, manager):
+				frappe.throw(_("不能把员工设为自己的下级。"))
+			doc.reports_to = manager
+		elif target_type in {"department", "work_level", "position_group"}:
+			context = _get_live_node_context(target_node_id, company)
+			if not context.get("department"):
+				frappe.throw(_("目标节点未关联有效部门。"))
+			doc.department = context["department"]
+			if target_type in {"work_level", "position_group"} and context.get("work_level"):
+				doc.grade = context["work_level"] if context["work_level"] != _("直线级") else ""
+			if target_type == "position_group" and context.get("designation"):
+				doc.designation = context["designation"] if context["designation"] != _("员工") else ""
+		else:
+			frappe.throw(_("人员可移动到部门、职级、岗位或另一名员工下。"))
+		doc.save(ignore_permissions=False)
+		return {"message": _("员工归属已同步到花名册与组织树。"), "updated": [doc.name]}
+
+	if node_type == "position_group" and target_type == "position_group":
+		source = _get_live_node_context(node_id, company)
+		target = _get_live_node_context(target_node_id, company)
+		designation = source.get("designation")
+		parent_designation = target.get("designation")
+		if not designation or not parent_designation or designation == parent_designation:
+			frappe.throw(_("岗位上下级关系无效。"))
+		if not frappe.db.exists("Designation", designation) or not frappe.db.exists("Designation", parent_designation):
+			frappe.throw(_("请先维护岗位主数据后再调整岗位层级。"))
+		if _would_create_designation_loop(designation, parent_designation):
+			frappe.throw(_("不能把岗位移动到自己的下级岗位。"))
+		doc = frappe.get_doc("Designation", designation)
+		doc.check_permission("write")
+		if frappe.get_meta("Designation").has_field("hrms_parent_designation"):
+			doc.hrms_parent_designation = parent_designation
+			doc.save(ignore_permissions=False)
+			return {"message": _("岗位上下级已同步到组织树。"), "updated": [doc.name]}
+		frappe.throw(_("当前站点尚未安装岗位上级字段，请先执行系统迁移。"))
+
+	frappe.throw(_("当前节点类型暂不支持拖动。"))
 
 
 @frappe.whitelist()
@@ -2474,7 +2578,10 @@ def _build_department_node(department, employees_by_department, department_child
 		"role": department.get("hrms_org_role"),
 		"manager_names": department.get("hrms_org_manager"),
 		"proxy_names": department.get("hrms_org_proxy"),
-		"people": [_employee_row(employee) for employee in managers],
+		# Employees are rendered once as leaf nodes under 职级 → 岗位.  Keeping
+		# them as department chips as well was the source of the apparent
+		# "unclassified people" in the old hybrid chart.
+		"people": [],
 		"recruitment_plan": department.get("hrms_recruitment_plan"),
 		"planned_headcount": staffing_row.get("planned_headcount", 0),
 		"current_headcount": current_headcount,
@@ -2515,7 +2622,7 @@ def _build_live_management_hierarchy(
 		template_node = frappe._dict(template_node or {})
 		node_type = template_node.get("node_type")
 		business_name = _organization_business_name(template_node.get("name"))
-		if node_type in {"department", "team"} and business_name in department_nodes_by_label:
+		if node_type in TEMPLATE_DEPARTMENT_NODE_TYPES and business_name in department_nodes_by_label:
 			live_department = department_nodes_by_label[business_name]
 			used_departments.add(live_department.get("department"))
 			return live_department
@@ -2545,6 +2652,7 @@ def _build_live_management_hierarchy(
 				frappe._dict({"name": template_node.get("title")})
 			)
 			deputy_names = _resolve_management_names(deputy_role, deputy_fallback, employees, employees_by_name)
+			children = _wrap_deputy_divisions(children, deputy_names, company)
 			director_lines = []
 			for director in template_node.get("children") or []:
 				if director.get("node_type") != "director":
@@ -2634,6 +2742,53 @@ def _build_live_management_hierarchy(
 	root["connections"] = len(root.get("children") or [])
 	root["expandable"] = bool(root.get("children"))
 	return root
+
+
+def _wrap_deputy_divisions(children, deputy_names, company):
+	"""Make 总经理 → 副总经理 → 分管 a real visible branch, not card text."""
+	deputies = {name for name in deputy_names if name and name != _("未设置")}
+	if not deputies:
+		return children
+	grouped = defaultdict(list)
+	remaining = []
+	for child in children:
+		# Imported divisions are Department records (and therefore carry the
+		# ``department`` node type); the source label is the stable indicator.
+		if child.get("node_type") != "division" and not cstr(child.get("name")).endswith("分管"):
+			remaining.append(child)
+			continue
+		manager_names = [person.get("employee_name") or person.get("name") for person in child.get("people") or []]
+		manager_names.extend(re.findall(r"(.+?)分管$", cstr(child.get("name"))))
+		deputy = next((name for name in manager_names if name in deputies), None)
+		if deputy:
+			grouped[deputy].append(child)
+		else:
+			remaining.append(child)
+	wrapped = []
+	for deputy in deputy_names:
+		branches = grouped.get(deputy)
+		if not branches:
+			continue
+		summary = _summarize_live_nodes(branches)
+		node_id = f"director:deputy:{company}:{deputy}"
+		wrapped.append(
+			{
+				"node_id": node_id,
+				"id": node_id,
+				"node_type": "director",
+				"name": _("副总经理：{0}").format(deputy),
+				"title": _("分管 {0} 个组织单元").format(len(branches)),
+				"role": "副总经理",
+				"people": [],
+				"planned_headcount": summary["planned_headcount"],
+				"current_headcount": summary["current_headcount"],
+				"vacancy_count": summary["vacancy_count"],
+				"children": branches,
+				"connections": len(branches),
+				"expandable": True,
+			}
+		)
+	return wrapped + remaining
 
 
 def _build_live_division_nodes(template_root, build_node):
@@ -2795,11 +2950,8 @@ def _build_grade_group_nodes(department, employees, managers):
 
 
 def _build_work_level_nodes(department, employees, managers):
-	manager_names = {employee.name for employee in managers}
 	groups = defaultdict(list)
 	for employee in employees:
-		if employee.name in manager_names:
-			continue
 		work_level = cstr(employee.get("grade")).strip() or _("直线级")
 		groups[work_level].append(employee)
 
@@ -2820,7 +2972,7 @@ def _build_work_level_nodes(department, employees, managers):
 				"planned_headcount": 0,
 				"current_headcount": len(group_people),
 				"vacancy_count": 0,
-				"people": group_people,
+				"people": [],
 				"children": children,
 				"connections": len(children),
 				"expandable": bool(children),
@@ -2835,45 +2987,82 @@ def _build_position_group_nodes(department, work_level, level_index, employees):
 		position = cstr(employee.get("designation")).strip() or _("员工")
 		groups[position].append(employee)
 
-	nodes = []
+	nodes_by_designation = {}
 	for position_index, (position, position_employees) in enumerate(sorted(groups.items())):
 		group_people = [_employee_row(employee) for employee in position_employees]
 		node_id = f"position_group:{department.name}::{level_index}::{position_index}"
-		nodes.append(
-			{
-				"node_id": node_id,
-				"id": node_id,
-				"node_type": "position_group",
-				"name": position,
-				"title": _("岗位 · {0} 人").format(len(group_people)),
-				"department": department.name,
-				"work_level": work_level,
-				"designation": position,
-				"planned_headcount": 0,
-				"current_headcount": len(group_people),
-				"vacancy_count": 0,
-				"people": group_people,
-				"children": [],
-				"connections": len(group_people),
-				"expandable": False,
-			}
-		)
-	return nodes
+		employee_nodes = [_build_employee_node(employee) for employee in position_employees]
+		nodes_by_designation[position] = {
+			"node_id": node_id,
+			"id": node_id,
+			"node_type": "position_group",
+			"name": position,
+			"title": _("岗位 · {0} 人").format(len(group_people)),
+			"department": department.name,
+			"work_level": work_level,
+			"designation": position,
+			"planned_headcount": 0,
+			"current_headcount": len(group_people),
+			"vacancy_count": 0,
+			"people": [],
+			"children": employee_nodes,
+			"connections": len(employee_nodes),
+			"expandable": bool(employee_nodes),
+		}
+
+	parents = _get_designation_parent_map(nodes_by_designation)
+	roots = []
+	for designation, node in nodes_by_designation.items():
+		parent = parents.get(designation)
+		if parent and parent in nodes_by_designation and parent != designation:
+			nodes_by_designation[parent]["children"].insert(0, node)
+			nodes_by_designation[parent]["connections"] = len(nodes_by_designation[parent]["children"])
+			nodes_by_designation[parent]["expandable"] = True
+		else:
+			roots.append(node)
+	return roots
+
+
+def _build_employee_node(employee):
+	name = employee.get("employee_name") or employee.name
+	return {
+		"node_id": f"employee:{employee.name}",
+		"id": f"employee:{employee.name}",
+		"node_type": "employee",
+		"name": name,
+		"title": employee.get("designation") or _("员工"),
+		"employee": employee.name,
+		"employee_route": employee.name,
+		"employee_code": _employee_business_number(employee),
+		"department": employee.get("department"),
+		"work_level": cstr(employee.get("grade")).strip() or _("直线级"),
+		"designation": employee.get("designation") or _("员工"),
+		"people": [],
+		"planned_headcount": 0,
+		"current_headcount": 1,
+		"vacancy_count": 0,
+		"children": [],
+		"connections": 0,
+		"expandable": False,
+	}
+
+
+def _get_designation_parent_map(designations):
+	if not designations or not frappe.get_meta("Designation").has_field("hrms_parent_designation"):
+		return {}
+	rows = frappe.get_all(
+		"Designation",
+		filters={"name": ["in", list(designations)]},
+		fields=["name", "hrms_parent_designation"],
+	)
+	return {row.name: row.hrms_parent_designation for row in rows if row.get("hrms_parent_designation")}
 
 
 def _get_live_group_node_detail(node_id, company=None, search=None):
-	payload = _node_value(node_id)
-	department = payload.split("::", 1)[0]
-	employees = [employee for employee in _get_active_employees(company) if employee.get("department") == department]
-	managers = _get_department_managers(employees)
-	department_row = (
-		frappe.get_cached_doc("Department", department)
-		if department and frappe.db.exists("Department", department)
-		else frappe._dict(name=department, department_name=department)
-	)
-	work_levels = _build_work_level_nodes(department_row, employees, managers)
-	candidates = work_levels + [child for level in work_levels for child in level.get("children", [])]
-	group = next((row for row in candidates if row["node_id"] == node_id), None)
+	context = _get_live_node_context(node_id, company)
+	department = context.get("department")
+	department_row = context.get("department_row") or frappe._dict(name=department, department_name=department)
+	group = context.get("node")
 	if not group:
 		return {
 			"node_type": _node_type_from_id(node_id),
@@ -2885,7 +3074,7 @@ def _get_live_group_node_detail(node_id, company=None, search=None):
 			"actions": {},
 		}
 
-	people = group.get("people") or []
+	people = _collect_node_people(group)
 	if search:
 		keyword = cstr(search).lower()
 		people = [
@@ -2909,6 +3098,50 @@ def _get_live_group_node_detail(node_id, company=None, search=None):
 		"relationships": _get_department_relationships(department_row, company),
 		"actions": {},
 	}
+
+
+def _flatten_tree_nodes(nodes):
+	result = []
+	for node in nodes or []:
+		result.append(node)
+		result.extend(_flatten_tree_nodes(node.get("children") or []))
+	return result
+
+
+def _collect_node_people(node):
+	people = list(node.get("people") or [])
+	if node.get("node_type") == "employee" and node.get("employee"):
+		people.append({
+			"employee": node.get("employee"),
+			"name": node.get("employee"),
+			"employee_name": node.get("name"),
+			"employee_code": node.get("employee_code"),
+			"department": node.get("department"),
+			"designation": node.get("designation"),
+			"grade": node.get("work_level"),
+		})
+	for child in node.get("children") or []:
+		people.extend(_collect_node_people(child))
+	seen = set()
+	return [person for person in people if person.get("employee") and not (person.get("employee") in seen or seen.add(person.get("employee")))]
+
+
+def _get_live_node_context(node_id, company=None):
+	payload = _node_value(node_id)
+	department = payload.split("::", 1)[0]
+	if not department:
+		return {}
+	employees = [employee for employee in _get_active_employees(company) if employee.get("department") == department]
+	department_row = (
+		frappe.get_cached_doc("Department", department)
+		if frappe.db.exists("Department", department)
+		else frappe._dict(name=department, department_name=department)
+	)
+	work_levels = _build_work_level_nodes(department_row, employees, _get_department_managers(employees))
+	node = next((item for item in _flatten_tree_nodes(work_levels) if item.get("node_id") == node_id), None)
+	if not node:
+		return {}
+	return {"node": node, "department": department, "department_row": department_row, "work_level": node.get("work_level"), "designation": node.get("designation")}
 
 
 def _get_grade_group_node_detail(node_id, company=None, search=None):
@@ -3026,6 +3259,29 @@ def _node_value(node_id):
 	if ":" in node_id:
 		return node_id.split(":", 1)[1]
 	return node_id
+
+
+def _would_create_employee_reporting_loop(employee, manager):
+	"""Return true when assigning manager would create an Employee.reports_to cycle."""
+	seen = {employee}
+	current = manager
+	while current:
+		if current in seen:
+			return True
+		seen.add(current)
+		current = frappe.db.get_value("Employee", current, "reports_to")
+	return False
+
+
+def _would_create_designation_loop(designation, parent_designation):
+	seen = {designation}
+	current = parent_designation
+	while current:
+		if current in seen:
+			return True
+		seen.add(current)
+		current = frappe.db.get_value("Designation", current, "hrms_parent_designation")
+	return False
 
 
 def _get_node_employees(department=None, manager=None, company=None, search=None):

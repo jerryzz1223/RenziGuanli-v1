@@ -51,7 +51,9 @@
 
 .hrms-developer-center__hero h3,
 .hrms-developer-center__checklist h4,
-.hrms-developer-center__card h4 {
+.hrms-developer-center__card h4,
+.hrms-developer-center__clarify h4,
+.hrms-developer-center__catalog h4 {
 	margin: 0 0 8px;
 }
 
@@ -86,6 +88,76 @@
 	margin-top: 16px;
 }
 
+.hrms-developer-center__summary-grid {
+	display: grid;
+	gap: 12px;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	margin-top: 16px;
+}
+
+.hrms-developer-center__summary-grid article,
+.hrms-developer-center__clarify,
+.hrms-developer-center__catalog {
+	background: var(--card-bg, #fff);
+	border: 1px solid var(--border-color, #dfe3e8);
+	border-radius: 8px;
+}
+
+.hrms-developer-center__summary-grid article {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	padding: 14px 16px;
+}
+
+.hrms-developer-center__summary-grid strong {
+	color: #1f6fb2;
+	font-size: 24px;
+	line-height: 1.1;
+}
+
+.hrms-developer-center__summary-grid span {
+	font-weight: 600;
+}
+
+.hrms-developer-center__summary-grid small,
+.hrms-developer-center__clarify p,
+.hrms-developer-center__clarify small {
+	color: var(--text-muted, #6b7280);
+}
+
+.hrms-developer-center__clarify {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	margin-top: 16px;
+	overflow: hidden;
+}
+
+.hrms-developer-center__clarify h4 {
+	grid-column: 1 / -1;
+	padding: 16px 18px 0;
+}
+
+.hrms-developer-center__clarify div {
+	padding: 8px 18px 16px;
+}
+
+.hrms-developer-center__clarify div:last-child {
+	background: #fffaf1;
+	border-left: 1px solid var(--border-color, #dfe3e8);
+}
+
+.hrms-developer-center__clarify p {
+	font-size: 13px;
+	line-height: 1.5;
+	margin: 5px 0 0;
+}
+
+.hrms-developer-center__catalog {
+	margin-top: 16px;
+	padding: 18px 20px;
+}
+
 .hrms-developer-center__card {
 	display: flex;
 	flex-direction: column;
@@ -107,6 +179,141 @@
 .hrms-developer-center__map {
 	margin-top: 16px;
 	padding: 18px 20px 8px;
+}
+
+.hrms-developer-center__field-table {
+	margin-bottom: 0;
+}
+
+.hrms-developer-center__field-table th,
+.hrms-developer-center__field-table td {
+	vertical-align: top;
+}
+
+.hrms-developer-center__field-table td:first-child {
+	min-width: 155px;
+}
+
+.hrms-developer-center__field-table td:nth-child(2),
+.hrms-developer-center__field-table td:nth-child(4) {
+	min-width: 230px;
+}
+
+.hrms-developer-center__field-table strong,
+.hrms-developer-center__field-table code,
+.hrms-developer-center__field-table small {
+	display: block;
+}
+
+.hrms-developer-center__field-table code {
+	background: transparent;
+	color: var(--text-muted, #6b7280);
+	font-size: 11px;
+	margin: 4px 0;
+	padding: 0;
+}
+
+.hrms-developer-center__field-table p {
+	margin: 0 0 5px;
+}
+
+.hrms-developer-center__field-table small {
+	color: var(--text-muted, #6b7280);
+	line-height: 1.45;
+}
+
+.hrms-developer-center__value-source {
+	color: #2b70ad;
+	display: block;
+	font-size: 12px;
+	font-weight: 600;
+	margin-bottom: 5px;
+}
+
+.hrms-developer-center__chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 5px;
+	margin-top: 7px;
+}
+
+.hrms-developer-center__chips span {
+	background: #f1f5f9;
+	border-radius: 999px;
+	color: #475569;
+	font-size: 11px;
+	line-height: 1.25;
+	padding: 3px 7px;
+}
+
+.hrms-developer-center__dictionary-grid {
+	display: grid;
+	gap: 12px;
+	grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+}
+
+.hrms-developer-center__dictionary-card {
+	border: 1px solid var(--border-color, #dfe3e8);
+	border-radius: 7px;
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+	min-height: 238px;
+	padding: 14px;
+}
+
+.hrms-developer-center__dictionary-card.is-highlighted {
+	border-color: #77b6e6;
+	box-shadow: inset 3px 0 #1683d8;
+}
+
+.hrms-developer-center__dictionary-title {
+	align-items: flex-start;
+	display: flex;
+	justify-content: space-between;
+}
+
+.hrms-developer-center__dictionary-title h5,
+.hrms-developer-center__dictionary-title code,
+.hrms-developer-center__dictionary-card p,
+.hrms-developer-center__dictionary-card small {
+	margin: 0;
+}
+
+.hrms-developer-center__dictionary-title h5 {
+	font-size: 15px;
+}
+
+.hrms-developer-center__dictionary-title code {
+	background: transparent;
+	color: var(--text-muted, #6b7280);
+	font-size: 11px;
+	padding: 0;
+}
+
+.hrms-developer-center__dictionary-title > span {
+	background: #edf5ff;
+	border-radius: 999px;
+	color: #2b70ad;
+	font-size: 12px;
+	padding: 3px 8px;
+}
+
+.hrms-developer-center__dictionary-card p,
+.hrms-developer-center__dictionary-card small {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	line-height: 1.45;
+}
+
+.hrms-developer-center__dictionary-card .hrms-developer-center__risk {
+	color: #9a6700;
+}
+
+.hrms-developer-center__dictionary-actions {
+	display: flex;
+	gap: 7px;
+	margin-top: auto;
 }
 
 .hrms-developer-center__map-head {
@@ -206,6 +413,20 @@
 
 	.hrms-developer-center__boundary {
 		grid-template-columns: 1fr;
+	}
+
+	.hrms-developer-center__summary-grid,
+	.hrms-developer-center__clarify {
+		grid-template-columns: 1fr;
+	}
+
+	.hrms-developer-center__clarify h4 {
+		grid-column: auto;
+	}
+
+	.hrms-developer-center__clarify div:last-child {
+		border-left: 0;
+		border-top: 1px solid var(--border-color, #dfe3e8);
 	}
 
 	.hrms-developer-center__boundary div:first-child {

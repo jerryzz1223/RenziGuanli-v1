@@ -10,6 +10,15 @@
 	const SINGLE_COMPANY_OPERATION_MODE = true;
 	const HR_SETTINGS_MANAGER_ROLES = ["HR Manager", "System Manager"];
 	const SYSTEM_ADMIN_ROLES = ["System Manager"];
+	const REDUNDANT_FRAMEWORK_CONTROL_SELECTOR = [
+		"#navbar-search",
+		".navbar-search",
+		".navbar .search-bar",
+		"#navbar-new",
+		".navbar-new",
+		".dropdown-navbar-new",
+		".dropdown-new",
+	].join(", ");
 	let renderFrame = null;
 	const CONTEXTUAL_ADMIN_PAGES = {
 		doctype: {
@@ -51,7 +60,7 @@
 	};
 
 	const modules = [
-		{ label: "工作台", route: "/desk/hrms-workbench", keys: ["hrms-workbench"] },
+		{ label: "主页", route: "/desk/hrms-workbench", keys: ["hrms-workbench"] },
 		{
 			label: "人事",
 			route: "/desk/employee",
@@ -152,6 +161,7 @@
 	let accountInfoLoading = false;
 	let accountEventsBound = false;
 	let moreEventsBound = false;
+	let sidebarToggleEventsBound = false;
 	let companyContextPromise = null;
 	let companyFilterSyncTimer = null;
 	const companyContext = {
@@ -160,7 +170,8 @@
 	};
 
 	const WORKSPACE_ROUTE_SLUGS = {
-		"工作台": "hrms-workbench",
+		"主页": "hrms-workbench",
+		"工作台": "hrms-workbench", // 兼容旧书签
 		"人事": "employee",
 		"部门": "department",
 		"组织": "department",
@@ -422,7 +433,7 @@
 
 	function activeLabel() {
 		const slug = routeSlug();
-		if (slug === "hrms-workbench") return "工作台";
+		if (slug === "hrms-workbench") return "主页";
 		if (slug === "personnel" || slug === "employee") return "人事";
 		const match = modules.find((module) => module.keys.some((key) => slug === key || slug.indexOf(`${key}/`) === 0));
 		return match ? match.label : "";
@@ -842,6 +853,46 @@
 		bar.querySelector("[data-admin-parent]").onclick = () => navigate(`/desk/${context.route}`);
 	}
 
+	function updateSidebarToggleButton(collapsed) {
+		const toggle = document.getElementById("hrms-top-sidebar-toggle");
+		if (!toggle) return;
+		toggle.setAttribute("aria-expanded", String(!collapsed));
+		toggle.setAttribute("aria-label", collapsed ? "展开菜单" : "收起菜单");
+		toggle.title = collapsed ? "展开菜单" : "收起菜单";
+	}
+
+	function bindSidebarToggleEvents() {
+		if (sidebarToggleEventsBound) return;
+		window.addEventListener("hrms:sidebar-state-change", (event) => {
+			updateSidebarToggleButton(Boolean(event.detail?.collapsed));
+		});
+		sidebarToggleEventsBound = true;
+	}
+
+	function renderSidebarToggle() {
+		bindSidebarToggleEvents();
+		const collapsed = document.body.classList.contains("hrms-unified-sidebar-collapsed");
+		const toggle = document.createElement("button");
+		toggle.id = "hrms-top-sidebar-toggle";
+		toggle.type = "button";
+		toggle.className = "hrms-top-module-nav__sidebar-toggle";
+		toggle.innerHTML = '<span aria-hidden="true">☰</span>';
+		toggle.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			window.dispatchEvent(new CustomEvent("hrms:toggle-sidebar"));
+		});
+		updateSidebarToggleButton(collapsed);
+		return toggle;
+	}
+
+	function removeRedundantFrameworkControls() {
+		// HRMS has its own module navigation and account menu.  Remove the two
+		// framework controls rather than merely hiding them, so they cannot return
+		// as empty blocks after the Desk toolbar rerenders.
+		document.querySelectorAll(REDUNDANT_FRAMEWORK_CONTROL_SELECTOR).forEach((element) => element.remove());
+	}
+
 	function render() {
 		if (!isDeskPage() || document.body.classList.contains("login")) {
 			document.getElementById(NAV_ID)?.remove();
@@ -851,6 +902,7 @@
 
 		const target = mountPoint();
 		if (!target) return;
+		removeRedundantFrameworkControls();
 
 		let nav = document.getElementById(NAV_ID);
 		if (!nav) {
@@ -865,6 +917,8 @@
 		const active = activeLabel();
 		bindMoreDocumentEvents();
 		nav.replaceChildren();
+
+		nav.appendChild(renderSidebarToggle());
 
 		const brand = document.createElement("button");
 		brand.type = "button";
@@ -926,6 +980,10 @@
 
 	new MutationObserver(() => {
 		if (!isDeskPage()) return;
+		// Frappe recreates its toolbar asynchronously on some native list and form
+		// routes.  Removing these controls on every toolbar mutation keeps the
+		// custom HRMS navigation consistent across every module page.
+		removeRedundantFrameworkControls();
 		if (!document.getElementById(NAV_ID) || (contextualPageKey() && !document.getElementById("hrms-contextual-admin-bar"))) {
 			scheduleRender();
 		}

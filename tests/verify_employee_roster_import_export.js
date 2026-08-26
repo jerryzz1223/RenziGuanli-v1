@@ -31,6 +31,16 @@ const exportJson = JSON.parse(read(exportJsonPath));
 const exportJs = read(exportJsPath);
 const css = read(cssPath);
 
+for (const marker of [
+	"Frappe renders request blockers and dialog backdrops",
+	"body:has(#hrms-top-module-nav) .freeze",
+	"body:has(#hrms-top-module-nav) .modal-backdrop",
+	"height: 117.6470588235vh !important;",
+	"width: 117.6470588235vw !important;",
+]) {
+	mustInclude(css, marker, `Desktop zoom must keep every edit/import blocker viewport-sized: ${marker}`);
+}
+
 if (importJson.name !== "employee-roster-import" || importJson.title !== "智能花名册导入") {
 	throw new Error("智能花名册导入 Page route/title is incorrect.");
 }
@@ -189,6 +199,10 @@ for (const marker of [
 	"按身份证",
 	"按手机号",
 	"下载失败行",
+	"重新上传文件",
+	"back-to-upload",
+	"return_to_upload",
+	"go_back",
 	"下载错误行及修改建议",
 	"download-preview-failed",
 	"Excel 位置",
@@ -213,6 +227,17 @@ if (!restartHandler.includes('state.mode = "";') || !restartHandler.includes('st
 	throw new Error("继续导入必须先回到新增/修改方式选择页，不能沿用上一次导入模式。");
 }
 
+const returnToUploadHandler = importJs.match(/function return_to_upload\(\) \{([\s\S]*?)\n\t\}/)?.[1] || "";
+for (const marker of [
+	"state.request_id += 1;",
+	"state.file = null;",
+	"state.parse_result = null;",
+	"state.preview_result = null;",
+	"render_upload();",
+]) {
+	mustInclude(returnToUploadHandler, marker, `重新上传必须清空旧文件及其校验状态：${marker}`);
+}
+
 mustInclude(api, "_get_employee_roster_preview_code", "预览列表必须使用业务工号，而不是 Frappe 内部 Employee 名称。");
 mustInclude(api, '"employee_code": _get_employee_roster_preview_code(values, existing)', "预览列表必须返回员工工号。");
 
@@ -223,6 +248,8 @@ for (const marker of ["_excel_cell_reference", "_employee_import_fix_suggestion"
 for (const marker of [
 	'"replace"',
 	"_get_employee_roster_replace_candidates",
+	'filters={"company": company, "status": ["!=", "Left"]}',
+	"imported_employee_codes",
 	'"archived"',
 	'doc.status = "Left"',
 ]) {

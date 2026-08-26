@@ -58,7 +58,7 @@
    "fieldtype": "Select",
    "hidden": 1,
    "label": "异动场景",
-   "options": "调岗\n晋升\n转全职",
+   "options": "调岗\n晋升\n转全职\n工作性质调整",
    "reqd": 1
   },
   {

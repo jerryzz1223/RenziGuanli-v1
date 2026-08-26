@@ -341,10 +341,15 @@ def import_cross_department_support_capabilities(file_url: str):
 
 @frappe.whitelist()
 def get_available_support_candidates(
+	source_department: str | None = None,
+	source_designation: str | None = None,
 	support_department: str | None = None,
 	support_designation: str | None = None,
+	employee_keyword: str | None = None,
 	employee: str | None = None,
 	include_unavailable: int | str = 0,
+	page: int | str = 1,
+	page_length: int | str = 10,
 ):
 	"""Return supportable employees for the search page.
 
@@ -355,12 +360,14 @@ def get_available_support_candidates(
 		frappe.throw(_("你没有查看跨部门支援名单的权限。"), frappe.PermissionError)
 
 	filters: dict[str, object] = {}
+	if source_department:
+		filters["source_department"] = source_department
+	if source_designation:
+		filters["source_designation"] = source_designation
 	if support_department:
 		filters["support_department"] = support_department
 	if support_designation:
 		filters["support_designation"] = support_designation
-	if employee:
-		filters["employee"] = employee
 	if not frappe.utils.cint(include_unavailable):
 		filters.update({"qualification_status": "有效", "is_active": 1})
 
@@ -389,11 +396,59 @@ def get_available_support_candidates(
 
 	today = getdate()
 	result = []
+	keyword = frappe.utils.cstr(employee_keyword or employee).strip().lower()
+	keyword_parts = [part.strip() for part in keyword.split("/") if part.strip()] or [keyword]
 	for row in rows:
+		employee_values = [frappe.utils.cstr(row.get(field)).lower() for field in ("employee", "employee_name", "employee_code")]
+		if keyword and not any(part in value for part in keyword_parts for value in employee_values):
+			continue
 		is_current = not row.valid_from or getdate(row.valid_from) <= today
 		is_current = is_current and (not row.valid_until or getdate(row.valid_until) >= today)
 		row["availability"] = "可派" if row.is_active and row.qualification_status == "有效" and is_current else "不可派"
 		if frappe.utils.cint(include_unavailable) or row["availability"] == "可派":
 			result.append(row)
 
-	return {"rows": result, "count": len(result)}
+	total_count = len(result)
+	page = max(frappe.utils.cint(page), 1)
+	page_length = min(max(frappe.utils.cint(page_length), 1), 100)
+	start = (page - 1) * page_length
+	return {
+		"rows": result[start : start + page_length],
+		"count": total_count,
+		"page": page,
+		"page_length": page_length,
+		"total_pages": max((total_count + page_length - 1) // page_length, 1),
+	}
+
+
+@frappe.whitelist()
+def get_support_filter_options():
+	"""Return the existing values used by the type-ahead query controls."""
+	if not _can_read_support_capabilities():
+		frappe.throw(_("你没有查看跨部门支援名单的权限。"), frappe.PermissionError)
+
+	rows = frappe.get_all(
+		"Cross Department Support Capability",
+		fields=["source_department", "source_designation", "support_department", "support_designation", "employee_name", "employee_code"],
+		limit_page_length=500,
+	)
+
+	def values(fieldname):
+		return sorted({frappe.utils.cstr(row.get(fieldname)).strip() for row in rows if row.get(fieldname)})
+
+	employees = sorted(
+		{
+			"{0} / {1}".format(row.employee_name, row.employee_code)
+			if row.employee_code
+			else frappe.utils.cstr(row.employee_name)
+			for row in rows
+			if row.employee_name
+		}
+	)
+	return {
+		"source_departments": values("source_department"),
+		"source_designations": values("source_designation"),
+		"support_departments": values("support_department"),
+		"support_designations": values("support_designation"),
+		"employees": employees,
+	}

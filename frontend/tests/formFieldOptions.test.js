@@ -22,3 +22,23 @@ test("applies translation callback to normalized select options", () => {
 		{ label: "t:Draft", value: "Draft" },
 	])
 })
+
+test("preserves pre-normalized select option objects", () => {
+	assert.deepEqual(
+		normalizeSelectOptions([
+			{ label: "Approved", value: "approved" },
+			{ label: "Rejected", value: "rejected", disabled: true },
+		]),
+		[
+			{ label: "Approved", value: "approved" },
+			{ label: "Rejected", value: "rejected", disabled: true },
+		]
+	)
+})
+
+test("filters nullish array entries while normalizing option objects", () => {
+	assert.deepEqual(
+		normalizeSelectOptions([null, undefined, { label: "Draft", value: "draft" }], (value) => `t:${value}`),
+		[{ label: "t:Draft", value: "draft" }]
+	)
+})

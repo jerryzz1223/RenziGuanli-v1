@@ -22,6 +22,7 @@ class HRSettings(Document):
 
 		allow_employee_checkin_from_mobile_app: DF.Check
 		allow_geolocation_tracking: DF.Check
+		attendance_final_excel_fields: DF.Table
 		allow_multiple_shift_assignments: DF.Check
 		auto_leave_encashment: DF.Check
 		check_vacancies: DF.Check
@@ -58,12 +59,24 @@ class HRSettings(Document):
 
 	def validate(self):
 		self.set_naming_series()
+		self.validate_attendance_final_excel_fields()
 
 		# Based on proceed flag
 		global PROCEED_WITH_FREQUENCY_CHANGE
 		if not PROCEED_WITH_FREQUENCY_CHANGE:
 			self.validate_frequency_change()
 		PROCEED_WITH_FREQUENCY_CHANGE = False
+
+	def validate_attendance_final_excel_fields(self):
+		"""Keep each canonical export field mapped at most once."""
+		seen = set()
+		for row in self.get("attendance_final_excel_fields") or []:
+			field_key = str(row.field_key or "").strip()
+			if not field_key:
+				continue
+			if field_key in seen:
+				frappe.throw(frappe._("终稿 Excel 表头字段存在重复的系统字段编码：{0}").format(field_key))
+			seen.add(field_key)
 
 	def set_naming_series(self):
 		# EmployeeMaster.autoname owns employee naming.  Do not let the generic

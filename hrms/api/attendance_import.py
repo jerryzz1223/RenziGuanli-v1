@@ -182,6 +182,13 @@ ATTENDANCE_FIELD_CATALOG = [
 ]
 ATTENDANCE_RULE_APPLICATION_MODES = ("仅展示", "导入校验", "异常提示")
 SUPPORTED_ATTENDANCE_HINT_RULE_CODES = ("ATT-LATE-30", "ATT-MISSING-CARD", "ATT-ABSENT-NO-LEAVE")
+ATTENDANCE_DRAFT_IMPORT_RULE_CODES = (
+	"ATT-DRAFT-MISSING-PUNCH",
+	"ATT-DRAFT-LATE",
+	"ATT-DRAFT-EARLY",
+	"ATT-DRAFT-ABSENCE-MARKER",
+	"ATT-DRAFT-SHIFT-MISSING",
+)
 ATTENDANCE_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
 DAY_CHECK_DOCTYPE = "HRMS Attendance Day Check"
 LEAVE_EVIDENCE_DOCTYPE = "HRMS Attendance Leave Evidence"
@@ -218,6 +225,8 @@ def _rule_execution_state(rule):
 		return {"status": "说明规则", "description": "展示制度来源和处理建议，不读取考勤数据。"}
 	if mode == "导入校验":
 		return {"status": "导入合同校验", "description": "导入时使用固定字段映射和必填项校验；不会执行自定义公式。"}
+	if getattr(rule, "rule_code", "") in ATTENDANCE_DRAFT_IMPORT_RULE_CODES:
+		return {"status": "导入时运行", "description": "在考勤初稿加工时按受控内置逻辑识别；可在此启用或停用，不会执行自定义公式。"}
 	if getattr(rule, "rule_code", "") in SUPPORTED_ATTENDANCE_HINT_RULE_CODES:
 		return {"status": "可运行", "description": "可对当前公司和月份的有效日核对数据运行只读提示。"}
 	return {"status": "待接入执行器", "description": "已保存为规则说明；自定义公式不会被系统直接执行。"}
@@ -279,6 +288,71 @@ def get_attendance_field_mapping_catalog():
 
 
 DEFAULT_ATTENDANCE_CUSTOM_RULES = [
+	{
+		"rule_code": "ATT-DRAFT-MISSING-PUNCH",
+		"rule_name": "考勤初稿：缺卡识别",
+		"rule_group": "考勤",
+		"rule_type": "导入异常识别",
+		"source_module": "钉钉每日统计",
+		"source_document": "每日统计 / 上班未打卡次数、下班未打卡次数",
+		"trigger_condition": "来源明确给出上班未打卡次数或下班未打卡次数大于 0。",
+		"formula": "clock_in_missing_count > 0 || clock_out_missing_count > 0",
+		"action_result": "按员工＋日期生成缺卡待核验事件；不自动扣款。",
+		"priority": 5,
+		"application_mode": "异常提示",
+	},
+	{
+		"rule_code": "ATT-DRAFT-LATE",
+		"rule_name": "考勤初稿：迟到识别",
+		"rule_group": "考勤",
+		"rule_type": "导入异常识别",
+		"source_module": "钉钉每日统计",
+		"source_document": "每日统计 / 迟到次数",
+		"trigger_condition": "来源明确给出迟到次数大于 0。",
+		"formula": "late_count > 0",
+		"action_result": "按员工＋日期生成迟到待核验事件；需结合请假或主管说明后处理。",
+		"priority": 6,
+		"application_mode": "异常提示",
+	},
+	{
+		"rule_code": "ATT-DRAFT-EARLY",
+		"rule_name": "考勤初稿：早退识别",
+		"rule_group": "考勤",
+		"rule_type": "导入异常识别",
+		"source_module": "钉钉每日统计",
+		"source_document": "每日统计 / 早退次数",
+		"trigger_condition": "来源明确给出早退次数大于 0。",
+		"formula": "early_count > 0",
+		"action_result": "按员工＋日期生成早退待核验事件；不自动形成缺勤工时。",
+		"priority": 7,
+		"application_mode": "异常提示",
+	},
+	{
+		"rule_code": "ATT-DRAFT-ABSENCE-MARKER",
+		"rule_name": "考勤初稿：旷工标记核验",
+		"rule_group": "考勤",
+		"rule_type": "导入异常识别",
+		"source_module": "钉钉每日统计",
+		"source_document": "每日统计 / 旷工",
+		"trigger_condition": "来源的无单位“旷工”标记大于 0。",
+		"formula": "absence_marker_count > 0",
+		"action_result": "按员工＋日期生成旷工待核验事件；来源无小时单位，不能直接用于薪资扣减。",
+		"priority": 8,
+		"application_mode": "异常提示",
+	},
+	{
+		"rule_code": "ATT-DRAFT-SHIFT-MISSING",
+		"rule_name": "考勤初稿：班次缺失核验",
+		"rule_group": "考勤",
+		"rule_type": "数据质量",
+		"source_module": "钉钉每日统计",
+		"source_document": "每日统计 / 班次、员工入职日期、离职日期",
+		"trigger_condition": "班次为空，且日期不在花名册已知的入职前或离职后期间。",
+		"formula": "!shift && attendance_date >= date_of_joining && (!relieving_date || attendance_date <= relieving_date)",
+		"action_result": "生成排班数据待核验；入职前、离职后空班次仅留为数据质量记录，不进员工异常。",
+		"priority": 9,
+		"application_mode": "异常提示",
+	},
 	{
 		"rule_code": "ATT-LATE-30",
 		"rule_name": "迟到0-30分钟",

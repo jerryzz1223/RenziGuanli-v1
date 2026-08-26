@@ -20,12 +20,11 @@ function expect(condition, message) {
 
 [
 	"ensure_roster_empty_result_header",
-	"hrms-roster-empty-result-header",
-	"input.dataset.rosterEmptyFilter",
-	"restore_roster_when_cleared",
-	'input.addEventListener("search", restore_roster_when_cleared)',
-	"清除筛选",
-].forEach((needle) => expect(source.includes(needle), `Empty roster result must keep a recoverable filter header: ${needle}`));
+	"hrms-roster-table-header",
+	"remove_native_roster_list_header",
+	"hrms-roster-table-header__input",
+	"clear_roster_column_filter",
+].forEach((needle) => expect(source.includes(needle), `Empty roster result must retain its fixed header and recoverable filter entry point: ${needle}`));
 
 [
 	"ROSTER_SEARCH_RECOVERY_STORAGE_KEY",

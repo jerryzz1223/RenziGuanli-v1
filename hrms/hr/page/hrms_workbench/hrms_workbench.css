@@ -2011,3 +2011,309 @@ body.hrms-workbench-shell-mode .page-body {
 		grid-template-columns: 1fr;
 	}
 }
+
+/* 人资主页以图标快捷入口和轻量数据概览为主。 */
+.hrms-home {
+	--hrms-home-border: #e6eaee;
+	--hrms-home-muted: #697586;
+	--hrms-home-text: #1f2937;
+	background: #f6f8fb;
+	box-sizing: border-box;
+	color: var(--hrms-home-text);
+	display: flex;
+	flex-direction: column;
+	min-height: calc(100vh - 94px);
+	padding: 24px;
+}
+
+.hrms-home-state {
+	align-items: center;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	justify-content: center;
+}
+
+.hrms-home__header,
+.hrms-home__panel,
+.hrms-home__metric {
+	background: #fff;
+	border: 1px solid var(--hrms-home-border);
+	border-radius: 12px;
+}
+
+.hrms-home__header {
+	align-items: flex-start;
+	display: flex;
+	justify-content: space-between;
+	margin: 0 auto 14px;
+	max-width: 1440px;
+	padding: 20px 22px;
+	width: 100%;
+}
+
+.hrms-home__eyebrow,
+.hrms-home__header p,
+.hrms-home__panel p,
+.hrms-home__metric small,
+.hrms-home__table th small {
+	color: var(--hrms-home-muted);
+}
+
+.hrms-home__eyebrow {
+	font-size: 13px;
+	margin: 0 0 5px;
+}
+
+.hrms-home__header h2,
+.hrms-home__panel h3 {
+	margin: 0;
+}
+
+.hrms-home__header h2 {
+	font-size: 24px;
+	font-weight: 650;
+}
+
+.hrms-home__header h2 + p,
+.hrms-home__panel-head p,
+.hrms-home__actions p {
+	font-size: 13px;
+	margin: 6px 0 0;
+}
+
+.hrms-home__metrics,
+.hrms-home__grid {
+	display: grid;
+	gap: 14px;
+	margin: 0 auto 14px;
+	max-width: 1440px;
+}
+
+.hrms-home__metrics {
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.hrms-home__metric {
+	align-items: flex-start;
+	display: flex;
+	gap: 13px;
+	min-height: 112px;
+	padding: 17px;
+}
+
+.hrms-home__metric > div {
+	display: grid;
+	gap: 5px;
+}
+
+.hrms-home__metric > div > span {
+	color: #4b5563;
+	font-size: 14px;
+}
+
+.hrms-home__metric strong {
+	font-size: 30px;
+	font-variant-numeric: tabular-nums;
+	line-height: 1;
+}
+
+.hrms-home__metric small {
+	font-size: 12px;
+}
+
+.hrms-home__metric-icon,
+.hrms-home__shortcut-icon {
+	align-items: center;
+	display: inline-flex;
+	justify-content: center;
+}
+
+.hrms-home__metric-icon {
+	background: #eef4ff;
+	border-radius: 10px;
+	color: #4d75cb;
+	height: 38px;
+	width: 38px;
+}
+
+.hrms-home__metric-icon svg,
+.hrms-home__shortcut-icon svg {
+	height: 21px;
+	width: 21px;
+}
+
+.hrms-home__shortcuts {
+	margin: 0 auto 14px;
+	max-width: 1440px;
+	width: 100%;
+}
+
+.hrms-home__shortcut-list {
+	display: grid;
+	gap: 10px;
+	grid-template-columns: repeat(8, minmax(0, 1fr));
+	margin-top: 16px;
+}
+
+.hrms-home__shortcut {
+	align-items: center;
+	background: #fff;
+	border: 1px solid transparent;
+	border-radius: 10px;
+	color: #344054;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	justify-content: flex-start;
+	min-height: 122px;
+	padding: 14px 8px;
+	text-align: center;
+	transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+}
+
+.hrms-home__shortcut:hover {
+	background: #fafcff;
+	border-color: #d7e1f2;
+	transform: translateY(-1px);
+}
+
+.hrms-home__shortcut strong {
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.hrms-home__shortcut small {
+	color: var(--hrms-home-muted);
+	font-size: 11px;
+	line-height: 1.35;
+}
+
+.hrms-home__shortcut-icon {
+	border-radius: 12px;
+	height: 42px;
+	width: 42px;
+}
+
+.hrms-home__shortcut.is-blue .hrms-home__shortcut-icon { background: #eaf1ff; color: #4779d8; }
+.hrms-home__shortcut.is-green .hrms-home__shortcut-icon { background: #e9f8ef; color: #219565; }
+.hrms-home__shortcut.is-purple .hrms-home__shortcut-icon { background: #f1edff; color: #7563c9; }
+.hrms-home__shortcut.is-orange .hrms-home__shortcut-icon { background: #fff1e8; color: #dd7a36; }
+.hrms-home__shortcut.is-teal .hrms-home__shortcut-icon { background: #e5f8f8; color: #1d9799; }
+.hrms-home__shortcut.is-red .hrms-home__shortcut-icon { background: #fff0ef; color: #db635c; }
+.hrms-home__shortcut.is-yellow .hrms-home__shortcut-icon { background: #fff8df; color: #b4851e; }
+.hrms-home__shortcut.is-indigo .hrms-home__shortcut-icon { background: #ecf0ff; color: #5e6fca; }
+
+.hrms-home__grid {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hrms-home__panel {
+	display: flex;
+	flex-direction: column;
+	padding: 20px;
+}
+
+.hrms-home__panel-head,
+.hrms-home__actions {
+	align-items: flex-start;
+	display: flex;
+	gap: 16px;
+	justify-content: space-between;
+}
+
+.hrms-home__panel h3 {
+	font-size: 16px;
+	font-weight: 650;
+}
+
+.hrms-home__stat-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	margin-top: 20px;
+}
+
+.hrms-home__stat {
+	border-bottom: 1px solid var(--hrms-home-border);
+	border-right: 1px solid var(--hrms-home-border);
+	display: grid;
+	gap: 4px;
+	padding: 16px 10px;
+	place-items: center;
+}
+
+.hrms-home__stat:nth-child(3n) {
+	border-right: 0;
+}
+
+.hrms-home__stat:nth-last-child(-n + 3) {
+	border-bottom: 0;
+}
+
+.hrms-home__stat strong,
+.hrms-home__status-row b {
+	font-size: 22px;
+	font-variant-numeric: tabular-nums;
+	font-weight: 650;
+}
+
+.hrms-home__stat span,
+.hrms-home__status-row small {
+	color: var(--hrms-home-muted);
+	font-size: 12px;
+}
+
+.hrms-home__status-list {
+	margin-top: 12px;
+}
+
+.hrms-home__status-row {
+	align-items: center;
+	border-top: 1px solid var(--hrms-home-border);
+	display: flex;
+	justify-content: space-between;
+	min-height: 51px;
+	padding: 7px 0;
+}
+
+.hrms-home__status-row div {
+	display: grid;
+	gap: 2px;
+}
+
+.hrms-home__status-row strong {
+	color: #344054;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+@media (max-width: 900px) {
+	.hrms-home__metrics {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.hrms-home__shortcut-list {
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+	}
+}
+
+@media (max-width: 620px) {
+	.hrms-home {
+		padding: 14px;
+	}
+
+	.hrms-home__header {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.hrms-home__grid { grid-template-columns: 1fr; }
+
+	.hrms-home__shortcut-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+	.hrms-home__shortcut { min-height: 112px; }
+
+	.hrms-home__header .btn {
+		align-self: flex-start;
+	}
+}

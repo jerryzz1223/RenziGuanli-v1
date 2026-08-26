@@ -47,7 +47,7 @@ for (const label of ["桌面", "Desktop", "网站", "Website", "编辑侧边栏"
 mustInclude(redirect, "hide_empty_workspace_dropdowns", "Workspace dropdown should be hidden when every item is removed.");
 mustInclude(redirect, ".frappe-menu.context-menu", "Workspace dropdown cleanup must handle Frappe context menus.");
 
-for (const marker of ["工作台", "人事", "组织", "招聘", "考勤假期", "薪酬", "审批", "培训学习", "绩效", "更多"]) {
+for (const marker of ["主页", "人事", "组织", "招聘", "考勤假期", "薪酬", "审批", "培训学习", "绩效", "更多"]) {
 	mustInclude(topNav, marker, `Top navbar is missing module: ${marker}`);
 }
 
@@ -61,7 +61,7 @@ for (const marker of [
 	'"custom_employee_code": "工号"',
 	'"department": "部门"',
 	'"designation": "岗位"',
-	'"custom_personnel_status": "工作性质"',
+	'"employment_type": "工作性质"',
 	'"date_of_joining": "入职日期"',
 	'"custom_id_type": "证件类型"',
 	'"passport_number": "证件号码"',
@@ -85,15 +85,16 @@ for (const marker of [
 for (const marker of [
 	"表头联想筛选",
 	"员工花名册",
-	"在职",
+	"在职 · 正式",
+	"在职 · 试用期",
 	"退休返聘",
-	"试用期",
 	"待离职",
-	"已离职",
+	"离职",
 	"添加员工",
 	"导入",
 	"导出",
 	"hide_unused_roster_toolbar_controls",
+	"hrms-roster-column-filter-input, .hrms-roster-empty-result-header__input",
 	"hrms-roster-toolbar-control-hidden",
 	"快速编辑",
 	"部门筛选",
@@ -110,6 +111,7 @@ for (const marker of [
 	"get_employee_roster",
 	"get_employee_roster_summary",
 	"frappe.db.count",
+	"get_user_default(\"Company\")",
 	"frappe.set_route",
 	"frappe.set_route(\"employee-detail\"",
 	"apply_single_roster_filter",
@@ -129,10 +131,23 @@ for (const marker of [
 	"page_length: ROSTER_ALL_EMPLOYEES_PAGE_LENGTH",
 	"configure_roster_page_length",
 	"hide_roster_page_length_controls",
+	"querySelectorAll(\".sort-selector\")",
+	"querySelectorAll(\".filter-section\")",
+	"ensure_roster_records_loaded",
+	"__hrmsRosterInitialLoadRequested",
 	"hide_native_roster_field_filters",
-	"enhance_roster_column_headers",
-	"hrms-roster-column-filter-hotspot",
-	"hrms-roster-column-filter-input",
+	"remove_native_roster_list_header",
+	"expand_roster_layout",
+	"stretch_roster_result_area",
+	"getBoundingClientRect().top",
+	"main_top",
+	"window.innerHeight - main_top - 8",
+	"window.innerHeight - top - 12",
+	"no-list-sidebar",
+	"hrms-employee-roster-page",
+	"hrms-roster-table-header",
+	"hrms-roster-table-header__input",
+	"apply_roster_column_sort",
 	"get_roster_filter_suggestions",
 	"apply_roster_column_filter",
 	"ROSTER_COLUMN_FILTER_STORAGE_KEY",
@@ -164,8 +179,16 @@ mustInclude(topNavCss, "body.hrms-employee-roster-view .filter-button", "Employe
 mustInclude(topNavCss, ".hrms-roster-card.is-active", "Employee roster must show a single active status card.");
 mustInclude(topNavCss, ".hrms-roster-page-length-hidden", "Employee roster must hide only the page-size choices, not its data.");
 mustInclude(topNavCss, ".hrms-roster-native-filters-hidden", "Employee roster must remove its redundant top field filters.");
-mustInclude(topNavCss, ".hrms-roster-column-filter-hotspot", "Employee roster headers must expose a blank-space filter target.");
-mustInclude(topNavCss, ".hrms-roster-column-filter-editor", "Employee roster headers must provide an inline suggestion editor.");
+mustInclude(topNavCss, ".page-container.hrms-employee-roster-page .layout-main-section-wrapper", "Employee roster must target the actual ListView layout wrapper.");
+mustInclude(topNavCss, "flex: 1 1 100% !important;", "Employee roster must release Frappe's 80% list-shell width.");
+mustInclude(topNavCss, ".page-container[data-page-route=\"Workspaces\"] .layout-main", "Workspaces must remove Frappe's reading-column width cap.");
+mustInclude(topNavCss, ".page-container[data-page-route=\"Workspaces\"] .layout-main-section-wrapper", "Workspaces must use the available desktop width.");
+mustInclude(topNavCss, "body.hrms-module-shell .page-container > .page-body", "Module pages must share a full-height content shell.");
+mustInclude(topNavCss, "min-height: calc(100vh - var(--navbar-height, 56px));", "Module pages must extend to the viewport bottom.");
+mustInclude(topNavCss, "body.hrms-module-shell .main-section", "Frappe's list-height measurement node must fill the viewport.");
+mustInclude(topNavCss, ".hrms-roster-table-header", "Employee roster must provide one fixed business table header.");
+mustInclude(topNavCss, ".hrms-roster-table-header__input", "Employee roster header must provide searchable inputs.");
+mustInclude(topNavCss, ".hrms-roster-table-header__sort", "Employee roster header must provide sortable column titles.");
 
 for (const marker of [
 	"在职信息",
@@ -181,6 +204,8 @@ for (const marker of [
 	"bind_employee_detail_route_redirect",
 	"openEmployeeFormForEdit",
 	"EMPLOYEE_FORM_EDIT_ACCESS_KEY",
+	"is_new_employee_form_route",
+	"/^new-employee(?:-|$)/",
 	"frappe.set_route(\"employee-detail\", frm.doc.name)",
 ]) {
 	mustInclude(employeeForm, marker, `Employee form is missing detail marker: ${marker}`);
@@ -319,8 +344,8 @@ for (const marker of [
 	"toggle_related_block",
 	"查看更多",
 	"新增记录",
-	"记录说明",
-	"办理入口",
+	"row.compact",
+	"暂未录入薪资社保数据",
 	"hrms-employee-detail-sticky-tabs",
 	"body.hrms-employee-detail-view",
 ]) {

@@ -28,7 +28,10 @@ for (const marker of [
 	'key: "attendance-pay-rules"',
 	"load_salary_assignment_step",
 	"load_attendance_pay_rules",
-	"这里只显示参与本月算薪的人数范围",
+	"薪资计算仅取本月已锁定考勤终稿中的人员；下方固定展示参与人员与考勤工时",
+	"load_payroll_participation_preview",
+	"get_payroll_participation_preview",
+	"仅本表人员会进入本月薪资输入表与结算计算",
 	"打开员工花名册",
 	"查看已发布薪资架构",
 	'frappe.set_route("salary-architecture")',
@@ -79,8 +82,9 @@ for (const marker of [
 const css = read("hrms/hr/page/payroll_input_center/payroll_input_center.css");
 for (const marker of [
 	".hrms-payroll-area-navigation",
-	".hrms-payroll-area-card.is-selected",
-	".hrms-payroll-personnel-summary",
+".hrms-payroll-area-card.is-selected",
+".hrms-payroll-personnel-summary",
+	".hrms-payroll-participation-preview",
 	".hrms-payroll-attendance-rule-grid",
 	".hrms-payroll-step-purpose",
 	".hrms-payroll-step-kicker",
@@ -91,7 +95,7 @@ for (const marker of [
 }
 
 const guide = read("docs/payroll/薪酬配置中心操作指南.md");
-for (const marker of ["数据区域与按需入口", "人员范围只看统计", "试算时统一校验", "规则修改要求", "最低验收案例"]) {
+for (const marker of ["数据区域与按需入口", "人员范围：统计与参与人员预览", "试算时统一校验", "规则修改要求", "最低验收案例"]) {
 	mustInclude(guide, marker);
 }
 

@@ -110,7 +110,6 @@ for (const marker of [
 	"_get_latest_separations",
 	"custom_employee_code",
 	"relieving_date",
-	"custom_personnel_status",
 	"departure_date",
 	"separation_name",
 	"exit_interview",

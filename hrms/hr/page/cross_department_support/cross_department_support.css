@@ -3,7 +3,12 @@
 .cross-department-support-page__intro h4 { margin: 0 0 6px; }
 .cross-department-support-page__intro p { margin: 0; color: var(--text-muted); }
 .cross-department-support-page__intro-actions { display: flex; gap: 8px; flex: 0 0 auto; }
-.cross-department-support-page__filters { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.cross-department-support-page__filters { display: grid; grid-template-columns: 1fr 1fr 0.8fr; gap: 12px; margin-bottom: 16px; }
+.cross-department-support-page__filter-group { padding: 14px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--card-bg); }
+.cross-department-support-page__filter-label { margin-bottom: 10px; font-weight: 600; color: var(--heading-color); }
+.cross-department-support-page__filter-fields { display: grid; grid-template-columns: repeat(2, minmax(130px, 1fr)); gap: 10px; }
+.cross-department-support-page__filter-fields[data-filter-group="employee"] { grid-template-columns: minmax(180px, 1fr); }
+.cross-department-support-page__filter-actions { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .cross-department-support-page__filters .form-group { margin-bottom: 0; }
 .cross-department-support-page__summary { display: flex; align-items: center; gap: 16px; margin: 4px 0 12px; }
 .cross-department-support-page__count { display: inline-flex; align-items: baseline; gap: 6px; padding: 8px 12px; border-radius: 8px; background: var(--control-bg); }
@@ -12,6 +17,8 @@
 .cross-department-support-page__results .table { margin: 0; min-width: 860px; }
 .cross-department-support-page__results th { background: var(--subtle-fg); white-space: nowrap; }
 .cross-department-support-page__results td { vertical-align: middle; }
+.cross-department-support-page__pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--border-color); }
+.cross-department-support-page__pagination .btn + .btn { margin-left: 8px; }
 .cross-department-support-page__import-tip { padding: 8px 0; }
 .cross-department-support-page__import-summary { margin-bottom: 12px; font-weight: 600; }
-@media (max-width: 900px) { .cross-department-support-page__filters { grid-template-columns: repeat(2, minmax(160px, 1fr)); } }
+@media (max-width: 900px) { .cross-department-support-page__filters { grid-template-columns: 1fr; } .cross-department-support-page__filter-actions { grid-column: auto; } }

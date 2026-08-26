@@ -95,6 +95,7 @@
   {
    "fieldname": "change_reason",
    "fieldtype": "Data",
+   "hidden": 1,
    "label": "异动原因"
   },
   {
@@ -181,10 +182,10 @@
    "label": "核准"
   },
   {
-   "default": "草稿",
+   "default": "已批准",
    "fieldname": "status",
    "fieldtype": "Select",
-   "in_list_view": 1,
+   "hidden": 1,
    "label": "状态",
    "options": "草稿\n待审核\n已批准\n已作废"
   },

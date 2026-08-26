@@ -397,6 +397,51 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertEqual(sheet["L3"].fill.fgColor.rgb, "00FFFF00")
 		self.assertEqual(result["file_url"], "/private/files/test.xlsx")
 
+	def test_monthly_signed_file_reads_custom_excel_headers_from_hr_settings(self):
+		if load_workbook is None:
+			self.skipTest("openpyxl is unavailable")
+		center, file_manager, frappe_modules = processing_center_module()
+		saved = {}
+		file_manager.save_file = lambda file_name, content, *_args, **_kwargs: (
+			saved.update({"content": content})
+			or SimpleNamespace(file_name=file_name, file_url="/private/files/test.xlsx")
+		)
+		configured_rows = [
+			SimpleNamespace(
+				enabled=1,
+				field_key="special_workday_hours",
+				excel_main_header="平日加班",
+				excel_sub_header="平日特",
+				field_type="来源字段",
+				comparison_policy="必须一致",
+				numeric_tolerance=0,
+			),
+			SimpleNamespace(
+				enabled=1,
+				field_key="workday_overtime_hours",
+				excel_main_header="平日加班",
+				excel_sub_header="工作日加班",
+				field_type="来源字段",
+				comparison_policy="必须一致",
+				numeric_tolerance=0,
+			),
+		]
+		settings = SimpleNamespace(get=lambda fieldname: configured_rows if fieldname == "attendance_final_excel_fields" else [])
+		center.frappe.get_single = lambda _doctype: settings
+		with patch.dict(sys.modules, frappe_modules):
+			center._save_monthly_signed_confirmation_file("2026-06", [{
+				"department": "工程课", "employee_code": "103", "employee_name": "张三", "standard_hours": 168,
+				"actual_attendance_hours": 168, "special_workday_hours": 4, "workday_overtime_hours": 8,
+			}])
+
+		book = load_workbook(BytesIO(saved["content"]), read_only=False, data_only=False)
+		sheet = book["员工签字版"]
+		self.assertEqual(sheet["J2"].value, "平日加班")
+		self.assertEqual(sheet["J3"].value, "平日特")
+		self.assertEqual(sheet["K3"].value, "工作日加班")
+		self.assertIn("J2:K2", {str(item) for item in sheet.merged_cells.ranges})
+		self.assertEqual(sheet["AU5"].value, "=AQ5+AN5+AO5")
+
 	def test_special_hours_are_split_by_date_before_final_calculation(self):
 		center, _file_manager, _frappe_modules = processing_center_module()
 		self.assertEqual(

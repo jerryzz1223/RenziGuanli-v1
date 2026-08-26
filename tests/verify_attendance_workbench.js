@@ -28,8 +28,8 @@ if (workbenchJs.includes("window.location.replace")) {
 	throw new Error("hrms-workbench must render the unified HR shell, not redirect to /desk/hr-setup.");
 }
 
-for (const marker of ["工作台", "人事", "组织", "招聘", "考勤假期", "薪酬", "审批", "培训学习", "绩效", "更多"]) {
-	mustInclude(workbenchJs + workbenchPy, marker, `Unified HR workbench is missing module marker: ${marker}`);
+for (const marker of ["人资主页", "本月人员状况", "今日考勤状况", "薪资数据不在首页展示", "get_data"]) {
+	mustInclude(workbenchJs + workbenchPy, marker, `Integrated HR home page is missing marker: ${marker}`);
 }
 
 for (const marker of ["考勤导入中心", "每日考勤核对", "考勤异常处理", "月度考勤终稿", "attendance-import-center"]) {
@@ -91,9 +91,17 @@ for (const marker of [
 	"approval_no",
 	"get_processing_batch",
 	"register_source_file",
+	"文件已登记，正在自动加工并检查。",
 	"bulk_import_and_process_sources",
-	"批量导入 5 个考勤文件并加工",
+	"批量导入",
+	"bulk_source_count",
 	"allow_multiple: true",
+	"data-bulk-select-files",
+	"data-bulk-import-submit",
+	"选择或补选文件",
+	"attendance_exception_lines(row)",
+	"attendance_exception_date_text(row)",
+	"render_attendance_exception_lines(lines, recordId",
 	"register_monthly_support_file",
 	"process_monthly_support_file",
 	"导入并校验",
@@ -119,10 +127,8 @@ for (const marker of [
 	"异常日期及原因",
 	"update_processing_record",
 	"bulk_update_processing_records",
-	"本类结果已确认",
 	"查看/更正记录",
 	"该记录已处理；如需更正",
-	"confirm_source_result",
 	"list_processing_exceptions",
 	"list_processing_batches",
 	"list_daily_attendance_records",
@@ -151,14 +157,23 @@ for (const marker of [
 	"result_trace(row",
 	"特殊工时明细",
 	"selected_exception_record_ids",
+	"exception_page_record_ids",
+	"exception_page_size = 20",
+	"render_exception_pagination",
+	"data-exception-page",
+	"选择当前页的全部异常",
 	"data-exception-record-select",
 	"data-select-exception-all",
 	"data-bulk-exception-process",
 	"请选择一个来源后，可勾选并批量处理异常。",
+	"处理当前页已勾选",
+	"page_start: (this.exception_page - 1) * this.exception_page_size",
 	"show_bulk_processing_dialog(this.exception_source_filter)",
 	"hrms-attendance-monthly-support-grid",
 	"来源完备性",
 	"锁定快照",
+	"const ready = sourcesReady;",
+	'["已就绪", "已确认"].includes(status)',
 	"exception_codes",
 	"exception_message",
 	"review_status",
@@ -247,6 +262,10 @@ for (const marker of [
 	mustInclude(attendancePageJs, marker, `Attendance import center is missing marker: ${marker}`);
 }
 
+if (attendancePageJs.includes("请继续从同一窗口选择剩余文件")) {
+	throw new Error("Bulk uploader must keep selected files in a persistent batch dialog, not require the closed file picker.");
+}
+
 for (const forbiddenMarker of ["data-monthly-support-exceptions", "data-monthly-support-confirm"]) {
 	if (attendancePageJs.includes(forbiddenMarker)) {
 		throw new Error(`One-time monthly support imports must not expose secondary exception/review actions: ${forbiddenMarker}`);
@@ -312,6 +331,9 @@ for (const queueControl of ["data-bulk-process", "data-processing-record-select"
 		throw new Error(`Processing results must remain read-only; move ${queueControl} to the exception queue.`);
 	}
 }
+if (processingResults.includes("data-confirm-source") || processingResults.includes("确认本类结果")) {
+	throw new Error("Source confirmation must be performed on the monthly summary cards, not in processing results.");
+}
 
 const toolbarStart = attendancePageJs.indexOf("render_toolbar() {");
 const toolbarEnd = attendancePageJs.indexOf("\n\trender_workflow_tabs()", toolbarStart);
@@ -354,7 +376,7 @@ for (const marker of ["flex: 0 0 220px", "min-width: 220px", "white-space: nowra
 	mustInclude(topNavCss, marker, `Attendance sidebar header layout is missing ${marker}.`);
 }
 
-mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260814c", "The sidebar stylesheet cache key must change with its layout.");
+mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260826k", "The sidebar stylesheet cache key must change with its layout.");
 
 if (attendancePageJs.includes('this.wrapper.querySelector("[data-company]").addEventListener("change"')) {
 	throw new Error("Attendance company must be controlled by the global company selector, not a local editable field.");
@@ -493,9 +515,11 @@ for (const [folder, titleMarkers] of [
 
 for (const marker of [
 	"hrms-attendance-kpi-grid",
-	"hrms-attendance-toolbar",
-	"processing-batch-status",
-	"待确认异常",
+	"hrms-attendance-overview-grid",
+	"待处理异常",
+	"加工结果",
+	"月度考勤",
+	"processing-results",
 	"hrms-attendance-source-grid",
 	"hrms-attendance-source-card",
 	"hrms-attendance-final-grid",

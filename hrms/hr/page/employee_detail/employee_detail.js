@@ -42,18 +42,7 @@ class EmployeeDetailPage {
 	show() {
 		document.body.classList.add("hrms-employee-detail-view");
 		this.page.set_secondary_action(__("返回花名册"), () => frappe.set_route("List", "Employee"));
-		this.bind_personnel_status_updates();
 		this.refresh_from_route();
-	}
-
-	bind_personnel_status_updates() {
-		if (this.personnel_status_updates_bound || !frappe.realtime?.on) return;
-		this.personnel_status_updates_bound = true;
-		frappe.realtime.on("hrms_employee_personnel_status_updated", (payload = {}) => {
-			if (!payload.employee || payload.employee !== this.employee) return;
-			this.last_loaded_at = 0;
-			this.load(this.employee);
-		});
 	}
 
 	refresh_from_route() {
@@ -661,9 +650,8 @@ class EmployeeDetailPage {
 
 	render_header(header) {
 		const department_display = this.get_department_display(header);
-		const personnel_status = header.custom_personnel_status || "";
 		const meta = [
-			this.get_personnel_status_display(personnel_status),
+			this.get_employment_type_display(header),
 			header.custom_employee_code ? `${__("工号")}：${header.custom_employee_code}` : "",
 			header.cell_number,
 		].filter(Boolean);
@@ -692,7 +680,7 @@ class EmployeeDetailPage {
 						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="edit-employee">${__("编辑资料")}</button>` : ""}
 						<button class="btn btn-default btn-sm" data-action="compare">${__("员工对比")}</button>
 						<button class="btn btn-primary btn-sm" data-action="transfer">${__("办理人事异动")}</button>
-						${personnel_status === "试用期" ? `<button class="btn btn-default btn-sm" data-action="promotion">${__("转正面谈")}</button>` : ""}
+						${this.is_probation_work_nature(header) ? `<button class="btn btn-default btn-sm" data-action="promotion">${__("转正面谈")}</button>` : ""}
 						<button class="btn btn-default btn-sm" data-action="separation">${__("离职")}</button>
 						<button class="btn btn-default btn-sm" data-action="contract">${__("合同记录")}</button>
 					</div>
@@ -701,12 +689,17 @@ class EmployeeDetailPage {
 		`;
 	}
 
-	get_personnel_status_display(personnel_status) {
-		return {
-			"在职": __("在职 · 正式"),
-			"试用期": __("在职 · 试用期"),
-			"已离职": __("离职"),
-		}[personnel_status] || personnel_status;
+	is_probation_work_nature(header = {}) {
+		return header.employment_type === "Probation" || header.custom_is_confirmed === "否";
+	}
+
+	get_employment_type_display(header = {}) {
+		if (header.status === "Left") return __("离职");
+		if (header.status === "Inactive") return __("待离职");
+		if (header.employment_type === "Retainer") return __("退休返聘");
+		if (this.is_probation_work_nature(header)) return __("在职 · 试用期");
+		if (header.employment_type) return __("在职 · 正式");
+		return __("未设置");
 	}
 
 	render_tabs() {
@@ -752,7 +745,7 @@ class EmployeeDetailPage {
 							${this.render_kpi("部门", department_display || "未设置")}
 							${this.render_kpi("岗位", header.designation || "未设置")}
 							${this.render_kpi("入职日期", header.date_of_joining || "未设置")}
-							${this.render_kpi("工作性质", this.get_personnel_status_display(header.custom_personnel_status || "未设置"))}
+							${this.render_kpi("工作性质", this.get_employment_type_display(header))}
 						</div>
 					</div>
 					<div class="hrms-employee-detail-section hrms-employee-detail-section-card">
@@ -806,7 +799,18 @@ class EmployeeDetailPage {
 	render_growth_timeline() {
 		const header = this.detail?.header || {};
 		const department_display = this.get_department_display(header);
+		const employment_type_changes = (this.detail?.growth_records || []).map((record) => ({
+			date: record.date,
+			title: record.title || __("工作性质调整"),
+			description: [
+				record.from_value,
+				record.to_value,
+			]
+				.filter(Boolean)
+				.join(" → "),
+		}));
 		const items = [
+			...employment_type_changes,
 			{
 				date: header.date_of_joining || __("入职"),
 				title: __("入职"),
@@ -815,7 +819,7 @@ class EmployeeDetailPage {
 			{
 				date: __("至今"),
 				title: __("当前任职"),
-				description: this.join_values([department_display, header.designation, this.get_personnel_status_display(header.custom_personnel_status)]),
+				description: this.join_values([department_display, header.designation, this.get_employment_type_display(header)]),
 			},
 		];
 		return items
@@ -854,14 +858,14 @@ class EmployeeDetailPage {
 						: `<div class="hrms-employee-detail-empty">${__("当前区块没有已启用字段")}</div>`
 				}
 				${this.render_related_blocks(tab_label)}
-				${this.render_add_field_hint()}
+				${tab_label === "工资社保" ? "" : this.render_add_field_hint()}
 			</div>
 		`;
 	}
 
 	render_readonly_field(field) {
-		const value = field.fieldname === "custom_personnel_status"
-			? this.get_personnel_status_display(field.value)
+		const value = field.fieldname === "employment_type"
+			? this.get_employment_type_display({ ...this.detail?.header, employment_type: field.value })
 			: field.value;
 		return `
 			<div class="hrms-employee-detail-field">
@@ -956,6 +960,13 @@ class EmployeeDetailPage {
 
 	render_related_detail(row) {
 		const items = row.items || [];
+		if (row.compact) {
+			return `
+				<div class="hrms-employee-detail-related-detail">
+					${items.length ? this.render_related_items(items) : `<div class="text-muted">${__("暂未录入薪资社保数据")}</div>`}
+				</div>
+			`;
+		}
 		return `
 			<div class="hrms-employee-detail-related-detail">
 				<h4>${__("记录说明")}</h4>
@@ -1096,7 +1107,7 @@ class EmployeeDetailPage {
 		});
 		this.wrapper.querySelectorAll("[data-action='promotion']").forEach((button) => {
 			button.addEventListener("click", () => {
-				if (this.detail?.header?.custom_personnel_status !== "试用期") return;
+				if (!this.is_probation_work_nature(this.detail?.header)) return;
 				const interview_date = frappe.datetime.get_today();
 				frappe.new_doc("Employee Promotion", {
 					employee: this.employee,

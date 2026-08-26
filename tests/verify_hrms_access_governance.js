@@ -39,11 +39,11 @@ for (const marker of [
 
 for (const marker of [
 	"get_hrms_developer_configuration_map",
-	"可配置业务逻辑地图",
+	"字段字典与引用范围",
 	"打开生效位置",
 	"如何验证",
 	"仍然需要代码和迁移",
-	'case "permissions": route("hrms-access-center")',
+	'frappe.set_route("List", this.dataset.dictionary)',
 ]) {
 	assert(developerPage.includes(marker), `Developer configuration map contract missing: ${marker}`);
 }

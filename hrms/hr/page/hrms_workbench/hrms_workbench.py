@@ -41,6 +41,15 @@ def _count_today(doctype, date_field, filters=None):
 	return _count(doctype, safe_filters)
 
 
+def _count_in_date_range(doctype, date_field, start_date, end_date, filters=None):
+	"""Count records in a date range only when the source schema supports it."""
+	if not _has_field(doctype, date_field):
+		return 0
+	safe_filters = _safe_filters(doctype, filters)
+	safe_filters[date_field] = ["between", [start_date, end_date]]
+	return _count(doctype, safe_filters)
+
+
 def _calendar_days(today):
 	_, days_in_month = calendar.monthrange(today.year, today.month)
 	start_weekday = date(today.year, today.month, 1).weekday()
@@ -681,6 +690,7 @@ def get_performance_view(
 @frappe.whitelist()
 def get_data():
 	today = getdate(nowdate())
+	month_start = today.replace(day=1)
 	weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 
 	employee_total = _count("Employee")
@@ -699,6 +709,7 @@ def get_data():
 
 	onboarding = _count_with_safe_filters("Employee Onboarding", {"boarding_status": "Pending"})
 	separation = _count_with_safe_filters("Employee Separation", {"boarding_status": "Pending"})
+	monthly_new_hires = _count_in_date_range("Employee", "date_of_joining", month_start, today)
 
 	return {
 		"today": {
@@ -748,6 +759,11 @@ def get_data():
 			_route("人事常用表格", ["List", "File"], "table"),
 		],
 		"cards": {
+			"personnel": {
+				"new_hires": monthly_new_hires,
+				"onboarding": onboarding,
+				"separation": separation,
+			},
 			"recruitment": {"open_jobs": open_jobs, "interviews": today_interviews},
 			"attendance": {
 				"checkins": today_attendance,

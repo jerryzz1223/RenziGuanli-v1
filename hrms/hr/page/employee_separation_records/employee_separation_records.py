@@ -79,7 +79,6 @@ def _employee_fields():
 		"status",
 		"modified",
 		"custom_employee_code",
-		"custom_personnel_status",
 	)
 	return [fieldname for fieldname in candidates if _meta_has_field(meta, fieldname)]
 
@@ -137,7 +136,7 @@ def _get_employees_by_names(employee_names, company=None):
 
 
 def _is_departed_employee(employee):
-	return employee.get("status") == "Left" or employee.get("custom_personnel_status") == "已离职"
+	return employee.get("status") == "Left"
 
 
 def _get_latest_separations(employee_names):

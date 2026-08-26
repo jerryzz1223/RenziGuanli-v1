@@ -450,7 +450,7 @@ def _employee_indexes(employee_directory):
 			"employee_code": _directory_value(item, "employee_code", "custom_employee_code", "工号"),
 			"employee_name": _directory_value(item, "employee_name", "姓名", "employee_full_name"),
 			"department": normalize_department_name(_directory_value(item, "department", "部门")),
-			"employment_status": _directory_value(item, "employment_status", "custom_personnel_status", "status", "工作性质"),
+			"employment_status": _directory_value(item, "employment_status", "status", "工作性质"),
 			"date_of_joining": _directory_value(item, "date_of_joining", "入职日期"),
 			"relieving_date": _directory_value(item, "relieving_date", "离职日期"),
 		}

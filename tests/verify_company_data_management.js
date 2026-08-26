@@ -36,6 +36,7 @@ check(api.includes("_employee_link_blockers"), "employee cleanup must preview ex
 check(api.includes("HRMS Data Cleanup Log"), "successful cleanup must be audited");
 check(api.includes("frappe.db.savepoint"), "cleanup must create an atomic savepoint");
 check(api.includes("frappe.db.rollback(save_point=savepoint)"), "cleanup must roll back on failure");
+check(api.includes("previous_in_test = frappe.in_test"), "large roster cleanup must avoid filling the background queue");
 check(!api.includes('TEST_COMPANY = "TEST-HRMS"'), "durable cleanup must not hardcode TEST-HRMS");
 check(!/"doctypes"\s*:\s*\([^)]*"Company"/.test(api), "Company must never be a cleanup target");
 check(!/"doctypes"\s*:\s*\([^)]*"Department"/.test(api), "Department must never be a cleanup target");

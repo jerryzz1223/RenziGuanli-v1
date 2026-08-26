@@ -29,6 +29,7 @@ class PayrollFormulaEngineTest(unittest.TestCase):
 			"raw_weekend_overtime_hours": 8,
 			"weekday_overtime_hours": 12,
 			"holiday_overtime_hours": 0,
+			"deep_night_shift_count": 1,
 			"large_night_shift_count": 1,
 			"small_night_shift_count": 2,
 			"full_attendance_bonus": 100,
@@ -37,6 +38,7 @@ class PayrollFormulaEngineTest(unittest.TestCase):
 		self.assertEqual(result["salary_subtotal"], 2800)
 		self.assertEqual(result["missing_hours"], 16)
 		self.assertEqual(result["adjusted_absence_hours"], 8)
+		self.assertEqual(result["night_shift_allowance"], 148)
 		self.assertEqual(result["social_security_company"], 1256.82)
 		self.assertEqual(len(trace), len(FORMULA_TEMPLATES))
 

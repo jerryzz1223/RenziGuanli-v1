@@ -19,7 +19,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	};
 
 	$(page.body).addClass("hrms-roster-import-page");
-	page.set_secondary_action(__("返回"), () => frappe.set_route("List", "Employee"));
+	page.set_secondary_action(__("返回"), () => go_back());
 
 	function download_template() {
 		window.open(
@@ -151,6 +151,9 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 								.join("")}
 						</tbody>
 					</table>
+					<div class="hrms-import-actions">
+						<button class="btn btn-default" data-action="back-to-upload">${__("重新上传文件")}</button>
+					</div>
 				</div>
 			</div>
 		`);
@@ -245,6 +248,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 					${errors.length ? render_errors(errors, "", true) : ""}
 					${errors.length ? "" : `<div class="alert alert-success">${__("预览通过，仅显示需要人工校正的数据。")}</div>`}
 					<div class="hrms-import-actions">
+						<button class="btn btn-default" data-action="back-to-upload">${__("重新上传文件")}</button>
 						<button class="btn btn-default" data-action="back-to-match">${__("返回匹配表头")}</button>
 						${(result.failed_rows || []).length ? `<button class="btn btn-default" data-action="download-preview-failed">${__("下载错误行及修改建议")}</button>` : ""}
 						<button class="btn btn-primary" data-action="confirm-import" ${can_write ? "" : "disabled"}>${__("导入")}</button>
@@ -394,6 +398,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 					}
 					<div class="hrms-import-actions">
 						<button class="btn btn-default" data-action="restart">${__("继续导入其他花名册")}</button>
+						${result.failed ? `<button class="btn btn-default" data-action="back-to-upload">${__("重新上传文件")}</button>` : ""}
 						${(result.failed_rows || []).length ? `<button class="btn btn-default" data-action="download-failed">${__("下载失败行")}</button>` : ""}
 						<button class="btn btn-primary" data-action="open-employee-list">${__("打开员工花名册")}</button>
 					</div>
@@ -439,6 +444,44 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		});
 	}
 
+	function return_to_upload() {
+		// Clear the previous file and invalidate any in-flight request so a newly
+		// selected workbook always becomes the source for subsequent validation.
+		state.request_id += 1;
+		state.step = 1;
+		state.file = null;
+		state.parse_result = null;
+		state.preview_result = null;
+		state.import_result = null;
+		state.manual_mappings = {};
+		state.row_overrides = {};
+		render_upload();
+	}
+
+	function go_back() {
+		if (state.step === 2) {
+			return_to_upload();
+			return;
+		}
+		if (state.step === 3) {
+			state.step = 2;
+			render_match();
+			return;
+		}
+		if (state.step === 4 && state.preview_result) {
+			state.step = 3;
+			render_preview();
+			return;
+		}
+		if (state.mode) {
+			state.mode = "";
+			state.step = 1;
+			render_landing();
+			return;
+		}
+		frappe.set_route("List", "Employee");
+	}
+
 	$(page.body).on("change", "[data-match-by]", function () {
 		state.match_by = this.value;
 	});
@@ -451,6 +494,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			render_upload();
 		}
 		if (action === "upload") open_uploader();
+		if (action === "back-to-upload") return_to_upload();
 		if (action === "download-template") download_template();
 		if (action === "records") frappe.set_route("List", "Employee");
 		if (action === "back-to-match") {

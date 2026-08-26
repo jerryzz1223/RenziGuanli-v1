@@ -56,6 +56,7 @@ for (const marker of [
 	"def preview_yongxin_q3_organization_snapshot(",
 	"def import_yongxin_q2_org_structure(",
 	"def update_department_fields(",
+	"def move_organization_node(",
 	"def delete_departments(",
 	"YONGXIN_Q2_ORG_TEMPLATE",
 	"YONGXIN_Q3_BASELINE_WORKBOOK",
@@ -90,6 +91,7 @@ for (const marker of [
 	"_build_department_node",
 	"_build_live_management_hierarchy",
 	"_build_live_division_nodes",
+	"_wrap_deputy_divisions",
 	"_collect_template_department_units",
 	"_position_hierarchy_level",
 	"_position_hierarchy_message",
@@ -102,6 +104,10 @@ for (const marker of [
 	"_build_employee_group_node",
 	"_build_work_level_nodes",
 	"_build_position_group_nodes",
+	"_build_employee_node",
+	"_get_designation_parent_map",
+	"_would_create_employee_reporting_loop",
+	"_would_create_designation_loop",
 	'"node_type": "work_level"',
 	'"node_type": "position_group"',
 	'if node_type not in TEMPLATE_DEPARTMENT_NODE_TYPES',
@@ -356,8 +362,12 @@ for (const marker of [
 }
 
 for (const marker of [
-	'this.source_mode = "workbook_snapshot"',
+	'this.source_mode = "live"',
 	"set_source_mode",
+	"move_organization_node",
+	"handle_drag_start",
+	"handle_drop",
+	'draggable="${movable ? "true" : "false"}"',
 	"toggle_fullscreen",
 	"requestFullscreen",
 	"source_mode: this.source_mode",
@@ -405,6 +415,8 @@ for (const marker of [
 	".hrms-org-employee-row",
 	".hrms-org-toolbar",
 	".hrms-org-vacancy-marker",
+	".hrms-org-node.is-drop-target",
+	".hrms-org-node--employee",
 ]) {
 	mustInclude(css, marker, `Hybrid organization CSS missing marker: ${marker}`);
 }

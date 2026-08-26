@@ -31,6 +31,7 @@
   "work_injury_leave_hours",
   "rest_leave_hours",
   "absent_hours",
+  "deep_night_shift_count",
   "large_night_shift_count",
   "small_night_shift_count",
   "actual_clock_attendance_hours",
@@ -204,9 +205,15 @@
   },
   {
    "default": "0",
-   "fieldname": "absent_hours",
+  "fieldname": "absent_hours",
+  "fieldtype": "Float",
+  "label": "旷工"
+ },
+  {
+   "default": "0",
+   "fieldname": "deep_night_shift_count",
    "fieldtype": "Float",
-   "label": "旷工"
+   "label": "深夜班"
   },
   {
    "default": "0",

@@ -52,7 +52,7 @@ for (const forbidden of [
 }
 
 for (const marker of [
-	"data-company",
+	"get_context_company",
 	"data-attendance-dependency",
 	"get_payroll_attendance_dependency",
 	"scope_args(extra = {})",

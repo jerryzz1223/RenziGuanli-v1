@@ -24,6 +24,8 @@ const TRANSFER_PROPERTY_LABELS = {
 	custom_is_confirmed: __("是否转正"),
 };
 
+const TRANSFER_WORK_NATURE_OPTIONS = ["在职 · 正式", "在职 · 试用期", "退休返聘", "待离职", "离职"];
+
 function set_transfer_field_property(frm, fieldname, property, value) {
 	if (frm.fields_dict[fieldname]) {
 		frm.set_df_property(fieldname, property, value);
@@ -113,8 +115,10 @@ function derive_transfer_type(frm) {
 	const changed_fields = (frm.doc.transfer_details || [])
 		.filter((row) => !row.__deleted)
 		.map((row) => row.fieldname);
-	const transfer_type = changed_fields.includes("custom_is_confirmed")
-		? "转全职"
+	const transfer_type = changed_fields.includes("employment_type")
+			? "工作性质调整"
+		: changed_fields.includes("custom_is_confirmed")
+			? "转全职"
 		: changed_fields.includes("grade")
 			? "晋升"
 			: "调岗";

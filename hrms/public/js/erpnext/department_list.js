@@ -31,6 +31,12 @@
 			show_position_hierarchy_preview_dialog(listview);
 		});
 
+		listview.page.add_inner_button(__("树状拼图"), function () {
+			// The builder writes Department.parent_department directly, so the
+			// Department list always reflects the same tree after a refresh.
+			frappe.set_route("organizational-chart");
+		});
+
 		listview.page.add_inner_button(__("快速编辑"), function () {
 			const selected = get_selected_departments(listview);
 			if (selected.length !== 1) {

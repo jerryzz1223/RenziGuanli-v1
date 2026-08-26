@@ -1,0 +1,78 @@
+{
+ "actions": [],
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "fields": [
+  {
+   "default": "1",
+   "description": "关闭后该字段恢复系统默认表头，不会移除终稿计算列。",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "启用"
+  },
+  {
+   "fieldname": "field_key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "系统字段编码",
+   "reqd": 1
+  },
+  {
+   "fieldname": "field_label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "字段说明"
+  },
+  {
+   "fieldname": "excel_main_header",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Excel 一级表头"
+  },
+  {
+   "fieldname": "excel_sub_header",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Excel 二级表头"
+  },
+  {
+   "default": "来源字段",
+   "fieldname": "field_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "字段类型",
+   "options": "来源字段\n计算字段\n人工填写"
+  },
+  {
+   "default": "必须一致",
+   "fieldname": "comparison_policy",
+   "fieldtype": "Select",
+   "label": "对账策略",
+   "options": "必须一致\n允许误差\n仅提醒\n不对账"
+  },
+  {
+   "default": "0",
+   "fieldname": "numeric_tolerance",
+   "fieldtype": "Float",
+   "label": "数值容差"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "备注"
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-08-26 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Attendance Final Excel Field",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "idx",
+ "sort_order": "ASC",
+ "states": []
+}

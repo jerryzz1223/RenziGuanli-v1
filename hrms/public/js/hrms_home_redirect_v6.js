@@ -49,7 +49,7 @@
 		"HRMS DingTalk Settings": "钉钉连接设置",
 		"Personnel": "人事",
 		"Employee": "员工",
-		"人资设置": "工作台",
+		"人资设置": "主页",
 		"Employment Type": "工作性质",
 		"Full-time": "全职",
 		"Intern": "实习生",
@@ -310,7 +310,7 @@
 			],
 		},
 		{
-			label: "工作台",
+			label: "主页",
 			route: "/desk/hrms-workbench",
 			icon: "H",
 			keys: ["hrms-workbench", "hr-setup"],
@@ -687,7 +687,8 @@
 	}
 
 	var WORKSPACE_ROUTE_SLUGS = {
-		"工作台": "hrms-workbench",
+		"主页": "hrms-workbench",
+		"工作台": "hrms-workbench", // 兼容旧工作区及收藏链接
 		"人事": "employee",
 		"组织": "department",
 		"招聘": "recruitment",
@@ -800,6 +801,8 @@
 	}
 
 	function navigate_hrms_sidebar(route) {
+		// Keep the drawer in the state chosen by the user. A route change must not
+		// silently close a menu they intentionally left open.
 		if (window.frappe && frappe.set_route && route.indexOf("/desk/") === 0) {
 			announce_hrms_route_change(route);
 			var route_parts = route_to_parts(route);
@@ -912,34 +915,39 @@
 		});
 	}
 
+	function set_hrms_sidebar_collapsed(collapsed) {
+		document.body.classList.toggle("hrms-unified-sidebar-collapsed", collapsed);
+		document.body.classList.toggle("hrms-top-drawer-open", !collapsed);
+		document.body.classList.toggle("hrms-custom-drawer-open", !collapsed);
+		try {
+			window.localStorage.setItem("hrms-top-drawer:collapsed", collapsed ? "1" : "0");
+		} catch (error) {
+			// A restricted browser must still be able to open its navigation.
+		}
+		window.dispatchEvent(new CustomEvent("hrms:sidebar-state-change", { detail: { collapsed: collapsed } }));
+	}
+
+	function bind_hrms_sidebar_toggle_event() {
+		if (window.__hrmsSidebarToggleBound) return;
+		window.__hrmsSidebarToggleBound = true;
+		window.addEventListener("hrms:toggle-sidebar", function () {
+			set_hrms_sidebar_collapsed(!document.body.classList.contains("hrms-unified-sidebar-collapsed"));
+		});
+	}
+
 	function render_hrms_sidebar_items(sidebar, module, active_slug) {
 		var signature = module.label + ":" + active_slug + ":" + sidebar_order_signature(module);
 		if (sidebar.dataset.hrmsUnifiedSidebar === signature) {
 			return;
 		}
 		sidebar.dataset.hrmsUnifiedSidebar = signature;
-		var sidebar_collapsed = window.localStorage.getItem("hrms-unified-sidebar:collapsed") === "1";
-		document.body.classList.toggle("hrms-unified-sidebar-collapsed", sidebar_collapsed);
+		// The first visit starts closed. After that, the drawer is a user-controlled
+		// setting and stays open across both top navigation and drawer navigation.
+		var saved_sidebar_state = window.localStorage.getItem("hrms-top-drawer:collapsed");
+		set_hrms_sidebar_collapsed(saved_sidebar_state !== "0");
 
 		var body = [
 			'<div class="hrms-unified-sidebar">',
-			'<button type="button" class="hrms-unified-sidebar-collapse" data-hrms-unified-sidebar-collapse aria-expanded="',
-			sidebar_collapsed ? "false" : "true",
-			'" title="',
-			escape_html(sidebar_collapsed ? "展开菜单" : "收起菜单"),
-			'"><span aria-hidden="true">',
-			sidebar_collapsed ? "›" : "‹",
-			"</span></button>",
-			'<button type="button" class="hrms-unified-sidebar-app" data-hrms-route="',
-			escape_html(module.route),
-			'">',
-			'<span class="hrms-unified-sidebar-app__icon">',
-			escape_html(module.icon || module.label.slice(0, 1)),
-			"</span>",
-			'<span class="hrms-unified-sidebar-app__text"><strong>',
-			escape_html(module.label),
-			'</strong><small>人资管理系统</small></span>',
-			"</button>",
 			'<div class="hrms-unified-sidebar-list">',
 		];
 
@@ -996,20 +1004,6 @@
 			});
 		});
 
-		var collapse_button = sidebar.querySelector("[data-hrms-unified-sidebar-collapse]");
-		if (collapse_button) {
-			collapse_button.addEventListener("click", function (event) {
-				event.preventDefault();
-				event.stopPropagation();
-				var collapsed = !document.body.classList.contains("hrms-unified-sidebar-collapsed");
-				document.body.classList.toggle("hrms-unified-sidebar-collapsed", collapsed);
-				window.localStorage.setItem("hrms-unified-sidebar:collapsed", collapsed ? "1" : "0");
-				collapse_button.setAttribute("aria-expanded", collapsed ? "false" : "true");
-				collapse_button.setAttribute("title", collapsed ? "展开菜单" : "收起菜单");
-				collapse_button.querySelector("span").textContent = collapsed ? "›" : "‹";
-			});
-		}
-
 		sidebar.querySelectorAll("[data-hrms-sidebar-section]").forEach(function (section) {
 			var trigger = section.querySelector(".hrms-unified-sidebar-section__button");
 			var children = section.querySelector(".hrms-unified-sidebar-section__children");
@@ -1027,6 +1021,18 @@
 		});
 
 		enable_sidebar_item_sorting(sidebar, module, active_slug);
+	}
+
+	function get_hrms_top_drawer() {
+		var drawer = document.getElementById("hrms-top-drawer");
+		if (!drawer) {
+			drawer = document.createElement("aside");
+			drawer.id = "hrms-top-drawer";
+			drawer.className = "hrms-top-drawer";
+			drawer.setAttribute("aria-label", "业务菜单");
+			document.body.appendChild(drawer);
+		}
+		return drawer;
 	}
 
 	function enable_sidebar_item_sorting(sidebar, module, active_slug) {
@@ -1111,23 +1117,26 @@
 }
 
 	function apply_hrms_sidebar_shell() {
+		bind_hrms_sidebar_toggle_event();
 		var active_slug = stable_route_slug();
 		var module = active_sidebar_module(active_slug);
 		if (!module) {
-			document.body.classList.remove("hrms-module-shell");
+			document.body.classList.remove(
+				"hrms-module-shell",
+				"hrms-unified-sidebar-collapsed",
+				"hrms-top-drawer-open",
+				"hrms-custom-drawer-active",
+				"hrms-custom-drawer-open",
+			);
+			document.getElementById("hrms-top-drawer")?.remove();
 			return;
 		}
-		document.body.classList.add("hrms-module-shell");
-
-		var sidebar =
-			document.querySelector(".body-sidebar-container") ||
-			document.querySelector(".layout-side-section") ||
-			document.querySelector(".desk-sidebar") ||
-			document.querySelector(".standard-sidebar");
-		if (!sidebar) {
-			return;
-		}
-		render_hrms_sidebar_items(sidebar, module, active_slug);
+		// The drawer is deliberately not a Frappe sidebar. Native pages reuse
+		// `.body-sidebar-container` for different layout roles, which previously
+		// caused the home page itself to be rendered in a narrow sidebar column.
+		document.body.classList.remove("hrms-module-shell");
+		document.body.classList.add("hrms-custom-drawer-active");
+		render_hrms_sidebar_items(get_hrms_top_drawer(), module, active_slug);
 	}
 
 	function hide_frappe_breadcrumbs() {
@@ -1363,11 +1372,21 @@
 	}
 
 	function apply_hrms_shell_rules() {
+		redirect_legacy_home_workspace();
 		hide_frappe_breadcrumbs();
 		fix_desk_home_links();
 		apply_hrms_sidebar_shell();
-		enable_sidebar_section_collapse();
 		hide_personnel_social_metadata();
+	}
+
+	function redirect_legacy_home_workspace() {
+		var route = window.frappe?.get_route?.() || [];
+		if (route[0] !== "Workspaces" || route[1] !== "HR Setup") {
+			return;
+		}
+		// HR Setup used to be a native Workspace.  Keep the record only for old
+		// bookmarks, then take users to the data-integrated home page instead.
+		frappe.set_route("hrms-workbench");
 	}
 
 	// The sidebar is the primary navigation.  Optional improvements such as

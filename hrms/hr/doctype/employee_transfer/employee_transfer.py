@@ -9,6 +9,9 @@ from frappe.utils import cstr, getdate, nowdate
 from hrms.hr.utils import update_employee_work_history, validate_active_employee
 
 
+WORK_NATURE_OPTIONS = ("在职 · 正式", "在职 · 试用期", "退休返聘", "待离职", "离职")
+
+
 # The first rollout only permits changes that belong to an employee's current role.
 TRANSFER_PROPERTY_FIELDS = {
 	"department": "部门",
@@ -85,7 +88,9 @@ class EmployeeTransfer(Document):
 	def derive_transfer_type(self):
 		"""Use a stable, human-readable type derived from the actual changes."""
 		changed_fields = {cstr(row.fieldname).strip() for row in self.transfer_details}
-		if "custom_is_confirmed" in changed_fields:
+		if "employment_type" in changed_fields:
+			self.transfer_type = "工作性质调整"
+		elif "custom_is_confirmed" in changed_fields:
 			self.transfer_type = "转全职"
 		elif "grade" in changed_fields:
 			self.transfer_type = "晋升"
@@ -114,19 +119,27 @@ class EmployeeTransfer(Document):
 				frappe.throw(_("请填写{0}的变更后内容。").format(TRANSFER_PROPERTY_FIELDS[fieldname]))
 
 			new_value = cstr(row.new).strip()
-			if field.fieldtype == "Link" and field.options:
+			if fieldname == "employment_type":
+				if new_value not in WORK_NATURE_OPTIONS:
+					frappe.throw(_("请选择已有的工作性质。"))
+				row.new = new_value
+			elif field.fieldtype == "Link" and field.options:
 				row.new = _resolve_transfer_link_value(field.options, new_value, employee.company)
 			else:
 				row.new = new_value
 
-			current_value = employee.get(fieldname)
+			current_value = _get_work_nature(employee) if fieldname == "employment_type" else employee.get(fieldname)
 			row.current = cstr(current_value)
 			row.property = TRANSFER_PROPERTY_FIELDS[fieldname]
 			if cstr(current_value).strip() == cstr(row.new).strip():
 				frappe.throw(_("{0}的变更前后不能相同。").format(row.property))
 			if fieldname == "reports_to" and row.new == employee.name:
 				frappe.throw(_("直属上级不能选择员工本人。"))
-			if field.fieldtype == "Link" and field.options and not frappe.db.exists(field.options, row.new):
+			if (
+				field.fieldtype == "Link"
+				and field.options
+				and not frappe.db.exists(field.options, row.new)
+			):
 				frappe.throw(_("{0}不存在：{1}").format(row.property, row.new))
 			details[fieldname] = row
 
@@ -146,13 +159,74 @@ class EmployeeTransfer(Document):
 
 	def on_submit(self):
 		employee = frappe.get_doc("Employee", self.employee)
-		update_employee_work_history(employee, self.transfer_details, date=self.transfer_date)
+		self.apply_work_nature_changes(employee)
+		update_employee_work_history(employee, self.work_history_details(), date=self.transfer_date)
 		employee.save()
 
 	def on_cancel(self):
 		employee = frappe.get_doc("Employee", self.employee)
-		update_employee_work_history(employee, self.transfer_details, date=self.transfer_date, cancel=True)
+		self.apply_work_nature_changes(employee, cancel=True)
+		update_employee_work_history(employee, self.work_history_details(), date=self.transfer_date, cancel=True)
 		employee.save()
+
+	def work_history_details(self):
+		"""Return auditable business-field changes for Employee work history."""
+		return [row for row in self.transfer_details if row.fieldname != "employment_type"]
+
+	def apply_work_nature_changes(self, employee, cancel=False):
+		for row in self.transfer_details:
+			if row.fieldname == "employment_type":
+				_apply_work_nature(employee, row.current if cancel else row.new)
+
+
+def _get_work_nature(employee):
+	if employee.get("status") == "Left":
+		return "离职"
+	if employee.get("status") == "Inactive":
+		return "待离职"
+	if employee.get("employment_type") == "Retainer":
+		return "退休返聘"
+	if employee.get("employment_type") == "Probation" or employee.get("custom_is_confirmed") == "否":
+		return "在职 · 试用期"
+	return "在职 · 正式"
+
+
+def _find_employment_type(*candidates):
+	for candidate in candidates:
+		if frappe.db.exists("Employment Type", candidate):
+			return candidate
+		name = frappe.db.get_value("Employment Type", {"employee_type_name": candidate}, "name")
+		if name:
+			return name
+	frappe.throw(_("未找到已维护的工作性质：{0}。请先在基础资料中维护后再提交。").format(" / ".join(candidates)))
+
+
+def _set_if_present(employee, fieldname, value):
+	if employee.meta.get_field(fieldname):
+		employee.set(fieldname, value)
+
+
+def _apply_work_nature(employee, work_nature):
+	if work_nature not in WORK_NATURE_OPTIONS:
+		frappe.throw(_("工作性质不在现有五类范围内：{0}").format(work_nature))
+	if work_nature == "在职 · 正式":
+		_set_if_present(employee, "employment_type", _find_employment_type("Full-time", "全职"))
+		_set_if_present(employee, "custom_is_confirmed", "是")
+		_set_if_present(employee, "relieving_date", None)
+		_set_if_present(employee, "status", "Active")
+	elif work_nature == "在职 · 试用期":
+		_set_if_present(employee, "employment_type", _find_employment_type("Full-time", "全职"))
+		_set_if_present(employee, "custom_is_confirmed", "否")
+		_set_if_present(employee, "relieving_date", None)
+		_set_if_present(employee, "status", "Active")
+	elif work_nature == "退休返聘":
+		_set_if_present(employee, "employment_type", _find_employment_type("Retainer", "退休返聘", "返聘"))
+		_set_if_present(employee, "relieving_date", None)
+		_set_if_present(employee, "status", "Active")
+	elif work_nature == "待离职":
+		_set_if_present(employee, "status", "Inactive")
+	elif work_nature == "离职":
+		_set_if_present(employee, "status", "Left")
 
 
 @frappe.whitelist()

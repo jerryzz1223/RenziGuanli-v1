@@ -82,7 +82,7 @@ for (const marker of [
 	"import_employee_salary_change_workbook",
 	"update_employee_salary_change",
 	"data-save-salary-change",
-	"下拉只显示当前薪资架构版本的数字等级",
+	"选择等级后自动带入薪资",
 	"data-salary-change-field=\"salary_grade\"",
 	"assignableSalaryGrades",
 	"员工定薪导入记录",
@@ -94,7 +94,8 @@ for (const marker of [
 	"data-salary-change-save-state",
 	"confirm_salary_changes_saved",
 	"values: JSON.stringify(values)",
-	"员工定薪保存失败",
+	"员工定薪提交失败",
+	"保存并提交",
 	"get_saved_payroll_month",
 	"remember_payroll_month",
 ]) {
@@ -103,6 +104,14 @@ for (const marker of [
 
 if (pageJs.includes("data-salary-assignment-overview") || pageJs.includes("请先处理以下人员")) {
 	throw new Error("The duplicated salary-action list must not be rendered above the editable table.");
+}
+
+if (pageJs.includes('data-salary-change-field="status"') || pageJs.includes('__("异动原因")')) {
+	throw new Error("Employee salary grid must not expose legacy status or change-reason columns.");
+}
+
+if (!api.includes('status = "已批准"') || !api.includes('"status": "已批准"')) {
+	throw new Error("Employee salary saves and imports must be submitted immediately.");
 }
 
 const workbenchJs = read("hrms/hr/page/hrms_workbench/hrms_workbench.js");

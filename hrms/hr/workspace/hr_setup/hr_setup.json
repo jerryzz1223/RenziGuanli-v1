@@ -1,7 +1,7 @@
 {
  "app": "hrms",
  "charts": [],
- "content": "[{\"id\":\"workbench-header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>工作台</b></span>\",\"col\":12}},{\"id\":\"workbench-card-1\",\"type\":\"card\",\"data\":{\"card_name\":\"快捷入口\",\"col\":4}},{\"id\":\"workbench-card-2\",\"type\":\"card\",\"data\":{\"card_name\":\"今日事项\",\"col\":4}},{\"id\":\"workbench-card-3\",\"type\":\"card\",\"data\":{\"card_name\":\"人事提醒\",\"col\":4}},{\"id\":\"workbench-card-4\",\"type\":\"card\",\"data\":{\"card_name\":\"人事概况\",\"col\":4}},{\"id\":\"workbench-card-5\",\"type\":\"card\",\"data\":{\"card_name\":\"常用报表\",\"col\":4}}]",
+ "content": "[]",
  "creation": "2020-03-02 15:48:58.322521",
  "custom_blocks": [],
  "docstatus": 0,
@@ -10,8 +10,8 @@
  "hide_custom": 0,
  "icon": "hr",
  "idx": 1,
- "is_hidden": 0,
- "label": "工作台",
+ "is_hidden": 1,
+ "label": "主页（旧入口）",
  "links": [
   {
    "hidden": 0,
@@ -309,6 +309,6 @@
  "roles": [],
  "sequence_id": 1,
  "shortcuts": [],
- "title": "工作台",
+ "title": "主页（旧入口）",
  "type": "Workspace"
 }

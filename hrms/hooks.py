@@ -27,13 +27,13 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260818b",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260814b",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260826h",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260826f",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260814c",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260826n",
 ]
 
 # website
@@ -232,7 +232,6 @@ doc_events = {
 	"Employee": {
 		"validate": [
 			"hrms.overrides.employee_master.validate_onboarding_process",
-			"hrms.hr.employee_personnel_status.sync_employee_personnel_status",
 		],
 		"on_update": [
 			"hrms.overrides.employee_master.update_approver_role",
@@ -241,10 +240,6 @@ doc_events = {
 		"after_insert": "hrms.overrides.employee_master.update_job_applicant_and_offer",
 		"on_trash": "hrms.overrides.employee_master.update_employee_transfer",
 		"after_delete": "hrms.overrides.employee_master.publish_update",
-	},
-	"Employee Separation": {
-		"on_submit": "hrms.hr.employee_personnel_status.sync_employee_separation_status",
-		"on_cancel": "hrms.hr.employee_personnel_status.cancel_employee_separation_status",
 	},
 	"Project": {"validate": "hrms.controllers.employee_boarding_controller.update_employee_boarding_status"},
 	"Task": {"on_update": "hrms.controllers.employee_boarding_controller.update_task"},
@@ -262,6 +257,7 @@ scheduler_events = {
 	],
 	"hourly": [
 		"hrms.hr.doctype.daily_work_summary_group.daily_work_summary_group.trigger_emails",
+		"hrms.hr.employee_confirmation_scheduler.process_due_employee_confirmations",
 	],
 	"hourly_long": [
 		"hrms.hr.doctype.shift_type.shift_type.update_last_sync_of_checkin",
@@ -275,7 +271,6 @@ scheduler_events = {
 		"hrms.hr.doctype.interview.interview.send_daily_feedback_reminder",
 		"hrms.hr.doctype.shift_assignment.shift_assignment.mark_expired_shift_assignments_as_inactive",
 		"hrms.hr.doctype.job_opening.job_opening.close_expired_job_openings",
-		"hrms.hr.employee_personnel_status.sync_due_employee_personnel_statuses",
 	],
 	"daily_long": [
 		"hrms.hr.doctype.leave_ledger_entry.leave_ledger_entry.process_expired_allocation",

@@ -258,6 +258,11 @@ def fill_employee_holiday_list_date_gaps_with_company_holiday_list(
 	Example: employee HLA starts Jan 16, company HLA covers full month →
 	Jan 1-15 use the company holiday list, Jan 16-31 use the employee's.
 	"""
+	start_date = getdate(start_date)
+	end_date = getdate(end_date)
+	primary_ranges = _clip_and_sort_holiday_ranges(primary_ranges, start_date, end_date)
+	fallback_ranges = _clip_and_sort_holiday_ranges(fallback_ranges, start_date, end_date)
+
 	if not primary_ranges:
 		return fallback_ranges
 	if not fallback_ranges:
@@ -297,6 +302,24 @@ def fill_employee_holiday_list_date_gaps_with_company_holiday_list(
 				)
 
 	return sorted(result, key=lambda r: r["from_date"])
+
+
+def _clip_and_sort_holiday_ranges(ranges: list[dict], start_date: date, end_date: date) -> list[dict]:
+	clipped_ranges = []
+	for holiday_range in ranges:
+		from_date = max(getdate(holiday_range["from_date"]), start_date)
+		to_date = min(getdate(holiday_range["to_date"]), end_date)
+		if from_date > to_date:
+			continue
+		clipped_ranges.append(
+			{
+				"holiday_list": holiday_range["holiday_list"],
+				"from_date": from_date,
+				"to_date": to_date,
+			}
+		)
+
+	return sorted(clipped_ranges, key=lambda holiday_range: holiday_range["from_date"])
 
 
 def invalidate_cache(doc, method=None):

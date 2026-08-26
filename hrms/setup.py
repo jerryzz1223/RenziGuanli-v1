@@ -500,6 +500,7 @@ def make_fixtures():
 		{"doctype": "Employment Type", "employee_type_name": _("Commission")},
 		{"doctype": "Employment Type", "employee_type_name": _("Piecework")},
 		{"doctype": "Employment Type", "employee_type_name": _("Intern")},
+		{"doctype": "Employment Type", "employee_type_name": _("Retainer")},
 		{"doctype": "Employment Type", "employee_type_name": _("Apprentice")},
 		# Job Applicant Source
 		{"doctype": "Job Applicant Source", "source_name": _("Website Listing")},
@@ -845,7 +846,7 @@ def after_migrate():
 
 	from hrms.api.employee_field_template import ensure_personnel_pages
 	from hrms.api.employee_field_template import ensure_personnel_sidebar_links
-	from hrms.api.employee_field_template import ensure_employee_personnel_status_setup
+	from hrms.api.employee_field_template import ensure_employee_work_nature_setup
 	from hrms.api.dingtalk_integration import ensure_dingtalk_company_scope
 	from hrms.branding import apply_login_page_customizations
 	from hrms.hr.doctype.hrms_reward_punishment_rule.hrms_reward_punishment_rule import (
@@ -855,7 +856,7 @@ def after_migrate():
 
 	ensure_personnel_pages()
 	ensure_personnel_sidebar_links()
-	ensure_employee_personnel_status_setup()
+	ensure_employee_work_nature_setup()
 	ensure_dingtalk_company_scope()
 	ensure_default_reward_punishment_rules(ignore_permissions=True)
 	apply_hrms_zh_translations()

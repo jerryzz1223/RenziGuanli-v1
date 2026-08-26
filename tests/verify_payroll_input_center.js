@@ -64,7 +64,7 @@ for (const marker of [
 	"hrms-payroll-filter-row",
 	"data-settlement-search",
 	"唯一补充数据入口",
-	"导入为待审核",
+	"录入数据",
 	"确认入账",
 	"薪资输入表",
 	"薪资结算表",
@@ -86,6 +86,9 @@ for (const marker of [
 	"选择一次，整个薪资模块共用",
 	"bind_month_control",
 	"remember_payroll_month",
+	"PAYROLL_SIGNATURE_SOURCE_CODES",
+	"data-download-source-signature-sheet",
+	"download_source_signature_sheet",
 ]) {
 	mustInclude(pageJs, marker, `Payroll input center page is missing marker: ${marker}`);
 }
@@ -115,6 +118,10 @@ for (const marker of [
 	"HRMS Payroll Variable Record",
 	"HRMS Payroll Input Record",
 	"HRMS Monthly Attendance Summary",
+	"SIGNABLE_PAYROLL_SOURCE_CODES",
+	"download_payroll_source_signature_sheet",
+	"员工签字",
+	"签字日期",
 ]) {
 	mustInclude(api, marker, `Payroll input API is missing marker: ${marker}`);
 }

@@ -388,9 +388,8 @@ const props = defineProps({
 })
 const emit = defineEmits(["validateForm", "update:modelValue", "formReloaded"])
 const router = useRouter()
-const { downloadPDF } = useDownloadPDF()
-
 const __ = inject("$translate")
+const { downloadPDF } = useDownloadPDF(__)
 
 let activeTab = ref(props.tabs?.[0].name)
 let fileAttachments = ref([])

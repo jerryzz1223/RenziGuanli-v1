@@ -1,3 +1,52 @@
+/*
+ * Desktop density baseline
+ *
+ * The target desktop density is 85% while the browser itself remains at 100%.
+ * Frappe sizes the Desk shell with viewport units, so compensate the shell
+ * height by the inverse scale. Without that compensation list views end early
+ * and leave an empty strip at the bottom of the screen.
+ */
+@media screen and (min-width: 1280px) {
+	html:has(#hrms-top-module-nav) {
+		zoom: 0.85;
+	}
+
+	/* `zoom` scales a fixed element's `100vw` too.  Expand the navigation by
+	 * the inverse ratio so the company selector and account menu remain flush
+	 * with the physical top-right edge of a wide screen. */
+	.hrms-top-module-nav {
+		width: 117.6470588235vw !important;
+	}
+
+	body:has(#hrms-top-module-nav) > .body-sidebar-container,
+	body:has(#hrms-top-module-nav) > .main-section {
+		height: calc(117.6470588235vh - 46px);
+	}
+
+	/* Frappe renders request blockers and dialog backdrops as viewport-sized
+	 * fixed layers.  `html { zoom: .85 }` scales their 100vw/100vh dimensions
+	 * as well, leaving the lower and right portions of the Desk interactive
+	 * during saves, imports, uploads and confirmation dialogs.  Make those
+	 * layers use the inverse viewport dimensions, so their painted size remains
+	 * exactly one physical viewport while the application UI stays compact. */
+	body:has(#hrms-top-module-nav) .freeze,
+	body:has(#hrms-top-module-nav) .modal-backdrop {
+		height: 117.6470588235vh !important;
+		width: 117.6470588235vw !important;
+	}
+
+	/* Prevent the compacted navigation rail from exposing a redundant
+	 * horizontal scrollbar at the bottom. Vertical navigation remains
+	 * scrollable through the framework's normal sidebar container. */
+	body:has(#hrms-top-module-nav) > .body-sidebar-container,
+	body:has(#hrms-top-module-nav) .body-sidebar-container,
+	body:has(#hrms-top-module-nav) .desk-sidebar,
+	body:has(#hrms-top-module-nav) .standard-sidebar,
+	body:has(#hrms-top-module-nav) .sidebar-menu {
+		overflow-x: hidden !important;
+	}
+}
+
 .hrms-top-module-nav {
 	align-items: center;
 	background: var(--fg-color, #fff);
@@ -15,6 +64,19 @@
 	width: 100vw;
 	box-sizing: border-box;
 	z-index: 1030;
+}
+
+/* The HR module already provides its own navigation and account entry.  The
+ * framework-wide command search and generic “New” control are duplicate,
+ * confusing entry points here, so keep them out of the Desk chrome. */
+body:has(#hrms-top-module-nav) #navbar-search,
+body:has(#hrms-top-module-nav) .navbar-search,
+body:has(#hrms-top-module-nav) .navbar .search-bar,
+body:has(#hrms-top-module-nav) #navbar-new,
+body:has(#hrms-top-module-nav) .navbar-new,
+body:has(#hrms-top-module-nav) .dropdown-navbar-new,
+body:has(#hrms-top-module-nav) .dropdown-new {
+	display: none !important;
 }
 
 .hrms-settings-shell {
@@ -162,6 +224,16 @@ body:has(#hrms-top-module-nav) > .main-section {
 	margin-top: 46px;
 }
 
+/* `html { zoom: .85 }` also reduces the painted height of the Desk shell.
+ * Keep the workspace at the inverse CSS height so its scaled bottom aligns
+ * with the viewport, rather than exposing the document canvas below it. */
+@media screen and (min-width: 1280px) {
+	body:has(#hrms-top-module-nav) > .body-sidebar-container,
+	body:has(#hrms-top-module-nav) > .main-section {
+		height: calc(117.6470588235vh - 46px) !important;
+	}
+}
+
 .hrms-contextual-admin-bar {
 	align-items: center;
 	background: #f7fbff;
@@ -210,12 +282,34 @@ body:has(#hrms-top-module-nav) > .main-section {
 }
 
 .hrms-top-module-nav__brand,
+.hrms-top-module-nav__sidebar-toggle,
 .hrms-top-module-nav__item,
 .hrms-top-module-nav__menu-item {
 	border: 0;
 	font: inherit;
 	margin: 0;
 	outline: 0;
+}
+
+.hrms-top-module-nav__sidebar-toggle {
+	align-items: center;
+	background: var(--control-bg, #f3f4f6);
+	border-radius: 9px;
+	color: var(--text-muted, #6b7280);
+	cursor: pointer;
+	display: inline-flex;
+	flex: none;
+	height: 30px;
+	justify-content: center;
+	padding: 0;
+	transition: background 160ms ease, color 160ms ease;
+	width: 30px;
+}
+
+.hrms-top-module-nav__sidebar-toggle:hover,
+.hrms-top-module-nav__sidebar-toggle:focus-visible {
+	background: var(--gray-200, #edf0f2);
+	color: var(--text-color, #1f2937);
 }
 
 .hrms-top-module-nav__brand {
@@ -1111,7 +1205,10 @@ body.hrms-employee-roster-view .hrms-roster-empty-result-header {
 body.hrms-employee-roster-view .hrms-roster-empty-result-header__cell {
 	border-right: 1px solid var(--border-color, #e5e7eb);
 	color: var(--text-muted, #6b7280);
-	min-height: 42px;
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	min-height: 70px;
 	padding: 8px 10px;
 }
 
@@ -1135,6 +1232,12 @@ body.hrms-employee-roster-view .hrms-roster-empty-result-header__input {
 	padding: 3px 7px;
 }
 
+/* The empty area below each title is intentionally the filter field, matching
+ * the compact header design.  A value is always shown after the filter runs. */
+body.hrms-employee-roster-view .hrms-roster-empty-result-header .hrms-roster-column-filter-input::placeholder {
+	color: transparent;
+}
+
 body.hrms-employee-roster-view .hrms-roster-empty-result-header__clear {
 	align-self: center;
 	margin: 0 10px;
@@ -1150,12 +1253,411 @@ body.hrms-employee-roster-view .hrms-roster-empty-result-header__clear {
 	padding-left: 14px;
 }
 
+/*
+ * Safari-like navigation drawer
+ *
+ * The application navigation is a supporting control, so it should feel like
+ * a light drawer resting above the work area instead of a rigid column that
+ * permanently takes screen width.  Keeping this treatment desktop-only lets
+ * Frappe retain its native responsive sidebar behaviour on small screens.
+ */
+@media (min-width: 768px) {
+	body.hrms-module-shell > .body-sidebar-container,
+	body.hrms-module-shell .body-sidebar-container {
+		background: rgba(250, 250, 252, 0.86);
+		backdrop-filter: blur(26px) saturate(135%);
+		-webkit-backdrop-filter: blur(26px) saturate(135%);
+		border: 1px solid rgba(255, 255, 255, 0.88);
+		border-radius: 24px;
+		bottom: 14px;
+		box-shadow: 0 18px 46px rgba(15, 23, 42, 0.14), 0 2px 8px rgba(15, 23, 42, 0.06);
+		height: auto !important;
+		left: 14px;
+		/* The Desk shell adds this margin for its in-flow sidebar.  This drawer is
+		 * fixed, so retaining it creates the empty strip below the top navigation. */
+		margin-top: 0 !important;
+		overflow: visible;
+		position: fixed;
+		top: 60px;
+		transform: translateX(0);
+		transition: background 180ms ease, border-color 180ms ease, box-shadow 220ms ease, opacity 180ms ease, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s;
+		visibility: visible;
+		width: 272px;
+		z-index: 1025;
+	}
+
+	body.hrms-module-shell > .main-section {
+		/* The drawer overlays the Desk shell.  It must never reserve width in the
+		 * main section, otherwise route changes compress native list pages. */
+		margin-left: 0 !important;
+		min-width: 0;
+		transition: none;
+		width: auto !important;
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar {
+		gap: 8px;
+		overflow-x: hidden;
+		padding: 12px;
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar-app {
+		background: rgba(255, 255, 255, 0.58);
+		border: 1px solid rgba(226, 232, 240, 0.78);
+		border-radius: 17px;
+		min-height: 62px;
+		padding: 11px 12px;
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar-app:hover {
+		background: rgba(255, 255, 255, 0.9);
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar-app__icon {
+		background: linear-gradient(145deg, #85878b, #65676b);
+		border-radius: 13px;
+		height: 40px;
+		width: 40px;
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar-link,
+	body.hrms-module-shell .hrms-unified-sidebar-section__button {
+		border-radius: 11px;
+		font-size: 14px;
+		min-height: 38px;
+		padding: 8px 11px;
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar-link {
+		grid-template-columns: 1fr;
+		position: relative;
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar-link.selected,
+	body.hrms-module-shell .hrms-unified-sidebar-link.active {
+		background: rgba(80, 118, 160, 0.13);
+		box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.58);
+		color: #1f4f72;
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar-section {
+		margin-top: 8px;
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar-section__button {
+		color: #7a818b;
+		font-size: 12px;
+		font-weight: 650;
+		letter-spacing: 0.02em;
+		padding-top: 6px;
+		padding-bottom: 6px;
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar-section__children .hrms-unified-sidebar-link {
+		padding-left: 12px;
+	}
+
+	/* Reordering remains available, but the persistent hamburger marks no
+	 * longer compete with the navigation labels. */
+	body.hrms-module-shell .hrms-unified-sidebar-link__drag-handle {
+		background: rgba(255, 255, 255, 0.82);
+		box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
+		left: 7px;
+		opacity: 0;
+		position: absolute;
+		transition: opacity 120ms ease;
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar-link:hover .hrms-unified-sidebar-link__drag-handle,
+	body.hrms-module-shell .hrms-unified-sidebar-link:focus-within .hrms-unified-sidebar-link__drag-handle {
+		opacity: 1;
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar-collapse {
+		background: rgba(255, 255, 255, 0.92);
+		border-color: rgba(255, 255, 255, 0.9) !important;
+		box-shadow: 0 5px 16px rgba(15, 23, 42, 0.14);
+		height: 32px;
+		right: -16px;
+		top: 25px;
+		width: 32px;
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar-collapse span {
+		font-size: 0;
+	}
+
+	body.hrms-module-shell .hrms-unified-sidebar-collapse span::before {
+		content: "‹";
+		font-size: 22px;
+		font-weight: 400;
+		line-height: 1;
+	}
+
+	body.hrms-module-shell.hrms-unified-sidebar-collapsed > .body-sidebar-container,
+	body.hrms-module-shell.hrms-unified-sidebar-collapsed .body-sidebar-container {
+		background: transparent;
+		backdrop-filter: none;
+		border-color: transparent;
+		bottom: 14px;
+		box-shadow: none;
+		height: auto !important;
+		min-width: 0 !important;
+		opacity: 0;
+		pointer-events: none;
+		transform: translateX(-110%);
+		visibility: hidden;
+		width: 272px !important;
+	}
+
+	body.hrms-module-shell.hrms-unified-sidebar-collapsed > .main-section {
+		margin-left: 0 !important;
+		width: auto !important;
+	}
+
+	/* Keep the existing top-bar drawer design, but reserve its exact visual
+	 * footprint while it is open. `vw` is intentional here: the sidebar is
+	 * fixed against the viewport, and a percentage width can resolve against a
+	 * transient Desk flex container during SPA navigation. */
+	body.hrms-module-shell:not(.hrms-unified-sidebar-collapsed) > .main-section {
+		margin-left: 300px !important;
+		width: calc(100vw - 300px) !important;
+	}
+
+}
+
+/* On phones the unified menu must be a drawer, not an in-flow column.  The
+ * latter leaves the workbench with only a few characters of usable width. */
+@media (max-width: 767px) {
+	body.hrms-module-shell > .body-sidebar-container,
+	body.hrms-module-shell .body-sidebar-container {
+		bottom: 0;
+		box-shadow: 12px 0 28px rgba(15, 23, 42, 0.16);
+		height: auto !important;
+		left: 0;
+		margin-top: 0 !important;
+		max-width: min(86vw, 272px);
+		position: fixed;
+		top: 46px;
+		transform: translateX(0);
+		transition: transform 220ms ease, visibility 0s;
+		width: min(86vw, 272px);
+		z-index: 1025;
+	}
+
+	body.hrms-module-shell > .main-section {
+		margin-left: 0 !important;
+		min-width: 0;
+		width: auto !important;
+	}
+
+	body.hrms-module-shell.hrms-unified-sidebar-collapsed > .body-sidebar-container,
+	body.hrms-module-shell.hrms-unified-sidebar-collapsed .body-sidebar-container {
+		box-shadow: none;
+		pointer-events: none;
+		transform: translateX(-105%);
+		visibility: hidden;
+	}
+}
+
+/* Standalone top-bar drawer.  It never reuses Frappe's contextual sidebar,
+ * so dashboard and list-page DOM trees remain untouched across route changes. */
+.hrms-top-drawer {
+	background: rgba(250, 250, 252, 0.96);
+	border: 1px solid rgba(255, 255, 255, 0.9);
+	border-radius: 18px;
+	bottom: 14px;
+	box-shadow: 0 18px 46px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.06);
+	left: 14px;
+	overflow: auto;
+	position: fixed;
+	top: 60px;
+	transform: translateX(-115%);
+	transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 240ms;
+	visibility: hidden;
+	width: 248px;
+	z-index: 1035;
+}
+
+body.hrms-top-drawer-open .hrms-top-drawer {
+	transform: translateX(0);
+	transition-delay: 0s;
+	visibility: visible;
+}
+
+.hrms-top-drawer .hrms-unified-sidebar {
+	display: block;
+	min-height: 0;
+	overflow: visible;
+	padding: 10px;
+}
+
+.hrms-top-drawer .hrms-unified-sidebar-list,
+.hrms-top-drawer .hrms-unified-sidebar-section__children {
+	display: flex;
+	flex: none;
+	flex-direction: column;
+	gap: 2px;
+	grid-auto-rows: max-content;
+	justify-content: flex-start;
+	min-height: 0;
+}
+
+.hrms-top-drawer .hrms-unified-sidebar-link,
+.hrms-top-drawer .hrms-unified-sidebar-section__button {
+	border: 0;
+	box-sizing: border-box;
+	border-radius: 7px;
+	color: var(--text-color, #1f2937);
+	font: inherit;
+	font-size: 13px;
+	line-height: 18px;
+	min-height: 34px;
+	padding: 7px 9px;
+	text-align: left;
+	width: 100%;
+}
+
+.hrms-top-drawer .hrms-unified-sidebar-link {
+	background: transparent;
+	display: grid;
+	grid-template-columns: 18px minmax(0, 1fr);
+	gap: 6px;
+	align-items: center;
+	flex: 0 0 34px;
+	height: 34px;
+	max-height: 34px;
+}
+
+.hrms-top-drawer .hrms-unified-sidebar-link.active,
+.hrms-top-drawer .hrms-unified-sidebar-link:hover,
+.hrms-top-drawer .hrms-unified-sidebar-section__button:hover {
+	background: rgba(80, 118, 160, 0.13);
+	color: #1f4f72;
+}
+
+.hrms-top-drawer .hrms-unified-sidebar-section__button {
+	background: transparent;
+	color: #697586;
+	display: flex;
+	font-size: 12px;
+	font-weight: 650;
+	justify-content: space-between;
+	margin-top: 8px;
+	min-height: 30px;
+	padding: 6px 9px;
+}
+
+.hrms-top-drawer .hrms-unified-sidebar-link__drag-handle {
+	color: #9aa4b2;
+	font-size: 11px;
+	height: 18px;
+	margin: 0;
+	width: 18px;
+}
+
+/* The custom drawer replaces Frappe's contextual sidebar for HR routes.
+ * Keeping both containers alive is what made the home Page mount in the
+ * narrow native column after a client-side route change. */
+body.hrms-custom-drawer-active > .body-sidebar-container {
+	display: none !important;
+}
+
+body.hrms-custom-drawer-active > .main-section {
+	flex: 1 1 auto !important;
+	margin-left: 0 !important;
+	min-width: 0 !important;
+	width: auto !important;
+}
+
+@media (min-width: 768px) {
+	/* While the user has the custom drawer open, reserve its visual lane rather
+	 * than covering the current page. Closing it restores the full page width. */
+	body.hrms-custom-drawer-active.hrms-custom-drawer-open > .main-section {
+		margin-left: 300px !important;
+		width: calc(100vw - 300px) !important;
+	}
+}
+
+@media (max-width: 767px) {
+	.hrms-top-drawer {
+		left: 0;
+		max-width: 86vw;
+		top: 46px;
+		width: 248px;
+	}
+}
+
 .hrms-roster-summary {
 	background: var(--fg-color, #fff);
 	border: 1px solid var(--border-color, #e5e7eb);
 	border-radius: var(--border-radius-lg, 8px);
 	margin-bottom: 14px;
 	padding: 12px;
+}
+
+/* Native workspaces are operational dashboards, not reading columns. */
+body.hrms-module-shell .page-container[data-page-route="Workspaces"] .layout-main {
+	margin: 0 !important;
+	max-width: none !important;
+	width: 100% !important;
+}
+
+body.hrms-module-shell .page-container[data-page-route="Workspaces"] .layout-main-section-wrapper {
+	flex: 1 1 100% !important;
+	max-width: none !important;
+	width: 100% !important;
+}
+
+body.hrms-module-shell .page-container[data-page-route="Workspaces"] .workspace-container {
+	box-sizing: border-box;
+	max-width: none !important;
+	padding: 16px 24px 32px;
+	width: 100% !important;
+}
+
+body.hrms-module-shell .page-container[data-page-route="Workspaces"] .workspace-container .layout-main-section,
+body.hrms-module-shell .page-container[data-page-route="Workspaces"] .workspace-container .row {
+	max-width: none;
+}
+
+/* Every module page shares this shell.  Keep its main work area anchored to
+ * the viewport bottom instead of ending wherever the first content block ends. */
+body.hrms-module-shell .page-container {
+	display: flex;
+	flex-direction: column;
+	min-height: calc(100vh - var(--navbar-height, 56px));
+}
+
+body.hrms-module-shell .page-container > .page-body,
+body.hrms-module-shell .page-container .page-wrapper,
+body.hrms-module-shell .page-container .page-content,
+body.hrms-module-shell .page-container .layout-main-section-wrapper {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-height: 0;
+}
+
+body.hrms-module-shell .page-container .page-content > .layout-main {
+	display: flex;
+	flex: 1 1 auto;
+	min-height: 0;
+	width: 100%;
+}
+
+body.hrms-module-shell .page-container .layout-main-section {
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+/* Frappe ListView measures this node to size its result area.  Without a
+ * viewport floor it only measures the loaded rows, leaving unused space below
+ * every list and work page. */
+body.hrms-module-shell .main-section {
+	min-height: calc(
+		100vh - var(--navbar-height, 56px) - var(--page-head-height, 48px)
+	);
 }
 
 .hrms-roster-summary__cards {
@@ -1268,15 +1770,78 @@ body.hrms-employee-roster-view .list-row .list-row-like {
 }
 
 body.hrms-employee-roster-view .list-row-head {
+	align-items: center;
+	background: var(--fg-color, #fff);
+	border: 0;
+	border-bottom: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 0;
+	display: flex !important;
+	height: 36px !important;
+	margin-bottom: 0;
+	max-height: 36px !important;
+	min-height: 36px !important;
 	overflow: visible;
 	position: relative;
 	z-index: 5;
 }
 
+/* The Frappe ListView header is also the roster filter header. Keeping it in
+ * the same list row as the data guarantees one shared column layout. */
+body.hrms-employee-roster-view .list-row-head.hrms-roster-native-table-header {
+	align-items: stretch;
+	height: auto !important;
+	max-height: none !important;
+	min-height: 76px !important;
+	overflow: visible;
+}
+
+body.hrms-employee-roster-view .list-row-head.hrms-roster-native-table-header .list-row-col {
+	align-content: start;
+	border-right: 1px solid var(--border-color, #e5e7eb);
+	display: grid !important;
+	gap: 8px;
+	grid-template-columns: minmax(0, 1fr) !important;
+	grid-template-rows: 20px 32px;
+	min-height: 76px !important;
+	padding: 10px 12px;
+}
+
+body.hrms-employee-roster-view .list-row-head.hrms-roster-native-table-header .list-row-col:last-child {
+	border-right: 0;
+}
+
+body.hrms-employee-roster-view .list-row-head.hrms-roster-native-table-header .hrms-roster-table-header__sort,
+body.hrms-employee-roster-view .list-row-head.hrms-roster-native-table-header .hrms-roster-table-header__input {
+	min-width: 0;
+	width: 100%;
+}
+
+body.hrms-employee-roster-view .result-container .no-result:has(.hrms-roster-native-table-header) {
+	align-self: stretch;
+	box-sizing: border-box;
+	padding-top: 76px;
+	position: relative;
+}
+
+body.hrms-employee-roster-view .result-container .no-result .hrms-roster-native-table-header {
+	left: 0;
+	position: absolute;
+	top: 0;
+	width: 100%;
+}
+
+body.hrms-employee-roster-view .list-row-head .list-row-col[data-fieldname] {
+	height: auto !important;
+	min-height: 36px !important;
+}
+
 body.hrms-employee-roster-view .hrms-roster-filterable-column {
 	align-items: stretch;
 	display: flex !important;
+	justify-content: space-between;
+	min-height: 36px;
 	overflow: visible !important;
+	padding: 0 8px;
 	position: relative;
 }
 
@@ -1284,7 +1849,7 @@ body.hrms-employee-roster-view .hrms-roster-column-sort {
 	align-items: center;
 	cursor: pointer;
 	display: inline-flex;
-	flex: 0 0 auto;
+	flex: 0 1 auto;
 	min-height: 32px;
 	position: relative;
 	z-index: 2;
@@ -1300,19 +1865,20 @@ body.hrms-employee-roster-view .hrms-roster-column-filter-hotspot {
 	display: flex;
 	flex: 1 1 auto;
 	justify-content: flex-end;
-	min-width: 24px;
+	min-width: 0;
 	opacity: 0;
-	padding: 0 4px;
-	transition: opacity 0.12s ease;
+	padding: 0 3px;
+	transition: opacity 0.15s ease;
 }
 
 body.hrms-employee-roster-view .hrms-roster-filterable-column:hover .hrms-roster-column-filter-hotspot,
-body.hrms-employee-roster-view .hrms-roster-column-filter-hotspot:focus-visible,
+body.hrms-employee-roster-view .hrms-roster-filterable-column:focus-within .hrms-roster-column-filter-hotspot,
 body.hrms-employee-roster-view .hrms-roster-filterable-column.has-filter .hrms-roster-column-filter-hotspot {
 	opacity: 1;
 }
 
 body.hrms-employee-roster-view .hrms-roster-filterable-column.has-filter {
+	background: var(--control-bg, #f8fafc);
 	box-shadow: inset 0 -2px 0 var(--primary, #2490ef);
 }
 
@@ -1322,21 +1888,23 @@ body.hrms-employee-roster-view .hrms-roster-filterable-column.is-filtering .hrms
 }
 
 body.hrms-employee-roster-view .hrms-roster-column-filter-editor {
-	background: var(--fg-color, #fff);
-	inset: 0 4px 0 0;
-	min-width: 150px;
+	align-items: center;
+	display: flex;
+	inset: 0 2px;
 	position: absolute;
-	z-index: 30;
+	z-index: 20;
 }
 
 body.hrms-employee-roster-view .hrms-roster-column-filter-input {
-	background: var(--control-bg, #f3f4f6);
+	background: var(--fg-color, #fff);
 	border: 1px solid var(--primary, #2490ef);
-	border-radius: var(--border-radius, 6px);
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary, #2490ef) 12%, transparent);
+	border-radius: 4px;
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary, #2490ef) 16%, transparent);
+	color: var(--text-color, #1f2937);
+	font-size: 13px;
 	height: 32px;
 	min-width: 0;
-	padding: 4px 28px 4px 8px;
+	padding: 3px 25px 3px 7px;
 	width: 100%;
 }
 
@@ -1346,14 +1914,14 @@ body.hrms-employee-roster-view .hrms-roster-column-filter-clear {
 	border: 0;
 	color: var(--text-muted, #6b7280);
 	display: flex;
-	font-size: 18px;
-	height: 28px;
+	font-size: 17px;
+	height: 24px;
 	justify-content: center;
 	padding: 0;
 	position: absolute;
 	right: 3px;
-	top: 2px;
-	width: 24px;
+	top: 6px;
+	width: 20px;
 }
 
 body.hrms-employee-roster-view .hrms-roster-column-filter-suggestions {
@@ -1364,12 +1932,12 @@ body.hrms-employee-roster-view .hrms-roster-column-filter-suggestions {
 	display: none;
 	left: 0;
 	max-height: 240px;
-	min-width: max(100%, 190px);
+	min-width: max(100%, 170px);
 	overflow-y: auto;
 	padding: 4px;
 	position: absolute;
-	top: calc(100% + 4px);
-	z-index: 31;
+	top: calc(100% + 3px);
+	z-index: 20;
 }
 
 body.hrms-employee-roster-view .hrms-roster-column-filter-suggestions.is-visible {
@@ -1390,12 +1958,241 @@ body.hrms-employee-roster-view .hrms-roster-column-filter-option {
 }
 
 body.hrms-employee-roster-view .hrms-roster-column-filter-option:hover,
-body.hrms-employee-roster-view .hrms-roster-column-filter-option.is-active {
+body.hrms-employee-roster-view .hrms-roster-column-filter-option:focus {
 	background: var(--control-bg, #f3f4f6);
+}
+
+body.hrms-employee-roster-view .hrms-roster-header-actions {
+	align-items: center;
+	background: var(--fg-color, #fff);
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: var(--border-radius, 6px);
+	box-shadow: var(--shadow-sm, 0 1px 3px rgba(15, 23, 42, 0.08));
+	display: flex;
+	gap: 3px;
+	padding: 3px;
+	position: absolute;
+	right: 7px;
+	top: 7px;
+	z-index: 8;
+}
+
+body.hrms-employee-roster-view .hrms-roster-empty-result-header .hrms-roster-header-actions {
+	align-self: stretch;
+	border: 0;
+	border-left: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 0;
+	box-shadow: none;
+	position: sticky;
+	right: 0;
+	top: auto;
+}
+
+body.hrms-employee-roster-view .hrms-roster-header-actions__label {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	padding: 0 3px 0 4px;
+}
+
+body.hrms-employee-roster-view .hrms-roster-header-actions .btn {
+	min-height: 26px;
+	padding: 3px 8px;
+	white-space: nowrap;
+}
+
+body.hrms-employee-roster-view .hrms-roster-sort-order.is-active {
+	background: var(--primary, #2490ef);
+	border-color: var(--primary, #2490ef);
+	color: var(--fg-color, #fff);
 }
 
 body.hrms-employee-roster-view .hrms-roster-page-length-hidden {
 	display: none !important;
+}
+
+/* Employee is a normal Frappe ListView.  The page gets its full-width
+ * behavior from Frappe's `.no-list-sidebar` class (added in employee_list.js),
+ * so no duplicate grid or hidden native list is kept in the DOM. */
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .layout-main-section-wrapper,
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .layout-main,
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .layout-main-section {
+	flex: 1 1 100% !important;
+	max-width: none !important;
+	width: 100% !important;
+}
+
+/* 固定业务表头：它是花名册唯一的表头，和下方的原生 ListView 共用
+ * 同一套字段与请求逻辑，因此不会再出现两套表头或一套筛选失效。 */
+body.hrms-employee-roster-view .hrms-roster-table-header {
+	background: var(--fg-color, #fff);
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: var(--border-radius, 6px);
+	display: grid;
+	grid-template-columns: repeat(10, minmax(118px, 1fr)) 112px;
+	margin: 0 0 16px;
+	overflow-x: auto;
+	position: sticky;
+	top: var(--page-head-height, 48px);
+	width: 100%;
+	z-index: 4;
+}
+
+body.hrms-employee-roster-view .hrms-roster-table-header__cell {
+	border-right: 1px solid var(--border-color, #e5e7eb);
+	display: grid;
+	gap: 8px;
+	min-width: 118px;
+	padding: 10px 12px;
+}
+
+body.hrms-employee-roster-view .hrms-roster-table-header__sort {
+	align-items: center;
+	background: transparent;
+	border: 0;
+	color: var(--text-color, #1f2937);
+	cursor: pointer;
+	display: flex;
+	font-size: 14px;
+	font-weight: 600;
+	justify-content: space-between;
+	padding: 0;
+	text-align: left;
+}
+
+body.hrms-employee-roster-view .hrms-roster-table-header__sort::after {
+	color: var(--text-muted, #8a93a0);
+	content: "↕";
+	font-size: 14px;
+}
+
+body.hrms-employee-roster-view .hrms-roster-table-header__sort:hover,
+body.hrms-employee-roster-view .hrms-roster-table-header__sort:focus {
+	color: var(--primary, #2490ef);
+}
+
+body.hrms-employee-roster-view .hrms-roster-table-header__input {
+	border: 0;
+	border-radius: 5px;
+	box-shadow: none;
+	font-size: 14px;
+	height: 32px;
+	min-width: 0;
+	padding: 3px 8px;
+	width: 100%;
+}
+
+body.hrms-employee-roster-view .hrms-roster-table-header__input:focus {
+	box-shadow: 0 0 0 1px var(--primary, #2490ef);
+}
+
+body.hrms-employee-roster-view .hrms-roster-table-header__actions {
+	align-items: center;
+	display: flex;
+	justify-content: center;
+	min-width: 112px;
+	padding: 10px;
+}
+
+/* Keep the roster easy to scan at the application's compact desktop scale. */
+body.hrms-employee-roster-view .result-container .list-row {
+	min-height: 48px !important;
+}
+
+body.hrms-employee-roster-view .result-container .list-row .list-row-col {
+	font-size: 14px;
+	line-height: 20px;
+	padding-bottom: 8px;
+	padding-top: 8px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .layout-main-section {
+	display: flex;
+	flex-direction: column;
+	height: calc(100vh - var(--navbar-height, 56px) - var(--page-head-height, 48px));
+	min-height: calc(100vh - var(--navbar-height, 56px) - var(--page-head-height, 48px));
+	overflow: hidden;
+}
+
+/* Desktop uses `html { zoom: .85 }` for the compact density.  A plain 100vh
+ * here is painted at only 85% of the real viewport, leaving a blank strip
+ * below the roster.  Use the inverse viewport height so the table reaches
+ * the browser bottom while retaining its own scroll area. */
+@media screen and (min-width: 1280px) {
+	body:has(#hrms-top-module-nav) .page-container.hrms-employee-roster-page .layout-main-section {
+		height: calc(117.6470588235vh - var(--navbar-height, 56px) - var(--page-head-height, 48px));
+		min-height: calc(117.6470588235vh - var(--navbar-height, 56px) - var(--page-head-height, 48px));
+	}
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .frappe-list {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-height: 0;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .result-container {
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: var(--border-radius, 6px);
+	display: flex;
+	flex-direction: column;
+	flex: 0 0 auto;
+	height: calc(100vh - 300px) !important;
+	min-height: calc(100vh - 300px);
+	overflow: auto;
+}
+
+/* Keep the roster header in ListView's stable host, before Frappe's
+ * replaceable result container. A search only swaps the data/empty state,
+ * never the header or its filter inputs. */
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-header {
+	background: var(--subtle-fg, #f7f8fa);
+	border: 0;
+	border-bottom: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 0;
+	display: grid;
+	flex: 0 0 auto;
+	grid-template-columns: repeat(var(--hrms-roster-column-count, 10), minmax(150px, 1fr));
+	margin: 0;
+	min-width: 1500px;
+	overflow: visible;
+	position: sticky;
+	top: 0;
+	width: 100%;
+	z-index: 7;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-header .hrms-roster-table-header__cell {
+	background: transparent;
+	border-right: 1px solid var(--border-color, #e5e7eb);
+	gap: 6px;
+	min-width: 150px;
+	padding: 9px 10px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-header .hrms-roster-table-header__sort {
+	font-size: 13px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-header .hrms-roster-table-header__input {
+	background: var(--fg-color, #fff);
+	border: 1px solid transparent;
+	height: 30px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-header .hrms-roster-table-header__input:focus {
+	border-color: var(--primary, #2490ef);
+	box-shadow: none;
+}
+
+body.hrms-employee-roster-view .list-row-head.hrms-roster-native-table-header-hidden {
+	display: none !important;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .result-container > .result,
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .result-container > .no-result {
+	flex: 1 0 auto;
+	min-height: 100% !important;
 }
 
 /* The roster is the operational entry point for HR.  Hide generic ListView

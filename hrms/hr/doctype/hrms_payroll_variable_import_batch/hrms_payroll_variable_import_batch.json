@@ -68,12 +68,12 @@
    "label": "本月选定版本"
   },
   {
-   "default": "待审核",
+   "default": "待确认",
    "fieldname": "status",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "状态",
-   "options": "待解析\n待审核\n已确认\n已驳回\n已作废"
+   "options": "待解析\n待确认\n待审核\n已确认\n已驳回\n已作废"
   },
   {
    "default": "0",

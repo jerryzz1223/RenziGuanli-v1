@@ -6,6 +6,25 @@
 	width: 100%;
 }
 
+.hrms-attendance-exception-lines {
+	display: grid;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.hrms-attendance-exception-line {
+	background: var(--control-bg, #f8fafc);
+	border-left: 3px solid var(--yellow-500, #f59e0b);
+	border-radius: 4px;
+	line-height: 1.55;
+	margin: 4px 0;
+	padding: 7px 9px;
+}
+
+.hrms-attendance-exception-line small {
+	color: var(--text-muted, #6b7280);
+}
+
 /* This page is a data workbench.  Do not constrain wide result tables to the
  * generic Desk reading-column width; retain just enough edge space to scan. */
 .page-container.hrms-attendance-wide-layout .layout-main-section-wrapper,
@@ -174,6 +193,10 @@
 	gap: 12px;
 	grid-template-columns: repeat(4, minmax(0, 1fr));
 	margin-bottom: 12px;
+}
+
+.hrms-attendance-overview-grid {
+	grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .hrms-attendance-kpi {
@@ -922,6 +945,20 @@
 	justify-self: start;
 }
 
+.hrms-attendance-pagination {
+	align-items: center;
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 12px 0;
+}
+
+.hrms-attendance-pagination-controls {
+	align-items: center;
+	display: flex;
+	gap: 8px;
+}
+
 @keyframes hrms-dingtalk-pulse {
 	50% {
 		opacity: 0.3;
@@ -972,6 +1009,11 @@
 	}
 
 	.hrms-attendance-review-panel {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.hrms-attendance-pagination {
 		align-items: stretch;
 		flex-direction: column;
 	}

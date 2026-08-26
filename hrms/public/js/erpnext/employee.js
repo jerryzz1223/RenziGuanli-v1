@@ -118,9 +118,18 @@ function consume_employee_form_edit_access(employee) {
 function redirect_employee_form_route_to_detail() {
 	const route = frappe.get_route();
 	if (route[0] !== "Form" || route[1] !== "Employee" || !route[2]) return;
+	// frappe.new_doc() first opens a temporary route such as
+	// "new-employee-wefamctblb".  It is not an existing Employee name, so
+	// redirecting it to the read-only detail page turns a normal create action
+	// into a misleading “not found” error.
+	if (is_new_employee_form_route(route[2])) return;
 	if (is_employee_form_edit_access_allowed(route[2])) return;
 	if (frappe.route_options && frappe.route_options.hrms_allow_employee_form) return;
 	frappe.set_route("employee-detail", route[2]);
+}
+
+function is_new_employee_form_route(route_name) {
+	return /^new-employee(?:-|$)/.test(String(route_name || ""));
 }
 
 function bind_employee_detail_route_redirect() {
