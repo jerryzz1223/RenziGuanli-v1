@@ -2267,6 +2267,7 @@ def bulk_update_processing_records(
 	attendance_month: str,
 	source_type: str,
 	record_ids: str | list[str],
+	select_all_pending: int = 0,
 	page_start: int = 0,
 	page_length: int = 20,
 	review_status: str = "待审核",
@@ -2284,35 +2285,35 @@ def bulk_update_processing_records(
 		frappe.throw(_("处理结果无效。"))
 	if not (reason or "").strip():
 		frappe.throw(_("批量处理必须填写原因。"))
+	select_all_pending = cint(select_all_pending)
 	if isinstance(record_ids, str):
 		record_ids = _loads(record_ids, [])
 	if not isinstance(record_ids, list):
 		frappe.throw(_("请选择要批量处理的记录。"))
 	record_ids = list(dict.fromkeys(str(record_id).strip() for record_id in record_ids if str(record_id).strip()))
-	if not record_ids:
+	if not select_all_pending and not record_ids:
 		frappe.throw(_("请选择至少一条异常记录。"))
-	if len(record_ids) > 500:
-		frappe.throw(_("一次最多批量处理 500 条记录。"))
-	# The UI exposes a fixed 20-row work-queue page.  Normalize the cursor here
-	# too, rather than trusting a client to decide which other-page IDs it may
-	# submit for a "current page" action.
-	page_length = 20
-	page_start = max(cint(page_start), 0)
-	page_start -= page_start % page_length
 	batch = _latest_batch(company, attendance_month, source_type)
 	if not batch:
 		frappe.throw(_("尚未上传该来源文件。"))
-	current_page_rows = frappe.get_all(
-		PROCESSING_RECORD_DOCTYPE,
-		filters={"import_batch": batch.name, "exception_codes": ["!=", "[]"], "review_status": "待审核"},
-		fields=["name"],
-		order_by="modified desc",
-		limit_start=page_start,
-		limit_page_length=page_length,
-	)
-	current_page_ids = {row.name for row in current_page_rows}
-	if not set(record_ids).issubset(current_page_ids):
-		frappe.throw(_("批量处理只能处理当前页中已勾选的异常记录；请刷新页面后重试。"))
+	if select_all_pending:
+		# A source-filtered all-selection is resolved on the server at submit time,
+		# so every pending record is included even when the browser only displays
+		# one page.  The source boundary remains mandatory: different source types
+		# can carry different review semantics.
+		record_ids = [row.name for row in frappe.get_all(
+			PROCESSING_RECORD_DOCTYPE,
+			filters={"import_batch": batch.name, "exception_codes": ["!=", "[]"], "review_status": "待审核"},
+			fields=["name"],
+			order_by="modified desc",
+			limit_page_length=501,
+		)]
+		if not record_ids:
+			frappe.throw(_("当前筛选来源没有待处理异常，请刷新页面后重试。"))
+	elif len(record_ids) > 500:
+		frappe.throw(_("一次最多批量处理 500 条记录。"))
+	if len(record_ids) > 500:
+		frappe.throw(_("当前筛选待处理异常超过 500 条，请分批处理。"))
 	rows = frappe.get_all(
 		PROCESSING_RECORD_DOCTYPE,
 		filters={"name": ["in", record_ids]},

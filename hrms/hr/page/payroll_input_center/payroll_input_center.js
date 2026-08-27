@@ -1286,14 +1286,15 @@ class PayrollInputCenter {
 	load_employee_salary_profiles() {
 		this.body().innerHTML = `
 			<div class="hrms-payroll-input-list-head hrms-payroll-step-head">
-				<div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("本月统计"))}</span><h3>${frappe.utils.escape_html(__("人员范围"))}</h3><p>${frappe.utils.escape_html(__("薪资计算仅取本月已锁定考勤终稿中的人员；下方固定展示参与人员与考勤工时，不在薪酬中心维护员工资料。"))}</p></div>
-				<button class="btn btn-default btn-sm" data-open-personnel-master>${frappe.utils.escape_html(__("打开员工花名册"))}</button>
+				<div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("本月处理决定"))}</span><h3>${frappe.utils.escape_html(__("人员范围"))}</h3><p>${frappe.utils.escape_html(__("薪资计算仅取本月已锁定考勤终稿中的人员。可在下表为离职或异常人员选择离职结算、不参与或待审核；审核决定会随本月锁定版本留痕。"))}</p></div>
+				<div class="hrms-payroll-action-group"><button class="btn btn-default btn-sm" data-reload-payroll-population>${frappe.utils.escape_html(__("重新加载人员范围"))}</button><button class="btn btn-default btn-sm" data-open-personnel-master>${frappe.utils.escape_html(__("打开员工花名册"))}</button></div>
 			</div>
 			<div data-employee-salary-cards></div>
 			<div class="hrms-payroll-personnel-summary" data-employee-summary></div>
 			<div class="hrms-payroll-participation-preview" data-payroll-participation-preview><div class="hrms-payroll-source-empty-detail text-muted">${frappe.utils.escape_html(__("正在读取本月锁定考勤终稿…"))}</div></div>
 		`;
 		this.body().querySelector("[data-open-personnel-master]").addEventListener("click", () => frappe.set_route("List", "Employee"));
+		this.body().querySelector("[data-reload-payroll-population]").addEventListener("click", () => this.reload_payroll_participation_population());
 		this.load_payroll_participation_preview(this.body().querySelector("[data-payroll-participation-preview]"));
 		frappe.call({
 			method: "hrms.api.payroll_input.list_employee_salary_profiles",
@@ -1315,18 +1316,91 @@ class PayrollInputCenter {
 				if (summaryTarget) {
 					summaryTarget.classList.toggle("has-warning", Boolean(missingRows.length));
 					summaryTarget.innerHTML = missingRows.length
-						? `<strong>${frappe.utils.escape_html(__("有 {0} 人的花名册资料待补全。", [missingRows.length]))}</strong><span>${frappe.utils.escape_html(__("这里不需要每月确认；需要时请在员工花名册处理。"))}</span>`
-						: `<strong>${frappe.utils.escape_html(__("人员范围正常"))}</strong><span>${frappe.utils.escape_html(__("无需每月重复确认，可直接处理当月变动项。"))}</span>`;
+						? `<strong>${frappe.utils.escape_html(__("有 {0} 人的花名册资料待补全。", [missingRows.length]))}</strong><span>${frappe.utils.escape_html(__("花名册资料仍在员工花名册维护；本月是否参与计算请在下方锁定考勤名单中决定。"))}</span>`
+						: `<strong>${frappe.utils.escape_html(__("花名册资料正常"))}</strong><span>${frappe.utils.escape_html(__("本月是否参与、离职结算及异常审核请在下方锁定考勤名单中决定。"))}</span>`;
 				}
 			},
 		});
+	}
+
+	reload_payroll_participation_population() {
+		frappe.confirm(
+			__("将重新读取当前已锁定的考勤终稿，更新薪酬侧人员名单，并删除该锁定版本尚未确认的薪资输入和试算结果。已确认工资不会被删除。是否继续？"),
+			() => {
+				frappe.call({
+					method: "hrms.api.payroll_input.reload_payroll_participation_population",
+					args: { company: this.company, payroll_month: this.payroll_month },
+					freeze: true,
+					freeze_message: __("正在重新加载人员范围…"),
+					callback: (response) => {
+						const result = response.message || {};
+						const key = this.attendance_dependency_key();
+						this.attendance_dependency_cache.delete(key);
+						this.payroll_participation_preview = null;
+						this.apply_attendance_dependency(result, this.company, this.payroll_month);
+						frappe.show_alert({ message: __("人员范围已重新加载；已清除未确认薪资输入 {0} 条、试算结果 {1} 条。", [result.invalidation?.deleted_inputs || 0, result.invalidation?.deleted_settlements || 0]), indicator: "green" });
+						this.load_employee_salary_profiles();
+					},
+				});
+			},
+		);
 	}
 
 	render_payroll_participation_preview(preview) {
 		if (!preview?.available) return `<div class="hrms-payroll-source-empty-detail text-muted">${frappe.utils.escape_html(preview?.reason || __("当前没有可预览的参与人员。"))}</div>`;
 		const columns = preview.columns || [];
 		const rows = preview.rows || [];
-		return `<div class="hrms-payroll-preview-summary"><strong>${frappe.utils.escape_html(__("参与算薪人员预览"))}</strong><span class="is-valid">${frappe.utils.escape_html(__("共 {0} 人", [rows.length]))}</span><span>${frappe.utils.escape_html(__("锁定版本：{0}", [preview.attendance_lock_version || "-"]))}</span>${preview.locked_on ? `<span>${frappe.utils.escape_html(__("锁定时间：{0}", [preview.locked_on]))}</span>` : ""}</div><p class="hrms-payroll-participation-note">${frappe.utils.escape_html(__("仅本表人员会进入本月薪资输入表与结算计算；未被锁定考勤终稿识别的员工不会参与。"))}</p><div class="hrms-payroll-table-wrap"><table class="table table-bordered hrms-payroll-input-table"><thead><tr>${columns.map((column) => `<th>${frappe.utils.escape_html(__(column.label || column.field))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${frappe.utils.escape_html(row[column.field] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+		const counts = preview.counts || {};
+		const detail = (row, field) => {
+			const value = row[field] ?? "";
+			if (field === "decision" && (row.decision_reason || row.settlement_basis)) return `${frappe.utils.escape_html(value)}<small class="d-block text-muted">${frappe.utils.escape_html([row.decision_reason, row.settlement_basis ? __("结算依据：{0}", [row.settlement_basis]) : ""].filter(Boolean).join("；"))}</small>`;
+			if (field === "review_status" && row.approval_note) return `${frappe.utils.escape_html(value)}<small class="d-block text-muted">${frappe.utils.escape_html(row.approval_note)}</small>`;
+			if (field === "calculation_status") return `<strong>${frappe.utils.escape_html(value)}</strong>`;
+			return frappe.utils.escape_html(value);
+		};
+		return `<div class="hrms-payroll-preview-summary"><strong>${frappe.utils.escape_html(__("本月人员范围与处理决定"))}</strong><span class="is-valid">${frappe.utils.escape_html(__("锁定名单 {0} 人", [rows.length]))}</span><span>${frappe.utils.escape_html(__("正常 {0}", [counts.normal || 0]))}</span><span>${frappe.utils.escape_html(__("离职结算 {0}", [counts.termination || 0]))}</span><span>${frappe.utils.escape_html(__("不参与 {0}", [counts.excluded || 0]))}</span><span class="is-warning">${frappe.utils.escape_html(__("待决定 {0}", [counts.pending || 0]))}</span><span>${frappe.utils.escape_html(__("锁定版本：{0}", [preview.attendance_lock_version || "-"]))}</span>${preview.locked_on ? `<span>${frappe.utils.escape_html(__("锁定时间：{0}", [preview.locked_on]))}</span>` : ""}</div><p class="hrms-payroll-participation-note">${frappe.utils.escape_html(__("离职人员必须选择“离职结算”或“不参与计算”；异常待审核不会绕过校验。审核通过后，本表会显示处理结论并决定是否进入试算。"))}</p><div class="hrms-payroll-table-wrap"><table class="table table-bordered hrms-payroll-input-table"><thead><tr>${columns.map((column) => `<th>${frappe.utils.escape_html(__(column.label || column.field))}</th>`).join("")}<th>${frappe.utils.escape_html(__("操作"))}</th></tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${detail(row, column.field)}</td>`).join("")}<td><button class="btn btn-default btn-xs" data-payroll-participation-decision="${frappe.utils.escape_html(row.employee)}">${frappe.utils.escape_html(row.decision === "异常待审核" || row.decision === "待处理" ? __("处理 / 审核") : __("调整处理"))}</button></td></tr>`).join("")}</tbody></table></div>`;
+	}
+
+	bind_payroll_participation_actions(target) {
+		target?.querySelectorAll("[data-payroll-participation-decision]").forEach((button) => {
+			button.addEventListener("click", () => {
+				const row = (this.payroll_participation_preview?.rows || []).find((item) => item.employee === button.dataset.payrollParticipationDecision);
+				if (row) this.open_payroll_participation_decision_dialog(row);
+			});
+		});
+	}
+
+	open_payroll_participation_decision_dialog(row) {
+		const escape = (value) => frappe.utils.escape_html(String(value ?? ""));
+		const defaultDecision = ["正常计薪", "离职结算", "不参与计算", "异常待审核"].includes(row.decision) ? row.decision : "离职结算";
+		const dialog = new frappe.ui.Dialog({
+			title: __("本月人员处理：{0}", [row.employee_name || row.employee_code]),
+			fields: [
+				{ fieldtype: "HTML", fieldname: "employee", options: `<div class="alert alert-info"><strong>${escape(row.employee_name || "-")}</strong> / ${escape(row.employee_code || "-")}<br>${escape(__("花名册状态：{0}；当前定薪：{1}", [row.employee_status || "-", row.salary_status || "-"]))}</div>` },
+				{ fieldtype: "Select", fieldname: "decision", label: __("本月处理方式"), options: `${__("正常计薪")}\n${__("离职结算")}\n${__("不参与计算")}\n${__("异常待审核")}`, default: defaultDecision, reqd: 1 },
+				{ fieldtype: "Small Text", fieldname: "decision_reason", label: __("处理或异常说明"), default: row.decision_reason || "", description: __("离职结算、不参与计算和异常待审核必须填写。") },
+				{ fieldtype: "Small Text", fieldname: "settlement_basis", label: __("离职结算依据"), default: row.settlement_basis || "", description: __("离职结算必须填写，例如离职审批单、结算单或已批准标准。") },
+				{ fieldtype: "Check", fieldname: "approved", label: __("我已审核通过并确认本月处理结论"), default: row.review_status === "审核通过" ? 1 : 0 },
+				{ fieldtype: "Small Text", fieldname: "approval_note", label: __("审核意见"), default: row.approval_note || "" },
+			],
+			primary_action_label: __("保存本月处理决定"),
+			primary_action: (values) => {
+				frappe.call({
+					method: "hrms.api.payroll_input.save_monthly_payroll_participation_decision",
+					args: { company: this.company, payroll_month: this.payroll_month, attendance_lock_version: this.attendance_lock_version, employee: row.employee, ...values },
+					freeze: true,
+					freeze_message: __("正在保存本月处理决定…"),
+					callback: () => {
+						dialog.hide();
+						this.payroll_participation_preview = null;
+						this.process_readiness = {};
+						frappe.show_alert({ message: __("本月人员处理决定已保存"), indicator: "green" });
+						this.load_employee_salary_profiles();
+					},
+					});
+			},
+		});
+		dialog.show();
 	}
 
 	load_payroll_participation_preview(target) {
@@ -1334,6 +1408,7 @@ class PayrollInputCenter {
 		const scope = `${this.attendance_dependency_key()}::${this.attendance_lock_version || ""}`;
 		if (this.payroll_participation_preview?._scope === scope) {
 			target.innerHTML = this.render_payroll_participation_preview(this.payroll_participation_preview);
+			this.bind_payroll_participation_actions(target);
 			return;
 		}
 		target.innerHTML = `<div class="hrms-payroll-source-empty-detail text-muted">${frappe.utils.escape_html(__("正在读取本月锁定考勤终稿…"))}</div>`;
@@ -1345,7 +1420,10 @@ class PayrollInputCenter {
 				if (this.payroll_participation_preview_loading_scope !== scope) return;
 				this.payroll_participation_preview_loading_scope = "";
 				this.payroll_participation_preview = { ...(response.message || { available: false, reason: __("未取得参与人员预览。") }), _scope: scope };
-				if (target.isConnected) target.innerHTML = this.render_payroll_participation_preview(this.payroll_participation_preview);
+				if (target.isConnected) {
+					target.innerHTML = this.render_payroll_participation_preview(this.payroll_participation_preview);
+					this.bind_payroll_participation_actions(target);
+				}
 			},
 			error: () => {
 				if (this.payroll_participation_preview_loading_scope !== scope) return;
@@ -2978,7 +3056,7 @@ class PayrollInputCenter {
 				<div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("唯一补充数据入口"))}</span><h3>${frappe.utils.escape_html(__("月度增减项"))}</h3><p>${frappe.utils.escape_html(__("录入后系统自动显示异常；可直接更改或剔除异常记录，确认一次即可参与本月薪资计算。"))}</p></div>
 			</div>
 			<div class="hrms-payroll-input-panel">
-				<div class="hrms-payroll-input-list-head"><div><h3>${frappe.utils.escape_html(__("本月导入批次"))}</h3><div class="text-muted">${frappe.utils.escape_html(__("可一键确认当前版本；已确认的错误版本可作废并保留追溯。"))}</div></div><div class="hrms-payroll-action-group"><button class="btn btn-default btn-sm" data-bulk-variable-upload>${frappe.utils.escape_html(__("批量导入表格"))}</button><button class="btn btn-default btn-sm" data-manage-import-batches>${frappe.utils.escape_html(__("批次管理"))}</button></div></div>
+				<div class="hrms-payroll-input-list-head"><div><h3>${frappe.utils.escape_html(__("本月导入批次"))}</h3><div class="text-muted">${frappe.utils.escape_html(__("可一键确认当前版本；已确认的错误版本可作废并保留追溯。"))}</div></div><div class="hrms-payroll-action-group"><button class="btn btn-default btn-sm" data-bulk-variable-upload>${frappe.utils.escape_html(__("批量导入表格"))}</button><button class="btn btn-default btn-sm" data-manage-import-batches>${frappe.utils.escape_html(__("批次管理"))}</button><button class="btn btn-danger btn-sm" data-test-monthly-reset>${frappe.utils.escape_html(__("测试清空本月全部薪酬"))}</button></div></div>
 				<div class="hrms-payroll-variable-source-grid" data-variable-source-catalog><div class="text-muted">${frappe.utils.escape_html(__("正在读取来源配置…"))}</div></div>
 			</div>
 		`;
@@ -2988,6 +3066,7 @@ class PayrollInputCenter {
 		this.variable_source_catalog_target = this.body()?.querySelector("[data-variable-source-catalog]") || null;
 		this.body().querySelector("[data-bulk-variable-upload]")?.addEventListener("click", () => this.open_bulk_variable_uploader());
 		this.body().querySelector("[data-manage-import-batches]")?.addEventListener("click", () => this.open_import_batch_manager());
+		this.body().querySelector("[data-test-monthly-reset]")?.addEventListener("click", () => this.open_test_monthly_reset_dialog());
 		this.load_variable_source_catalog();
 		this.load_import_batches();
 	}
@@ -3458,6 +3537,59 @@ class PayrollInputCenter {
 		const refresh = () => this.load_import_batch_history(target, refresh);
 		dialog.show();
 		refresh();
+	}
+
+	open_test_monthly_reset_dialog() {
+		const escape = (value) => frappe.utils.escape_html(String(value ?? ""));
+		const dialog = new frappe.ui.Dialog({
+			title: __("测试清空本月全部薪酬"),
+			size: "large",
+			fields: [
+				{ fieldtype: "HTML", fieldname: "warning", options: `<div class="alert alert-danger"><strong>${escape(__("仅限测试数据"))}</strong><br>${escape(__("将清空本公司当前月份的全部薪酬数据，包括定薪、福利来源、月度增减项、薪资输入和结算结果；不会删除花名册、薪资架构或原始附件。"))}</div>` },
+				{ fieldtype: "Data", fieldname: "payroll_month", label: __("月份"), default: this.payroll_month, read_only: 1 },
+				{ fieldtype: "HTML", fieldname: "reset_preview", options: `<div class="text-muted">${escape(__("点击“预览影响”后查看全公司本月将删除的数据。"))}</div>` },
+				{ fieldtype: "Check", fieldname: "test_mode", label: __("我确认这是测试数据，允许永久删除"), default: 0 },
+				{ fieldtype: "Data", fieldname: "confirmation", label: __("确认语"), description: __("预览后将显示必须输入的确认语。") },
+			],
+		});
+		const preview = () => {
+			dialog.fields_dict.reset_preview.$wrapper.html(`<div class="text-muted">${escape(__("正在计算影响范围…"))}</div>`);
+			frappe.call({
+				method: "hrms.api.payroll_input.preview_test_monthly_data_reset",
+				args: { company: this.company, payroll_month: this.payroll_month, department: "", area: "payroll" },
+				freeze: true,
+				freeze_message: __("正在预览测试清空影响…"),
+			}).then((response) => {
+				const result = response.message || {};
+				dialog.__test_monthly_reset_preview = result;
+				const rows = (result.records || []).map((row) => `<tr><td>${escape(row.doctype)}</td><td class="text-right">${escape(row.count)}</td></tr>`).join("");
+				dialog.fields_dict.reset_preview.$wrapper.html(`<div class="alert alert-warning"><strong>${escape(__("将删除 {0} 条记录", [result.total_count || 0]))}</strong><table class="table table-bordered table-sm mt-2"><thead><tr><th>${escape(__("数据类型"))}</th><th>${escape(__("数量"))}</th></tr></thead><tbody>${rows || `<tr><td colspan="2" class="text-muted">${escape(__("没有找到可清空记录"))}</td></tr>`}</tbody></table><p>${(result.warnings || []).map((item) => escape(item)).join("<br>")}</p><p><strong>${escape(__("确认语："))}</strong>${escape(result.confirmation || "")}</p></div>`);
+				dialog.set_primary_action(__("输入确认语后清空"), execute);
+			});
+		};
+		const execute = () => {
+			const values = dialog.get_values();
+			const result = dialog.__test_monthly_reset_preview;
+			if (!result) return preview();
+			if (!values?.test_mode || values.confirmation !== result.confirmation) {
+				frappe.msgprint({ title: __("确认不足"), indicator: "red", message: __("请勾选测试确认并完整输入预览中显示的确认语。") });
+				return;
+			}
+			frappe.call({
+				method: "hrms.api.payroll_input.reset_test_monthly_data",
+				args: { company: this.company, payroll_month: this.payroll_month, department: "", area: result.area, confirmation: values.confirmation, test_mode: values.test_mode },
+				freeze: true,
+				freeze_message: __("正在清空测试月度数据…"),
+				callback: (response) => {
+					dialog.hide();
+					frappe.show_alert({ message: response.message?.message || __("测试月度数据已清空"), indicator: "orange" });
+					this.process_readiness = {};
+					this.load_active_tab();
+				},
+			});
+		};
+		dialog.set_primary_action(__("预览影响"), preview);
+		dialog.show();
 	}
 
 	load_import_batch_history(target, refresh) {

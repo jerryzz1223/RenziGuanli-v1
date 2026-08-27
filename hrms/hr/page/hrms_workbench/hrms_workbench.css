@@ -2017,13 +2017,36 @@ body.hrms-workbench-shell-mode .page-body {
 	--hrms-home-border: #e6eaee;
 	--hrms-home-muted: #697586;
 	--hrms-home-text: #1f2937;
-	background: #f6f8fb;
+	/* The homepage is a white canvas; visual grouping comes only from cards. */
+	background: #fff;
 	box-sizing: border-box;
 	color: var(--hrms-home-text);
 	display: flex;
 	flex-direction: column;
-	min-height: calc(100vh - 94px);
+	/* Keep the page background flush with the viewport bottom.  The top bar and
+	 * page heading are rendered by Frappe, so their actual configured heights
+	 * must be deducted instead of using a fixed value. */
+	flex: 1 0 auto;
+	min-height: calc(
+		100vh - var(--navbar-height, 56px) - var(--page-head-height, 48px)
+	);
+	min-height: calc(
+		100dvh - var(--navbar-height, 56px) - var(--page-head-height, 48px)
+	);
 	padding: 24px;
+}
+
+/* Frappe paints the page shell behind the custom homepage.  Keep every layer
+ * of this page white so the cards, rather than a tinted canvas, define the UI. */
+.page-container:has(.hrms-home),
+.page-container:has(.hrms-home) > .page-body,
+.page-container:has(.hrms-home) .page-wrapper,
+.page-container:has(.hrms-home) .page-content,
+.page-container:has(.hrms-home) .layout-main,
+.page-container:has(.hrms-home) .layout-main-section-wrapper,
+.page-container:has(.hrms-home) .layout-main-section,
+.page-container:has(.hrms-home) .main-section {
+	background: #fff !important;
 }
 
 .hrms-home-state {

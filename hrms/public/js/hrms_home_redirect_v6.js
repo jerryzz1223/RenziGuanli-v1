@@ -351,6 +351,7 @@
 				"hrms-employee-reward-punishment",
 				"exit-interview",
 				"cross-department-support",
+				"cross-department-support-capability",
 			],
 			items: [
 				{ type: "link", label: "主页", route: "/desk/employee", slug: "employee" },
@@ -380,7 +381,7 @@
 					type: "section",
 					label: "跨部门协作",
 					children: [
-						{ label: "跨部门支援", route: "/desk/cross-department-support", slug: "cross-department-support" },
+						{ label: "跨部门支援", route: "/desk/cross-department-support", slug: "cross-department-support", active_slugs: ["cross-department-support-capability"] },
 					],
 				},
 			],

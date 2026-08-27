@@ -123,8 +123,8 @@
    "indent": 0,
    "keep_closed": 0,
    "label": "跨部门支援",
-   "link_to": "Cross Department Support Capability",
-   "link_type": "DocType",
+   "link_to": "cross-department-support",
+   "link_type": "Page",
    "open_in_new_tab": 0,
    "show_arrow": 0,
    "type": "Link"

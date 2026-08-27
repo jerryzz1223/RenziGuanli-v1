@@ -39,6 +39,11 @@ class AttendanceImportCenter {
 		this.selected_source_type = "attendance_draft";
 		this.exception_source_filter = "";
 		this.selected_exception_record_ids = new Set();
+		// This represents every unresolved row under the current source filter.
+		// Keep it separate from the page-local set so a 99-row monthly review is
+		// not silently reduced to the first 20 rows shown on screen.
+		this.select_all_filtered_exceptions = false;
+		this.filtered_pending_exception_count = 0;
 		this.exception_page = 1;
 		this.exception_page_size = 20;
 		this.exception_page_record_ids = new Set();
@@ -1262,27 +1267,31 @@ class AttendanceImportCenter {
 	}
 
 	show_bulk_processing_dialog(sourceType) {
-		// Never carry a selection across pagination.  The backend repeats this
-		// boundary check before it writes, so this action is limited to this page.
-		const recordIds = [...this.selected_exception_record_ids].filter((recordId) => this.exception_page_record_ids.has(recordId));
+		const selectAllPending = this.select_all_filtered_exceptions;
+		const recordIds = selectAllPending
+			? []
+			: [...this.selected_exception_record_ids].filter((recordId) => this.exception_page_record_ids.has(recordId));
+		const selectedCount = selectAllPending ? this.filtered_pending_exception_count : recordIds.length;
 		if (!sourceType) {
 			frappe.msgprint(__("请先选择一个来源，再批量处理该来源的异常。"));
 			return;
 		}
-		if (!recordIds.length) {
+		if (!selectedCount) {
 			frappe.msgprint(__("请先勾选需要处理的异常记录。"));
 			return;
 		}
 		const decisions = [
-			{ label: __("批量确认当前数据（通过）"), review_status: "已通过" },
+			{ label: __("确认并按缺勤规则计薪（通过）"), review_status: "已通过" },
 			{ label: __("批量标记为不计入下游（驳回）"), review_status: "已驳回" },
 			{ label: __("批量保留待审核"), review_status: "待审核" },
 		];
 		const statusForLabel = (label) => decisions.find((item) => item.label === label)?.review_status;
 		const dialog = new frappe.ui.Dialog({
-			title: __("批量处理当前页 {0} 条异常", [recordIds.length]),
+			title: __("批量处理当前筛选 {0} 条异常", [selectedCount]),
 			fields: [
-				{ fieldtype: "HTML", options: `<div class="hrms-attendance-dialog-note">${this.escape(__("本次只处理当前第 {0} 页已勾选的 {1} 条记录，不会处理其他页面的异常。请只勾选已核实、可采用同一决定的记录。系统不会擅自修改加工数据；本次决定、原因、操作人和时间会逐条留痕。", [this.exception_page, recordIds.length]))}</div>` },
+				{ fieldtype: "HTML", options: `<div class="hrms-attendance-dialog-note">${this.escape(selectAllPending
+					? __("本次将处理当前筛选来源下全部 {0} 条待处理异常（含其他页面）。确认不会改写钉钉原始工时、缺卡、迟到、早退或旷工事实；人员会继续进入终稿和薪资，缺勤、旷工、迟到/全勤及忘打卡仍按既有规则计算。每条记录都会分别留痕。", [selectedCount])
+					: __("本次只处理当前第 {0} 页已勾选的 {1} 条记录。系统不会擅自修改加工数据；本次决定、原因、操作人和时间会逐条留痕。", [this.exception_page, selectedCount]))}</div>` },
 				{ fieldtype: "Select", fieldname: "decision", label: __("批量处理方式"), options: decisions.map((item) => item.label).join("\n"), default: decisions[0].label, reqd: 1 },
 				{ fieldtype: "Small Text", fieldname: "reason", label: __("处理原因"), reqd: 1 },
 			],
@@ -1300,6 +1309,7 @@ class AttendanceImportCenter {
 						attendance_month: this.attendance_month,
 						source_type: sourceType,
 						record_ids: JSON.stringify(recordIds),
+						select_all_pending: selectAllPending ? 1 : 0,
 						page_start: (this.exception_page - 1) * this.exception_page_size,
 						page_length: this.exception_page_size,
 						review_status: reviewStatus,
@@ -1311,7 +1321,8 @@ class AttendanceImportCenter {
 						on_success: (data) => {
 							dialog.hide();
 							this.selected_exception_record_ids.clear();
-							frappe.show_alert({ message: __("已批量处理 {0} 条记录。", [data.updated_rows || recordIds.length]), indicator: "green" });
+							this.select_all_filtered_exceptions = false;
+							frappe.show_alert({ message: __("已批量处理 {0} 条记录。", [data.updated_rows || selectedCount]), indicator: "green" });
 							this.load_processing_batch({ rerender_active: false, on_loaded: () => this.load_processing_exceptions() });
 						},
 						on_error: (message) => frappe.msgprint(message),
@@ -1497,6 +1508,7 @@ class AttendanceImportCenter {
 	load_processing_exceptions() {
 		const body = this.body();
 		this.selected_exception_record_ids.clear();
+		this.select_all_filtered_exceptions = false;
 		this.exception_page_record_ids.clear();
 		body.innerHTML = this.render_processing_exceptions([], true);
 		if (!this.ensure_company()) return;
@@ -1518,6 +1530,7 @@ class AttendanceImportCenter {
 						this.load_processing_exceptions();
 						return;
 					}
+					this.filtered_pending_exception_count = Number(data.filtered_pending_count || 0);
 					this.exception_page_record_ids = new Set((data.review_rows || []).map((row) => row.record_id || row.source_id || row.name).filter(Boolean));
 					body.innerHTML = this.render_processing_exceptions(data.review_rows || [], false, "", data);
 					this.bind_processing_exception_events();
@@ -1541,10 +1554,10 @@ class AttendanceImportCenter {
 
 	render_processing_exceptions(rows = [], loading = false, error = "", summary = {}) {
 		const canBulkProcess = Boolean(this.exception_source_filter);
-		const selectedCount = this.selected_exception_record_ids.size;
 		const selectedSourceLabel = this.exception_source_filter ? this.processing_source_label(this.exception_source_filter) : __("全部来源");
 		const totalPending = Number(summary.total_pending_count || 0);
 		const currentPending = Number(summary.filtered_pending_count ?? rows.length);
+		const selectedCount = this.select_all_filtered_exceptions ? currentPending : this.selected_exception_record_ids.size;
 		const pagination = !loading && !error ? this.render_exception_pagination(currentPending) : "";
 		const scopeSummary = loading ? __("正在读取异常数量...") : __("当前筛选：{0}，待处理 {1} 条；全部来源共 {2} 条。", [selectedSourceLabel, currentPending, totalPending]);
 		const filterNotice = !loading && this.exception_source_filter && !currentPending && totalPending
@@ -1557,7 +1570,7 @@ class AttendanceImportCenter {
 				? this.render_attendance_exception_lines(dailyLines, recordId)
 				: `<strong>${this.escape(__("问题日期：{0}", [this.attendance_exception_date_text(row)]))}</strong><br><strong>${this.escape(__("问题：{0}", [this.exception_label_text(row)]))}</strong><br><small>${this.escape(row.exception_detail || row.exception_message || "")}</small>`;
 			return `<tr>
-				<td><input type="checkbox" data-exception-record-select="${this.escape(recordId)}" ${canBulkProcess && recordId ? "" : "disabled"} title="${this.escape(canBulkProcess ? __("选择后可批量处理") : __("请先按来源筛选，再进行批量处理"))}"></td>
+				<td><input type="checkbox" data-exception-record-select="${this.escape(recordId)}" ${canBulkProcess && recordId ? "" : "disabled"} ${this.select_all_filtered_exceptions ? "checked" : ""} title="${this.escape(canBulkProcess ? __("选择后可批量处理") : __("请先按来源筛选，再进行批量处理"))}"></td>
 				<td>${this.escape(`${row.employee_code || "--"} ${row.employee_name || ""}`)}</td>
 				<td>${this.escape(row.source_label || this.processing_source_label(row.source_type))}</td>
 				<td class="hrms-attendance-long-cell">${issueCell}</td>
@@ -1565,7 +1578,7 @@ class AttendanceImportCenter {
 				<td><button class="btn btn-default btn-xs" data-edit-exception="${this.escape(row.record_id || row.source_id || row.name || "")}" data-exception-source-type="${this.escape(row.source_type || "")}">${this.escape(__("处理异常"))}</button></td>
 			</tr>`;
 		};
-		return `<div class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("异常处理"))}</h3><small>${this.escape(__("按员工集中显示，但仅展开该员工存在异常的钉钉原始日期行。缺卡、迟到、早退与旷工均直接采用钉钉字段；人工修改会留痕并重新汇总。"))}</small></div><div><strong>${this.escape(scopeSummary)}</strong><br><button class="btn btn-default btn-sm" data-bulk-exception-process ${canBulkProcess && selectedCount ? "" : "disabled"}>${this.escape(__("处理当前页已勾选（{0}）", [selectedCount]))}</button></div></div><div class="hrms-attendance-result-controls">${this.render_exception_source_filter()}${!canBulkProcess ? `<small class="text-muted">${this.escape(__("请选择一个来源后，可勾选并批量处理异常。"))}</small>` : ""}</div>${filterNotice}${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}${pagination}<div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr><th><input type="checkbox" data-select-exception-all ${canBulkProcess && rows.length ? "" : "disabled"} title="${this.escape(__("选择当前页的全部异常"))}"></th><th>${this.escape(__("员工"))}</th><th>${this.escape(__("来源"))}</th><th>${this.escape(__("异常日期及原因"))}</th><th>${this.escape(__("处理状态"))}</th><th>${this.escape(__("操作"))}</th></tr></thead><tbody>${loading ? `<tr><td colspan="6" class="text-muted">${this.escape(__("正在读取统一异常队列..."))}</td></tr>` : rows.length ? rows.map(renderRow).join("") : `<tr><td colspan="6" class="text-muted">${this.escape(__("当前筛选下没有待处理异常；已处理记录可在加工结果和人工调整记录中查看。"))}</td></tr>`}</tbody></table></div>${pagination}</div>`;
+		return `<div class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("异常处理"))}</h3><small>${this.escape(__("按员工集中显示，但仅展开该员工存在异常的钉钉原始日期行。缺卡、迟到、早退与旷工均直接采用钉钉字段；确认后保留人员参与终稿与薪资，缺勤对策仍由薪资规则计算。"))}</small></div><div><strong>${this.escape(scopeSummary)}</strong><br><button class="btn btn-default btn-sm" data-bulk-exception-process ${canBulkProcess && selectedCount ? "" : "disabled"}>${this.escape(__(this.select_all_filtered_exceptions ? "处理当前筛选全部（{0}）" : "处理已勾选（{0}）", [selectedCount]))}</button></div></div><div class="hrms-attendance-result-controls">${this.render_exception_source_filter()}${canBulkProcess && currentPending ? `<button class="btn btn-default btn-sm" data-select-all-filtered-exceptions>${this.escape(__("全选当前筛选 {0} 条", [currentPending]))}</button>` : ""}${!canBulkProcess ? `<small class="text-muted">${this.escape(__("请选择一个来源后，可全选并批量处理该来源的异常。"))}</small>` : ""}</div>${filterNotice}${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}${pagination}<div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr><th><input type="checkbox" data-select-exception-all ${canBulkProcess && rows.length ? "" : "disabled"} ${this.select_all_filtered_exceptions ? "checked" : ""} title="${this.escape(__("全选当前筛选来源的全部待处理异常"))}"></th><th>${this.escape(__("员工"))}</th><th>${this.escape(__("来源"))}</th><th>${this.escape(__("异常日期及原因"))}</th><th>${this.escape(__("处理状态"))}</th><th>${this.escape(__("操作"))}</th></tr></thead><tbody>${loading ? `<tr><td colspan="6" class="text-muted">${this.escape(__("正在读取统一异常队列..."))}</td></tr>` : rows.length ? rows.map(renderRow).join("") : `<tr><td colspan="6" class="text-muted">${this.escape(__("当前筛选下没有待处理异常；已处理记录可在加工结果和人工调整记录中查看。"))}</td></tr>`}</tbody></table></div>${pagination}</div>`;
 	}
 
 	bind_processing_exception_events() {
@@ -1580,27 +1593,39 @@ class AttendanceImportCenter {
 		}));
 		const selectableInputs = [...body.querySelectorAll("[data-exception-record-select]")].filter((input) => !input.disabled);
 		const updateSelection = () => {
-			const selectedCount = this.selected_exception_record_ids.size;
+			const selectedCount = this.select_all_filtered_exceptions ? this.filtered_pending_exception_count : this.selected_exception_record_ids.size;
 			const bulkButton = body.querySelector("[data-bulk-exception-process]");
 			if (bulkButton) {
 				bulkButton.disabled = !this.exception_source_filter || !selectedCount;
-				bulkButton.textContent = __("处理当前页已勾选（{0}）", [selectedCount]);
+				bulkButton.textContent = __(this.select_all_filtered_exceptions ? "处理当前筛选全部（{0}）" : "处理已勾选（{0}）", [selectedCount]);
 			}
 			const selectAll = body.querySelector("[data-select-exception-all]");
 			if (selectAll) {
-				selectAll.checked = Boolean(selectableInputs.length) && selectableInputs.every((input) => input.checked);
-				selectAll.indeterminate = selectableInputs.some((input) => input.checked) && !selectAll.checked;
+				selectAll.checked = this.select_all_filtered_exceptions;
+				selectAll.indeterminate = !this.select_all_filtered_exceptions && selectableInputs.some((input) => input.checked);
 			}
 		};
 		body.querySelector("[data-select-exception-all]")?.addEventListener("change", (event) => {
+			this.select_all_filtered_exceptions = event.target.checked;
+			this.selected_exception_record_ids.clear();
 			selectableInputs.forEach((input) => {
-				input.checked = event.target.checked;
-				if (input.checked) this.selected_exception_record_ids.add(input.dataset.exceptionRecordSelect);
-				else this.selected_exception_record_ids.delete(input.dataset.exceptionRecordSelect);
+				input.checked = this.select_all_filtered_exceptions;
 			});
 			updateSelection();
 		});
+		body.querySelector("[data-select-all-filtered-exceptions]")?.addEventListener("click", () => {
+			this.select_all_filtered_exceptions = true;
+			this.selected_exception_record_ids.clear();
+			selectableInputs.forEach((input) => { input.checked = true; });
+			updateSelection();
+		});
 		selectableInputs.forEach((input) => input.addEventListener("change", () => {
+			if (this.select_all_filtered_exceptions) {
+				// Switching back to an explicit selection is deliberate: an operator
+				// who unticks one row should no longer submit a hidden all-pages scope.
+				this.select_all_filtered_exceptions = false;
+				this.selected_exception_record_ids = new Set(selectableInputs.filter((box) => box.checked).map((box) => box.dataset.exceptionRecordSelect));
+			}
 			if (input.checked) this.selected_exception_record_ids.add(input.dataset.exceptionRecordSelect);
 			else this.selected_exception_record_ids.delete(input.dataset.exceptionRecordSelect);
 			updateSelection();
@@ -2184,6 +2209,7 @@ class AttendanceImportCenter {
 		this.body().innerHTML = this.render_action_bar("导入批次管理", [
 			{ label: "撤回最近一次导入", action: "revoke-latest-import", primary: true },
 			{ label: "前往导入中心", action: "open-import" },
+			{ label: "测试清空月度数据", action: "test-monthly-reset" },
 		]);
 		this.body().querySelector("[data-table]").insertAdjacentHTML(
 			"beforebegin",
@@ -3148,9 +3174,66 @@ class AttendanceImportCenter {
 				if (button.dataset.action === "open-custom-rules") this.set_view("custom-rules");
 				if (button.dataset.action === "open-import") this.set_view("import");
 				if (button.dataset.action === "revoke-latest-import") this.open_latest_attendance_import_revoke_dialog();
+				if (button.dataset.action === "test-monthly-reset") this.open_test_monthly_reset_dialog();
 				if (button.dataset.action === "evaluate-rules") this.run_attendance_rule_evaluation();
 			});
 		});
+	}
+
+	open_test_monthly_reset_dialog() {
+		const escape = (value) => frappe.utils.escape_html(String(value ?? ""));
+		const dialog = new frappe.ui.Dialog({
+			title: __("测试清空考勤数据"),
+			size: "large",
+			fields: [
+				{ fieldtype: "HTML", fieldname: "warning", options: `<div class="alert alert-danger"><strong>${escape(__("仅限测试数据"))}</strong><br>${escape(__("按部门和月份删除考勤加工、异常、终稿及本部门关联的试算结果；不会删除花名册、部门或原始上传附件。"))}</div>` },
+				{ fieldtype: "Data", fieldname: "attendance_month", label: __("月份"), default: this.attendance_month, read_only: 1 },
+				{ fieldtype: "Link", fieldname: "department", label: __("部门"), options: "Department", reqd: 1 },
+				{ fieldtype: "HTML", fieldname: "reset_preview", options: `<div class="text-muted">${escape(__("先选择部门，再点击“预览影响”。"))}</div>` },
+				{ fieldtype: "Check", fieldname: "test_mode", label: __("我确认这是测试数据，允许永久删除"), default: 0 },
+				{ fieldtype: "Data", fieldname: "confirmation", label: __("确认语"), description: __("预览后将显示必须输入的确认语。") },
+			],
+		});
+		const preview = () => {
+			const values = dialog.get_values();
+			if (!values?.department) return;
+			dialog.fields_dict.reset_preview.$wrapper.html(`<div class="text-muted">${escape(__("正在计算影响范围…"))}</div>`);
+			frappe.call({
+				method: "hrms.api.payroll_input.preview_test_monthly_data_reset",
+				args: { company: this.company, payroll_month: this.attendance_month, department: values.department, area: "attendance" },
+				freeze: true,
+				freeze_message: __("正在预览测试清空影响…"),
+			}).then((response) => {
+				const result = response.message || {};
+				dialog.__test_monthly_reset_preview = result;
+				const rows = (result.records || []).map((row) => `<tr><td>${escape(row.doctype)}</td><td class="text-right">${escape(row.count)}</td></tr>`).join("");
+				dialog.fields_dict.reset_preview.$wrapper.html(`<div class="alert alert-warning"><strong>${escape(__("将删除 {0} 条记录", [result.total_count || 0]))}</strong><table class="table table-bordered table-sm mt-2"><thead><tr><th>${escape(__("数据类型"))}</th><th>${escape(__("数量"))}</th></tr></thead><tbody>${rows || `<tr><td colspan="2" class="text-muted">${escape(__("没有找到可清空记录"))}</td></tr>`}</tbody></table><p>${(result.warnings || []).map((item) => escape(item)).join("<br>")}</p><p><strong>${escape(__("确认语："))}</strong>${escape(result.confirmation || "")}</p></div>`);
+				dialog.set_primary_action(__("输入确认语后清空"), execute);
+			});
+		};
+		const execute = () => {
+			const values = dialog.get_values();
+			const result = dialog.__test_monthly_reset_preview;
+			if (!result) return preview();
+			if (!values?.test_mode || values.confirmation !== result.confirmation) {
+				frappe.msgprint({ title: __("确认不足"), indicator: "red", message: __("请勾选测试确认并完整输入预览中显示的确认语。") });
+				return;
+			}
+			frappe.call({
+				method: "hrms.api.payroll_input.reset_test_monthly_data",
+				args: { company: this.company, payroll_month: this.attendance_month, department: values.department, area: "attendance", confirmation: values.confirmation, test_mode: values.test_mode },
+				freeze: true,
+				freeze_message: __("正在清空测试考勤数据…"),
+				callback: (response) => {
+					dialog.hide();
+					frappe.show_alert({ message: response.message?.message || __("测试考勤数据已清空"), indicator: "orange" });
+					this.load_dashboard_summary();
+					this.load_attendance_import_batches();
+				},
+			});
+		};
+		dialog.set_primary_action(__("预览影响"), preview);
+		dialog.show();
 	}
 
 	seed_attendance_custom_rules() {

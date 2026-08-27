@@ -283,8 +283,8 @@ for marker in ("page_start", "limit_start=page_start", "limit_page_length=page_l
 bulk_start = api.find("def bulk_update_processing_records(")
 bulk_end = api.find("\n\n@frappe.whitelist()", bulk_start)
 bulk_body = api[bulk_start:] if bulk_end == -1 else api[bulk_start:bulk_end]
-for marker in ("page_start", "page_length = 20", "current_page_ids", "issubset(current_page_ids)"):
-	require(bulk_body, marker, f"Current-page bulk processing guard is incomplete: {marker}")
+for marker in ("select_all_pending", 'filters={"import_batch": batch.name, "exception_codes": ["!=", "[]"], "review_status": "待审核"}', "limit_page_length=501", "当前筛选待处理异常超过 500 条"):
+	require(bulk_body, marker, f"All-filtered bulk processing guard is incomplete: {marker}")
 
 for marker in (
 	"one employee per row",

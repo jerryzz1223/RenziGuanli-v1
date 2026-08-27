@@ -21,11 +21,8 @@ class CrossDepartmentSupportPage {
 	}
 
 	show() {
-		this.page.set_primary_action(__("新增支援能力"), () =>
+		this.page.set_primary_action(__("新建支援"), () =>
 			frappe.new_doc("Cross Department Support Capability"),
-		);
-		this.page.set_secondary_action(__("维护台账"), () =>
-			frappe.set_route("List", "Cross Department Support Capability"),
 		);
 		this.render_shell();
 		this.add_filters();
@@ -184,7 +181,7 @@ class CrossDepartmentSupportPage {
 				<div class="cross-department-support-page__import-summary ${preview.failed ? "text-warning" : "text-success"}">
 					${__("已读取 {0} 行；通过 {1} 行；错误 {2} 行。", [preview.total || 0, (preview.total || 0) - (preview.failed || 0), preview.failed || 0])}
 				</div>
-				${preview.failed ? `<div class="alert alert-warning">${__("异常行也可导入为“待复核、不可派”记录；可在维护台账中补齐员工或岗位等信息后直接编辑。")}</div>` : ""}
+				${preview.failed ? `<div class="alert alert-warning">${__("异常行会导入为“待复核、不可派”记录；补齐员工、部门或岗位后即可正常使用。")}</div>` : ""}
 				<table class="table table-bordered table-sm"><thead><tr><th>${__("Excel 行")}</th><th>${__("部门")}</th><th>${__("姓名")}</th><th>${__("可支援部门")}</th><th>${__("可支援岗位")}</th><th>${__("结果")}</th></tr></thead>
 				<tbody>${sample.map((row) => `<tr><td>${escape(row.row_number)}</td><td>${escape(row.source_department)}</td><td>${escape(row.employee_name)}</td><td>${escape(row.support_department)}</td><td>${escape(row.support_designation)}</td><td>${row.errors?.length ? `<span class="text-warning">${escape(row.action)}：${escape(row.errors.join("；"))}</span>` : `<span class="text-success">${escape(row.action)}</span>`}</td></tr>`).join("")}</tbody></table>
 				${(preview.rows || []).length > sample.length ? `<p class="text-muted">${__("仅显示前 12 行预览。")}</p>` : ""}
@@ -224,8 +221,8 @@ class CrossDepartmentSupportPage {
 				.then((response) => {
 					const result = response.message || {};
 					dialog.hide();
-					const pendingText = result.pending_review ? __("；其中 {0} 条为待复核记录，可在维护台账中编辑。", [result.pending_review]) : "";
-					frappe.show_alert({ message: __("已新增 {0} 条支援能力，跳过 {1} 条已有记录{2}", [result.inserted || 0, result.skipped || 0, pendingText]), indicator: "green" });
+					const pendingText = result.pending_review ? __("；其中 {0} 条为待复核记录。", [result.pending_review]) : "";
+					frappe.show_alert({ message: __("已新增 {0} 条支援记录，跳过 {1} 条已有记录{2}", [result.inserted || 0, result.skipped || 0, pendingText]), indicator: "green" });
 					this.search();
 				});
 		}
@@ -262,7 +259,7 @@ class CrossDepartmentSupportPage {
 	render_results(count) {
 		$(this.wrapper).find("[data-summary]").html(`
 			<div class="cross-department-support-page__count"><strong>${frappe.utils.escape_html(String(count))}</strong><span>${__("名符合当前条件")}</span></div>
-			<div class="text-muted">${__("名单来自“跨部门支援能力”台账；新增、暂停、失效后会立即反映。")}</div>
+			<div class="text-muted">${__("名单会随新增或状态变更立即更新。")}</div>
 		`);
 		const result = $(this.wrapper).find("[data-results]");
 		if (!this.rows.length) {

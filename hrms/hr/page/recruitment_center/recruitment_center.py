@@ -20,7 +20,12 @@ def _count(doctype, filters=None):
 	"""Count through get_list so user permission conditions remain effective."""
 	if not _can_read(doctype):
 		return 0
-	rows = frappe.get_list(doctype, fields=["count(name) as total"], filters=filters or {}, page_length=1)
+	rows = frappe.get_list(
+		doctype,
+		fields=[{"COUNT": "name", "as": "total"}],
+		filters=filters or {},
+		page_length=1,
+	)
 	return cint(rows[0].total) if rows else 0
 
 
@@ -41,7 +46,7 @@ def _status_totals():
 		return {}
 	rows = frappe.get_list(
 		"Job Applicant",
-		fields=["status", "count(name) as total"],
+		fields=["status", {"COUNT": "name", "as": "total"}],
 		group_by="status",
 		page_length=20,
 	)

@@ -1,0 +1,45 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-08-27 00:00:00.000000",
+ "description": "锁定考勤终稿内每位员工的月度薪资参与、离职结算与异常审核决定。",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company", "payroll_month", "attendance_lock_version", "employee", "employee_code", "employee_name", "department", "employee_status", "relieving_date", "decision", "decision_reason", "settlement_basis", "review_status", "approval_note", "approved_by", "approved_on"
+ ],
+ "fields": [
+  {"fieldname": "company", "fieldtype": "Link", "label": "公司", "options": "Company", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "payroll_month", "fieldtype": "Data", "label": "薪资月份", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "attendance_lock_version", "fieldtype": "Data", "label": "考勤锁定版本", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "employee", "fieldtype": "Link", "label": "员工", "options": "Employee", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "employee_code", "fieldtype": "Data", "label": "工号", "in_list_view": 1, "read_only": 1},
+  {"fieldname": "employee_name", "fieldtype": "Data", "label": "姓名", "in_list_view": 1, "read_only": 1},
+  {"fieldname": "department", "fieldtype": "Link", "label": "部门", "options": "Department", "read_only": 1},
+  {"fieldname": "employee_status", "fieldtype": "Data", "label": "花名册状态", "read_only": 1},
+  {"fieldname": "relieving_date", "fieldtype": "Date", "label": "离职日期", "read_only": 1},
+  {"fieldname": "decision", "fieldtype": "Select", "label": "本月处理方式", "options": "正常计薪\n离职结算\n不参与计算\n异常待审核", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "decision_reason", "fieldtype": "Small Text", "label": "处理或异常说明"},
+  {"fieldname": "settlement_basis", "fieldtype": "Small Text", "label": "离职结算依据"},
+  {"fieldname": "review_status", "fieldtype": "Select", "label": "审核状态", "options": "无需审核\n待审核\n审核通过\n已驳回", "in_list_view": 1, "read_only": 1},
+  {"fieldname": "approval_note", "fieldtype": "Small Text", "label": "审核意见"},
+  {"fieldname": "approved_by", "fieldtype": "Link", "label": "审核人", "options": "User", "read_only": 1},
+  {"fieldname": "approved_on", "fieldtype": "Datetime", "label": "审核时间", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-27 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Monthly Payroll Participation",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "HR Manager", "share": 1, "write": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name"
+}

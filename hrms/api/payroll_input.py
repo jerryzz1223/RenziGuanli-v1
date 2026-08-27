@@ -46,6 +46,7 @@ LOCAL_PAYROLL_TEST_COMPANY = "TEST-HRMS"
 SALARY_STRUCTURE_VERSION_DOCTYPE = "HRMS Salary Structure Version"
 SALARY_GRADE_DOCTYPE = "HRMS Salary Grade"
 EMPLOYEE_SALARY_CHANGE_DOCTYPE = "HRMS Employee Salary Change"
+MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE = "HRMS Monthly Payroll Participation"
 FORM_IMPORT_BATCH_DOCTYPE = "HRMS Form Import Batch"
 WELFARE_SOURCE_DOCTYPE = "HRMS Payroll Welfare Source Record"
 PAYROLL_RULE_DOCTYPE = "HRMS Payroll Rule"
@@ -64,6 +65,8 @@ SINGLETON_MONTHLY_VARIABLE_TYPES = {
 	"住房补贴", "学历补贴", "宿舍扣款", "水电费及扣款",
 	"社保个人", "社保公司", "公积金个人", "公积金公司",
 }
+PAYROLL_PARTICIPATION_DECISIONS = {"正常计薪", "离职结算", "不参与计算", "异常待审核"}
+PAYROLL_PARTICIPATION_APPROVED_STATUS = "审核通过"
 # ``待审核`` is retained for batches created before the simplified entry flow
 # was released.  New data only has one human action left: confirm it for payroll.
 PENDING_VARIABLE_BATCH_STATUSES = {"待确认", "待审核"}
@@ -75,6 +78,10 @@ SIGNABLE_PAYROLL_SOURCE_CODES = {
 	"education",
 	"social_insurance",
 	"housing_fund",
+}
+TEST_MONTHLY_RESET_AREAS = {
+	"attendance": "考勤派生数据",
+	"payroll": "薪酬派生数据",
 }
 
 DEFAULT_PAYROLL_VARIABLE_SOURCE_TYPES = [
@@ -3024,6 +3031,23 @@ def get_payroll_attendance_dependency(company: str, payroll_month: str):
 	}
 
 
+@frappe.whitelist()
+def reload_payroll_participation_population(company: str, payroll_month: str):
+	"""Reload the current locked attendance population and invalidate only unconfirmed downstream trials."""
+	_require_payroll_master_manager()
+	dependency = get_payroll_attendance_dependency(company, payroll_month)
+	if not dependency.get("ready"):
+		frappe.throw(_("无法重新加载人员范围：{0}").format(dependency.get("message") or "请先锁定考勤终稿"))
+	invalidation = _invalidate_unconfirmed_payroll_trial(
+		dependency["company"],
+		dependency["payroll_month"],
+		dependency["attendance_lock_version"],
+		reason=_("重新加载当前锁定考勤人员范围"),
+	)
+	frappe.db.commit()
+	return {**dependency, "invalidation": invalidation}
+
+
 def _require_payroll_scope(company, payroll_month, attendance_lock_version=""):
 	company = _require_company(company)
 	payroll_month = (payroll_month or "").strip()
@@ -3271,6 +3295,15 @@ def _payroll_run_snapshot(company, payroll_month, attendance_lock_version):
 		order_by="name asc",
 		limit_page_length=100000,
 	)
+	participation_decisions = []
+	if _doctype_exists(MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE):
+		participation_decisions = frappe.get_all(
+			MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE,
+			filters={"company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version},
+			fields=["employee", "decision", "decision_reason", "settlement_basis", "review_status", "approved_by", "approved_on", "modified"],
+			order_by="employee asc, modified asc",
+			limit_page_length=100000,
+		)
 	payload = {
 		"company": company,
 		"payroll_month": payroll_month,
@@ -3279,6 +3312,7 @@ def _payroll_run_snapshot(company, payroll_month, attendance_lock_version):
 		"confirmed_batches": [dict(row) for row in batches],
 		"confirmed_variables": [dict(row) for row in variables],
 		"salary_changes": [dict(row) for row in salary_changes],
+		"participation_decisions": [dict(row) for row in participation_decisions],
 		"calculation_rules": _payroll_calculation_rules(company, payroll_month),
 		"payroll_formulas": _effective_payroll_formulas(company, payroll_month),
 	}
@@ -3774,7 +3808,7 @@ def _employee_context(employee):
 	# by every payroll import, so request only fields that exist in this site.
 	fields = _safe_fields(
 		"Employee",
-		["custom_employee_code", "employee_number", "employee_name", "department", "designation", "date_of_joining", "company", "employment_type", "status", "custom_is_confirmed", "final_confirmation_date", "confirmation_date"],
+		["custom_employee_code", "employee_number", "employee_name", "department", "designation", "date_of_joining", "relieving_date", "company", "employment_type", "status", "custom_is_confirmed", "final_confirmation_date", "confirmation_date"],
 	)
 	row = frappe.db.get_value("Employee", employee, fields, as_dict=True)
 	if row:
@@ -4054,6 +4088,177 @@ def set_employee_payroll_participation(employee: str, company: str, payroll_mont
 		doc.insert(ignore_permissions=True)
 	frappe.db.commit()
 	return {"employee": employee, "participates": 0, "name": doc.name}
+
+
+def _monthly_payroll_participation_decision_map(company, payroll_month, attendance_lock_version):
+	"""Return the latest explicit decision for every person in one locked payroll population."""
+	if not _doctype_exists(MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE):
+		return {}
+	rows = frappe.get_all(
+		MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE,
+		filters={
+			"company": company,
+			"payroll_month": payroll_month,
+			"attendance_lock_version": attendance_lock_version,
+		},
+		fields=["name", "employee", "employee_code", "employee_name", "decision", "decision_reason", "settlement_basis", "review_status", "approved_by", "approved_on", "approval_note", "modified"],
+		order_by="modified desc, name desc",
+		limit_page_length=100000,
+	)
+	by_key = {}
+	for row in rows:
+		for key in (row.get("employee"), row.get("employee_code"), row.get("employee_name")):
+			key = _text(key).strip()
+			if key and key not in by_key:
+				by_key[key] = row
+	return by_key
+
+
+def _participation_decision_for_row(decisions, row):
+	for key in (row.get("employee"), row.get("employee_code"), row.get("employee_name")):
+		decision = decisions.get(_text(key).strip()) if key else None
+		if decision:
+			return decision
+	return None
+
+
+def _participation_decision_blocks_calculation(decision):
+	if not decision:
+		return False
+	if decision.get("decision") == "异常待审核":
+		return True
+	return decision.get("decision") in {"离职结算", "不参与计算"} and decision.get("review_status") != PAYROLL_PARTICIPATION_APPROVED_STATUS
+
+
+def _participation_decision_excludes(decision):
+	return bool(
+		decision
+		and decision.get("decision") == "不参与计算"
+		and decision.get("review_status") == PAYROLL_PARTICIPATION_APPROVED_STATUS
+	)
+
+
+def _employee_left_in_payroll_month(employee_row, payroll_month):
+	"""Use the exit date when available so historical closed months stay calculable."""
+	if not employee_row or _text(employee_row.get("status")) not in {"Left", "离职"}:
+		return False
+	relieving_date = _date_or_none(employee_row.get("relieving_date"))
+	return not relieving_date or relieving_date <= _month_end(payroll_month)
+
+
+def _attendance_employee_context_map(attendance_rows):
+	employee_names = sorted({_text(row.get("employee")).strip() for row in attendance_rows if row.get("employee")})
+	if not employee_names:
+		return {}
+	fields = _safe_fields("Employee", ["name", "status", "relieving_date", "employee_name", "custom_employee_code", "department"])
+	return {
+		row.name: row
+		for row in _safe_get_all("Employee", fields=fields, filters={"name": ["in", employee_names]}, limit_page_length=100000)
+	}
+
+
+@frappe.whitelist()
+def save_monthly_payroll_participation_decision(
+	company: str,
+	payroll_month: str,
+	attendance_lock_version: str,
+	employee: str,
+	decision: str,
+	decision_reason: str = "",
+	settlement_basis: str = "",
+	approval_note: str = "",
+	approved: int = 0,
+):
+	"""Record an auditable monthly handling decision for one locked-attendance employee."""
+	_require_payroll_master_manager()
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	if not _doctype_exists(MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE):
+		frappe.throw(_("月度薪资参与决策数据表尚未安装，请先执行站点迁移。"))
+	decision = _text(decision).strip()
+	decision_reason = _text(decision_reason).strip()
+	settlement_basis = _text(settlement_basis).strip()
+	approval_note = _text(approval_note).strip()
+	if decision not in PAYROLL_PARTICIPATION_DECISIONS:
+		frappe.throw(_("请选择有效的本月处理方式。"))
+	attendance = frappe.db.get_value(
+		MONTHLY_ATTENDANCE_DOCTYPE,
+		{**_attendance_scope_filters(company, payroll_month, attendance_lock_version), "employee": employee},
+		["employee", "employee_code", "employee_name", "department"],
+		as_dict=True,
+	)
+	if not attendance:
+		frappe.throw(_("该员工不在当前锁定考勤终稿中，不能加入薪资计算范围。"))
+	if decision == "异常待审核" and not decision_reason:
+		frappe.throw(_("异常待审核必须填写异常说明。"))
+	if decision == "不参与计算" and not decision_reason:
+		frappe.throw(_("不参与计算必须填写原因。"))
+	if decision == "离职结算":
+		if not decision_reason:
+			frappe.throw(_("离职结算必须填写处理说明。"))
+		if not settlement_basis:
+			frappe.throw(_("离职结算必须填写结算依据，例如离职审批单或已批准结算标准。"))
+		if not cint(approved):
+			frappe.throw(_("离职结算需勾选审核通过后才能参与计算。"))
+	if decision == "不参与计算" and not cint(approved):
+		frappe.throw(_("不参与计算需勾选审核通过后才能生效。"))
+
+	context = _employee_context(employee)
+	filters = {
+		"company": company,
+		"payroll_month": payroll_month,
+		"attendance_lock_version": attendance_lock_version,
+		"employee": employee,
+	}
+	existing_name = frappe.db.get_value(MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE, filters, "name")
+	doc = frappe.get_doc(MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE, existing_name) if existing_name else frappe.get_doc({"doctype": MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE})
+	review_status = "待审核" if decision == "异常待审核" else (PAYROLL_PARTICIPATION_APPROVED_STATUS if cint(approved) else "无需审核")
+	doc.update({
+		**filters,
+		"employee_code": attendance.get("employee_code") or context.get("employee_code") or employee,
+		"employee_name": attendance.get("employee_name") or context.get("employee_name") or employee,
+		"department": attendance.get("department") or context.get("department"),
+		"employee_status": context.get("status") or "",
+		"relieving_date": context.get("relieving_date"),
+		"decision": decision,
+		"decision_reason": decision_reason,
+		"settlement_basis": settlement_basis,
+		"review_status": review_status,
+		"approval_note": approval_note,
+		"approved_by": frappe.session.user if review_status == PAYROLL_PARTICIPATION_APPROVED_STATUS else "",
+		"approved_on": now_datetime() if review_status == PAYROLL_PARTICIPATION_APPROVED_STATUS else None,
+	})
+	if existing_name:
+		doc.save(ignore_permissions=True)
+	else:
+		doc.insert(ignore_permissions=True)
+	# A previous quick exclusion used an employee-salary marker.  A subsequent
+	# decision of "正常计薪" must restore that employee instead of leaving a hidden
+	# marker that contradicts the visible personnel-range decision.
+	if decision == "正常计薪":
+		marker_name = frappe.db.get_value(
+			EMPLOYEE_SALARY_CHANGE_DOCTYPE,
+			{
+				"company": company,
+				"employee": employee,
+				"exclude_from_payroll": 1,
+				"status": "已批准",
+				"effective_date": ["<=", _month_end(payroll_month)],
+			},
+			"name",
+			order_by="effective_date desc, modified desc",
+		)
+		if marker_name:
+			marker = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, marker_name)
+			marker.status = "已作废"
+			marker.save(ignore_permissions=True)
+	_invalidate_unconfirmed_payroll_trial(
+		company,
+		payroll_month,
+		attendance_lock_version,
+		reason=_("更新人员范围决策：{0} / {1}").format(attendance.get("employee_code") or attendance.get("employee_name"), decision),
+	)
+	frappe.db.commit()
+	return {"name": doc.name, "decision": decision, "review_status": review_status}
 
 
 @frappe.whitelist()
@@ -6437,6 +6642,219 @@ def delete_payroll_variable_import_batch(batch_name: str, company: str = "", att
 	}
 
 
+def _require_test_monthly_reset_access():
+	"""Restrict destructive monthly resets to an explicitly acknowledged test run."""
+	if "System Manager" not in frappe.get_roles():
+		frappe.throw(_("只有系统管理员可以清空测试月度数据。"), frappe.PermissionError)
+
+
+def _test_monthly_reset_confirmation(area, payroll_month, department):
+	scope_label = department or "全公司"
+	return "TEST 清空 {0} {1} {2}".format(TEST_MONTHLY_RESET_AREAS[area], payroll_month, scope_label)
+
+
+def _test_monthly_reset_scope(company, payroll_month, department, area):
+	_require_test_monthly_reset_access()
+	company = _require_company(company)
+	payroll_month = _workflow_month(payroll_month)
+	department = _text(department)
+	if area not in TEST_MONTHLY_RESET_AREAS:
+		frappe.throw(_("请选择要清空的测试数据范围。"))
+	if department and not frappe.db.exists("Department", department):
+		frappe.throw(_("请选择存在的部门。"))
+	if area == "attendance" and not department:
+		frappe.throw(_("请选择存在的部门；考勤清空不支持未限定部门。"))
+	return company, payroll_month, department, area
+
+
+def _test_monthly_reset_names(doctype, filters):
+	return frappe.get_all(doctype, filters=filters, pluck="name", limit_page_length=100000)
+
+
+def _test_monthly_reset_targets(company, payroll_month, department, area):
+	"""Build a test reset dependency list without touching raw files."""
+	month_start = "{0}-01".format(payroll_month)
+	month_end = _month_end(payroll_month)
+	targets = {}
+	if area == "payroll":
+		targets = {
+			PAYROLL_SETTLEMENT_DOCTYPE: _test_monthly_reset_names(PAYROLL_SETTLEMENT_DOCTYPE, {"company": company, "payroll_month": payroll_month}),
+			PAYROLL_INPUT_DOCTYPE: _test_monthly_reset_names(PAYROLL_INPUT_DOCTYPE, {"company": company, "payroll_month": payroll_month}),
+			VARIABLE_RECORD_DOCTYPE: _test_monthly_reset_names(VARIABLE_RECORD_DOCTYPE, {"company": company, "payroll_month": payroll_month}),
+			WELFARE_SOURCE_DOCTYPE: _test_monthly_reset_names(WELFARE_SOURCE_DOCTYPE, {"company": company, "payroll_month": payroll_month}),
+			EMPLOYEE_SALARY_CHANGE_DOCTYPE: _test_monthly_reset_names(EMPLOYEE_SALARY_CHANGE_DOCTYPE, {"company": company, "effective_date": ["between", [month_start, month_end]]}),
+		}
+		if _doctype_exists(MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE):
+			targets[MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE] = _test_monthly_reset_names(
+				MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE,
+				{"company": company, "payroll_month": payroll_month},
+			)
+	else:
+		batch_names = _test_monthly_reset_names(
+			"HRMS Attendance Import Batch", {"company": company, "attendance_month": payroll_month}
+		)
+		batch_filter = {"import_batch": ["in", batch_names or [""]], "department": department}
+		targets = {
+			PAYROLL_SETTLEMENT_DOCTYPE: _test_monthly_reset_names(PAYROLL_SETTLEMENT_DOCTYPE, {"company": company, "payroll_month": payroll_month, "department": department}),
+			PAYROLL_INPUT_DOCTYPE: _test_monthly_reset_names(PAYROLL_INPUT_DOCTYPE, {"company": company, "payroll_month": payroll_month, "department": department}),
+			VARIABLE_RECORD_DOCTYPE: _test_monthly_reset_names(VARIABLE_RECORD_DOCTYPE, {"company": company, "payroll_month": payroll_month, "department": department, "source_sheet": "考勤终稿锁定快照"}),
+			"HRMS Monthly Attendance Summary": _test_monthly_reset_names("HRMS Monthly Attendance Summary", {"company": company, "attendance_month": payroll_month, "department": department}),
+			"HRMS Attendance Department Confirmation": _test_monthly_reset_names("HRMS Attendance Department Confirmation", {"company": company, "attendance_month": payroll_month, "department": department}),
+			"HRMS Attendance Processing Record": _test_monthly_reset_names("HRMS Attendance Processing Record", {"company": company, "attendance_month": payroll_month, "department": department}),
+			"HRMS Attendance Exception": _test_monthly_reset_names("HRMS Attendance Exception", {**batch_filter, "attendance_date": ["between", [month_start, month_end]]}),
+			"HRMS Attendance Day Check": _test_monthly_reset_names("HRMS Attendance Day Check", {**batch_filter, "attendance_date": ["between", [month_start, month_end]]}),
+			"HRMS Attendance Leave Evidence": _test_monthly_reset_names("HRMS Attendance Leave Evidence", batch_filter),
+			"HRMS Apple Reward Record": _test_monthly_reset_names("HRMS Apple Reward Record", batch_filter),
+		}
+		if _doctype_exists(MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE):
+			targets[MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE] = _test_monthly_reset_names(
+				MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE,
+				{"company": company, "payroll_month": payroll_month, "department": department},
+			)
+	return {doctype: names for doctype, names in targets.items() if names}
+
+
+def _test_monthly_reset_batch_candidates(variable_names):
+	if not variable_names:
+		return []
+	return list(
+		{
+			row.import_batch
+			for row in frappe.get_all(
+				VARIABLE_RECORD_DOCTYPE,
+				filters={"name": ["in", variable_names]},
+				fields=["import_batch"],
+				limit_page_length=100000,
+			)
+			if row.import_batch
+		}
+	)
+
+
+def _test_monthly_reset_salary_import_batch_candidates(salary_change_names):
+	"""Keep no empty salary-import batch visible after a full monthly payroll reset."""
+	if not salary_change_names:
+		return []
+	return list(
+		{
+			row.salary_import_batch
+			for row in frappe.get_all(
+				EMPLOYEE_SALARY_CHANGE_DOCTYPE,
+				filters={"name": ["in", salary_change_names]},
+				fields=["salary_import_batch"],
+				limit_page_length=100000,
+			)
+			if row.salary_import_batch
+		}
+	)
+
+
+def _reopen_test_attendance_month(company, attendance_month, department):
+	lock_name = frappe.db.get_value("HRMS Attendance Month Lock", {"company": company, "attendance_month": attendance_month}, "name")
+	if not lock_name:
+		return False
+	lock = frappe.get_doc("HRMS Attendance Month Lock", lock_name)
+	if lock.status != "已锁定":
+		return False
+	lock.status = "已重开"
+	lock.reopened_by = frappe.session.user
+	lock.reopened_on = now_datetime()
+	lock.remarks = "{0}\n{1}".format(
+		lock.remarks or "",
+		"测试清空：{0} {1} 部门 {2}".format(TEST_MONTHLY_RESET_AREAS["attendance"], attendance_month, department),
+	).strip()
+	lock.save(ignore_permissions=True)
+	if frappe.db.exists("DocType", "HRMS Attendance Lock Audit"):
+		frappe.get_doc({
+			"doctype": "HRMS Attendance Lock Audit",
+			"month_lock": lock.name,
+			"company": company,
+			"attendance_month": attendance_month,
+			"action": "解锁",
+			"lock_version": lock.active_version,
+			"reason": "测试清空部门数据：{0}".format(department),
+			"operator": frappe.session.user,
+			"occurred_on": now_datetime(),
+			"source_checksum": lock.source_checksum,
+		}).insert(ignore_permissions=True)
+	return True
+
+
+@frappe.whitelist()
+def preview_test_monthly_data_reset(company: str, payroll_month: str, department: str = "", area: str = "payroll"):
+	"""Show the exact test-only monthly reset impact before any record is removed."""
+	company, payroll_month, department, area = _test_monthly_reset_scope(company, payroll_month, department, area)
+	targets = _test_monthly_reset_targets(company, payroll_month, department, area)
+	scope_label = department or "全公司"
+	warnings = [
+		"仅清理所选范围和月份的派生业务数据，不删除员工花名册、部门、薪资架构或原始上传附件。",
+		"确认语必须完全输入：{0}".format(_test_monthly_reset_confirmation(area, payroll_month, department)),
+	]
+	if area == "attendance":
+		warnings.append("考勤清空会同步删除本部门本月的薪资输入、试算结果和考勤继承变量，并将该公司该月考勤锁定重开；其他部门需重新锁定后再试算。")
+	else:
+		warnings.append("薪酬清空会删除全公司本月生效的定薪、福利来源、月度增减项、薪资输入和结算结果；早于本月生效的历史定薪、导入附件与批次追溯保留。")
+	return {
+		"company": company,
+		"payroll_month": payroll_month,
+		"department": department,
+		"scope_label": scope_label,
+		"area": area,
+		"area_label": TEST_MONTHLY_RESET_AREAS[area],
+		"confirmation": _test_monthly_reset_confirmation(area, payroll_month, department),
+		"records": [{"doctype": doctype, "count": len(names), "sample_names": names[:5]} for doctype, names in targets.items()],
+		"total_count": sum(len(names) for names in targets.values()),
+		"warnings": warnings,
+	}
+
+
+@frappe.whitelist()
+def reset_test_monthly_data(company: str, payroll_month: str, department: str = "", area: str = "payroll", confirmation: str = "", test_mode: int = 0):
+	"""Delete one test month scope after an explicit, non-reusable acknowledgement."""
+	company, payroll_month, department, area = _test_monthly_reset_scope(company, payroll_month, department, area)
+	expected_confirmation = _test_monthly_reset_confirmation(area, payroll_month, department)
+	if not cint(test_mode) or _text(confirmation) != expected_confirmation:
+		frappe.throw(_("测试清空确认不匹配；请重新预览影响范围并输入完整确认语。"))
+	targets = _test_monthly_reset_targets(company, payroll_month, department, area)
+	variable_names = list(targets.get(VARIABLE_RECORD_DOCTYPE) or [])
+	salary_change_names = list(targets.get(EMPLOYEE_SALARY_CHANGE_DOCTYPE) or [])
+	batch_candidates = _test_monthly_reset_batch_candidates(variable_names)
+	salary_import_batch_candidates = _test_monthly_reset_salary_import_batch_candidates(salary_change_names) if area == "payroll" else []
+	deleted = {}
+	try:
+		for doctype, names in targets.items():
+			deleted[doctype] = 0
+			for name in names:
+				if frappe.db.exists(doctype, name):
+					frappe.delete_doc(doctype, name, ignore_permissions=True, force=True)
+					deleted[doctype] += 1
+		deleted_batches = 0
+		for batch_name in batch_candidates:
+			if frappe.db.exists(VARIABLE_BATCH_DOCTYPE, batch_name) and not frappe.db.exists(VARIABLE_RECORD_DOCTYPE, {"import_batch": batch_name}):
+				frappe.delete_doc(VARIABLE_BATCH_DOCTYPE, batch_name, ignore_permissions=True, force=True)
+				deleted_batches += 1
+		for batch_name in salary_import_batch_candidates:
+			if frappe.db.exists(FORM_IMPORT_BATCH_DOCTYPE, batch_name) and not frappe.db.exists(EMPLOYEE_SALARY_CHANGE_DOCTYPE, {"salary_import_batch": batch_name}):
+				frappe.delete_doc(FORM_IMPORT_BATCH_DOCTYPE, batch_name, ignore_permissions=True, force=True)
+				deleted_batches += 1
+		attendance_reopened = _reopen_test_attendance_month(company, payroll_month, department) if area == "attendance" else False
+		frappe.db.commit()
+	except Exception:
+		frappe.db.rollback()
+		raise
+	return {
+		"company": company,
+		"payroll_month": payroll_month,
+		"department": department,
+		"area": area,
+		"deleted": deleted,
+		"deleted_batches": deleted_batches,
+		"attendance_reopened": attendance_reopened,
+		"count": sum(deleted.values()) + deleted_batches,
+		"message": _("已清空测试范围：{0} / {1} / {2}；原始附件、花名册和薪资架构均未删除。").format(payroll_month, department or "全公司", TEST_MONTHLY_RESET_AREAS[area]),
+	}
+
+
 @frappe.whitelist()
 def update_payroll_variable_record(
 	name: str,
@@ -6632,20 +7050,35 @@ def _validate_salary_step(company, payroll_month, attendance_lock_version=""):
 			["employee", "employee_code", "employee_name", "department"],
 		)
 		profiles = _active_salary_changes_for_month(company, payroll_month)
-		missing, trial = [], []
+		decisions = _monthly_payroll_participation_decision_map(company, payroll_month, attendance_lock_version)
+		employee_contexts = _attendance_employee_context_map(attendance_rows)
+		missing, trial, pending_decisions, excluded = [], [], [], []
 		population_keys = set()
 		for row in attendance_rows:
 			keys = [str(row.get(field) or "").strip() for field in ("employee", "employee_code", "employee_name")]
 			population_keys.update(key for key in keys if key)
+			decision = _participation_decision_for_row(decisions, row)
+			label = row.get("employee_code") or row.get("employee_name") or row.get("employee")
+			if _participation_decision_blocks_calculation(decision):
+				pending_decisions.append(label)
+				continue
+			if _participation_decision_excludes(decision):
+				excluded.append(label)
+				continue
+			if not decision and _employee_left_in_payroll_month(employee_contexts.get(row.get("employee")), payroll_month):
+				pending_decisions.append(label)
+				continue
 			profile = next((profiles.get(key) for key in keys if key and profiles.get(key)), None)
-			if not profile:
+			if profile and _is_salary_excluded(profile):
+				excluded.append(label)
+			elif not profile:
 				missing.append(row)
 			elif _is_trial_salary_change(profile):
 				trial.append(profile)
 		coverage.update({
-			"active_employee_count": len(attendance_rows),
-			"approved_profile_count": len(attendance_rows) - len(missing),
-			"coverage_percent": round(100 * (len(attendance_rows) - len(missing)) / len(attendance_rows), 1) if attendance_rows else 0,
+			"active_employee_count": len(attendance_rows) - len(excluded),
+			"approved_profile_count": len(attendance_rows) - len(excluded) - len(missing),
+			"coverage_percent": round(100 * (len(attendance_rows) - len(excluded) - len(missing)) / (len(attendance_rows) - len(excluded)), 1) if len(attendance_rows) - len(excluded) else 100,
 		})
 		population_label = "本月考勤终稿人员"
 	blockers = []
@@ -6658,6 +7091,10 @@ def _validate_salary_step(company, payroll_month, attendance_lock_version=""):
 		]
 		blockers.append("有 {0} 位员工缺少当月有效定薪：{1}{2}".format(
 			len(missing), "、".join(missing_labels), "等" if len(missing) > 10 else ""
+		))
+	if attendance_lock_version and pending_decisions:
+		blockers.append("有 {0} 位离职或异常员工尚未完成审核决定：{1}{2}".format(
+			len(pending_decisions), "、".join(str(item) for item in pending_decisions[:10]), "等" if len(pending_decisions) > 10 else ""
 		))
 	if trial and company != LOCAL_PAYROLL_TEST_COMPANY:
 		blockers.append("有 {0} 位员工仍使用试运营/测试定薪。".format(len(trial)))
@@ -7470,8 +7907,11 @@ def generate_payroll_input_records(company: str, payroll_month: str, attendance_
 	extra_variable_keys = sorted(set(variable_identity) - set(attendance_by_key))
 
 	active_salary_changes = _active_salary_changes_for_month(company, payroll_month)
+	participation_decisions = _monthly_payroll_participation_decision_map(company, payroll_month, attendance_lock_version)
+	employee_contexts = _attendance_employee_context_map(summary_rows)
 	missing_salary_profiles = []
 	trial_salary_profiles = []
+	pending_participation_decisions = []
 	excluded_salary_keys = set()
 	for key, attendance in attendance_by_key.items():
 		profile = (
@@ -7480,6 +7920,16 @@ def generate_payroll_input_records(company: str, payroll_month: str, attendance_
 			or active_salary_changes.get(getattr(attendance, "employee_name", None))
 		)
 		label = getattr(attendance, "employee_code", None) or getattr(attendance, "employee_name", None) or key
+		decision = _participation_decision_for_row(participation_decisions, attendance)
+		if _participation_decision_blocks_calculation(decision):
+			pending_participation_decisions.append(label)
+			continue
+		if _participation_decision_excludes(decision):
+			excluded_salary_keys.add(key)
+			continue
+		if not decision and _employee_left_in_payroll_month(employee_contexts.get(getattr(attendance, "employee", None)), payroll_month):
+			pending_participation_decisions.append(label)
+			continue
 		if profile and _is_salary_excluded(profile):
 			excluded_salary_keys.add(key)
 			continue
@@ -7489,6 +7939,8 @@ def generate_payroll_input_records(company: str, payroll_month: str, attendance_
 			trial_salary_profiles.append(label)
 	if missing_salary_profiles:
 		frappe.throw(_("无法生成薪资输入表：以下员工缺少本月有效定薪：{0}").format(", ".join(missing_salary_profiles[:10])))
+	if pending_participation_decisions:
+		frappe.throw(_("无法生成薪资输入表：以下离职或异常人员尚未完成审核决定：{0}").format(", ".join(pending_participation_decisions[:10])))
 	if trial_salary_profiles and company != LOCAL_PAYROLL_TEST_COMPANY:
 		frappe.throw(_("无法生成薪资输入表：以下员工仍使用本地试运营/测试薪资数据，请先导入并批准正式薪资异动：{0}").format(", ".join(trial_salary_profiles[:10])))
 
@@ -8416,10 +8868,89 @@ def get_payroll_participation_preview(company: str, payroll_month: str, attendan
 		order_by="department asc, employee_code asc, employee_name asc",
 		limit_page_length=100000,
 	)
+	employee_contexts = _attendance_employee_context_map(rows)
+	decisions = _monthly_payroll_participation_decision_map(company, payroll_month, attendance_lock_version)
+	salary_profiles = _active_salary_changes_for_month(company, payroll_month)
+	counts = defaultdict(int)
+	decision_rows = []
+	for source_row in rows:
+		row = dict(source_row)
+		employee_context = employee_contexts.get(row.get("employee")) or {}
+		profile = next(
+			(
+				salary_profiles.get(key)
+				for key in (row.get("employee"), row.get("employee_code"), row.get("employee_name"))
+				if key and salary_profiles.get(key)
+			),
+			None,
+		)
+		decision_record = _participation_decision_for_row(decisions, row)
+		legacy_exclusion = bool(profile and _is_salary_excluded(profile))
+		left_in_month = _employee_left_in_payroll_month(employee_context, payroll_month)
+		if decision_record:
+			decision = decision_record.get("decision")
+			review_status = decision_record.get("review_status")
+			decision_reason = decision_record.get("decision_reason")
+			settlement_basis = decision_record.get("settlement_basis")
+			approval_note = decision_record.get("approval_note")
+		elif legacy_exclusion:
+			decision = "不参与计算"
+			review_status = "历史标记"
+			decision_reason = profile.get("exclude_reason") or "员工定薪页标记"
+			settlement_basis = ""
+			approval_note = ""
+		elif left_in_month:
+			decision = "待处理"
+			review_status = "需决策"
+			decision_reason = "花名册显示离职，请选择离职结算或不参与计算。"
+			settlement_basis = ""
+			approval_note = ""
+		else:
+			decision = "正常计薪"
+			review_status = "无需审核"
+			decision_reason = ""
+			settlement_basis = ""
+			approval_note = ""
+
+		if decision == "不参与计算" and (review_status in {PAYROLL_PARTICIPATION_APPROVED_STATUS, "历史标记"}):
+			calculation_status = "不参与计算"
+			counts["excluded"] += 1
+		elif decision in {"异常待审核", "待处理"} or _participation_decision_blocks_calculation(decision_record):
+			calculation_status = "阻塞：等待人员范围决策"
+			counts["pending"] += 1
+		elif decision == "离职结算":
+			calculation_status = "离职结算参与计算" if profile and not legacy_exclusion else "阻塞：离职结算缺少有效定薪"
+			counts["termination"] += 1
+		elif not profile:
+			calculation_status = "阻塞：缺少有效定薪"
+			counts["missing_salary"] += 1
+		else:
+			calculation_status = "参与计算"
+			counts["normal"] += 1
+		row.update({
+			"employee_status": employee_context.get("status") or "未知",
+			"relieving_date": employee_context.get("relieving_date") or "",
+			"decision": decision,
+			"review_status": review_status,
+			"decision_reason": decision_reason,
+			"settlement_basis": settlement_basis,
+			"approval_note": approval_note,
+			"salary_status": "已有有效定薪" if profile and not legacy_exclusion else "缺少有效定薪",
+			"calculation_status": calculation_status,
+			"can_decide": 1,
+		})
+		decision_rows.append(row)
+	rows = decision_rows
 	columns = [
 		("employee_code", "工号"),
 		("employee_name", "姓名"),
 		("department", "部门"),
+		("employee_status", "花名册状态"),
+		("relieving_date", "离职日期"),
+		("decision", "本月处理"),
+		("review_status", "审核状态"),
+		("salary_status", "定薪"),
+		("calculation_status", "计算状态"),
 		("standard_hours", "标准工时"),
 		("actual_attendance_hours", "实际出勤工时"),
 		("adjusted_working_hours", "调整后工时"),
@@ -8433,6 +8964,7 @@ def get_payroll_participation_preview(company: str, payroll_month: str, attendan
 		"locked_on": next((row.get("locked_on") for row in rows if row.get("locked_on")), None),
 		"columns": [{"field": field, "label": label} for field, label in columns],
 		"rows": rows,
+		"counts": dict(counts),
 		"reason": "" if rows else _("当前锁定考勤终稿没有可参与薪资计算的员工。"),
 	}
 
