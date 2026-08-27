@@ -115,41 +115,48 @@
 
 .hrms-payroll-global-scope {
 	align-items: center;
-	background: #f6fbf8;
-	border: 1px solid #d9eee1;
-	border-radius: 8px;
+	background: transparent;
+	border: 0;
+	border-radius: 0;
 	display: flex;
-	gap: 18px;
+	gap: 0;
 	justify-content: flex-end;
-	margin: 0 0 12px;
-	padding: 10px 14px;
+	margin: 0 0 8px;
+	padding: 0;
 }
 
 .hrms-payroll-month-control {
-	display: grid;
+	display: flex;
 	flex: 0 0 auto;
-	gap: 3px;
-}
-
-.hrms-payroll-month-control > span {
-	color: var(--text-muted, #6b7280);
-	font-size: 11px;
 }
 
 .hrms-payroll-month-switcher {
 	align-items: center;
+	background: #f6fbf8;
+	border: 1px solid #d9eee1;
+	border-radius: 7px;
 	display: flex;
 	gap: 2px;
+	padding: 3px;
 }
 
 .hrms-payroll-month-switcher .btn {
-	min-height: 32px;
-	padding: 3px 10px;
+	min-height: 30px;
+	padding: 2px 8px;
+}
+
+.hrms-payroll-month-switcher .btn:not(.hrms-payroll-month-current) {
+	background: transparent;
+	border-color: transparent;
+	min-width: 28px;
+	padding-inline: 6px;
 }
 
 .hrms-payroll-month-switcher .hrms-payroll-month-current {
+	background: #fff;
+	border-color: #e6ece8;
 	font-weight: 600;
-	min-width: 104px;
+	min-width: 96px;
 }
 
 .hrms-payroll-month-picker {
@@ -433,9 +440,11 @@
 	transform: translateY(-1px);
 }
 
-.hrms-payroll-variable-source.is-selected {
+.hrms-payroll-variable-source.is-selected,
+.hrms-payroll-variable-source.is-active {
+	background: #f6fbf8;
 	border-color: #4cab7b;
-	box-shadow: 0 0 0 1px #bfe4d3 inset;
+	box-shadow: 0 0 0 1px #bfe4d3 inset, 0 3px 12px rgba(27, 100, 62, .06);
 }
 
 .hrms-payroll-variable-source-name {
@@ -973,6 +982,43 @@
 	background: #ecf8f1;
 	border-color: #a9d8bd;
 	color: #147a50;
+}
+
+.hrms-payroll-contribution-view-switch {
+	display: flex;
+	gap: 6px;
+	margin: 4px 0 10px;
+}
+
+.hrms-payroll-contribution-summary {
+	background: #f3faf6;
+	border: 1px solid #cce7da;
+	border-radius: 7px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 14px;
+	margin: 0 0 12px;
+	padding: 9px 12px;
+}
+
+.hrms-payroll-contribution-summary span,
+.hrms-payroll-contribution-note {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+}
+
+.hrms-payroll-contribution-summary strong {
+	color: var(--text-color, #1f2937);
+	margin-left: 4px;
+}
+
+.hrms-payroll-contribution-note {
+	margin: 0 0 8px;
+}
+
+.hrms-payroll-contribution-total {
+	background: #f7faf8;
+	font-weight: 700;
 }
 
 .hrms-payroll-employment-stage {

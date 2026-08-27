@@ -24,12 +24,14 @@ for (const marker of [
 	"②职能津贴",
 	"级差",
 	"defaultLevelCount = 20",
-	"人员薪级分配将在后续作为独立功能建设",
+	"删除",
+	"版本 + 薪资序号",
 	"list_salary_structure_versions",
 	"list_salary_grades",
 	"save_salary_level_structure",
 	"create_salary_level_structure_version",
 	"import_salary_structure_workbook",
+	"delete_salary_structure_version",
 ]) {
 	if (!pageJs.includes(marker)) throw new Error(`薪资架构页缺少关键逻辑: ${marker}`);
 }

@@ -55,7 +55,8 @@ check(company.includes("hrmsCompanyContext?.reload"), "Company save must refresh
 check(settings.includes("公司与数据空间管理"), "settings center must link to company data management");
 check(cleanupLog.includes('"company_code"'), "audit log must keep a stable company snapshot");
 check(!cleanupLog.includes('"options": "Company"'), "audit log must not block later Company deletion");
-check(departmentIdentity.includes("get_department_document_name"), "Department links must use company-scoped stable names");
-check(departmentIdentity.includes('{"company": company, "department_name": business_name}'), "Department uniqueness must be checked inside one company");
+check(departmentIdentity.includes("get_department_document_name"), "Department links must use stable business names");
+check(departmentIdentity.includes("without a company suffix"), "Department links must not append a company abbreviation");
+check(departmentIdentity.includes('frappe.db.get_value("Department", target_name'), "Department business names must remain globally unambiguous");
 
 console.log("Company data management contract verified.");

@@ -420,13 +420,13 @@ FORM_IMPORT_PROFILES = [
 		"module": "薪酬",
 		"label": "社保公积金名单",
 		"description": "社保、医疗及个人/公司承担额，进入月度薪资扣款和成本资料池。",
-		"source_sheets": ["2606社保名单"],
+		"source_sheets": ["2607社保名单", "2606社保名单"],
 		"processing_target": "社保公积金记录 / 薪酬变量（确认后）",
 		"target_doctype": "HRMS Payroll Welfare Source Record",
 		"columns": [
 			_column("payroll_month", "月份", True), _column("employee_code", "工号", True), _column("employee_name", "姓名", True), _column("department", "部门", True),
-			_column("social_security_base", "社保基数", True), _column("medical_base", "医疗基数"), _column("company_amount", "公司合计承担"),
-			_column("employee_amount", "个人合计承担", True), _column("remarks", "备注"),
+			_column("social_security_base", "社保基数", True), _column("medical_base", "医疗基数"), _column("company_amount", "公司合计承担", aliases=["公司合计承担25.38%", "公司合计承担24.7%"]),
+			_column("employee_amount", "个人合计承担", True, ["个人合计承担10.5%+5"]), _column("remarks", "备注"),
 		],
 	},
 	{
@@ -1582,13 +1582,54 @@ def _insert_target(row, data, payroll_month="", attendance_lock_version="", appr
 
 		month = payroll_month or _month_from(data.get("payroll_month") or data.get("occurred_on"))
 		lock_version = attendance_lock_version or _active_attendance_lock_version(row.company, month)
+		source_reference = _('表单导入审核行 {0}').format(row.name)
+		if row.template_key == "social_insurance":
+			# One social-insurance row carries two independent payroll facts.  Keep
+			# both source records under the same reviewed import-row reference so
+			# their confirmation and audit trail always stay together.
+			contributions = (
+				("社保个人", "社保个人", "应扣", flt(data.get("employee_amount"))),
+				("社保公司", "社保公司", "公司承担", flt(data.get("company_amount"))),
+			)
+			created = {}
+			for source_type, variable_type, direction, amount in contributions:
+				existing_name = frappe.db.get_value(
+					target,
+					{
+						"company": row.company,
+						"payroll_month": month,
+						"attendance_lock_version": lock_version,
+						"source_type": source_type,
+						"source_reference": source_reference,
+					},
+					"name",
+				)
+				created[source_type] = payroll_input.upsert_payroll_welfare_source_record(
+					name=existing_name,
+					company=row.company,
+					payroll_month=month,
+					attendance_lock_version=lock_version,
+					source_type=source_type,
+					variable_type=variable_type,
+					direction=direction,
+					employee=row.employee,
+					employee_code=data.get("employee_code") or row.employee_code,
+					employee_name=data.get("employee_name") or row.employee_name,
+					department=context.department,
+					amount=amount,
+					eligibility_status="符合",
+					confirmation_status="草稿",
+					source_reference=source_reference,
+					source_file=_row_source_file(row),
+					remarks=data.get("remarks"),
+				)
+			return frappe.get_doc(target, created["社保个人"])
 		profile_to_source = {
 			"skill_certificate_allowance": ("证书多能工津贴", "证书及多能工津贴", flt(data.get("multi_skill_allowance")) + flt(data.get("certificate_allowance"))),
 			"full_attendance_bonus": ("其他奖金", "全勤奖", flt(data.get("amount"))),
 			"housing_allowance": ("租房补贴", "住房补贴", flt(data.get("amount"))),
 			"education_allowance": ("学历补贴", "学历补贴", flt(data.get("amount"))),
 			"dormitory_fee": ("宿舍住宿费", "宿舍扣款", flt(data.get("deduction_amount"))),
-			"social_insurance": ("社保个人", "社保个人", flt(data.get("employee_amount"))),
 			"service_award": ("继续服务奖", "继续服务奖", flt(data.get("amount"))),
 			"reward_punishment": (("其他扣款" if "惩" in (data.get("reward_punishment_type") or "") else "其他奖金"), ("其他扣款" if "惩" in (data.get("reward_punishment_type") or "") else "其他奖金"), flt(data.get("amount"))),
 			"exit_payroll_settlement": ("其他扣款", "其他扣款", flt(data.get("deduction_amount"))),
@@ -1876,10 +1917,27 @@ def _activate_non_submittable_target(row, target):
 	if target.doctype == "HRMS Payroll Welfare Source Record":
 		from hrms.api import payroll_input
 
-		target.confirmation_status = "已确认"
-		target.confirmed_by = frappe.session.user
-		target.confirmed_on = now_datetime()
-		target.save(ignore_permissions=True)
+		targets = [target]
+		if row.template_key == "social_insurance" and target.source_reference:
+			targets = [
+				frappe.get_doc(target.doctype, name)
+				for name in frappe.get_all(
+					target.doctype,
+					filters={
+						"company": target.company,
+						"payroll_month": target.payroll_month,
+						"attendance_lock_version": target.attendance_lock_version,
+						"source_reference": target.source_reference,
+						"source_type": ["in", ["社保个人", "社保公司"]],
+					},
+					pluck="name",
+				)
+			]
+		for contribution in targets:
+			contribution.confirmation_status = "已确认"
+			contribution.confirmed_by = frappe.session.user
+			contribution.confirmed_on = now_datetime()
+			contribution.save(ignore_permissions=True)
 		sync = payroll_input.sync_welfare_sources_to_payroll_variables(
 			target.company, target.payroll_month, target.attendance_lock_version
 		)

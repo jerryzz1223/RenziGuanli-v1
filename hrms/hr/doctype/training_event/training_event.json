@@ -16,6 +16,12 @@
   "type",
   "level",
   "company",
+  "training_category",
+  "training_mode",
+  "assessment_required",
+  "passing_score",
+  "retraining_due_on",
+  "qualification_gate",
   "section_break_4",
   "trainer_name",
   "trainer_email",
@@ -93,6 +99,42 @@
    "fieldtype": "Link",
    "label": "Company",
    "options": "Company"
+  },
+  {
+   "fieldname": "training_category",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "培训类别",
+   "options": "内部培训\n外部培训\n安全教育\n特种作业\n新员工培训\n职业健康\n岗位资格"
+  },
+  {
+   "fieldname": "training_mode",
+   "fieldtype": "Select",
+   "label": "培训方式",
+   "options": "内部\n外部\n线上\n自主学习\n混合"
+  },
+  {
+   "default": "0",
+   "fieldname": "assessment_required",
+   "fieldtype": "Check",
+   "label": "需要考核"
+  },
+  {
+   "depends_on": "eval:doc.assessment_required",
+   "fieldname": "passing_score",
+   "fieldtype": "Float",
+   "label": "合格分数"
+  },
+  {
+   "fieldname": "retraining_due_on",
+   "fieldtype": "Date",
+   "label": "复训截止日期"
+  },
+  {
+   "fieldname": "qualification_gate",
+   "fieldtype": "Select",
+   "label": "资格用途",
+   "options": "\n无\n转正前必修\n晋升前必修\n上岗前必修\n证书复训"
   },
   {
    "fieldname": "section_break_4",

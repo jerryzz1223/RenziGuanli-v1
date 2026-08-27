@@ -5,6 +5,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.utils import cint
 
 
 class TrainingFeedback(Document):
@@ -28,6 +29,9 @@ class TrainingFeedback(Document):
 	# end: auto-generated types
 
 	def validate(self):
+		if self.satisfaction_score and not 1 <= cint(self.satisfaction_score) <= 5:
+			frappe.throw(_("满意度评分必须介于 1 到 5 分之间。"))
+
 		training_event = frappe.get_doc("Training Event", self.training_event)
 		if training_event.docstatus != 1:
 			frappe.throw(_("{0} must be submitted").format(_("Training Event")))

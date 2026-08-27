@@ -1,0 +1,153 @@
+/* Existing Training Program list: operational workspace, scoped to the training route. */
+.hrms-training-learning-view .layout-main-section {
+	max-width: none;
+}
+
+.hrms-training-learning-workspace {
+	margin: 0 0 24px;
+	color: #263246;
+}
+
+.hrms-training-hero,
+.hrms-training-panel,
+.hrms-training-list-heading {
+	border: 1px solid #e5e9f0;
+	border-radius: 16px;
+	background: #fff;
+}
+
+.hrms-training-hero {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 24px;
+	padding: 24px 28px;
+	background: linear-gradient(117deg, #edf4ff 0%, #fff 62%);
+}
+
+.hrms-training-eyebrow,
+.hrms-training-panel-heading p,
+.hrms-training-list-heading p {
+	margin: 0 0 4px;
+	color: #718099;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: .08em;
+}
+
+.hrms-training-hero h1,
+.hrms-training-panel-heading h2,
+.hrms-training-list-heading h2 {
+	margin: 0;
+	font-weight: 700;
+}
+
+.hrms-training-hero h1 { font-size: 26px; }
+.hrms-training-hero p:not(.hrms-training-eyebrow) { margin: 8px 0 0; color: #657187; }
+.hrms-training-hero-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+.hrms-training-summary {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 12px;
+	margin-top: 14px;
+}
+
+.hrms-training-summary-card,
+.hrms-training-step,
+.hrms-training-risk,
+.hrms-training-event {
+	position: relative;
+	border: 0;
+	text-align: left;
+	background: #fff;
+	cursor: pointer;
+}
+
+.hrms-training-summary-card {
+	min-height: 116px;
+	padding: 17px 42px 16px 18px;
+	border: 1px solid #e7ebf2;
+	border-radius: 14px;
+	transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+
+.hrms-training-summary-card:hover,
+.hrms-training-step:hover,
+.hrms-training-risk:hover,
+.hrms-training-event:hover {
+	border-color: #b9cae8;
+	box-shadow: 0 8px 20px rgba(40, 82, 140, .08);
+	transform: translateY(-1px);
+}
+
+.hrms-training-summary-card span,
+.hrms-training-summary-card small,
+.hrms-training-step small,
+.hrms-training-risk small,
+.hrms-training-event small {
+	display: block;
+	color: #758197;
+}
+
+.hrms-training-summary-card span { font-size: 13px; }
+.hrms-training-summary-card strong { display: block; margin: 4px 0; font-size: 30px; line-height: 1; }
+.hrms-training-summary-card small { font-size: 12px; }
+.hrms-training-summary-card i,
+.hrms-training-step i,
+.hrms-training-risk i,
+.hrms-training-event i { position: absolute; right: 16px; top: calc(50% - 10px); color: #6b83a8; font-size: 18px; font-style: normal; }
+
+.hrms-training-content-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 1.6fr) minmax(320px, .9fr);
+	gap: 14px;
+	margin-top: 14px;
+}
+
+.hrms-training-panel { padding: 20px; }
+.hrms-training-panel-heading,
+.hrms-training-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.hrms-training-panel-heading h2,
+.hrms-training-list-heading h2 { font-size: 18px; }
+.hrms-training-panel-heading > span,
+.hrms-training-list-heading > span { color: #8490a3; font-size: 12px; }
+
+.hrms-training-flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+.hrms-training-step { min-height: 146px; padding: 14px 22px 14px 14px; border: 1px solid #edf0f5; border-radius: 12px; }
+.hrms-training-step span { display: block; margin-bottom: 20px; color: #2b6cdb; font-size: 12px; font-weight: 700; }
+.hrms-training-step strong { display: block; margin-bottom: 7px; color: #2b3545; font-size: 14px; }
+.hrms-training-step small { font-size: 12px; line-height: 1.5; }
+
+.hrms-training-risks { display: grid; gap: 9px; margin-top: 16px; }
+.hrms-training-risk { display: flex; align-items: center; min-height: 70px; padding: 12px 30px 12px 11px; border: 1px solid #edf0f5; border-radius: 11px; }
+.hrms-training-risk > span { display: grid; place-items: center; width: 40px; height: 40px; margin-right: 11px; border-radius: 10px; background: #f7f8fb; color: #4d5d74; font-weight: 700; }
+.hrms-training-risk.warning > span { background: #fff6df; color: #9c6d08; }
+.hrms-training-risk.danger > span { background: #fff0ef; color: #bd3d37; }
+.hrms-training-risk.success > span { background: #eaf8ef; color: #278153; }
+.hrms-training-risk strong { display: block; font-size: 13px; }
+.hrms-training-risk small { margin-top: 3px; font-size: 12px; }
+
+.hrms-training-events-panel { margin-top: 14px; }
+.hrms-training-events { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+.hrms-training-event { min-height: 112px; padding: 12px 22px 12px 13px; border: 1px solid #edf0f5; border-radius: 11px; }
+.hrms-training-event-date { display: block; margin-bottom: 9px; color: #2b6cdb; font-size: 11px; }
+.hrms-training-event strong { display: block; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.hrms-training-event small { margin-top: 5px; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.hrms-training-empty { padding: 22px; border: 1px dashed #dce3ee; border-radius: 10px; color: #7a8699; font-size: 13px; text-align: center; }
+.hrms-training-events .hrms-training-empty { grid-column: 1 / -1; }
+
+.hrms-training-list-heading { margin-top: 14px; padding: 16px 20px; }
+
+@media (max-width: 1120px) {
+	.hrms-training-flow, .hrms-training-events { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+	.hrms-training-content-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 767px) {
+	.hrms-training-hero { align-items: flex-start; flex-direction: column; padding: 19px; }
+	.hrms-training-hero-actions, .hrms-training-hero-actions .btn { width: 100%; }
+	.hrms-training-summary, .hrms-training-flow, .hrms-training-events { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	.hrms-training-panel { padding: 15px; }
+	.hrms-training-list-heading > span { display: none; }
+}

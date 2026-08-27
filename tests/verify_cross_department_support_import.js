@@ -32,5 +32,7 @@ for (const marker of ["异常行也可导入", "导入并保留异常", "待复�
 	assert(page.includes(marker), `Missing import-review UI guidance: ${marker}`);
 }
 assert(page.includes('fieldname: "include_unavailable"') && page.includes("default: 1"), "The query page must show imported review records by default");
+assert(page.includes("frappe.ui.form.make_control"), "Query controls must be created in their own filter containers");
+assert(!page.includes("this.page.add_field"), "Page-header controls must not be moved into the query grid");
 
 console.log("cross department support partial import contract passed");

@@ -9,9 +9,16 @@
  "field_order": [
   "training_program",
   "status",
+  "approval_status",
   "column_break_3",
   "company",
+  "owner_department",
+  "plan_period",
   "section_break_5",
+  "training_category",
+  "training_mode",
+  "is_mandatory",
+  "objective",
   "trainer_name",
   "trainer_email",
   "column_break_8",
@@ -22,6 +29,14 @@
   "amended_from"
  ],
  "fields": [
+  {
+   "default": "Draft",
+   "fieldname": "approval_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "计划状态",
+   "options": "Draft\nApproved\nIn Progress\nClosed"
+  },
   {
    "fieldname": "training_program",
    "fieldtype": "Data",
@@ -53,8 +68,44 @@
    "reqd": 1
   },
   {
+   "fieldname": "owner_department",
+   "fieldtype": "Link",
+   "label": "归属部门",
+   "options": "Department"
+  },
+  {
+   "fieldname": "plan_period",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "计划期间"
+  },
+  {
    "fieldname": "section_break_5",
    "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "training_category",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "培训类别",
+   "options": "内部培训\n外部培训\n安全教育\n特种作业\n新员工培训\n职业健康\n岗位资格"
+  },
+  {
+   "fieldname": "training_mode",
+   "fieldtype": "Select",
+   "label": "培训方式",
+   "options": "内部\n外部\n线上\n自主学习\n混合"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_mandatory",
+   "fieldtype": "Check",
+   "label": "必修培训"
+  },
+  {
+   "fieldname": "objective",
+   "fieldtype": "Small Text",
+   "label": "培训目标与达成标准"
   },
   {
    "fieldname": "trainer_name",

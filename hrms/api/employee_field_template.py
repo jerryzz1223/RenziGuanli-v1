@@ -107,6 +107,7 @@ PERSONNEL_PAGE_DEFINITIONS = [
 	},
 	{"name": "employee-property-history", "title": "异动记录", "icon": "timeline"},
 	{"name": "cross-department-support", "title": "跨部门支援", "icon": "users"},
+	{"name": "recruitment-center", "title": "招聘中心", "icon": "briefcase", "roles": ["HR User", "HR Manager", "System Manager", "Interviewer"]},
 	{"name": "attendance-import-center", "title": "考勤导入中心", "icon": "upload"},
 	{"name": "payroll-input-center", "title": "薪资输入中心", "icon": "database"},
 	{"name": "form-data-intake", "title": "人资表单导入中心", "icon": "upload"},

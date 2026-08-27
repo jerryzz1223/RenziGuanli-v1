@@ -37,7 +37,10 @@ NUMERIC_FIELDS = {
 	"work_injury_hours": ("工伤(小时)",),
 	"rest_arrangement_hours": ("排休(小时)",),
 	"absence_hours": ("旷工(小时)",),
-	# This unitless source marker is evidence for review, never payroll hours.
+	# DingTalk's unitless marker becomes payroll absence hours only when the
+	# source row is a scheduled workday and the employee has unworked hours.
+	# Weekend/rest-day markers remain source evidence and never create a salary
+	# absence on their own.
 	"absence_marker_count": ("旷工", "旷工_2"),
 	# Different DingTalk reports express the same fact either as a count or as
 	# a per-day "缺卡" marker.  Both are source facts; neither is inferred from
@@ -54,6 +57,7 @@ IDENTITY_FIELDS = {
 	"department": ("实际部门", "部门", "department"),
 	"attendance_date": ("日期", "考勤日期", "attendance_date"),
 	"shift": ("班次", "shift"),
+	"approval": ("关联审批单", "审批单", "approval"),
 }
 
 EXCEPTION_MESSAGES = {
@@ -69,11 +73,11 @@ EXCEPTION_MESSAGES = {
 	"EMPLOYEE_NOT_FOUND": "员工工号未匹配到员工目录。",
 	"EMPLOYEE_NAME_AMBIGUOUS": "姓名匹配到多个员工工号。",
 	"INVALID_NUMERIC_VALUE": "工时或次数字段不是有效数字。",
-	"CLOCK_IN_MISSING": "钉钉明确存在上班未打卡记录。",
-	"CLOCK_OUT_MISSING": "钉钉明确存在下班未打卡记录。",
-	"LATE_MARKED": "钉钉明确标记迟到，需要核对请假或主管说明。",
-	"EARLY_MARKED": "钉钉明确标记早退，需要核对请假或主管说明。",
-	"ABSENCE_MARKED": "钉钉明确标记旷工；来源未提供小时数，须人工核验后才能影响薪资。",
+	"CLOCK_IN_MISSING": "钉钉明确存在上班未打卡记录；人员照常进入终稿，红苹果由忘打卡来源核算。",
+	"CLOCK_OUT_MISSING": "钉钉明确存在下班未打卡记录；人员照常进入终稿，红苹果由忘打卡来源核算。",
+	"LATE_MARKED": "钉钉明确标记迟到；工作日迟到计入全勤扣款。",
+	"EARLY_MARKED": "钉钉明确标记早退；工作日无请假证据时按实际早退时长计旷工工时。",
+	"ABSENCE_MARKED": "工作日无出勤且无可抵扣请假，已按未出勤工时计入旷工并进入薪资三倍扣款。",
 	"SOURCE_FILE_MISSING": "来源文件定位为空。",
 	"SOURCE_SHEET_MISSING": "来源工作表定位为空。",
 	"SOURCE_ROW_MISSING": "来源行号为空。",
@@ -93,6 +97,19 @@ DEFAULT_EXCEPTION_POLICY = {
 	"early": True,
 	"absence_marker": True,
 }
+
+# These are attendance facts, rather than conditions that remove an employee
+# from the monthly population.  Their monetary effect is calculated through
+# the locked attendance final and the payroll rules.  Only identity, source
+# structure, date, or other data-integrity failures keep a person out of the
+# downstream final.
+NON_BLOCKING_ATTENDANCE_EVENT_CODES = frozenset({
+	"CLOCK_IN_MISSING",
+	"CLOCK_OUT_MISSING",
+	"LATE_MARKED",
+	"EARLY_MARKED",
+	"ABSENCE_MARKED",
+})
 
 # These fields are persisted for every daily source row.  Keeping the mapping
 # here lets current and historic batches use the same date-level explanation,
@@ -115,6 +132,56 @@ def _is_positive_exception_marker(value: Any) -> bool:
 		return Decimal(str(value)) > 0
 	except (InvalidOperation, TypeError, ValueError):
 		return str(value).strip().lower() not in {"0", "否", "false", "no"}
+
+
+def _is_scheduled_workday(standard_hours: Decimal) -> bool:
+	"""A source row can affect absence pay only when it has scheduled hours."""
+	return standard_hours > 0
+
+
+def _has_leave_evidence(row: Mapping[str, Any], leave_hours: Decimal) -> bool:
+	if leave_hours > 0:
+		return True
+	approval = _text(_value(row, IDENTITY_FIELDS["approval"]))
+	return "假" in approval
+
+
+def _clock_minutes(value: Any) -> int | None:
+	"""Read the final HH:MM value from a DingTalk clock or shift label."""
+	matches = re.findall(r"(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?!\d)", _text(value))
+	if not matches:
+		return None
+	hour, minute = matches[-1]
+	return int(hour) * 60 + int(minute)
+
+
+def _early_departure_hours(row: Mapping[str, Any], *, standard_hours: Decimal, actual_hours: Decimal, leave_hours: Decimal, early_count: Decimal) -> Decimal:
+	"""Return payroll-relevant early-leave time, capped by unworked hours.
+
+	The rule applies only to scheduled workdays without leave evidence.  DingTalk
+	uses ``次日`` for overnight shifts, so both the scheduled end and actual
+	clock-out are normalised to the following day before comparing them.
+	"""
+	if early_count <= 0 or not _is_scheduled_workday(standard_hours) or _has_leave_evidence(row, leave_hours):
+		return Decimal("0")
+	shift = _text(_value(row, IDENTITY_FIELDS["shift"]))
+	actual_out = _text(_value(row, ("下班时间", "下班打卡", "下班打卡时间", "clock_out")))
+	expected_minutes = _clock_minutes(shift)
+	actual_minutes = _clock_minutes(actual_out)
+	if expected_minutes is None or actual_minutes is None:
+		return Decimal("0")
+	shift_times = re.findall(r"(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?!\d)", shift)
+	if len(shift_times) >= 2:
+		start_hour, start_minute = shift_times[0]
+		start_minutes = int(start_hour) * 60 + int(start_minute)
+		if "次日" in shift and expected_minutes <= start_minutes:
+			expected_minutes += 24 * 60
+			if "次日" in actual_out or actual_minutes <= start_minutes:
+				actual_minutes += 24 * 60
+	if actual_minutes >= expected_minutes:
+		return Decimal("0")
+	missing_hours = max(standard_hours - actual_hours - leave_hours, Decimal("0"))
+	return min(Decimal(expected_minutes - actual_minutes) / Decimal("60"), missing_hours).quantize(Decimal("0.01"))
 
 
 def exception_lines_from_attendance_details(attendance_details: Iterable[Mapping[str, Any]], exception_codes: Iterable[str]) -> list[dict[str, Any]]:
@@ -364,12 +431,7 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			_add_code(codes, "SOURCE_SHEET_MISSING")
 		if row_number is None:
 			_add_code(codes, "SOURCE_ROW_MISSING")
-		row_clock_in_missing = Decimal("0")
-		row_clock_out_missing = Decimal("0")
-		row_late_count = Decimal("0")
-		row_early_count = Decimal("0")
-		row_absence_marker_count = Decimal("0")
-		row_absence_hours = Decimal("0")
+		row_numbers = {fieldname: Decimal("0") for fieldname in NUMERIC_FIELDS}
 		for fieldname, aliases in NUMERIC_FIELDS.items():
 			value, exists = _field_value(row, aliases)
 			if not exists or _is_blank(value):
@@ -380,19 +442,42 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			if number is None:
 				_add_code(codes, "INVALID_NUMERIC_VALUE")
 				continue
+			row_numbers[fieldname] = number
+		row_standard_hours = row_numbers["standard_hours"]
+		row_actual_attendance_hours = row_numbers["actual_attendance_hours"]
+		row_leave_hours = sum(
+			(row_numbers[fieldname] for fieldname in ("personal_leave_hours", "sick_leave_hours", "annual_leave_hours", "work_injury_hours", "rest_arrangement_hours")),
+			Decimal("0"),
+		)
+		row_clock_in_missing = row_numbers["clock_in_missing_count"]
+		row_clock_out_missing = row_numbers["clock_out_missing_count"]
+		row_late_count = row_numbers["late_count"]
+		row_early_count = row_numbers["early_count"]
+		row_absence_marker_count = row_numbers["absence_marker_count"]
+		row_absence_hours = row_numbers["absence_hours"]
+		row_unworked_hours = max(row_standard_hours - row_actual_attendance_hours - row_leave_hours, Decimal("0"))
+		marker_absence_hours = (
+			row_unworked_hours
+			if row_absence_marker_count > 0 and _is_scheduled_workday(row_standard_hours) and not _has_leave_evidence(row, row_leave_hours)
+			else Decimal("0")
+		)
+		early_absence_hours = _early_departure_hours(
+			row,
+			standard_hours=row_standard_hours,
+			actual_hours=row_actual_attendance_hours,
+			leave_hours=row_leave_hours,
+			early_count=row_early_count,
+		)
+		if row_absence_hours <= 0:
+			row_absence_hours = max(marker_absence_hours, early_absence_hours)
+		row_numbers["absence_hours"] = row_absence_hours
+		for fieldname, number in row_numbers.items():
+			# Full-attendance late deductions apply to scheduled workdays.  Weekend
+			# overtime rows still retain the raw mark in attendance_details below,
+			# but do not become a monthly late count or a full-attendance deduction.
+			if fieldname in {"late_count", "early_count"} and not _is_scheduled_workday(row_standard_hours):
+				continue
 			totals[fieldname] += number
-			if fieldname == "clock_in_missing_count":
-				row_clock_in_missing = number
-			elif fieldname == "clock_out_missing_count":
-				row_clock_out_missing = number
-			elif fieldname == "late_count":
-				row_late_count = number
-			elif fieldname == "early_count":
-				row_early_count = number
-			elif fieldname == "absence_marker_count":
-				row_absence_marker_count = number
-			elif fieldname == "absence_hours":
-				row_absence_hours = number
 		if exception_policy.get("missing_punch", True):
 			if row_clock_in_missing > 0:
 				_add_code(codes, "CLOCK_IN_MISSING")
@@ -406,9 +491,9 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		if exception_policy.get("early", True) and row_early_count > 0:
 			_add_code(codes, "EARLY_MARKED")
 			exception_events.append(_exception_event("EARLY_MARKED", parsed_date, row_number, row_early_count))
-		if exception_policy.get("absence_marker", True) and row_absence_marker_count > 0:
+		if exception_policy.get("absence_marker", True) and marker_absence_hours > 0:
 			_add_code(codes, "ABSENCE_MARKED")
-			exception_events.append(_exception_event("ABSENCE_MARKED", parsed_date, row_number, row_absence_marker_count))
+			exception_events.append(_exception_event("ABSENCE_MARKED", parsed_date, row_number, marker_absence_hours))
 		source_rows.append({
 			"source_file": _text(row.get("source_file") or source_file),
 			"source_sheet": _text(row.get("source_sheet") or source_sheet),
@@ -447,7 +532,8 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		"data_quality_events": data_quality_events,
 		"source_row_count": len(rows),
 	}
-	review_status = REVIEW_PENDING if codes else REVIEW_NOT_REQUIRED
+	blocking_codes = set(codes) - NON_BLOCKING_ATTENDANCE_EVENT_CODES
+	review_status = REVIEW_PENDING if blocking_codes else REVIEW_NOT_REQUIRED
 	return {
 		"source_type": "attendance_draft",
 		"employee_code": proposed["employee_code"],

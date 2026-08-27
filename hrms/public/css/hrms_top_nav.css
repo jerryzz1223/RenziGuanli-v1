@@ -324,19 +324,56 @@ body:has(#hrms-top-module-nav) > .main-section {
 	white-space: nowrap;
 }
 
-.hrms-top-module-nav__brand::before {
-	align-items: center;
-	background: var(--gray-200, #edf0f2);
-	border-radius: 10px;
-	color: var(--gray-700, #4b5563);
-	content: "HR";
-	display: inline-flex;
-	font-size: 11px;
-	font-weight: 700;
+.hrms-top-module-nav__brand-logo {
+	border-radius: 8px;
+	display: block;
 	height: 28px;
-	justify-content: center;
 	margin-right: 8px;
+	object-fit: contain;
 	width: 28px;
+}
+
+.hrms-top-module-nav__brand-copy {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	line-height: 1.2;
+	text-align: left;
+}
+
+.hrms-top-module-nav__brand-company {
+	font-size: 12px;
+	font-weight: 650;
+}
+
+.hrms-top-module-nav__brand-label {
+	color: var(--text-muted, #6b7280);
+	font-size: 10px;
+	font-weight: 500;
+}
+
+.hrms-top-module-nav__item-icon,
+.hrms-page-title-icon {
+	display: inline-flex;
+	flex: none;
+	height: 15px;
+	width: 15px;
+}
+
+.hrms-top-module-nav__item-icon svg,
+.hrms-page-title-icon svg {
+	fill: none;
+	height: 100%;
+	stroke: currentColor;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	stroke-width: 1.8;
+	width: 100%;
+}
+
+.hrms-page-title-icon {
+	margin-right: 7px;
+	vertical-align: -2px;
 }
 
 .hrms-top-module-nav__list {
@@ -518,6 +555,7 @@ body:has(#hrms-top-module-nav) > .main-section {
 	color: var(--text-muted, #6b7280);
 	cursor: pointer;
 	display: inline-flex;
+	gap: 6px;
 	font-size: 13px;
 	font-weight: 500;
 	height: 34px;
@@ -1571,6 +1609,12 @@ body.hrms-custom-drawer-active > .main-section {
 }
 
 @media (min-width: 768px) {
+	/* A closed drawer should release the page width, while retaining a small
+	 * visual gutter so full-width tables and cards do not touch the viewport. */
+	body.hrms-custom-drawer-active:not(.hrms-custom-drawer-open) > .main-section {
+		margin-left: 16px !important;
+	}
+
 	/* While the user has the custom drawer open, reserve its visual lane rather
 	 * than covering the current page. Closing it restores the full page width. */
 	body.hrms-custom-drawer-active.hrms-custom-drawer-open > .main-section {
@@ -2568,11 +2612,15 @@ body.hrms-personnel-social-controls-hidden .form-sidebar .comment-box {
 	}
 
 	.hrms-top-module-nav__brand {
-		font-size: 0;
+		font-size: inherit;
 	}
 
-	.hrms-top-module-nav__brand::before {
+	.hrms-top-module-nav__brand-logo {
 		margin-right: 0;
+	}
+
+	.hrms-top-module-nav__brand-copy {
+		display: none;
 	}
 
 	.hrms-top-module-nav__item {

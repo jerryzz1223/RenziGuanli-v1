@@ -21,7 +21,7 @@ from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import cint, now_datetime
+from frappe.utils import cint, flt, now_datetime
 
 from hrms.api.attendance_processors.apple_tree import AppleTreeRules, is_auto_excluded_apple_tree_row, preflight_apple_tree_rows, process_apple_tree_rows
 from hrms.api.attendance_processors.attendance_draft import (
@@ -32,7 +32,7 @@ from hrms.api.attendance_processors.attendance_draft import (
 	process_attendance_draft_rows,
 	rows_from_dingtalk_daily_sheet,
 )
-from hrms.api.attendance_processors.missed_punch import precheck_missed_punch_structure, process_missed_punch_rows
+from hrms.api.attendance_processors.missed_punch import MissedPunchRules, precheck_missed_punch_structure, process_missed_punch_rows
 
 
 IMPORT_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
@@ -1046,6 +1046,23 @@ def _attendance_draft_exception_policy() -> dict[str, bool]:
 	return policy
 
 
+def _missed_punch_rules(company: str, attendance_month: str) -> MissedPunchRules:
+	"""Use the rule centre for future missed-punch batches without rewriting history."""
+	try:
+		from hrms.api.payroll_input import get_attendance_processing_rule_settings
+
+		settings = get_attendance_processing_rule_settings(company, attendance_month)
+		red_apples = cint(settings.get("red_apples_per_record", 2))
+		amount_per_apple = flt(settings.get("amount_per_apple", 5))
+		return MissedPunchRules(
+			red_apples_per_record=red_apples,
+			amount_per_record=red_apples * amount_per_apple,
+		)
+	except Exception:
+		# A phased rollout must not block an attendance upload on a legacy site.
+		return MissedPunchRules()
+
+
 def _process_batch(batch) -> dict[str, Any]:
 	rows, sheet_name = _read_source_rows(batch)
 	employees = _employee_directory(batch.company)
@@ -1083,6 +1100,7 @@ def _process_batch(batch) -> dict[str, Any]:
 		source_sheet=sheet_name,
 		employee_directory=employees or None,
 		department_mapping=_department_mapping_for(batch.company, "missing_card"),
+		rules=_missed_punch_rules(batch.company, batch.attendance_month),
 	)
 
 

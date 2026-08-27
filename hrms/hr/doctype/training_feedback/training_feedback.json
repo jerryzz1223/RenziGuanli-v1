@@ -15,6 +15,7 @@
   "event_name",
   "trainer_name",
   "section_break_6",
+  "satisfaction_score",
   "feedback",
   "amended_from"
  ],
@@ -81,6 +82,12 @@
   {
    "fieldname": "section_break_6",
    "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "satisfaction_score",
+   "fieldtype": "Int",
+   "label": "满意度评分（1-5）",
+   "description": "1分很不满意，5分非常满意"
   },
   {
    "fieldname": "feedback",

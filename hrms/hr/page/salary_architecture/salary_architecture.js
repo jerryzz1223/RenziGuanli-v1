@@ -46,7 +46,7 @@ class SalaryArchitecture {
 					this.selectedVersion = this.versions[0]?.name || "";
 				}
 				return this.selectedVersion
-					? frappe.call("hrms.api.payroll_input.list_salary_grades", { structure_version: this.selectedVersion, page_length: this.defaultLevelCount })
+					? frappe.call("hrms.api.payroll_input.list_salary_grades", { structure_version: this.selectedVersion })
 					: { message: [] };
 			})
 			.then((response) => {
@@ -88,12 +88,18 @@ class SalaryArchitecture {
 		const version = this.selectedVersionRow();
 		const levels = this.derivedLevels();
 		const levelCells = (render) => levels.map(render).join("");
+		const versionRows = this.versions.map((row) => `<tr>
+			<td><strong>${this.escape(row.structure_version)}</strong><br><small>${this.escape(__("{0} 个薪级", [row.grade_count || 0]))}</small></td>
+			<td>${this.escape(row.effective_from || "—")} ${this.escape(__("至"))} ${this.escape(row.effective_to || __("长期"))}</td>
+			<td>${this.escape(row.status || __("草稿"))}</td>
+			<td><button class="btn btn-danger btn-xs" data-action="delete-version" data-version="${this.escape(row.name)}">${this.escape(__("删除"))}</button></td>
+		</tr>`).join("");
 		this.wrapper.innerHTML = `
 			<div class="hrms-salary-level-head">
 				<div>
 					<span>${this.escape(__("薪资标准配置"))}</span>
 					<h3>${this.escape(__("薪级表"))}</h3>
-					<p>${this.escape(__("本页只建立薪级 1、2、3…N 及对应标准，不按部门、职位或岗位自动分配员工。人员薪级分配将在后续作为独立功能建设。"))}</p>
+					<p>${this.escape(__("可并存维护多张薪级表，例如 2H、2I。员工薪资异动导入始终按照 Excel 每行的版本 + 薪资序号精确匹配；本页当前选择仅用于查看和编辑。"))}</p>
 				</div>
 				<div class="hrms-salary-level-actions">
 					<button class="btn btn-default btn-sm" data-action="new-version">${this.escape(__("新建版本"))}</button>
@@ -102,11 +108,15 @@ class SalaryArchitecture {
 				</div>
 			</div>
 			<section class="hrms-salary-level-version-panel">
-				<label>${this.escape(__("当前薪级表版本"))}</label>
+				<label>${this.escape(__("当前查看 / 编辑版本"))}</label>
 				<select class="form-control" data-version-select ${this.versions.length ? "" : "disabled"}>
 					${this.versions.length ? this.versions.map((row) => `<option value="${this.escape(row.name)}" ${row.name === this.selectedVersion ? "selected" : ""}>${this.escape(row.structure_version)} · ${this.escape(row.status)} · ${this.escape(row.effective_from || "未设生效日")}</option>`).join("") : `<option>${this.escape(__("暂无版本，请先新建"))}</option>`}
 				</select>
-				${this.selectedVersion ? `<small>${this.escape(__("生效期间：{0} 至 {1}", [version.effective_from || "—", version.effective_to || "长期"]))}</small>` : ""}
+				${this.selectedVersion ? `<small>${this.escape(__("生效期间：{0} 至 {1}；当前查看不会改变 Excel 导入的匹配版本。", [version.effective_from || "—", version.effective_to || "长期"]))}</small>` : ""}
+			</section>
+			<section class="hrms-salary-level-editor">
+				<div class="hrms-salary-level-editor-head"><div><h4>${this.escape(__("薪级表版本"))}</h4><p>${this.escape(__("可直接删除未被员工定薪引用的版本及其全部薪级；已有员工定薪记录的历史版本不可删除。"))}</p></div></div>
+				<div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${this.escape(__("版本"))}</th><th>${this.escape(__("生效期间"))}</th><th>${this.escape(__("状态"))}</th><th>${this.escape(__("操作"))}</th></tr></thead><tbody>${versionRows || `<tr><td colspan="4" class="text-muted">${this.escape(__("暂无版本，请先新建或导入。"))}</td></tr>`}</tbody></table></div>
 			</section>
 			<section class="hrms-salary-level-editor">
 				<div class="hrms-salary-level-editor-head">
@@ -126,7 +136,7 @@ class SalaryArchitecture {
 				</div>
 				${this.selectedVersion ? "" : `<div class="text-muted hrms-salary-level-empty">${this.escape(__("请先新建一个薪级表版本，再维护 1、2、3…N 级标准。"))}</div>`}
 			</section>
-			<section class="hrms-salary-level-boundary"><strong>${this.escape(__("当前边界"))}</strong><span>${this.escape(__("此处仅维护薪级标准；不包含人员、部门、职位、岗位类别或标签。后续将另设人员薪级分配，并允许按员工逐一分配。"))}</span></section>
+			<section class="hrms-salary-level-boundary"><strong>${this.escape(__("匹配规则"))}</strong><span>${this.escape(__("每张薪级表的版本名称是导入匹配键。Excel 必须填写与此完全一致的版本和薪资序号，例如 2I + 3；只有版本或序号缺失、或该组合不存在时，才进入安全回退或手动定薪。"))}</span></section>
 		`;
 		this.bindEvents();
 	}
@@ -149,6 +159,7 @@ class SalaryArchitecture {
 			if (action === "new-version") this.createVersion();
 			if (action === "import") this.openUploader();
 			if (action === "save") this.save();
+			if (action === "delete-version") this.deleteVersion(button.dataset.version);
 			if (action === "add-level") { this.levels.push({ level: Math.max(0, ...this.levels.map((item) => item.level)) + 1, base_salary: 0, function_allowance: 0 }); this.render(); }
 			if (action === "remove-level" && this.levels.length > 1) { this.levels.pop(); this.render(); }
 		}));
@@ -165,7 +176,7 @@ class SalaryArchitecture {
 
 	createVersion() {
 		frappe.prompt([
-			{ fieldname: "structure_version", fieldtype: "Data", label: __("版本名称"), reqd: 1, description: __("例如：2026 年薪级表") },
+			{ fieldname: "structure_version", fieldtype: "Data", label: __("版本名称"), reqd: 1, description: __("必须与员工薪资异动 Excel 的“版本”列完全一致，例如：2I") },
 			{ fieldname: "effective_from", fieldtype: "Date", label: __("生效开始"), reqd: 1, default: frappe.datetime.get_today() },
 			{ fieldname: "effective_to", fieldtype: "Date", label: __("生效结束") },
 		], (values) => frappe.call({
@@ -177,6 +188,24 @@ class SalaryArchitecture {
 			this.selectedVersion = response.message.name;
 			this.load();
 		}), __("新建薪级表"));
+	}
+
+	deleteVersion(name) {
+		const version = this.versions.find((row) => row.name === name);
+		if (!version) return;
+		frappe.confirm(
+			__("确定删除版本 {0} 及其 {1} 个薪级吗？此操作不可恢复。", [version.structure_version, version.grade_count || 0]),
+			() => frappe.call({
+				method: "hrms.api.payroll_input.delete_salary_structure_version",
+				args: { name },
+				freeze: true,
+				freeze_message: __("正在删除薪级表版本..."),
+			}).then(() => {
+				frappe.show_alert({ message: __("薪级表版本已删除"), indicator: "green" });
+				if (this.selectedVersion === name) this.selectedVersion = "";
+				this.load();
+			}),
+		);
 	}
 
 	save() {
@@ -204,7 +233,7 @@ class SalaryArchitecture {
 			const preview = response.message || {};
 			if (!preview.found || !preview.grade_rows) return frappe.msgprint(__("未识别到薪级数据。Excel 请使用“薪资架构”工作表，并包含序号、底薪、职能津贴行。"));
 			frappe.prompt([
-				{ fieldname: "structure_version", fieldtype: "Data", label: __("版本名称"), reqd: 1, default: preview.suggested_structure_version || "" },
+				{ fieldname: "structure_version", fieldtype: "Data", label: __("版本名称"), reqd: 1, default: preview.suggested_structure_version || "", description: __("需与员工薪资异动 Excel 的“版本”列完全一致，例如：2I") },
 				{ fieldname: "effective_from", fieldtype: "Date", label: __("生效开始"), reqd: 1, default: frappe.datetime.get_today() },
 				{ fieldname: "effective_to", fieldtype: "Date", label: __("生效结束") },
 			], (values) => this.importWorkbook(fileUrl, values), __("识别到 {0} 个薪级", [preview.grade_rows]));

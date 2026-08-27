@@ -23,7 +23,7 @@ for (const marker of [
 	"DEFAULT_PAYROLL_RULES",
 	"ensure_default_payroll_rules",
 	"list_payroll_rules",
-	"upsert_payroll_rule",
+	"save_payroll_rule_version",
 	"can_edit_payroll_rules",
 	"PAYROLL_SETTLEMENT_GROSS_PAY",
 	"ATTENDANCE_FULL_ATTENDANCE_BONUS",
@@ -44,7 +44,7 @@ for (const marker of [
 	"下载公式模板",
 	"初始化公司公式",
 	"list_payroll_rules",
-	"upsert_payroll_rule",
+	"save_payroll_rule_version",
 	"ensure_default_payroll_rules",
 	"can_edit_payroll_rules",
 	"规则说明",
@@ -55,7 +55,7 @@ for (const marker of [
 
 const workbenchJs = read("hrms/hr/page/hrms_workbench/hrms_workbench.js");
 const workbenchPy = read("hrms/hr/page/hrms_workbench/hrms_workbench.py");
-for (const marker of ["薪资规则", "salary-rules", "规则中心"]) {
+for (const marker of ["薪资规则", "salary-rules", "计薪规则"]) {
 	mustInclude(workbenchJs + workbenchPy, marker, `Workbench is missing salary rule route marker: ${marker}`);
 }
 

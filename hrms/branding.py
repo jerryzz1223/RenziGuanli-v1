@@ -4,6 +4,8 @@ from werkzeug.wrappers import Response
 
 
 BLANK_BRAND_ASSET = "/assets/hrms/images/blank-brand.svg"
+DEFAULT_DESK_BRAND_ASSET = "/assets/hrms/images/yongxin-brand-mark-red.png"
+LEGACY_DESK_BRAND_ASSET = "/assets/hrms/images/yongxin-brand-mark.png"
 
 
 def serve_blank_for_undefined_image():
@@ -25,6 +27,16 @@ def _set_supported_single_values(doctype, values):
 			frappe.db.set_single_value(doctype, fieldname, value)
 
 
+def ensure_default_desk_branding():
+	"""Set Yongxin's initial Desk logo without overwriting a later admin upload."""
+	meta = frappe.get_meta("Navbar Settings")
+	if not meta.has_field("app_logo"):
+		return
+	current = frappe.db.get_single_value("Navbar Settings", "app_logo")
+	if not current or current in {BLANK_BRAND_ASSET, LEGACY_DESK_BRAND_ASSET}:
+		frappe.db.set_single_value("Navbar Settings", "app_logo", DEFAULT_DESK_BRAND_ASSET)
+
+
 def apply_login_page_customizations():
 	"""Keep the system login page neutral and focused on username/password login."""
 	_set_supported_single_values(
@@ -35,12 +47,7 @@ def apply_login_page_customizations():
 			"favicon": BLANK_BRAND_ASSET,
 		},
 	)
-	_set_supported_single_values(
-		"Navbar Settings",
-		{
-			"app_logo": BLANK_BRAND_ASSET,
-		},
-	)
+	ensure_default_desk_branding()
 	_set_supported_single_values(
 		"System Settings",
 		{

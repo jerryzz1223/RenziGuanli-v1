@@ -5,6 +5,11 @@
 	const COMPANY_CONTEXT_EVENT = "hrms:company-context-changed";
 	const COMPANY_CONTEXT_STORAGE_PREFIX = "hrms_company_context";
 	const PREFERRED_COMPANY = "永新";
+	const DEFAULT_BRAND_LOGO = "/assets/hrms/images/yongxin-brand-mark-red.png";
+	const LEGACY_BRAND_LOGO = "/assets/hrms/images/yongxin-brand-mark.png";
+	const BLANK_BRAND_ASSET = "/assets/hrms/images/blank-brand.svg";
+	// 日常界面暂不展示公司概念；保留内部上下文，确保数据查询仍受公司范围隔离。
+	const SHOW_COMPANY_CONTEXT_IN_NAV = false;
 	// 永新当前按单公司模式运行。Company 仍是 Frappe/ERPNext 的数据隔离
 	// 主键，不能删除；这里只隐藏历史/测试公司，避免日常操作误切数据空间。
 	const SINGLE_COMPANY_OPERATION_MODE = true;
@@ -60,9 +65,10 @@
 	};
 
 	const modules = [
-		{ label: "主页", route: "/desk/hrms-workbench", keys: ["hrms-workbench"] },
+		{ label: "主页", icon: "home", route: "/desk/hrms-workbench", keys: ["hrms-workbench"] },
 		{
 			label: "人事",
+			icon: "people",
 			route: "/desk/employee",
 			keys: [
 				"personnel",
@@ -86,16 +92,19 @@
 		},
 		{
 			label: "部门",
+			icon: "building",
 			route: "/desk/department",
 			keys: ["department", "organizational-chart"],
 		},
-		{
-			label: "招聘",
-			route: "/desk/recruitment",
-			keys: ["recruitment", "job-opening", "job-applicant", "interview", "job-offer", "employee-referral"],
+	{
+		label: "招聘",
+		icon: "recruitment",
+		route: "/desk/recruitment-center",
+		keys: ["recruitment", "recruitment-center", "job-opening", "job-applicant", "interview", "job-offer", "employee-referral", "employee-onboarding"],
 		},
 		{
 			label: "考勤假期",
+			icon: "calendar",
 			route: "/desk/attendance-import-center",
 			keys: [
 				"attendance-import-center",
@@ -112,6 +121,7 @@
 		},
 		{
 			label: "薪酬",
+			icon: "payroll",
 			route: "/desk/payroll-input-center",
 			keys: [
 				"payroll-input-center",
@@ -126,16 +136,19 @@
 		},
 		{
 			label: "审批",
+			icon: "approval",
 			route: "/desk/workflow",
 			keys: ["workflow", "workflow-action", "expense-claim", "travel-request"],
 		},
 		{
 			label: "培训学习",
+			icon: "learning",
 			route: "/desk/training-program",
 			keys: ["training-program", "training-event", "training-result", "training-feedback", "employee-skill-map"],
 		},
 		{
 			label: "绩效",
+			icon: "performance",
 			route: "/desk/performance",
 			keys: ["performance", "appraisal", "appraisal-cycle", "appraisal-template", "appraisal-goal"],
 		},
@@ -159,6 +172,8 @@
 
 	let accountInfo = null;
 	let accountInfoLoading = false;
+	let brandLogoUrl = DEFAULT_BRAND_LOGO;
+	let brandLogoRequest = null;
 	let accountEventsBound = false;
 	let moreEventsBound = false;
 	let sidebarToggleEventsBound = false;
@@ -457,15 +472,25 @@
 	function currentUserId() {
 		// The session is the authority for profile navigation. accountInfo is
 		// loaded asynchronously and can briefly belong to an earlier Desk session.
-		return window.frappe?.session?.user || "";
+		// Desk assets can run before `frappe.session` is assigned, while the boot
+		// payload is already available. Use it only as an initialization fallback.
+		return window.frappe?.session?.user || window.frappe?.boot?.user?.name || "";
 	}
 
 	function bootUserInfo() {
-		const user = window.frappe?.session?.user;
+		const user = currentUserId();
 		const bootInfo = user && window.frappe?.boot?.user_info ? frappe.boot.user_info[user] : null;
+		const bootUser = window.frappe?.boot?.user || {};
 		return {
 			name: user,
-			full_name: bootInfo?.fullname || bootInfo?.full_name || window.frappe?.session?.user_fullname || user || "",
+			full_name:
+				bootInfo?.fullname ||
+				bootInfo?.full_name ||
+				bootUser.fullname ||
+				bootUser.full_name ||
+				window.frappe?.session?.user_fullname ||
+				user ||
+				"",
 			first_name: bootInfo?.first_name || "",
 			user_image: bootInfo?.image || bootInfo?.user_image || "",
 			roles: window.frappe?.boot?.user?.roles || [],
@@ -473,10 +498,14 @@
 	}
 
 	function loadCurrentUser() {
-		if (!window.frappe || !frappe.session || frappe.session.user === "Guest") {
+		const requestedUser = currentUserId();
+		if (!window.frappe || !requestedUser || requestedUser === "Guest") {
+			// The custom navigation is mounted before Desk finishes hydrating on
+			// some routes. Retry once the boot/session payload is available instead
+			// of leaving the account trigger at its generic fallback label.
+			window.setTimeout(scheduleRender, 150);
 			return;
 		}
-		const requestedUser = frappe.session.user;
 		if (accountInfo?.name && accountInfo.name !== requestedUser) {
 			accountInfo = null;
 		}
@@ -490,7 +519,7 @@
 		frappe
 			.call("hrms.api.get_current_user_info")
 			.then((r) => {
-				if (frappe.session.user !== requestedUser) return;
+				if (currentUserId() !== requestedUser) return;
 				accountInfo = Object.assign({}, accountInfo || {}, r.message || {}, { name: requestedUser });
 			})
 			.always(() => {
@@ -543,6 +572,10 @@
 			openSettingsModule("字段管理中心");
 			return;
 		}
+		if (action === "branding" && window.frappe?.set_route) {
+			frappe.set_route("Form", "Navbar Settings", "Navbar Settings");
+			return;
+		}
 		if (action === "user-permissions") {
 			frappe.set_route("hrms-access-center");
 			return;
@@ -576,11 +609,50 @@
 		}
 	}
 
-	function button(label, route, active) {
+	const MODULE_ICONS = {
+		home: '<svg viewBox="0 0 24 24" focusable="false"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
+		people: '<svg viewBox="0 0 24 24" focusable="false"><circle cx="9" cy="8" r="3"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0M16 5.5a2.5 2.5 0 0 1 0 5M17.5 14a4.5 4.5 0 0 1 3 4.2"/></svg>',
+		building: '<svg viewBox="0 0 24 24" focusable="false"><path d="M4 21V4h11v17M15 9h5v12M8 8h3M8 12h3M8 16h3M17 13h1M17 17h1M2 21h20"/></svg>',
+		recruitment: '<svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18M10 12v2h4v-2"/></svg>',
+		calendar: '<svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/></svg>',
+		payroll: '<svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 8h8M8 12h5M8 16h3M17 15v.01"/></svg>',
+		approval: '<svg viewBox="0 0 24 24" focusable="false"><path d="M7 3h8l3 3v15H7zM15 3v4h4M10 14l2 2 4-4"/></svg>',
+		learning: '<svg viewBox="0 0 24 24" focusable="false"><path d="m4 6 8-3 8 3-8 3zM6 9v6c3.5 2 8.5 2 12 0V9M20 7v6"/></svg>',
+		performance: '<svg viewBox="0 0 24 24" focusable="false"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
+	};
+
+	function appendModuleIcon(element, icon) {
+		const graphic = document.createElement("span");
+		graphic.className = "hrms-top-module-nav__item-icon";
+		graphic.setAttribute("aria-hidden", "true");
+		graphic.innerHTML = MODULE_ICONS[icon] || MODULE_ICONS.home;
+		element.appendChild(graphic);
+	}
+
+	function currentModuleIcon() {
+		return modules.find((module) => module.label === activeLabel())?.icon || "home";
+	}
+
+	function decoratePageTitle() {
+		const pageHead = document.querySelector(".page-head");
+		const title = pageHead?.querySelector(".page-title .title-text, .page-title h1, .page-title h2");
+		if (!title || title.querySelector(":scope > .hrms-page-title-icon")) return;
+		const graphic = document.createElement("span");
+		graphic.className = "hrms-page-title-icon";
+		graphic.setAttribute("aria-hidden", "true");
+		graphic.innerHTML = MODULE_ICONS[currentModuleIcon()] || MODULE_ICONS.home;
+		title.prepend(graphic);
+	}
+
+	function button(label, route, active, icon) {
 		const element = document.createElement("button");
 		element.type = "button";
 		element.className = `hrms-top-module-nav__item${active ? " is-active" : ""}`;
-		element.textContent = label;
+		appendModuleIcon(element, icon);
+		const text = document.createElement("span");
+		text.className = "hrms-top-module-nav__item-label";
+		text.textContent = label;
+		element.appendChild(text);
 		element.addEventListener("click", () => navigate(route));
 		return element;
 	}
@@ -736,6 +808,7 @@
 			{ label: "个人资料", action: "profile" },
 			{ label: "修改密码", action: "change-password" },
 			{ label: "设置中心", action: "settings", roles: HR_SETTINGS_MANAGER_ROLES },
+			{ label: "品牌外观", action: "branding", roles: SYSTEM_ADMIN_ROLES },
 			{ label: "用户与权限", action: "user-permissions", roles: SYSTEM_ADMIN_ROLES },
 			{ label: "用户管理", action: "users", roles: SYSTEM_ADMIN_ROLES },
 			{ label: "角色管理", action: "roles", roles: SYSTEM_ADMIN_ROLES },
@@ -886,6 +959,26 @@
 		return toggle;
 	}
 
+	function usableBrandLogo(value) {
+		return Boolean(value && value !== BLANK_BRAND_ASSET && value !== LEGACY_BRAND_LOGO && value !== "/desk/undefined");
+	}
+
+	function updateBrandLogo(image, value) {
+		if (!usableBrandLogo(value)) return;
+		brandLogoUrl = value;
+		if (image) image.src = value;
+	}
+
+	function loadBrandLogo(image) {
+		const bootLogo = window.frappe?.boot?.navbar_settings?.app_logo;
+		updateBrandLogo(image, bootLogo);
+		if (!window.frappe?.db?.get_single_value || brandLogoRequest) return;
+		brandLogoRequest = frappe.db
+			.get_single_value("Navbar Settings", "app_logo")
+			.then((value) => updateBrandLogo(image, value))
+			.catch(() => undefined);
+	}
+
 	function removeRedundantFrameworkControls() {
 		// HRMS has its own module navigation and account menu.  Remove the two
 		// framework controls rather than merely hiding them, so they cannot return
@@ -923,20 +1016,41 @@
 		const brand = document.createElement("button");
 		brand.type = "button";
 		brand.className = "hrms-top-module-nav__brand";
-		brand.textContent = "人资管理系统";
+		const logo = document.createElement("img");
+		logo.className = "hrms-top-module-nav__brand-logo";
+		logo.src = brandLogoUrl;
+		logo.alt = "永新电子";
+		logo.addEventListener("error", () => {
+			if (logo.src.endsWith(DEFAULT_BRAND_LOGO)) return;
+			logo.src = DEFAULT_BRAND_LOGO;
+		});
+		brand.appendChild(logo);
+		const brandCopy = document.createElement("span");
+		brandCopy.className = "hrms-top-module-nav__brand-copy";
+		const companyName = document.createElement("span");
+		companyName.className = "hrms-top-module-nav__brand-company";
+		companyName.textContent = "永新电子（常熟）有限公司";
+		brandCopy.appendChild(companyName);
+		const brandLabel = document.createElement("span");
+		brandLabel.className = "hrms-top-module-nav__brand-label";
+		brandLabel.textContent = "人资管理系统";
+		brandCopy.appendChild(brandLabel);
+		brand.appendChild(brandCopy);
 		brand.addEventListener("click", () => navigate("/desk/hrms-workbench"));
 		nav.appendChild(brand);
+		loadBrandLogo(logo);
 
 		const moduleList = document.createElement("div");
 		moduleList.className = "hrms-top-module-nav__list";
 		modules.forEach((module) => {
-			moduleList.appendChild(button(module.label, module.route, module.label === active));
+			moduleList.appendChild(button(module.label, module.route, module.label === active, module.icon));
 		});
 		const moreActive = !active && routeSlug() !== "hrms-workbench";
 		moduleList.appendChild(renderMore(moreActive));
 		nav.appendChild(moduleList);
-		nav.appendChild(renderCompanyContext());
+		if (SHOW_COMPANY_CONTEXT_IN_NAV) nav.appendChild(renderCompanyContext());
 		nav.appendChild(renderAccountMenu());
+		decoratePageTitle();
 		renderContextualAdminBar();
 	}
 
@@ -984,6 +1098,7 @@
 		// routes.  Removing these controls on every toolbar mutation keeps the
 		// custom HRMS navigation consistent across every module page.
 		removeRedundantFrameworkControls();
+		decoratePageTitle();
 		if (!document.getElementById(NAV_ID) || (contextualPageKey() && !document.getElementById("hrms-contextual-admin-bar"))) {
 			scheduleRender();
 		}

@@ -398,11 +398,11 @@
 		},
 		{
 			label: "招聘",
-			route: "/desk/recruitment",
+			route: "/desk/recruitment-center",
 			icon: "R",
-			keys: ["recruitment", "job-opening", "job-applicant", "interview", "job-offer", "employee-referral"],
+			keys: ["recruitment", "recruitment-center", "job-opening", "job-applicant", "interview", "job-offer", "employee-referral", "employee-onboarding"],
 			items: [
-				{ type: "link", label: "主页", route: "/desk/recruitment", slug: "recruitment" },
+				{ type: "link", label: "招聘中心", route: "/desk/recruitment-center", slug: "recruitment-center" },
 				{
 					type: "section",
 					label: "招聘管理",
@@ -1372,6 +1372,7 @@
 	}
 
 	function apply_hrms_shell_rules() {
+		redirect_legacy_training_learning_center();
 		redirect_legacy_home_workspace();
 		hide_frappe_breadcrumbs();
 		fix_desk_home_links();
@@ -1387,6 +1388,17 @@
 		// HR Setup used to be a native Workspace.  Keep the record only for old
 		// bookmarks, then take users to the data-integrated home page instead.
 		frappe.set_route("hrms-workbench");
+	}
+
+	// A short-lived compatibility route for browser tabs opened while the
+	// training centre experiment was active. The centre itself has been removed;
+	// stale links must return to the existing Training Program list.
+	function redirect_legacy_training_learning_center() {
+		var route = window.frappe?.get_route?.() || [];
+		if (route[0] !== "training-learning-center") {
+			return;
+		}
+		frappe.set_route("List", "Training Program");
 	}
 
 	// The sidebar is the primary navigation.  Optional improvements such as

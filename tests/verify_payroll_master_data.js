@@ -25,6 +25,7 @@ for (const marker of [
 	"preview_salary_structure_workbook",
 	"import_salary_structure_workbook",
 	"list_salary_structure_versions",
+	"delete_salary_structure_version",
 	"list_salary_grades",
 	"list_assignable_salary_grades",
 	"create_employee_salary_change",
@@ -35,6 +36,14 @@ for (const marker of [
 	"rollback_employee_salary_change_import_batch",
 	"salary_import_batch",
 	"_salary_grade_from_structure",
+	"_salary_grade_from_unique_amounts",
+	"_salary_grade_from_import_row",
+	"_salary_grade_from_matching_history",
+	"按表内金额匹配薪资架构",
+	"hiding the earlier option makes a",
+	"salary_grade_label",
+	"已绑定历史薪级",
+	"version_by_name",
 	"薪资架构版本",
 	"薪资序号",
 	"已匹配薪资架构",
@@ -113,6 +122,17 @@ if (pageJs.includes('data-salary-change-field="status"') || pageJs.includes('__(
 if (!api.includes('status = "已批准"') || !api.includes('"status": "已批准"')) {
 	throw new Error("Employee salary saves and imports must be submitted immediately.");
 }
+
+mustInclude(
+	api,
+	'contribution_enabled = int(bool(is_active and stage == "正式"))',
+	"Only confirmed employees may default to social-insurance and housing-fund contributions.",
+);
+mustInclude(
+	api,
+	"社保、公积金：正式默认缴纳，试用默认不缴纳",
+	"The salary grid must describe the confirmed-only contribution default.",
+);
 
 const workbenchJs = read("hrms/hr/page/hrms_workbench/hrms_workbench.js");
 const workbenchPy = read("hrms/hr/page/hrms_workbench/hrms_workbench.py");

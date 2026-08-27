@@ -12,6 +12,9 @@
   "section_break_5",
   "hours",
   "grade",
+  "score",
+  "assessment_result",
+  "needs_retraining",
   "column_break_7",
   "comments"
  ],
@@ -58,6 +61,27 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Grade"
+  },
+  {
+   "fieldname": "score",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "考核分数"
+  },
+  {
+   "default": "Pending",
+   "fieldname": "assessment_result",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "考核结论",
+   "options": "Pending\nPass\nFail\nAbsent"
+  },
+  {
+   "default": "0",
+   "fieldname": "needs_retraining",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "需要补训"
   },
   {
    "fieldname": "column_break_7",

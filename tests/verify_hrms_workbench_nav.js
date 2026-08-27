@@ -40,7 +40,7 @@ for (const marker of ["/assets/hrms/js/hrms_top_nav.js", "/assets/hrms/css/hrms_
 	}
 }
 
-if (!hooksSource.includes("/assets/hrms/css/hrms_top_nav.css?v=20260826j")) {
+if (!hooksSource.includes("/assets/hrms/css/hrms_top_nav.css?v=20260827c")) {
 	throw new Error("The top navigation CSS cache version must change when its desktop layout is corrected.");
 }
 
@@ -57,6 +57,18 @@ for (const marker of ["@media (max-width: 767px)", "position: fixed;", "transfor
 for (const marker of ["主页", "人事", "/desk/hrms-workbench", "/desk/employee", "/desk/department", "/desk/attendance-import-center", "/desk/payroll-input-center", "aria-expanded", "bindMoreDocumentEvents", "closeMoreMenus"]) {
 	if (!topNavSource.includes(marker)) {
 		throw new Error(`Top navigation is missing marker: ${marker}`);
+	}
+}
+
+for (const marker of ["yongxin-brand-mark-red.png", "Navbar Settings", "MODULE_ICONS", "hrms-top-module-nav__brand-logo", "hrms-top-module-nav__brand-company", "loadBrandLogo", "decoratePageTitle"]) {
+	if (!topNavSource.includes(marker)) {
+		throw new Error(`Top navigation branding or module icons are missing marker: ${marker}`);
+	}
+}
+
+for (const marker of ["hrms-top-module-nav__brand-logo", "hrms-top-module-nav__brand-company", "hrms-top-module-nav__item-icon", "hrms-page-title-icon"]) {
+	if (!topNavCssSource.includes(marker)) {
+		throw new Error(`Top navigation icon CSS is missing marker: ${marker}`);
 	}
 }
 
@@ -171,6 +183,10 @@ if (!topNavSource.includes("nav.appendChild(renderSidebarToggle())")) {
 
 if (!topNavCssSource.includes(".hrms-top-drawer") || !topNavCssSource.includes("body.hrms-custom-drawer-active > .body-sidebar-container") || !topNavCssSource.includes("body.hrms-custom-drawer-active.hrms-custom-drawer-open > .main-section") || !topNavCssSource.includes("width: calc(100vw - 300px) !important")) {
 	throw new Error("The custom drawer must hide the native sidebar and reserve space instead of covering the current page.");
+}
+
+if (!topNavCssSource.includes("body.hrms-custom-drawer-active:not(.hrms-custom-drawer-open) > .main-section") || !topNavCssSource.includes("margin-left: 16px !important")) {
+	throw new Error("A closed custom drawer must retain a small left gutter for page content.");
 }
 
 if (personnel.is_hidden !== 1 || personnel.content !== "[]") {

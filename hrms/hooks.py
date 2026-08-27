@@ -7,13 +7,13 @@ app_license = "GNU General Public License (v3)"
 before_request = ["hrms.branding.serve_blank_for_undefined_image"]
 required_apps = ["frappe/erpnext"]
 source_link = "http://github.com/frappe/hrms"
-app_logo_url = "/assets/hrms/images/frappe-hr-logo.svg"
+app_logo_url = "/assets/hrms/images/yongxin-brand-mark-red.png"
 app_home = "/desk/hrms-workbench"
 
 add_to_apps_screen = [
 	{
 		"name": "hrms",
-		"logo": "/assets/hrms/images/frappe-hr-logo.svg",
+		"logo": "/assets/hrms/images/yongxin-brand-mark-red.png",
 		"title": "人资管理系统",
 		"route": "/desk/hrms-workbench",
 		"has_permission": "hrms.hr.utils.check_app_permission",
@@ -27,13 +27,15 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260826h",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260826f",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260827i",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260827g",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
+	"/assets/hrms/js/hrms_file_uploader.js?v=20260827a",
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260826n",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260827c",
+	"/assets/hrms/css/hrms_training_learning.css?v=20260827a",
 ]
 
 # website

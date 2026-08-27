@@ -59,52 +59,49 @@ class CrossDepartmentSupportPage {
 		const reset_to_first_page = () => {
 			this.page_number = 1;
 		};
-		this.source_department = this.page.add_field({
+		const add_filter = (target, df) =>
+			frappe.ui.form.make_control({
+				parent: filters.find(target),
+				df: { ...df, change: reset_to_first_page },
+				render_input: true,
+			});
+
+		this.source_department = add_filter("[data-filter-group='source']", {
 			fieldname: "source_department",
 			label: __("原部门"),
 			fieldtype: "Autocomplete",
 			options: [],
-			change: reset_to_first_page,
 		});
-		this.source_designation = this.page.add_field({
+		this.source_designation = add_filter("[data-filter-group='source']", {
 			fieldname: "source_designation",
 			label: __("原岗位"),
 			fieldtype: "Autocomplete",
 			options: [],
-			change: reset_to_first_page,
 		});
-		this.department = this.page.add_field({
+		this.department = add_filter("[data-filter-group='support']", {
 			fieldname: "support_department",
 			label: __("可支援部门"),
 			fieldtype: "Autocomplete",
 			options: [],
-			change: reset_to_first_page,
 		});
-		this.designation = this.page.add_field({
+		this.designation = add_filter("[data-filter-group='support']", {
 			fieldname: "support_designation",
 			label: __("可支援岗位"),
 			fieldtype: "Autocomplete",
 			options: [],
-			change: reset_to_first_page,
 		});
-		this.employee = this.page.add_field({
+		this.employee = add_filter("[data-filter-group='employee']", {
 			fieldname: "employee_keyword",
 			label: __("姓名或工号"),
 			fieldtype: "Autocomplete",
 			options: [],
-			change: reset_to_first_page,
 		});
-		this.show_unavailable = this.page.add_field({
+		this.show_unavailable = add_filter("[data-filter-group='availability']", {
 			fieldname: "include_unavailable",
 			label: __("同时显示不可派人员"),
 			fieldtype: "Check",
 			default: 1,
-			change: reset_to_first_page,
 		});
-		filters.find("[data-filter-group='source']").append(this.source_department.$wrapper, this.source_designation.$wrapper);
-		filters.find("[data-filter-group='support']").append(this.department.$wrapper, this.designation.$wrapper);
-		filters.find("[data-filter-group='employee']").append(this.employee.$wrapper);
-		filters.find("[data-filter-group='availability']").append(this.show_unavailable.$wrapper);
 	}
 
 	load_filter_options() {

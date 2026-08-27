@@ -39,11 +39,14 @@ for (const marker of [
 	mustInclude(topNav, marker, `Global company context is missing: ${marker}`);
 }
 
+mustInclude(topNav, "const SHOW_COMPANY_CONTEXT_IN_NAV = false", "Top navigation must hide the company selector while single-company operation is in effect.");
+mustInclude(topNav, "if (SHOW_COMPANY_CONTEXT_IN_NAV) nav.appendChild(renderCompanyContext());", "Company selector must only render when explicitly enabled.");
+
 if (!topNav.includes("!SINGLE_COMPANY_OPERATION_MODE && companies.length && canManageCompanyIdentity()")) {
 	throw new Error("Company management entry must stay hidden while Yongxin single-company mode is active.");
 }
 
-mustInclude(hooks, "hrms_top_nav.js?v=20260811a", "Top-nav cache key must change with the single-company contract.");
+mustInclude(hooks, "hrms_top_nav.js?v=20260827b", "Top-nav cache key must change when company-selector visibility changes.");
 
 for (const marker of [
 	"hrmsCompanyContext",
