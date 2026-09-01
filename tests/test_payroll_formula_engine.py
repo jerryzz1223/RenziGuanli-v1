@@ -52,6 +52,17 @@ class PayrollFormulaEngineTest(unittest.TestCase):
 		self.assertEqual(result["salary_subtotal"], 2800)
 		self.assertEqual(result["subsidy_bonus_total"], 350)
 
+	def test_weekday_overtime_used_for_rest_arrangement_is_not_paid_again(self):
+		result, _trace = evaluate_formula_set(FORMULA_TEMPLATES, {
+			"base_salary": 2770,
+			"standard_hours": 8,
+			"basic_attendance_hours": 8,
+			"weekday_overtime_hours": 0,
+			"raw_weekend_overtime_hours": 0,
+		})
+		self.assertEqual(result["adjusted_absence_hours"], 0)
+		self.assertEqual(result["weekday_overtime_pay"], 0)
+
 	def test_rejects_unsafe_python(self):
 		with self.assertRaises(FormulaError):
 			evaluate_formula("__import__('os').system('id')", {})

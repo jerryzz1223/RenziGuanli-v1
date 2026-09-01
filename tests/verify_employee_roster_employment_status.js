@@ -21,6 +21,11 @@ const expectedCards = [
 ];
 
 const normalisedList = list.replaceAll('"', "");
+const allCardExpression = /label: 全部[\s\S]{0,120}status: \[!=, Left\]/;
+if (!allCardExpression.test(normalisedList)) {
+	throw new Error("“全部”花名册必须排除已离职员工。");
+}
+
 for (const [label, filters] of expectedCards) {
 	const expression = new RegExp(`${label}[\\s\\S]{0,120}${filters}`);
 	if (!expression.test(normalisedList)) throw new Error(`${label} 的工作性质筛选口径错误。`);

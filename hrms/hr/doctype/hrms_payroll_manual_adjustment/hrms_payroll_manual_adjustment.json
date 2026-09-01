@@ -1,0 +1,39 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-09-01 00:00:00.000000",
+ "description": "薪酬中心产生的人工修改审计记录。考勤修改留在考勤处理中心的独立台账。",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["company", "payroll_month", "change_category", "employee", "employee_code", "employee_name", "reference_doctype", "reference_name", "field_name", "original_value_json", "new_value_json", "reason"],
+ "fields": [
+  {"fieldname": "company", "fieldtype": "Link", "label": "公司", "options": "Company", "reqd": 1, "in_list_view": 1, "read_only": 1},
+  {"fieldname": "payroll_month", "fieldtype": "Data", "label": "薪资月份", "reqd": 1, "in_list_view": 1, "read_only": 1},
+  {"fieldname": "change_category", "fieldtype": "Select", "label": "修改分类", "options": "员工定薪\n月度增减项\n人员范围\n福利扣款来源\n薪资规则\n考勤计薪规则\n薪资公式", "reqd": 1, "in_list_view": 1, "read_only": 1},
+  {"fieldname": "employee", "fieldtype": "Link", "label": "员工", "options": "Employee", "read_only": 1},
+  {"fieldname": "employee_code", "fieldtype": "Data", "label": "工号", "in_list_view": 1, "read_only": 1},
+  {"fieldname": "employee_name", "fieldtype": "Data", "label": "姓名", "in_list_view": 1, "read_only": 1},
+  {"fieldname": "reference_doctype", "fieldtype": "Data", "label": "关联单据类型", "read_only": 1},
+  {"fieldname": "reference_name", "fieldtype": "Dynamic Link", "label": "关联单据", "options": "reference_doctype", "read_only": 1},
+  {"fieldname": "field_name", "fieldtype": "Data", "label": "修改字段", "in_list_view": 1, "read_only": 1},
+  {"fieldname": "original_value_json", "fieldtype": "Long Text", "label": "原值 JSON", "read_only": 1},
+  {"fieldname": "new_value_json", "fieldtype": "Long Text", "label": "新值 JSON", "read_only": 1},
+  {"fieldname": "reason", "fieldtype": "Small Text", "label": "修改原因", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-09-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Payroll Manual Adjustment",
+ "owner": "Administrator",
+ "permissions": [
+  {"email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1},
+  {"email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "HR Manager", "share": 1}
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name"
+}

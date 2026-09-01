@@ -2499,7 +2499,7 @@ def get_hrms_developer_configuration_map():
 			"where_used": "钉钉员工同步、考勤同步和网关接口；dingtalk_integration.py 与 dingtalk_employee_gateway.py 读取。",
 			"storage": "HRMS DingTalk Settings（单例配置）",
 			"manage_route": "Form/HRMS DingTalk Settings/HRMS DingTalk Settings",
-			"verify_route": "hr-settings-center",
+			"verify_route": "attendance-import-center/dingtalk",
 			"test_hint": "先执行连接测试和预览同步；确认成功后再开启正式同步，避免直接写入错误数据。",
 		},
 	]

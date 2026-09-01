@@ -2,6 +2,11 @@
 	const YONGXIN_COMPANY = "永新";
 
 	frappe.listview_settings["Department"] = {
+		formatters: {
+			parent_department(value, df, doc) {
+				return frappe.utils.escape_html(format_department_parent_display(value, doc));
+			},
+		},
 		onload(listview) {
 			setup_department_list_actions(listview);
 		},
@@ -9,6 +14,17 @@
 			setup_department_list_actions(listview);
 		},
 	};
+
+	function is_technical_department_root(value) {
+		const normalized = String(value || "").replace(/\s+/g, "").toLowerCase();
+		return ["alldepartments", "all部门s", "所有部门"].includes(normalized);
+	}
+
+	function format_department_parent_display(value, doc) {
+		if (!is_technical_department_root(value)) return value || "";
+		const company = doc?.company && doc.company !== "1" ? doc.company : YONGXIN_COMPANY;
+		return `${company}（${__("总公司")}）`;
+	}
 
 	function setup_department_list_actions(listview) {
 		if (!listview || !listview.page || listview.page.__hrms_department_actions_ready) return;

@@ -57,6 +57,7 @@ class PayrollInputCenter {
 		this.payroll_rule_rows = [];
 		this.payroll_mapping_rows = [];
 		this.assignableSalaryGrades = [];
+		this.salary_assignment_load_id = 0;
 		this.process_readiness = {};
 		this.payroll_workflow = null;
 		this.month_runbook = null;
@@ -75,6 +76,7 @@ class PayrollInputCenter {
 			{ key: "payroll-reports", label: "薪酬报表" },
 			{ key: "payroll-analysis", label: "薪酬分析" },
 			{ key: "annual-bonus", label: "年终奖计算" },
+			{ key: "payroll-adjustments", label: "薪酬修改记录" },
 			{ key: "salary-slips", label: "发送工资条" },
 		];
 		this.workspace_areas = [
@@ -117,6 +119,8 @@ class PayrollInputCenter {
 	}
 
 	deactivate() {
+		window.cancelAnimationFrame(this.table_controls_decoration_frame);
+		window.clearTimeout(this.table_filter_timer);
 		if (this.viewport_fit_bound) {
 			window.removeEventListener("resize", this.handle_viewport_resize);
 			this.viewport_fit_bound = false;
@@ -183,13 +187,25 @@ class PayrollInputCenter {
 		this.handle_table_control_input = (event) => {
 			const input = event.target.closest("[data-table-column-search]");
 			if (!input || !this.wrapper.contains(input)) return;
-			this.filter_table_rows(input.closest("table"));
+			window.clearTimeout(this.table_filter_timer);
+			this.table_filter_timer = window.setTimeout(() => this.filter_table_rows(input.closest("table")), 120);
 		};
 		this.wrapper.addEventListener("click", this.handle_table_control_click);
 		this.wrapper.addEventListener("input", this.handle_table_control_input);
-		this.table_control_observer = new MutationObserver(() => this.decorate_table_controls());
+		// Inline save-state changes and large table renders can create many DOM
+		// mutations in one task. Coalesce them so we only scan the tables once
+		// before the next paint instead of interrupting the current interaction.
+		this.table_control_observer = new MutationObserver(() => this.schedule_table_controls_decoration());
 		this.table_control_observer.observe(this.wrapper, { childList: true, subtree: true });
 		this.decorate_table_controls();
+	}
+
+	schedule_table_controls_decoration() {
+		window.cancelAnimationFrame(this.table_controls_decoration_frame);
+		this.table_controls_decoration_frame = window.requestAnimationFrame(() => {
+			this.table_controls_decoration_frame = 0;
+			this.decorate_table_controls();
+		});
 	}
 
 	decorate_table_controls() {
@@ -241,9 +257,14 @@ class PayrollInputCenter {
 		const page = Math.min(Math.max(1, requestedPage || 1), pageCount);
 		table.dataset.tablePage = String(page);
 		const start = (page - 1) * pageSize;
+		let visibleIndex = 0;
 		rows.forEach((row) => {
-			const index = visibleRows.indexOf(row);
-			row.hidden = index < 0 || index < start || index >= start + pageSize;
+			if (row.dataset.tableFilterMatch === "0") {
+				row.hidden = true;
+				return;
+			}
+			row.hidden = visibleIndex < start || visibleIndex >= start + pageSize;
+			visibleIndex += 1;
 		});
 		const pagination = table.payrollPaginationElement;
 		if (!pagination) return;
@@ -309,7 +330,13 @@ class PayrollInputCenter {
 		const filters = Array.from(table.querySelectorAll("[data-table-column-search]")).map((input) => ({ column: Number(input.dataset.tableColumnSearch), value: input.value.trim().toLocaleLowerCase() })).filter((item) => item.value);
 		Array.from(table.tBodies[0].rows).forEach((row) => {
 			if (!row.cells.length) return;
-			row.dataset.tableFilterMatch = filters.every((filter) => (row.cells[filter.column]?.innerText || "").toLocaleLowerCase().includes(filter.value)) ? "1" : "0";
+			// textContent avoids a synchronous layout read for every cell. Include
+			// form values explicitly because textContent does not contain them.
+			row.dataset.tableFilterMatch = filters.every((filter) => {
+				const cell = row.cells[filter.column];
+				const inputValues = cell ? Array.from(cell.querySelectorAll("input, select, textarea")).map((input) => input.value).join(" ") : "";
+				return `${cell?.textContent || ""} ${inputValues}`.toLocaleLowerCase().includes(filter.value);
+			}) ? "1" : "0";
 		});
 		this.update_table_pagination(table, 1);
 	}
@@ -544,6 +571,7 @@ class PayrollInputCenter {
 	}
 
 	process_step_for(tab) {
+		if (tab === "payroll-adjustments") return "delivery";
 		if (tab === "employee-salary") return "master";
 		if (["salary-assignments", "salary-rules", "salary-templates"].includes(tab)) return "salary";
 		if (tab === "attendance-pay-rules") return "calculation";
@@ -785,6 +813,10 @@ class PayrollInputCenter {
 		}
 		if (this.active_tab === "annual-bonus") {
 			this.load_annual_bonus();
+			return;
+		}
+		if (this.active_tab === "payroll-adjustments") {
+			this.load_payroll_manual_adjustments();
 			return;
 		}
 		if (this.active_tab === "salary-slips") {
@@ -1669,7 +1701,7 @@ class PayrollInputCenter {
 		if (rule.rule_code === "PAYROLL_SETTLEMENT_ABSENCE_DEDUCTION") return __("标准计薪工时：{0} 小时 · 旷工按 {1} 倍扣款", [parameters.standard_hours_divisor || "-", parameters.absenteeism_multiplier || "-"]);
 		if (rule.rule_code === "ATTENDANCE_MISSED_PUNCH") return __("每次 {0} 颗红苹果 · 每颗 {1} 元", [parameters.red_apples_per_record ?? "-", parameters.amount_per_apple ?? "-"]);
 		if (rule.rule_code === "PAYROLL_SETTLEMENT_OVERTIME_PAY") return __("平日 {0} 倍 · 周末 {1} 倍 · 节假日 {2} 倍 · 基准 {3} 小时", [parameters.weekday || "-", parameters.weekend || "-", parameters.holiday || "-", parameters.standard_hours_divisor || "-"]);
-		if (rule.rule_code === "PAYROLL_SETTLEMENT_NIGHT_SHIFT") return __("深夜班 {0} 元/次（{1}–{2}）· 大夜班 {3} 元/次（{4}）· 小夜班 {5} 元/次（{6}）", [parameters.deep_night_shift || "-", parameters.deep_night_shift_start || "20:00", parameters.deep_night_shift_end || "08:00", parameters.large_night_shift || "-", parameters.large_night_shift_start && parameters.large_night_shift_end ? `${parameters.large_night_shift_start}–${parameters.large_night_shift_end}` : "沿用终稿次数", parameters.small_night_shift || "-", parameters.small_night_shift_start && parameters.small_night_shift_end ? `${parameters.small_night_shift_start}–${parameters.small_night_shift_end}` : "沿用终稿次数"]);
+		if (rule.rule_code === "PAYROLL_SETTLEMENT_NIGHT_SHIFT") return __("深夜班 {0} 元/次（{1}–{2}，容差前后 {3} 分钟）· 大夜班 {4} 元/次、 小夜班 {5} 元/次（次数均取钉钉终稿）", [parameters.deep_night_shift || "-", parameters.deep_night_shift_start || "08:00", parameters.deep_night_shift_end || "20:00", parameters.deep_night_shift_tolerance_minutes ?? 10, parameters.large_night_shift || "-", parameters.small_night_shift || "-"]);
 		return __("已设置");
 	}
 
@@ -1687,7 +1719,7 @@ class PayrollInputCenter {
 		} else if (rule.rule_code === "PAYROLL_SETTLEMENT_OVERTIME_PAY") {
 			fields = `<div class="hrms-payroll-rule-fields">${input("标准计薪工时", "standard_hours_divisor", parameters.standard_hours_divisor, "小时")}${input("平日加班", "weekday", parameters.weekday, "倍")}${input("周末加班", "weekend", parameters.weekend, "倍")}${input("法定节假日加班", "holiday", parameters.holiday, "倍")}</div>`;
 		} else if (rule.rule_code === "PAYROLL_SETTLEMENT_NIGHT_SHIFT") {
-			fields = `<div class="hrms-payroll-rule-fields">${input("深夜班每次津贴", "deep_night_shift", parameters.deep_night_shift || 55, "元/次")}${input("深夜班上班时间", "deep_night_shift_start", parameters.deep_night_shift_start || "20:00", "", "time")}${input("深夜班下班时间（次日）", "deep_night_shift_end", parameters.deep_night_shift_end || "08:00", "", "time")}${input("大夜班每次津贴", "large_night_shift", parameters.large_night_shift || 45, "元/次")}${input("大夜班上班时间（可选）", "large_night_shift_start", parameters.large_night_shift_start || "", "", "time", "填写上下班时间后启用大夜班时段匹配；留空则沿用终稿次数。")}${input("大夜班下班时间（可选）", "large_night_shift_end", parameters.large_night_shift_end || "", "", "time")}${input("小夜班每次津贴", "small_night_shift", parameters.small_night_shift || 24, "元/次")}${input("小夜班上班时间（可选）", "small_night_shift_start", parameters.small_night_shift_start || "", "", "time", "填写上下班时间后启用小夜班时段匹配；留空则沿用终稿次数。")}${input("小夜班下班时间（可选）", "small_night_shift_end", parameters.small_night_shift_end || "", "", "time")}</div><p class="hrms-payroll-rule-guide">${frappe.utils.escape_html(__("深夜班是时间段规则：上班时间落在 20:00、下班时间落在次日 08:00 内，即定义为深夜班。大夜班、小夜班可按需要填写完整上下班时间来启用同样的时段匹配；只填写其中一个时间会提示补齐。已启用的时段不能重叠，同一条完整打卡记录只会命中一个档位；未启用时段匹配的档位继续使用考勤终稿次数。"))}</p>`;
+			fields = `<div class="hrms-payroll-rule-fields">${input("深夜班每次津贴", "deep_night_shift", parameters.deep_night_shift || 55, "元/次")}${input("深夜班上班时间", "deep_night_shift_start", parameters.deep_night_shift_start || "08:00", "", "time")}${input("深夜班下班时间", "deep_night_shift_end", parameters.deep_night_shift_end || "20:00", "", "time")}${input("深夜班打卡容差", "deep_night_shift_tolerance_minutes", parameters.deep_night_shift_tolerance_minutes ?? 10, "分钟", "number", "默认前后各 10 分钟，例如 07:50 上班、20:10 下班都按深夜班计。")}</div><p class="hrms-payroll-rule-guide">${frappe.utils.escape_html(__("深夜班按同日 08:00–20:00 和打卡容差自动识别，并优先从钉钉大夜班次数中扣除，避免重复发放。大夜班、小夜班不再提供本地时段设置，始终直接使用钉钉考勤终稿次数；津贴标准分别为 {0} 元/次和 {1} 元/次。", [parameters.large_night_shift || 45, parameters.small_night_shift || 24]))}</p>`;
 		}
 		return `<section class="hrms-payroll-inline-rule-editor" data-attendance-rule-editor data-rule-code="${frappe.utils.escape_html(rule.rule_code || "")}"><div class="hrms-payroll-project-map-head"><div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("正在设置"))}</span><h3>${frappe.utils.escape_html(__(rule.title || rule.rule_name || ""))}</h3><p>${frappe.utils.escape_html(__(rule.description || ""))}</p></div><button class="btn btn-default btn-sm" data-close-attendance-editor>${frappe.utils.escape_html(__("收起"))}</button></div><div class="hrms-payroll-inline-rule-body">${fields}</div><div class="hrms-payroll-action-group"><button class="btn btn-primary btn-sm" data-save-attendance-rule>${frappe.utils.escape_html(__("保存本项设置"))}</button><span>${frappe.utils.escape_html(__("保存后仅影响之后重新处理或重新试算的月份。"))}</span></div></section>`;
 	}
@@ -1786,6 +1818,7 @@ class PayrollInputCenter {
 	}
 
 	load_salary_assignment_step() {
+		const loadId = ++this.salary_assignment_load_id;
 		this.body().innerHTML = `
 			<div class="hrms-payroll-input-list-head hrms-payroll-step-head">
 				<div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("当月定薪维护"))}</span><h3>${frappe.utils.escape_html(__("员工定薪"))}</h3><p>${frappe.utils.escape_html(__("维护本月固定薪资与缴纳选项；保存后立即生效并参与算薪。"))}</p></div>
@@ -1794,7 +1827,7 @@ class PayrollInputCenter {
 			<div class="hrms-payroll-scope-note">${frappe.utils.escape_html(__("员工定薪只引用独立“薪资架构”中已发布且当前生效的版本，并允许按员工覆盖；架构版本、梯队、等级和标签不在本页维护。"))}</div>
 			<div data-salary-change-import-preview></div>
 			<div data-salary-change-import-batches></div>
-			<div data-salary-changes></div>
+			<div data-salary-changes><div class="text-muted small">${frappe.utils.escape_html(__("正在读取员工定薪表…"))}</div></div>
 		`;
 		this.body().querySelector("[data-download-salary-change-template]").addEventListener("click", () => { if (this.confirm_salary_changes_saved()) this.download_employee_salary_change_template(); });
 		this.body().querySelector("[data-import-salary-change]").addEventListener("click", () => { if (this.confirm_salary_changes_saved()) this.open_employee_salary_change_import(); });
@@ -1807,7 +1840,20 @@ class PayrollInputCenter {
 				this.update_process_guide_status(this.process_status_from_salary_architecture(result));
 			},
 		});
-		this.load_assignable_salary_grades().then(() => this.load_employee_salary_changes());
+		// Render the employee form as soon as its rows arrive. Salary-grade
+		// options are only an enhancement to one column, so they must not hold up
+		// 187 rows of editable salary inputs.
+		const gradesRequest = this.load_assignable_salary_grades();
+		const salaryRowsRequest = this.load_employee_salary_changes({ render: false });
+		salaryRowsRequest.then((rows) => {
+			if (loadId !== this.salary_assignment_load_id || this.active_tab !== "salary-assignments") return;
+			const target = this.wrapper.querySelector("[data-salary-changes]");
+			if (target) this.render_employee_salary_change_grid(target, rows);
+		});
+		gradesRequest.then(() => {
+			if (loadId !== this.salary_assignment_load_id || this.active_tab !== "salary-assignments") return;
+			this.refresh_assignable_salary_grade_options(this.wrapper.querySelector("[data-salary-changes]"));
+		});
 		this.render_employee_salary_change_import_preview();
 		this.load_employee_salary_change_import_batches();
 	}
@@ -1985,7 +2031,7 @@ class PayrollInputCenter {
 			frappe.call({ method: "hrms.api.payroll_input.validate_payroll_formula", args: { company: this.company, output_field: formula.output_field, expression }, callback: (response) => {
 				const result = response.message || {};
 				if (!result.valid) { frappe.msgprint({ title: __("公式无法保存"), indicator: "red", message: result.message || __("公式无效") }); return; }
-				frappe.call({ method: "hrms.api.payroll_input.upsert_payroll_formula", args: { company: this.company, output_field: formula.output_field, formula_expression: expression, rule_text: root.querySelector("[data-inline-formula-description]")?.value || "" }, freeze: true, freeze_message: __("正在保存公式..."), callback: () => { this.inline_formula_editor_index = undefined; frappe.show_alert({ message: __("公式已保存并进入下一次试算"), indicator: "green" }); this.load_payroll_formula_catalog(); } });
+				frappe.call({ method: "hrms.api.payroll_input.upsert_payroll_formula", args: { company: this.company, payroll_month: this.payroll_month, output_field: formula.output_field, formula_expression: expression, rule_text: root.querySelector("[data-inline-formula-description]")?.value || "" }, freeze: true, freeze_message: __("正在保存公式..."), callback: () => { this.inline_formula_editor_index = undefined; frappe.show_alert({ message: __("公式已保存并进入下一次试算"), indicator: "green" }); this.load_payroll_formula_catalog(); } });
 			} });
 		});
 	}
@@ -2028,7 +2074,7 @@ class PayrollInputCenter {
 				frappe.call({ method: "hrms.api.payroll_input.validate_payroll_formula", args: { company: this.company, output_field: values.output_field, expression: values.formula_expression }, callback: (response) => {
 					const result = response.message || {};
 					if (!result.valid) { dialog.get_field("validation").$wrapper.html(`<div class="alert alert-danger">${frappe.utils.escape_html(result.message || __("公式无效"))}</div>`); return; }
-					frappe.call({ method: "hrms.api.payroll_input.upsert_payroll_formula", args: { company: this.company, ...values }, freeze: true, freeze_message: __("正在保存公式..."), callback: () => { dialog.hide(); frappe.show_alert({ message: __("公式已保存并进入下一次试算"), indicator: "green" }); this.load_payroll_formula_catalog(); } });
+					frappe.call({ method: "hrms.api.payroll_input.upsert_payroll_formula", args: this.scope_args(values), freeze: true, freeze_message: __("正在保存公式..."), callback: () => { dialog.hide(); frappe.show_alert({ message: __("公式已保存并进入下一次试算"), indicator: "green" }); this.load_payroll_formula_catalog(); } });
 				} });
 			},
 		});
@@ -2773,15 +2819,36 @@ class PayrollInputCenter {
 		});
 	}
 
-	load_employee_salary_changes() {
-		frappe.call({
+	load_employee_salary_changes({ render = true } = {}) {
+		return frappe.call({
 			method: "hrms.api.payroll_input.list_employee_salary_change_grid",
 			args: { company: this.company, payroll_month: this.payroll_month, page_length: 1000 },
-			callback: (response) => {
+		}).then((response) => {
+			const rows = response.message?.rows || [];
+			if (render) {
 				const target = this.wrapper.querySelector("[data-salary-changes]");
-				if (!target) return;
-				this.render_employee_salary_change_grid(target, response.message?.rows || []);
-			},
+				if (target) this.render_employee_salary_change_grid(target, rows);
+			}
+			return rows;
+		});
+	}
+
+	render_assignable_salary_grade_options(selected = "", selectedLabel = "") {
+		const escape = (value) => frappe.utils.escape_html(String(value ?? ""));
+		const available = this.assignableSalaryGrades.some((grade) => grade.name === selected);
+		const historicalOption = selected && !available
+			? `<option value="${escape(selected)}" selected>${escape(selectedLabel || __("已绑定历史薪级"))}</option>`
+			: "";
+		return `<option value="">${escape(__("手动定薪"))}</option>${historicalOption}${this.assignableSalaryGrades.map((grade) => `<option value="${escape(grade.name)}" ${grade.name === selected ? "selected" : ""}>${escape(grade.label)}</option>`).join("")}`;
+	}
+
+	refresh_assignable_salary_grade_options(target) {
+		if (!target) return;
+		target.querySelectorAll('[data-salary-change-field="salary_grade"]').forEach((select) => {
+			const selected = select.value;
+			const selectedLabel = select.selectedOptions?.[0]?.textContent || "";
+			select.innerHTML = this.render_assignable_salary_grade_options(selected, selectedLabel);
+			select.value = selected;
 		});
 	}
 
@@ -2792,13 +2859,7 @@ class PayrollInputCenter {
 			return `<div class="hrms-payroll-money-field"><input class="form-control input-sm ${isMissing ? "is-required" : ""}" type="number" min="0" step="0.01" data-salary-change-field="${field}" value="${isMissing ? "" : escape(value || 0)}" placeholder="${isMissing ? escape(__("请输入")) : ""}">${isMissing ? `<small class="hrms-payroll-required-hint">${escape(__("请输入"))}</small>` : ""}</div>`;
 		};
 		const contributionToggle = (field, enabled, hint) => `<label class="hrms-payroll-contribution-toggle" title="${escape(hint)}"><input type="checkbox" data-salary-change-field="${field}" ${Number(enabled) ? "checked" : ""}><span>${escape(field === "social_insurance_enabled" ? __("缴纳社保") : __("缴纳公积金"))}</span></label>`;
-		const salaryGradeSelect = (selected, selectedLabel) => {
-			const available = this.assignableSalaryGrades.some((grade) => grade.name === selected);
-			const historicalOption = selected && !available
-				? `<option value="${escape(selected)}" selected>${escape(selectedLabel || __("已绑定历史薪级"))}</option>`
-				: "";
-			return `<select class="form-control input-sm" data-salary-change-field="salary_grade"><option value="">${escape(__("手动定薪"))}</option>${historicalOption}${this.assignableSalaryGrades.map((grade) => `<option value="${escape(grade.name)}" ${grade.name === selected ? "selected" : ""}>${escape(grade.label)}</option>`).join("")}</select>`;
-		};
+		const salaryGradeSelect = (selected, selectedLabel) => `<select class="form-control input-sm" data-salary-change-field="salary_grade">${this.render_assignable_salary_grade_options(selected, selectedLabel)}</select>`;
 		const salaryRows = [...rows].sort((left, right) => {
 			const missingDifference = Number(!Number(left.base_salary)) - Number(!Number(right.base_salary));
 			if (missingDifference) return -missingDifference;
@@ -2985,7 +3046,7 @@ class PayrollInputCenter {
 				frappe
 					.call({
 						method: "hrms.api.payroll_input.upsert_payroll_welfare_source_record",
-						args: this.scope_args(values),
+						args: this.scope_args({ ...values, record_manual_change: 1 }),
 						freeze: true,
 						freeze_message: __("正在保存福利扣款来源..."),
 					})
@@ -4532,6 +4593,66 @@ class PayrollInputCenter {
 			return false;
 		}
 		return true;
+	}
+
+	format_manual_adjustment_value(value) {
+		if (value === null || value === undefined || value === "") return "--";
+		if (typeof value !== "object") return String(value);
+		return Object.entries(value)
+			.map(([key, item]) => `${key}: ${typeof item === "object" ? JSON.stringify(item) : item ?? "--"}`)
+			.join("；") || "--";
+	}
+
+	render_payroll_manual_adjustments(data = {}, error = "") {
+		const rows = data.items || [];
+		const headers = ["分类", "员工", "修改字段", "原值", "新值", "原因", "操作人", "时间", "关联单据"];
+		const renderRow = (row) => `<tr>
+			<td>${this.escape(row.change_category || "--")}</td>
+			<td>${this.escape(`${row.employee_code || "--"} ${row.employee_name || ""}`)}</td>
+			<td>${this.escape(row.field_name || "--")}</td>
+			<td>${this.escape(this.format_manual_adjustment_value(row.original_value))}</td>
+			<td>${this.escape(this.format_manual_adjustment_value(row.new_value))}</td>
+			<td>${this.escape(row.reason || "--")}</td>
+			<td>${this.escape(row.modified_by || "--")}</td>
+			<td>${this.escape(row.modified_on || "--")}</td>
+			<td>${this.escape([row.reference_doctype, row.reference_name].filter(Boolean).join(" / ") || "--")}</td>
+		</tr>`;
+		const migrationNotice = data.migration_required
+			? `<div class="alert alert-warning">${this.escape(__("修改记录数据表尚未安装，请先执行站点迁移；迁移后新发生的人工修改会开始留痕。"))}</div>`
+			: "";
+		return `<section class="hrms-payroll-input-section">
+			<div class="hrms-payroll-input-list-head hrms-payroll-step-head">
+				<div><span class="hrms-payroll-step-kicker">${this.escape(__("审计台账"))}</span><h3>${this.escape(__("薪酬修改记录"))}</h3><p>${this.escape(__("按当前公司和月份记录薪酬侧的人工修改；考勤修改请在考勤初稿的“考勤修改记录”查看。"))}</p></div>
+				<button class="btn btn-default btn-sm" data-refresh-payroll-adjustments>${this.escape(__("刷新"))}</button>
+			</div>
+			${migrationNotice}
+			${error ? `<div class="alert alert-danger">${this.escape(error)}</div>` : ""}
+			<div class="table-responsive"><table class="table table-bordered table-hover"><thead><tr>${headers.map((header) => `<th>${this.escape(__(header))}</th>`).join("")}</tr></thead><tbody>${rows.length ? rows.map(renderRow).join("") : `<tr><td colspan="${headers.length}" class="text-muted">${this.escape(__("当前月份暂无薪酬人工修改记录。"))}</td></tr>`}</tbody></table></div>
+		</section>`;
+	}
+
+	load_payroll_manual_adjustments() {
+		const body = this.body();
+		body.innerHTML = this.render_payroll_manual_adjustments({ items: [] });
+		frappe.call({
+			method: "hrms.api.payroll_input.list_payroll_manual_adjustments",
+			args: this.scope_args(),
+			callback: (response) => {
+				if (this.active_tab !== "payroll-adjustments") return;
+				body.innerHTML = this.render_payroll_manual_adjustments(response.message || {});
+				this.bind_payroll_manual_adjustments();
+			},
+			error: (response) => {
+				if (this.active_tab !== "payroll-adjustments") return;
+				body.innerHTML = this.render_payroll_manual_adjustments({}, response.message || __("读取薪酬修改记录失败"));
+				this.bind_payroll_manual_adjustments();
+			},
+		});
+		this.bind_payroll_manual_adjustments();
+	}
+
+	bind_payroll_manual_adjustments() {
+		this.body()?.querySelector("[data-refresh-payroll-adjustments]")?.addEventListener("click", () => this.load_payroll_manual_adjustments());
 	}
 
 	load_payroll_reports() {

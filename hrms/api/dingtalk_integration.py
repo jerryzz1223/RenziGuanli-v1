@@ -38,6 +38,7 @@ DINGTALK_DEFAULT_CLIENT_ID = ""
 DINGTALK_API_SYNC_MODE = "内网服务器主动拉取API"
 DINGTALK_ATTENDANCE_SOURCE_TYPE = "attendance"
 DINGTALK_APPROVAL_SOURCE_TYPE = "approval"
+LOCAL_PILOT_MAX_USERS = 5
 DINGTALK_LEGACY_DEPLOYMENT_NOTE = (
 	"当前方案：管理后台仍在公司人资系统；钉钉只作为员工入口和数据源。"
 	"公网小网关只暴露员工本人查询接口，不暴露 Desk 后台、薪资管理、规则配置和批量数据。"
@@ -101,6 +102,32 @@ def _json_loads(value):
 
 def _json_dumps(value):
 	return json.dumps(value or {}, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _parse_local_pilot_userids(userids_json: str | list | None) -> list[str]:
+	"""Accept a small, explicit set of DingTalk user IDs for a manual local pilot."""
+	if isinstance(userids_json, str):
+		try:
+			values = json.loads(userids_json)
+		except json.JSONDecodeError:
+			values = userids_json.replace("，", ",").replace(",", "\n").splitlines()
+	else:
+		values = userids_json or []
+	if isinstance(values, str):
+		values = [values]
+	if not isinstance(values, list):
+		frappe.throw(_("本地试运行的钉钉 UserId 必须按行填写。"))
+
+	userids = []
+	for value in values:
+		userid = str(value or "").strip()
+		if userid and userid not in userids:
+			userids.append(userid)
+	if not userids:
+		frappe.throw(_("请至少填写 1 名员工的钉钉 UserId。"))
+	if len(userids) > LOCAL_PILOT_MAX_USERS:
+		frappe.throw(_("本地试运行最多只能同步 {0} 名员工。").format(LOCAL_PILOT_MAX_USERS))
+	return userids
 
 
 def _payload_hash(payload):
@@ -741,7 +768,48 @@ def queue_dingtalk_attendance_sync(work_date: str, company: str = ""):
 	return {"sync_log": log.name, "status": log.status, "business_date": str(business_date)}
 
 
-def run_queued_dingtalk_attendance_sync(company: str, work_date: str, sync_log: str):
+@frappe.whitelist()
+def queue_dingtalk_local_pilot_sync(work_date: str, userids_json: str | list, company: str = ""):
+	"""Run one explicit, small DingTalk attendance pull on a local HRMS site.
+
+	This is intentionally separate from the regular queue endpoint: it cannot
+	expand to the whole roster, enable a schedule, or coexist with the employee
+	public gateway.  It creates auditable raw records and replaceable daily
+	drafts, never Employee master data, approved attendance, or payroll rows.
+	"""
+	_require_dingtalk_manager()
+	company = _require_api_sync_enabled(company)
+	settings = _settings_doc()
+	if settings.get("public_gateway_enabled"):
+		frappe.throw(_("本地试运行要求“启用员工端公网小网关”保持关闭。"))
+	if settings.get("daily_sync_enabled"):
+		frappe.throw(_("本地试运行要求“每日自动同步”保持关闭。"))
+
+	business_date = getdate(work_date)
+	userids = _parse_local_pilot_userids(userids_json)
+	log = _new_sync_log("考勤同步", company=company, business_date=business_date)
+	log.status = "已排队"
+	log.error_message = "已提交本地试运行：仅 {0} 名指定员工，未启用公网网关或自动同步。".format(len(userids))
+	log.save(ignore_permissions=False)
+	frappe.enqueue(
+		"hrms.api.dingtalk_integration.run_queued_dingtalk_attendance_sync",
+		queue="long",
+		timeout=1800,
+		enqueue_after_commit=True,
+		company=company,
+		work_date=str(business_date),
+		sync_log=log.name,
+		userids_json=userids,
+	)
+	return {
+		"sync_log": log.name,
+		"status": log.status,
+		"business_date": str(business_date),
+		"requested_user_count": len(userids),
+	}
+
+
+def run_queued_dingtalk_attendance_sync(company: str, work_date: str, sync_log: str, userids_json: str | list | None = None):
 	"""Worker entrypoint: raw evidence first, then replaceable daily drafts."""
 	log = frappe.get_doc(DINGTALK_SYNC_LOG_DOCTYPE, sync_log)
 	if _sync_cancel_requested(log.name):
@@ -751,6 +819,7 @@ def run_queued_dingtalk_attendance_sync(company: str, work_date: str, sync_log: 
 		raw = sync_attendance_from_dingtalk(
 			work_date,
 			company=company,
+			userids_json=userids_json,
 			convert_to_draft=False,
 			sync_log=log.name,
 			finalize_log=False,
@@ -1095,6 +1164,10 @@ def _new_sync_log(sync_type: str, sync_direction: str = "钉钉到人资系统",
 
 
 def _finish_sync_log(doc, status, received=0, created=0, updated=0, failed=0, error_message=""):
+	# A queued attendance pull updates this same log while it stores raw evidence.
+	# Refresh first so the final status does not overwrite a newer modification
+	# timestamp with a stale in-memory document.
+	doc.reload()
 	doc.update(
 		{
 			"status": status,

@@ -95,6 +95,8 @@ for (const marker of [
 	"_get_department_relationships",
 	"_is_all_departments_name",
 	"_build_department_node",
+	"_build_company_root_node",
+	"部门管理文件夹树",
 	"_build_live_management_hierarchy",
 	"_build_live_division_nodes",
 	"_wrap_deputy_divisions",
@@ -153,14 +155,14 @@ mustMatch(
 
 mustMatch(
 	py,
-	/root_node = _build_live_management_hierarchy\([\s\S]*?department_nodes=/,
-	"Live charts must keep the Excel management line above Department nodes",
+	/root_node = _build_company_root_node\([\s\S]*?department_nodes=/,
+	"Live charts must show the Company root above the editable Department folder tree",
 );
 
 mustMatch(
 	js,
-	/const roots = root\.node_type === "company" \? root\.children \|\| \[\] : \[root\];/,
-	"The chart must only hide a technical Company root, never the management hierarchy",
+	/const roots = \[root\];/,
+	"The chart must render the visible Company root instead of leaking ERPNext's technical root",
 );
 
 for (const marker of [
@@ -221,6 +223,9 @@ for (const marker of [
 	"先将承担上级职责的节点勾选为文件夹部门",
 	"批量删除部门",
 	"parent_department",
+	"format_department_parent_display",
+	"is_technical_department_root",
+	"总公司",
 	"上级部门",
 	"frappe.set_route(\"List\", \"Department\")",
 	"listview.refresh()",
@@ -234,6 +239,7 @@ for (const marker of [
 	"sync_company_root_parent_display",
 	"is_technical_department_root",
 	"get_company_root_label",
+	"get_company_root_display",
 	"公司根节点",
 	"hide_department_sidebar",
 	"render_department_relationships",
@@ -252,6 +258,12 @@ for (const marker of [
 ]) {
 	mustInclude(departmentFormJs, marker, `Department form localization missing marker: ${marker}`);
 }
+
+mustMatch(
+	departmentJs,
+	/parent_department\(value, df, doc\)\s*\{[\s\S]*?format_department_parent_display\(value, doc\)/,
+	"Department list must render the technical All Departments value as the visible company root",
+);
 
 for (const marker of [
 	'"Parent Department": "上级部门"',
@@ -309,6 +321,7 @@ for (const marker of [
 	"frappe.new_doc(\"Department\"",
 	"delete_departments",
 	"render_tree_node",
+	"collapse_live_folder_nodes",
 	"render_person_tokens",
 	"this.search_term",
 	"matching_people",

@@ -53,6 +53,7 @@ PAYROLL_RULE_DOCTYPE = "HRMS Payroll Rule"
 PAYROLL_FIELD_MAPPING_DOCTYPE = "HRMS Payroll Field Mapping"
 MONTHLY_ATTENDANCE_DOCTYPE = "HRMS Monthly Attendance Summary"
 PAYROLL_STEP_LOCK_DOCTYPE = "HRMS Payroll Step Lock"
+PAYROLL_MANUAL_ADJUSTMENT_DOCTYPE = "HRMS Payroll Manual Adjustment"
 PAYROLL_STANDARD_HOURS_DIVISOR = 174
 WELFARE_SOURCE_SYNC_SHEET = "福利扣款来源中心"
 PAYROLL_SETTLEMENT_IMPORT_SHEET = "薪资结算表"
@@ -477,8 +478,8 @@ DEFAULT_PAYROLL_RULES = [
 		"rule_category": "薪资结算",
 		"rule_scope": "薪资结算表",
 		"formula_expression": "夜班津贴 = 深夜班次数 * 55 + 大夜班次数 * 45 + 小夜班次数 * 24",
-		"parameters_json": {"deep_night_shift": 55, "large_night_shift": 45, "small_night_shift": 24, "deep_night_shift_start": "20:00", "deep_night_shift_end": "08:00", "large_night_shift_start": "", "large_night_shift_end": "", "small_night_shift_start": "", "small_night_shift_end": ""},
-		"rule_text": "深夜班、大夜班、小夜班均按各自设置的上下班时间匹配锁定考勤明细；同一条完整打卡记录只匹配一个档位。",
+		"parameters_json": {"deep_night_shift": 55, "large_night_shift": 45, "small_night_shift": 24, "deep_night_shift_start": "08:00", "deep_night_shift_end": "20:00", "deep_night_shift_tolerance_minutes": 10},
+		"rule_text": "深夜班按设置的上下班时间及前后打卡容差识别；大夜班、小夜班次数始终使用钉钉考勤终稿。",
 		"source_file": "5.2人资考勤.xlsx",
 		"source_sheet": "薪资结算表",
 		"source_cell": "V:X",
@@ -676,7 +677,7 @@ PAYROLL_SETTLEMENT_FIELD_MAPPINGS = [
 	{"mapping_code": "EXCEL_G_CERTIFICATE_SKILL_ALLOWANCE", "display_order": 7, "excel_column": "G", "excel_label": "证书及多能工津贴", "system_field": "certificate_skill_allowance", "source_module": "薪资主数据", "source_detail": "证书津贴 + 多能工津贴", "rule_code": "SALARY_STRUCTURE_SUBTOTAL"},
 	{"mapping_code": "EXCEL_H_SALARY_SUBTOTAL", "display_order": 8, "excel_column": "H", "excel_label": "薪资小计", "system_field": "salary_subtotal", "source_module": "公式计算", "formula_expression": "SUM(E:G)", "rule_code": "SALARY_STRUCTURE_SUBTOTAL"},
 	{"mapping_code": "EXCEL_I_STANDARD_HOURS", "display_order": 9, "excel_column": "I", "excel_label": "标准工时", "system_field": "standard_hours", "source_module": "考勤终稿", "source_detail": "HRMS Monthly Attendance Summary.standard_hours"},
-	{"mapping_code": "EXCEL_J_BASIC_ATTENDANCE_HOURS", "display_order": 10, "excel_column": "J", "excel_label": "调整前/基本出勤工时", "system_field": "basic_attendance_hours", "source_module": "考勤终稿", "source_detail": "实际出勤/基本出勤工时"},
+	{"mapping_code": "EXCEL_J_BASIC_ATTENDANCE_HOURS", "display_order": 10, "excel_column": "J", "excel_label": "调整前/基本出勤工时", "system_field": "basic_attendance_hours", "source_module": "考勤终稿", "source_detail": "锁定终稿调整后工时（已完成排休与加班抵扣）"},
 	{"mapping_code": "EXCEL_K_ABSENCE_HOURS", "display_order": 11, "excel_column": "K", "excel_label": "缺勤工时", "system_field": "missing_hours", "source_module": "公式计算", "formula_expression": "I-J", "rule_code": "PAYROLL_SETTLEMENT_ABSENCE_DEDUCTION"},
 	{"mapping_code": "EXCEL_L_RAW_WEEKEND_OVERTIME", "display_order": 12, "excel_column": "L", "excel_label": "调整前周末加班", "system_field": "raw_weekend_overtime_hours", "source_module": "考勤终稿", "source_detail": "考勤终稿2倍加班工时"},
 	{"mapping_code": "EXCEL_M_ADJUSTED_ABSENCE_HOURS", "display_order": 13, "excel_column": "M", "excel_label": "调整后缺勤工时", "system_field": "adjusted_absence_hours", "source_module": "公式计算", "formula_expression": "IF(K-L>0,K-L,0)", "rule_code": "PAYROLL_SETTLEMENT_ABSENCE_DEDUCTION"},
@@ -1599,6 +1600,57 @@ def _require_payroll_master_manager():
 		frappe.throw(_("仅系统管理员或人事管理员可以维护薪资架构和员工定薪。"))
 
 
+def _audit_json(value):
+	"""Serialize audit payloads without depending on a document's display shape."""
+	return json.dumps(value if value is not None else {}, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _audit_value(value):
+	"""Return the stored audit JSON as a display-ready value without raising."""
+	try:
+		return json.loads(value or "{}")
+	except (TypeError, ValueError):
+		return value or ""
+
+
+def _record_payroll_manual_adjustment(
+	*,
+	company: str,
+	payroll_month: str,
+	change_category: str,
+	reference_doctype: str,
+	reference_name: str,
+	field_name: str,
+	original_value=None,
+	new_value=None,
+	reason: str = "",
+	employee: str = "",
+	employee_code: str = "",
+	employee_name: str = "",
+):
+	"""Append one immutable payroll-side manual-change event when installed."""
+	if not _doctype_exists(PAYROLL_MANUAL_ADJUSTMENT_DOCTYPE):
+		return
+	original_json, new_json = _audit_json(original_value), _audit_json(new_value)
+	if original_json == new_json:
+		return
+	frappe.get_doc({
+		"doctype": PAYROLL_MANUAL_ADJUSTMENT_DOCTYPE,
+		"company": company,
+		"payroll_month": payroll_month,
+		"change_category": change_category,
+		"employee": employee or None,
+		"employee_code": employee_code or "",
+		"employee_name": employee_name or "",
+		"reference_doctype": reference_doctype,
+		"reference_name": reference_name,
+		"field_name": field_name,
+		"original_value_json": original_json,
+		"new_value_json": new_json,
+		"reason": reason or "",
+	}).insert(ignore_permissions=True)
+
+
 def _default_rule(rule_code):
 	return next((rule for rule in DEFAULT_PAYROLL_RULES if rule["rule_code"] == rule_code), {})
 
@@ -1644,27 +1696,15 @@ def _rule_parameter_errors(rule_code, parameters):
 	if "ranges" in parameters and not isinstance(parameters["ranges"], list):
 		errors.append("参数 ranges 必须是数组")
 	if rule_code == "PAYROLL_SETTLEMENT_NIGHT_SHIFT":
+		tolerance = parameters.get("deep_night_shift_tolerance_minutes", 10)
+		if flt(tolerance) < 0 or flt(tolerance) > 60 or flt(tolerance) != cint(tolerance):
+			errors.append("深夜班打卡容差必须是 0 到 60 的整数分钟")
+		start, end = str(parameters.get("deep_night_shift_start") or ""), str(parameters.get("deep_night_shift_end") or "")
 		pattern = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
-		tiers = (("深夜班", "deep_night_shift", True), ("大夜班", "large_night_shift", False), ("小夜班", "small_night_shift", False))
-		ranges = []
-		for label, key, required in tiers:
-			start, end = str(parameters.get(f"{key}_start") or ""), str(parameters.get(f"{key}_end") or "")
-			# 大夜班、小夜班可先沿用终稿次数；只有填写其中一个时间时，
-			# 才要求成对启用该档位的时间匹配。深夜班是当前已启用的默认规则。
-			if not start and not end and not required:
-				continue
-			if not pattern.fullmatch(start) or not pattern.fullmatch(end):
-				errors.append(f"{label}需要同时设置上班和下班时间（HH:MM）")
-				continue
-			start_minutes, end_minutes = _clock_time_minutes(start), _clock_time_minutes(end)
-			if start_minutes == end_minutes:
-				errors.append(f"{label}的上下班时间不能相同")
-				continue
-			ranges.append((label, start_minutes, end_minutes))
-		for index, (label, start, end) in enumerate(ranges):
-			for other_label, other_start, other_end in ranges[index + 1:]:
-				if _night_shift_ranges_overlap(start, end, other_start, other_end):
-					errors.append(f"{label}与{other_label}的匹配时段重叠，请调整后再保存")
+		if not pattern.fullmatch(start) or not pattern.fullmatch(end):
+			errors.append("深夜班需要同时设置上班和下班时间（HH:MM）")
+		elif _clock_time_minutes(start) == _clock_time_minutes(end):
+			errors.append("深夜班的上下班时间不能相同")
 	return errors
 
 
@@ -1730,13 +1770,11 @@ def _effective_rule_config(rule_code, payroll_month="", company="", allow_incomp
 	if not _rule_is_effective(rule, payroll_month):
 		frappe.throw(_("执行规则 {0} 不在薪资月份 {1} 的生效区间内。").format(rule_code, payroll_month))
 	saved_parameters = _rule_parameters(rule.parameters_json)
-	# Existing installations stored the single matching range under the former
-	# ``large_night_*`` keys.  Move it to deep night on upgrade; the new large
-	# and small tiers deliberately stay empty until HR configures their ranges.
 	if rule_code == "PAYROLL_SETTLEMENT_NIGHT_SHIFT":
-		if "deep_night_shift_start" not in saved_parameters and "large_night_shift_start" in saved_parameters:
-			saved_parameters["deep_night_shift_start"] = saved_parameters.pop("large_night_shift_start")
-			saved_parameters["deep_night_shift_end"] = saved_parameters.pop("large_night_shift_end", "")
+		# Large and small night-shift time ranges are retired.  Preserve their
+		# historical values for audit, but never let them affect classification.
+		for key in ("large_night_shift_start", "large_night_shift_end", "small_night_shift_start", "small_night_shift_end"):
+			saved_parameters.pop(key, None)
 	parameters = {**default_parameters, **{key: value for key, value in saved_parameters.items() if value not in (None, "")}}
 	errors = _rule_parameter_errors(rule_code, parameters)
 	if allow_incomplete_night_times and rule_code == "PAYROLL_SETTLEMENT_NIGHT_SHIFT":
@@ -2127,6 +2165,7 @@ def upsert_payroll_formula(**kwargs: object):
 		frappe.throw(_("公式无效：{0}").format(validation.get("message")))
 	field = FIELD_BY_NAME[output_field]
 	rule_code = _formula_rule_code(output_field)
+	audit_month = _workflow_month(data.get("payroll_month") or str(data.get("effective_from") or "")[:7] or date.today().strftime("%Y-%m"))
 	name = frappe.db.get_value(PAYROLL_RULE_DOCTYPE, {"company": company, "rule_code": rule_code}, "name")
 	current_version = int(frappe.db.get_value(PAYROLL_RULE_DOCTYPE, name, "formula_version") or 0) if name else 0
 	values = {
@@ -2151,15 +2190,28 @@ def upsert_payroll_formula(**kwargs: object):
 		"last_reviewed_by": frappe.session.user,
 		"last_reviewed_on": now_datetime(),
 	}
+	before = {}
 	if name:
 		doc = frappe.get_doc(PAYROLL_RULE_DOCTYPE, name)
 		if doc.company != company:
 			frappe.throw(_("不能跨公司修改薪资公式"))
+		before = {field: doc.get(field) for field in ("formula_expression", "rule_text", "status", "effective_from", "effective_to")}
 		doc.update(values)
 		doc.save(ignore_permissions=True)
 	else:
 		doc = frappe.get_doc({"doctype": PAYROLL_RULE_DOCTYPE, **values})
 		doc.insert(ignore_permissions=True)
+	_record_payroll_manual_adjustment(
+		company=company,
+		payroll_month=audit_month,
+		change_category="薪资公式",
+		reference_doctype=PAYROLL_RULE_DOCTYPE,
+		reference_name=doc.name,
+		field_name=field["label"],
+		original_value=before,
+		new_value={field: doc.get(field) for field in ("formula_expression", "rule_text", "status", "effective_from", "effective_to")},
+		reason=doc.rule_text or "人工保存薪资公式",
+	)
 	frappe.db.commit()
 	return {"name": doc.name, "formula_version": doc.formula_version, "validation": validation}
 
@@ -2518,6 +2570,7 @@ def _full_attendance_bonus(attendance, rule):
 		flt(getattr(attendance, "standard_hours", 0))
 		- flt(getattr(attendance, "actual_attendance_hours", 0))
 		- flt(getattr(attendance, "rest_leave_hours", 0))
+		- flt(getattr(attendance, "reunion_leave_hours", 0))
 		+ flt(getattr(attendance, "sick_leave_hours", 0)) * 0.5,
 		0,
 	)
@@ -2713,7 +2766,14 @@ def upsert_payroll_rule(**kwargs):
 
 
 @frappe.whitelist()
-def save_payroll_rule_version(company: str, payroll_month: str, rule_code: str, parameters_json=None, status: str = "已启用"):
+def save_payroll_rule_version(
+	company: str,
+	payroll_month: str,
+	rule_code: str,
+	parameters_json=None,
+	status: str = "已启用",
+	change_category: str = "薪资规则",
+):
 	"""Save a new company/month rule version instead of overwriting prior months.
 
 	A rule changed for 2026-08 starts on 2026-08-01.  The previous version is
@@ -2750,10 +2810,12 @@ def save_payroll_rule_version(company: str, payroll_month: str, rule_code: str, 
 		"last_reviewed_by": frappe.session.user,
 		"last_reviewed_on": now_datetime(),
 	})
+	before = _effective_rule_config(rule_code, payroll_month, company, allow_incomplete_night_times=True).get("parameters") or {}
 	if exact:
 		doc = frappe.get_doc(PAYROLL_RULE_DOCTYPE, exact.name)
 		if not flt(doc.editable):
 			frappe.throw(_("该薪资规则不允许修改"))
+		before = _rule_parameters(doc.parameters_json)
 		values["effective_to"] = doc.effective_to
 		doc.update(values)
 		doc.save(ignore_permissions=True)
@@ -2772,6 +2834,17 @@ def save_payroll_rule_version(company: str, payroll_month: str, rule_code: str, 
 			values["effective_to"] = (min(getdate(row.effective_from) for row in future) - timedelta(days=1)).isoformat()
 		doc = frappe.get_doc({"doctype": PAYROLL_RULE_DOCTYPE, **values})
 		doc.insert(ignore_permissions=True)
+	_record_payroll_manual_adjustment(
+		company=company,
+		payroll_month=payroll_month,
+		change_category=change_category if change_category in {"薪资规则", "考勤计薪规则"} else "薪资规则",
+		reference_doctype=PAYROLL_RULE_DOCTYPE,
+		reference_name=doc.name,
+		field_name=default.get("rule_name") or rule_code,
+		original_value=before,
+		new_value=parameters,
+		reason="人工保存{0}".format(change_category or "薪资规则"),
+	)
 	frappe.db.commit()
 	return {"name": doc.name, "rule_code": rule_code, "effective_from": doc.effective_from, "effective_to": doc.effective_to}
 
@@ -3957,6 +4030,20 @@ def create_employee_salary_change(**kwargs):
 		}
 	)
 	doc.insert(ignore_permissions=True)
+	_record_payroll_manual_adjustment(
+		company=company,
+		payroll_month=str(doc.effective_date or "")[:7],
+		change_category="员工定薪",
+		reference_doctype=EMPLOYEE_SALARY_CHANGE_DOCTYPE,
+		reference_name=doc.name,
+		field_name="__create__",
+		original_value={},
+		new_value={field: doc.get(field) for field in ("effective_date", "salary_grade", "base_salary", "function_allowance", "certificate_allowance", "multi_skill_allowance", "full_salary", "social_insurance_enabled", "housing_fund_enabled")},
+		reason=doc.remarks or "人工新增员工定薪",
+		employee=doc.employee,
+		employee_code=doc.employee_code,
+		employee_name=doc.employee_name,
+	)
 	frappe.db.commit()
 	return doc.name
 
@@ -3997,6 +4084,7 @@ def update_employee_salary_change(name: str = "", company: str = "", employee: s
 	if doc.company != company:
 		frappe.throw(_("不能修改其他公司的员工定薪记录"))
 	allowed = {"effective_date", "salary_grade", "base_salary", "function_allowance", "certificate_allowance", "multi_skill_allowance", "social_insurance_enabled", "housing_fund_enabled", "remarks"}
+	before = {field: doc.get(field) for field in allowed | {"full_salary", "status"}}
 	if not values.get("effective_date"):
 		frappe.throw(_("请填写生效日期"))
 	for fieldname in allowed:
@@ -4020,6 +4108,20 @@ def update_employee_salary_change(name: str = "", company: str = "", employee: s
 	# A legacy draft becomes effective as soon as it is edited in the new grid.
 	doc.status = "已批准"
 	doc.save(ignore_permissions=True)
+	_record_payroll_manual_adjustment(
+		company=company,
+		payroll_month=str(doc.effective_date or "")[:7],
+		change_category="员工定薪",
+		reference_doctype=EMPLOYEE_SALARY_CHANGE_DOCTYPE,
+		reference_name=doc.name,
+		field_name="员工定薪",
+		original_value=before,
+		new_value={field: doc.get(field) for field in before},
+		reason=doc.remarks or "人工修改员工定薪",
+		employee=doc.employee,
+		employee_code=doc.employee_code,
+		employee_name=doc.employee_name,
+	)
 	frappe.db.commit()
 	return {"name": doc.name, "full_salary": doc.full_salary, "status": doc.status}
 
@@ -4052,16 +4154,33 @@ def set_employee_payroll_participation(employee: str, company: str, payroll_mont
 		for marker in markers:
 			if str(marker.effective_date or "") <= month_end:
 				doc = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, marker.name)
+				before = {"status": doc.status, "exclude_from_payroll": doc.exclude_from_payroll, "exclude_reason": doc.exclude_reason}
 				doc.status = "已作废"
 				doc.save(ignore_permissions=True)
+				_record_payroll_manual_adjustment(
+					company=company,
+					payroll_month=payroll_month,
+					change_category="人员范围",
+					reference_doctype=EMPLOYEE_SALARY_CHANGE_DOCTYPE,
+					reference_name=doc.name,
+					field_name="是否参与计算",
+					original_value=before,
+					new_value={"status": doc.status, "exclude_from_payroll": doc.exclude_from_payroll, "exclude_reason": doc.exclude_reason},
+					reason="人工恢复本月薪资参与",
+					employee=doc.employee,
+					employee_code=doc.employee_code,
+					employee_name=doc.employee_name,
+				)
 				break
 		frappe.db.commit()
 		return {"employee": employee, "participates": 1}
 
 	effective_date = f"{payroll_month}-01"
 	existing = next((marker for marker in markers if str(marker.effective_date or "") == effective_date), None)
+	before = {}
 	if existing:
 		doc = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, existing.name)
+		before = {"status": doc.status, "exclude_from_payroll": doc.exclude_from_payroll, "exclude_reason": doc.exclude_reason}
 	else:
 		doc = frappe.get_doc({"doctype": EMPLOYEE_SALARY_CHANGE_DOCTYPE})
 	doc.update({
@@ -4086,6 +4205,20 @@ def set_employee_payroll_participation(employee: str, company: str, payroll_mont
 		doc.save(ignore_permissions=True)
 	else:
 		doc.insert(ignore_permissions=True)
+	_record_payroll_manual_adjustment(
+		company=company,
+		payroll_month=payroll_month,
+		change_category="人员范围",
+		reference_doctype=EMPLOYEE_SALARY_CHANGE_DOCTYPE,
+		reference_name=doc.name,
+		field_name="是否参与计算",
+		original_value=before,
+		new_value={"status": doc.status, "exclude_from_payroll": doc.exclude_from_payroll, "exclude_reason": doc.exclude_reason},
+		reason="人工标记本月不参与薪资计算",
+		employee=doc.employee,
+		employee_code=doc.employee_code,
+		employee_name=doc.employee_name,
+	)
 	frappe.db.commit()
 	return {"employee": employee, "participates": 0, "name": doc.name}
 
@@ -4211,6 +4344,7 @@ def save_monthly_payroll_participation_decision(
 	}
 	existing_name = frappe.db.get_value(MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE, filters, "name")
 	doc = frappe.get_doc(MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE, existing_name) if existing_name else frappe.get_doc({"doctype": MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE})
+	before = {field: doc.get(field) for field in ("decision", "decision_reason", "settlement_basis", "review_status", "approval_note", "approved_by", "approved_on")} if existing_name else {}
 	review_status = "待审核" if decision == "异常待审核" else (PAYROLL_PARTICIPATION_APPROVED_STATUS if cint(approved) else "无需审核")
 	doc.update({
 		**filters,
@@ -4251,6 +4385,20 @@ def save_monthly_payroll_participation_decision(
 			marker = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, marker_name)
 			marker.status = "已作废"
 			marker.save(ignore_permissions=True)
+	_record_payroll_manual_adjustment(
+		company=company,
+		payroll_month=payroll_month,
+		change_category="人员范围",
+		reference_doctype=MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE,
+		reference_name=doc.name,
+		field_name="本月处理方式",
+		original_value=before,
+		new_value={field: doc.get(field) for field in before} if before else {field: doc.get(field) for field in ("decision", "decision_reason", "settlement_basis", "review_status", "approval_note", "approved_by", "approved_on")},
+		reason=decision_reason or approval_note or "人工维护本月人员范围",
+		employee=doc.employee,
+		employee_code=doc.employee_code,
+		employee_name=doc.employee_name,
+	)
 	_invalidate_unconfirmed_payroll_trial(
 		company,
 		payroll_month,
@@ -4337,10 +4485,24 @@ def list_employee_salary_change_grid(company: str, payroll_month: str = "", page
 		if _doctype_has_field("Employee", "status"):
 			filters["status"] = "Active"
 		employees = _safe_get_all("Employee", filters=filters, fields=employee_fields, order_by="employee_name asc", limit_page_length=100000)
-	change_filters = {"company": company}
+	employee_names = [row.name for row in employees]
+	# A salary-change history can be much larger than the current payroll scope.
+	# The grid only needs the latest applicable history of employees it renders.
+	change_filters = {"company": company, "employee": ["in", employee_names or [""]]}
 	if month_end:
 		change_filters["effective_date"] = ["<=", month_end]
-	changes = frappe.get_all(EMPLOYEE_SALARY_CHANGE_DOCTYPE, filters=change_filters, fields=["*"], order_by="effective_date desc, modified desc", limit_page_length=100000)
+	changes = frappe.get_all(
+		EMPLOYEE_SALARY_CHANGE_DOCTYPE,
+		filters=change_filters,
+		fields=[
+			"name", "employee", "effective_date", "modified", "salary_grade",
+			"base_salary", "function_allowance", "certificate_allowance",
+			"multi_skill_allowance", "full_salary", "social_insurance_enabled",
+			"housing_fund_enabled", "exclude_from_payroll",
+		],
+		order_by="effective_date desc, modified desc",
+		limit_page_length=100000,
+	)
 	changes_by_employee = {}
 	excluded_employees = set()
 	for change in changes:
@@ -4547,13 +4709,30 @@ def upsert_payroll_welfare_source_record(**kwargs):
 		values["confirmed_by"] = frappe.session.user
 		values["confirmed_on"] = now_datetime()
 	record_name = data.get("name")
+	before = {}
 	if record_name and frappe.db.exists(WELFARE_SOURCE_DOCTYPE, record_name):
 		doc = frappe.get_doc(WELFARE_SOURCE_DOCTYPE, record_name)
+		before = {field: doc.get(field) for field in ("source_type", "variable_type", "direction", "employee", "employee_code", "employee_name", "department", "amount", "eligibility_status", "confirmation_status", "source_reference", "remarks")}
 		doc.update(values)
 		doc.save(ignore_permissions=True)
 	else:
 		doc = frappe.get_doc(values)
 		doc.insert(ignore_permissions=True)
+	if flt(data.get("record_manual_change")):
+		_record_payroll_manual_adjustment(
+			company=company,
+			payroll_month=payroll_month,
+			change_category="福利扣款来源",
+			reference_doctype=WELFARE_SOURCE_DOCTYPE,
+			reference_name=doc.name,
+			field_name="福利扣款来源明细",
+			original_value=before,
+			new_value={field: doc.get(field) for field in ("source_type", "variable_type", "direction", "employee", "employee_code", "employee_name", "department", "amount", "eligibility_status", "confirmation_status", "source_reference", "remarks")},
+			reason=doc.remarks or "人工维护福利扣款来源",
+			employee=doc.employee,
+			employee_code=doc.employee_code,
+			employee_name=doc.employee_name,
+		)
 	frappe.db.commit()
 	return doc.name
 
@@ -6592,6 +6771,7 @@ def set_payroll_variable_record_excluded(name: str, excluded: int = 1):
 	if not name or not frappe.db.exists(VARIABLE_RECORD_DOCTYPE, name):
 		frappe.throw(_("薪资变量记录不存在"))
 	doc = frappe.get_doc(VARIABLE_RECORD_DOCTYPE, name)
+	before = {"excluded": doc.excluded, "review_status": doc.review_status}
 	batch = frappe.get_doc(VARIABLE_BATCH_DOCTYPE, doc.import_batch) if doc.import_batch else None
 	if batch and batch.status == "已确认":
 		frappe.throw(_("已确认入账的批次不能直接修改或剔除。"))
@@ -6601,6 +6781,20 @@ def set_payroll_variable_record_excluded(name: str, excluded: int = 1):
 	doc.excluded = int(excluded or 0)
 	doc.review_status = "已剔除" if doc.excluded else "待确认"
 	doc.save(ignore_permissions=True)
+	_record_payroll_manual_adjustment(
+		company=doc.company,
+		payroll_month=doc.payroll_month,
+		change_category="月度增减项",
+		reference_doctype=VARIABLE_RECORD_DOCTYPE,
+		reference_name=doc.name,
+		field_name="是否参与计算",
+		original_value=before,
+		new_value={"excluded": doc.excluded, "review_status": doc.review_status},
+		reason="人工调整月度增减项剔除状态",
+		employee=doc.employee,
+		employee_code=doc.employee_code,
+		employee_name=doc.employee_name,
+	)
 	frappe.db.commit()
 	return {"name": doc.name, "excluded": doc.excluded, "review_status": doc.review_status, "invalidated_trial": invalidation}
 
@@ -6925,6 +7119,7 @@ def update_payroll_variable_record(
 
 	employee_context = _employee_context(resolved_employee)
 	doc = frappe.get_doc(VARIABLE_RECORD_DOCTYPE, name)
+	before = {field: doc.get(field) for field in ("employee", "employee_code", "employee_name", "department", "variable_type", "amount", "source_sheet", "remarks", "review_status", "excluded")}
 	company = _require_company(doc.company)
 	batch = frappe.get_doc(VARIABLE_BATCH_DOCTYPE, doc.import_batch) if doc.import_batch else None
 	if batch and batch.status == "已确认":
@@ -6952,6 +7147,20 @@ def update_payroll_variable_record(
 	doc.review_status = "待确认"
 	doc.excluded = 0
 	doc.save(ignore_permissions=True)
+	_record_payroll_manual_adjustment(
+		company=company,
+		payroll_month=doc.payroll_month,
+		change_category="月度增减项",
+		reference_doctype=VARIABLE_RECORD_DOCTYPE,
+		reference_name=doc.name,
+		field_name="月度增减项明细",
+		original_value=before,
+		new_value={field: doc.get(field) for field in before},
+		reason=doc.remarks or "人工修正月度增减项明细",
+		employee=doc.employee,
+		employee_code=doc.employee_code,
+		employee_name=doc.employee_name,
+	)
 
 	frappe.db.commit()
 	result = frappe.get_value(VARIABLE_RECORD_DOCTYPE, doc.name, ["name", "employee", "employee_code", "employee_name", "department", "variable_type", "amount", "source_sheet", "remarks", "review_status", "validation_status", "validation_message", "excluded"], as_dict=True)
@@ -7205,7 +7414,7 @@ def _attendance_rule_cards(company, payroll_month):
 		"PAYROLL_SETTLEMENT_ABSENCE_DEDUCTION": ("缺勤与旷工扣款", "早退的实际时长和工作日旷工都会成为旷工工时；按工资小计和当前倍率扣款。", "影响缺勤扣款、旷工扣款和出勤工资"),
 		"ATTENDANCE_MISSED_PUNCH": ("忘打卡红苹果", "仅由“忘打卡”来源产生红苹果，不与原始考勤的缺卡标记重复扣罚。", "影响红苹果金额；仅重新加工后的来源使用新值"),
 		"PAYROLL_SETTLEMENT_OVERTIME_PAY": ("加班工资倍率", "按平日、周末、法定节假日工时分别计算。", "影响加班费小计"),
-		"PAYROLL_SETTLEMENT_NIGHT_SHIFT": ("夜班津贴", "深夜班按默认时段匹配；大夜班、小夜班填写完整时段后也按时段匹配，未填写时沿用终稿次数。", "影响夜班津贴和应发工资"),
+		"PAYROLL_SETTLEMENT_NIGHT_SHIFT": ("夜班津贴", "深夜班按打卡时间自动识别；大夜班、小夜班次数始终由钉钉考勤终稿提供。", "影响夜班津贴和应发工资"),
 	}
 	cards = []
 	for rule_code in PAYROLL_ATTENDANCE_RULE_CODES:
@@ -7489,12 +7698,15 @@ def save_attendance_pay_rule(company: str, payroll_month: str, rule_code: str, s
 
 	default = _default_rule(rule_code)
 	parameters = dict((_effective_rule_config(rule_code, payroll_month, company, allow_incomplete_night_times=True).get("parameters") or {}))
+	if rule_code == "PAYROLL_SETTLEMENT_NIGHT_SHIFT":
+		for key in ("large_night_shift_start", "large_night_shift_end", "small_night_shift_start", "small_night_shift_end"):
+			parameters.pop(key, None)
 	allowed = {
 		"ATTENDANCE_FULL_ATTENDANCE_BONUS": {"thresholds", "late_deduction"},
 		"PAYROLL_SETTLEMENT_ABSENCE_DEDUCTION": {"standard_hours_divisor", "absenteeism_multiplier"},
 		"ATTENDANCE_MISSED_PUNCH": {"red_apples_per_record", "amount_per_apple"},
 		"PAYROLL_SETTLEMENT_OVERTIME_PAY": {"standard_hours_divisor", "weekday", "weekend", "holiday"},
-		"PAYROLL_SETTLEMENT_NIGHT_SHIFT": {"deep_night_shift", "large_night_shift", "small_night_shift", "deep_night_shift_start", "deep_night_shift_end", "large_night_shift_start", "large_night_shift_end", "small_night_shift_start", "small_night_shift_end"},
+		"PAYROLL_SETTLEMENT_NIGHT_SHIFT": {"deep_night_shift", "large_night_shift", "small_night_shift", "deep_night_shift_start", "deep_night_shift_end", "deep_night_shift_tolerance_minutes"},
 	}[rule_code]
 	for key in allowed:
 		if key in settings:
@@ -7507,6 +7719,7 @@ def save_attendance_pay_rule(company: str, payroll_month: str, rule_code: str, s
 		payroll_month=payroll_month,
 		rule_code=rule_code,
 		parameters_json=json.dumps(parameters, ensure_ascii=False),
+		change_category="考勤计薪规则",
 	)
 	return get_payroll_attendance_rule_overview(company, payroll_month)
 
@@ -7639,18 +7852,23 @@ def _night_shift_ranges_overlap(start, end, other_start, other_end):
 	)
 
 
-def _attendance_detail_matches_night_shift(detail, start, end):
+def _attendance_detail_matches_night_shift(detail, start, end, tolerance_minutes=0):
 	"""Return whether one complete clock-in/out record fits one configured tier."""
 	clock_in = _clock_time_minutes((detail or {}).get("clock_in"))
 	clock_out = _clock_time_minutes((detail or {}).get("clock_out"))
 	start_minutes, end_minutes = _clock_time_minutes(start), _clock_time_minutes(end)
 	if None in {clock_in, clock_out, start_minutes, end_minutes} or start_minutes == end_minutes:
 		return False
+	tolerance_minutes = max(cint(tolerance_minutes), 0)
 	if start_minutes < end_minutes:
-		return start_minutes <= clock_in and clock_out <= end_minutes and clock_in <= clock_out
+		return (
+			start_minutes - tolerance_minutes <= clock_in
+			and clock_out <= end_minutes + tolerance_minutes
+			and clock_in <= clock_out
+		)
 	# Cross-midnight shift: clock-in belongs to the evening and clock-out to the
 	# following morning. Requiring both values makes incomplete punches ineligible.
-	return clock_in >= start_minutes and clock_out <= end_minutes
+	return clock_in >= start_minutes - tolerance_minutes and clock_out <= end_minutes + tolerance_minutes
 
 
 def _locked_night_shift_matches(company, payroll_month, parameters):
@@ -7666,11 +7884,7 @@ def _locked_night_shift_matches(company, payroll_month, parameters):
 		fields=["employee_code", "employee_name", "confirmed_value_json", "processed_value_json"],
 		limit_page_length=5000,
 	)
-	tiers = (
-		("deep_night_shift_count", "deep_night_shift_start", "deep_night_shift_end"),
-		("large_night_shift_count", "large_night_shift_start", "large_night_shift_end"),
-		("small_night_shift_count", "small_night_shift_start", "small_night_shift_end"),
-	)
+	tiers = (("deep_night_shift_count", "deep_night_shift_start", "deep_night_shift_end"),)
 	matches = {}
 	for record in records:
 		try:
@@ -7682,7 +7896,12 @@ def _locked_night_shift_matches(company, payroll_month, parameters):
 		counts = {fieldname: 0 for fieldname, _start, _end in tiers}
 		for detail in values.get("attendance_details") or []:
 			for fieldname, start_key, end_key in tiers:
-				if _attendance_detail_matches_night_shift(detail, parameters.get(start_key), parameters.get(end_key)):
+				if _attendance_detail_matches_night_shift(
+					detail,
+					parameters.get(start_key),
+					parameters.get(end_key),
+					parameters.get("deep_night_shift_tolerance_minutes", 10),
+				):
 					counts[fieldname] += 1
 					break
 		if any(counts.values()):
@@ -7731,7 +7950,7 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 		# derived fields are generated only in the downloadable workbook, so derive
 		# the payroll-facing one-times settlement value from the same calculation
 		# chain instead of treating the missing preview key as zero.
-		attendance_calculation = attendance_processing_center._final_calculation(row)
+		settlement = attendance_processing_center._payroll_settlement_values(row)
 		employee_code = _text(row.get("employee_code"))
 		employee_name = _text(row.get("employee_name"))
 		if not employee_code and not employee_name:
@@ -7742,19 +7961,11 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 			frappe.throw(_("锁定考勤终稿存在跨公司员工：{0}").format(employee_code or employee_name))
 		key = employee or employee_code or f"name:{employee_name}"
 		night_counts = night_shift_matches.get(employee_code) or night_shift_matches.get(f"name:{employee_name}")
-		# 每个档位独立决定是否启用时段匹配：深夜班默认启用；大夜班、小
-		# 夜班尚未设置完整时段时，继续沿用终稿次数，避免空的可选配置阻断薪酬。
-		large_time_matching_enabled = bool(night_parameters.get("large_night_shift_start") and night_parameters.get("large_night_shift_end"))
-		small_time_matching_enabled = bool(night_parameters.get("small_night_shift_start") and night_parameters.get("small_night_shift_end"))
+		# 深夜班由完整的钉钉打卡详情自动识别。大夜班与小夜班始终按钉钉
+		# 终稿的统计次数取数，不允许旧的本地时段配置重新覆盖该来源。
 		deep_night_shift_count = flt((night_counts or {}).get("deep_night_shift_count"))
-		large_night_shift_count = (
-			flt((night_counts or {}).get("large_night_shift_count"))
-			if large_time_matching_enabled else max(flt(row.get("large_night_shifts")) - deep_night_shift_count, 0)
-		)
-		small_night_shift_count = (
-			flt((night_counts or {}).get("small_night_shift_count"))
-			if small_time_matching_enabled else flt(row.get("small_night_shifts"))
-		)
+		large_night_shift_count = max(flt(row.get("large_night_shifts")) - deep_night_shift_count, 0)
+		small_night_shift_count = flt(row.get("small_night_shifts"))
 		values = {
 			"company": company,
 			"attendance_month": payroll_month,
@@ -7771,10 +7982,14 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 			"date_of_joining": employee_context.get("date_of_joining"),
 			"standard_hours": flt(row.get("standard_hours")),
 			"actual_attendance_hours": flt(row.get("actual_attendance_hours")),
-			"adjusted_working_hours": flt(attendance_calculation["adjusted_one"]),
-			"overtime_1_5_hours": flt(row.get("workday_overtime_hours")) + flt(row.get("special_workday_hours")),
-			"overtime_2_hours": flt(row.get("restday_overtime_hours")) + flt(row.get("special_restday_hours")),
-			"overtime_3_hours": flt(row.get("holiday_overtime_hours")) + flt(row.get("special_holiday_hours")),
+			"adjusted_working_hours": flt(settlement["adjusted_working_hours"]),
+			"overtime_1_5_hours": flt(settlement["overtime_1_5_hours"]),
+			"overtime_2_hours": flt(settlement["overtime_2_hours"]),
+			"overtime_3_hours": flt(settlement["overtime_3_hours"]),
+			"overtime_1_5_settlement_hours": flt(settlement["overtime_1_5_hours"]),
+			"overtime_2_settlement_hours": flt(settlement["overtime_2_hours"]),
+			"overtime_3_settlement_hours": flt(settlement["overtime_3_hours"]),
+			"reunion_leave_hours": flt(settlement["reunion_leave_hours"]),
 			"absent_hours": flt(row.get("absence_hours")),
 			"deep_night_shift_count": deep_night_shift_count,
 			"large_night_shift_count": large_night_shift_count,
@@ -7803,7 +8018,8 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 			numeric_fields = {
 				"standard_hours", "actual_attendance_hours", "adjusted_working_hours",
 				"overtime_1_5_hours", "overtime_2_hours", "overtime_3_hours",
-				"absent_hours", "deep_night_shift_count", "large_night_shift_count", "small_night_shift_count",
+				"overtime_1_5_settlement_hours", "overtime_2_settlement_hours", "overtime_3_settlement_hours",
+				"absent_hours", "reunion_leave_hours", "deep_night_shift_count", "large_night_shift_count", "small_night_shift_count",
 				"green_apples", "red_apples", "apple_reward_amount",
 				"red_apple_penalty", "full_attendance_deduction",
 			}
@@ -8042,8 +8258,8 @@ def generate_payroll_input_records(company: str, payroll_month: str, attendance_
 				"standard_hours": flt(getattr(attendance, "standard_hours", 0)),
 				"actual_attendance_hours": flt(getattr(attendance, "actual_attendance_hours", 0)),
 				"adjusted_working_hours": flt(getattr(attendance, "adjusted_working_hours", 0)),
-				"overtime_1_5_hours": flt(getattr(attendance, "overtime_1_5_hours", 0)),
-				"overtime_2_hours": flt(getattr(attendance, "overtime_2_hours", 0)),
+				"overtime_1_5_hours": flt(getattr(attendance, "overtime_1_5_settlement_hours", None) if getattr(attendance, "overtime_1_5_settlement_hours", None) is not None else getattr(attendance, "overtime_1_5_hours", 0)),
+				"overtime_2_hours": flt(getattr(attendance, "overtime_2_settlement_hours", None) if getattr(attendance, "overtime_2_settlement_hours", None) is not None else getattr(attendance, "overtime_2_hours", 0)),
 			"overtime_3_hours": flt(getattr(attendance, "overtime_3_hours", 0)),
 			"leave_hours": flt(getattr(attendance, "leave_hours", 0)),
 			"absent_hours": flt(getattr(attendance, "absent_hours", 0)),
@@ -8094,6 +8310,47 @@ def list_payroll_variable_records(company: str, payroll_month: str = "", import_
 		limit_start=max(cint(start), 0),
 		limit_page_length=page_length,
 	)
+
+
+@frappe.whitelist()
+def list_payroll_manual_adjustments(company: str, payroll_month: str, page_length: int = 500):
+	"""List the payroll-only append-only adjustment ledger for one month."""
+	_require_payroll_master_manager()
+	company, payroll_month = _require_company(company), _workflow_month(payroll_month)
+	if not _doctype_exists(PAYROLL_MANUAL_ADJUSTMENT_DOCTYPE):
+		return {"items": [], "migration_required": 1}
+	rows = frappe.get_all(
+		PAYROLL_MANUAL_ADJUSTMENT_DOCTYPE,
+		filters={"company": company, "payroll_month": payroll_month},
+		fields=[
+			"name", "change_category", "employee", "employee_code", "employee_name",
+			"reference_doctype", "reference_name", "field_name", "original_value_json",
+			"new_value_json", "reason", "modified_by", "creation",
+		],
+		order_by="creation desc",
+		limit_page_length=min(max(cint(page_length), 1), 5000),
+	)
+	return {
+		"items": [
+			{
+				"name": row.name,
+				"change_category": row.change_category,
+				"employee": row.employee,
+				"employee_code": row.employee_code,
+				"employee_name": row.employee_name,
+				"reference_doctype": row.reference_doctype,
+				"reference_name": row.reference_name,
+				"field_name": row.field_name,
+				"original_value": _audit_value(row.original_value_json),
+				"new_value": _audit_value(row.new_value_json),
+				"reason": row.reason,
+				"modified_by": row.modified_by,
+				"modified_on": row.creation,
+			}
+			for row in rows
+		],
+		"migration_required": 0,
+	}
 
 
 @frappe.whitelist()
@@ -8229,7 +8486,7 @@ def generate_payroll_settlement_records(company: str, payroll_month: str, attend
 			"function_allowance": function_allowance,
 			"certificate_skill_allowance": certificate_skill_allowance,
 			"standard_hours": flt(getattr(input_row, "standard_hours", 0)),
-			"basic_attendance_hours": flt(getattr(input_row, "actual_attendance_hours", 0)),
+			"basic_attendance_hours": flt(getattr(input_row, "adjusted_working_hours", 0)),
 			"raw_weekend_overtime_hours": flt(getattr(input_row, "overtime_2_hours", 0)),
 			"weekday_overtime_hours": flt(getattr(input_row, "overtime_1_5_hours", 0)),
 			"holiday_overtime_hours": flt(getattr(input_row, "overtime_3_hours", 0)),

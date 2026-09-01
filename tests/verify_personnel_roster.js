@@ -128,13 +128,14 @@ for (const marker of [
 	"custom_employee_code || value",
 	"apply_roster_meta_columns",
 	"ROSTER_ALL_EMPLOYEES_PAGE_LENGTH",
-	"page_length: ROSTER_ALL_EMPLOYEES_PAGE_LENGTH",
+	"ROSTER_TABLE_PAGE_LENGTH",
+	"page_length: ROSTER_TABLE_PAGE_LENGTH",
 	"configure_roster_page_length",
 	"hide_roster_page_length_controls",
 	"querySelectorAll(\".sort-selector\")",
 	"querySelectorAll(\".filter-section\")",
 	"ensure_roster_records_loaded",
-	"__hrmsRosterInitialLoadRequested",
+	"load_roster_table_records",
 	"hide_native_roster_field_filters",
 	"remove_native_roster_list_header",
 	"expand_roster_layout",
@@ -148,6 +149,17 @@ for (const marker of [
 	"hrms-roster-table-header",
 	"hrms-roster-table-header__input",
 	"apply_roster_column_sort",
+	"hrms-roster-table-wrap",
+	"hrms-roster-input-table",
+	"get_roster_table_columns",
+	"get_visible_roster_table_rows",
+	"load_roster_table_records",
+	"hrms.api.employee_field_template.get_employee_roster",
+	"hrms-payroll-input-table hrms-roster-input-table",
+	"render_roster_table_pagination",
+	"page_size: 20",
+	"姓名 / 工号",
+	"hrms-roster-identity-cell",
 	"get_roster_filter_suggestions",
 	"apply_roster_column_filter",
 	"ROSTER_COLUMN_FILTER_STORAGE_KEY",
@@ -189,6 +201,15 @@ mustInclude(topNavCss, "body.hrms-module-shell .main-section", "Frappe's list-he
 mustInclude(topNavCss, ".hrms-roster-table-header", "Employee roster must provide one fixed business table header.");
 mustInclude(topNavCss, ".hrms-roster-table-header__input", "Employee roster header must provide searchable inputs.");
 mustInclude(topNavCss, ".hrms-roster-table-header__sort", "Employee roster header must provide sortable column titles.");
+mustInclude(topNavCss, ".hrms-roster-table-wrap", "Employee roster must use one payroll-style table surface.");
+mustInclude(topNavCss, ".hrms-roster-input-table", "Employee roster data and header must share one table layout.");
+mustInclude(topNavCss, ".hrms-roster-identity-cell", "Employee name and business code must be rendered in one identity cell.");
+mustInclude(topNavCss, ".hrms-roster-table-pagination", "Employee roster must provide visible paging for the custom table.");
+mustInclude(topNavCss, ".hrms-roster-input-table", "Employee roster must style its payroll-compatible table cells.");
+const rosterTableCss = topNavCss.slice(topNavCss.indexOf(".hrms-roster-table-wrap"), topNavCss.indexOf(".hrms-roster-input-table"));
+if (!rosterTableCss.includes("flex-direction: column;") || !rosterTableCss.includes("width: 100%;")) {
+	throw new Error("Employee roster table must stack its scroll area above the pagination bar and fill the available width.");
+}
 
 for (const marker of [
 	"在职信息",

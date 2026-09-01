@@ -227,8 +227,8 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 	def test_page_does_not_classify_apple_tree_as_special_hours(self):
 		source = ATTENDANCE_PAGE.read_text(encoding="utf-8")
 
-		self.assertIn("独立苹果树奖惩来源；不包含特殊工时。", source)
-		self.assertNotIn("独立奖惩与特殊工时来源。", source)
+		self.assertIn('{ key: "apple_tree", label: "苹果树" }', source)
+		self.assertNotIn('key: "apple_tree", label: "苹果树", description', source)
 
 	def test_full_apple_tree_result_has_browser_and_download_contract(self):
 		"""Apple-tree rows must stay columnar after persistence, not become JSON blobs."""
@@ -459,6 +459,27 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertEqual(calculation["settlement_15"], 23)
 		self.assertEqual(calculation["settlement_20"], 23)
 		self.assertEqual(calculation["adjusted_one_absence"], 0)
+
+	def test_rest_arrangement_uses_weekday_overtime_before_payroll(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		settlement = center._payroll_settlement_values({
+			"standard_hours": 8,
+			"actual_attendance_hours": 0,
+			"rest_arrangement_hours": 8,
+			"workday_overtime_hours": 8,
+		})
+		self.assertEqual(settlement["adjusted_working_hours"], 8)
+		self.assertEqual(settlement["overtime_1_5_hours"], 0)
+
+	def test_reunion_leave_is_paid_and_does_not_reduce_adjusted_hours(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		settlement = center._payroll_settlement_values({
+			"standard_hours": 8,
+			"actual_attendance_hours": 8,
+			"reunion_leave_hours": 8,
+		})
+		self.assertEqual(settlement["adjusted_working_hours"], 8)
+		self.assertEqual(settlement["reunion_leave_hours"], 8)
 
 	def test_special_hours_use_company_holiday_list_before_weekend_split(self):
 		center, _file_manager, _frappe_modules = processing_center_module()

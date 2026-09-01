@@ -163,6 +163,12 @@
 	// and system administration live in the account menu instead.
 	const moreItems = [
 		{
+			label: "钉钉集成",
+			description: "钉钉考勤、员工映射与同步记录",
+			route: "/desk/attendance-import-center/dingtalk",
+			roles: HR_SETTINGS_MANAGER_ROLES,
+		},
+		{
 			label: "社保个税",
 			description: "社保、公积金及个人所得税服务",
 			route: "/desk/tax-&-benefits",
@@ -201,7 +207,7 @@
 		"审批": "workflow",
 		"培训学习": "training-program",
 		"绩效": "performance",
-		"更多": "hr-settings-center",
+		"更多": "attendance-import-center",
 		"HR Setup": "hrms-workbench",
 		"Personnel": "employee",
 	};
@@ -451,8 +457,16 @@
 		return (queryRoute || path || "hrms-workbench").toLowerCase();
 	}
 
+	function isDingtalkIntegrationRoute() {
+		// DingTalk is launched from "更多", although its page is implemented by
+		// the attendance center.  Keep that implementation detail from making
+		// the attendance module look selected in the shared top navigation.
+		return routeSlug() === "attendance-import-center/dingtalk";
+	}
+
 	function activeLabel() {
 		const slug = routeSlug();
+		if (isDingtalkIntegrationRoute()) return "";
 		if (slug === "hrms-workbench") return "主页";
 		if (slug === "personnel" || slug === "employee") return "人事";
 		const match = modules.find((module) => module.keys.some((key) => slug === key || slug.indexOf(`${key}/`) === 0));
@@ -1058,7 +1072,7 @@
 		modules.forEach((module) => {
 			moduleList.appendChild(button(module.label, module.route, module.label === active, module.icon));
 		});
-		const moreActive = !active && routeSlug() !== "hrms-workbench";
+		const moreActive = isDingtalkIntegrationRoute() || (!active && routeSlug() !== "hrms-workbench");
 		moduleList.appendChild(renderMore(moreActive));
 		nav.appendChild(moduleList);
 		if (SHOW_COMPANY_CONTEXT_IN_NAV) nav.appendChild(renderCompanyContext());

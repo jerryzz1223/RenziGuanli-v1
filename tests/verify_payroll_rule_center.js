@@ -98,11 +98,18 @@ for (const marker of [
 	"深夜班每次津贴",
 	"深夜班上班时间",
 	"deep_night_shift_start",
-	"大夜班上班时间",
-	"small_night_shift_start",
+	"深夜班打卡容差",
+	"deep_night_shift_tolerance_minutes",
+	"钉钉考勤终稿次数",
 	"点击设置",
 ]) {
 	mustInclude(pageJs + api, marker, `Attendance rule inline editor is missing marker: ${marker}`);
+}
+
+for (const retiredSetting of ["large_night_shift_start", "large_night_shift_end", "small_night_shift_start", "small_night_shift_end"]) {
+	if (pageJs.includes(retiredSetting)) {
+		throw new Error(`Retired local night-shift setting remains available: ${retiredSetting}`);
+	}
 }
 
 console.log("Payroll rule center contract passed.");

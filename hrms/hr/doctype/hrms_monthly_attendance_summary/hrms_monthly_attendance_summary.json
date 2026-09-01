@@ -29,6 +29,7 @@
   "sick_leave_hours",
   "annual_leave_hours",
   "work_injury_leave_hours",
+  "reunion_leave_hours",
   "rest_leave_hours",
   "absent_hours",
   "deep_night_shift_count",
@@ -196,6 +197,12 @@
    "fieldname": "work_injury_leave_hours",
    "fieldtype": "Float",
    "label": "工伤"
+  },
+  {
+   "default": "0",
+   "fieldname": "reunion_leave_hours",
+   "fieldtype": "Float",
+   "label": "团圆假"
   },
   {
    "default": "0",

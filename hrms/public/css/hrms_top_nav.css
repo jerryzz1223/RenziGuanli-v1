@@ -2234,6 +2234,164 @@ body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-r
 	box-shadow: none;
 }
 
+/* 花名册使用与薪资输入中心相同的原生 table 结构：表头与单元格由同一
+ * 个 table 布局，不再依赖 ListView 的 subject 列，因此不会多出或错开工号。 */
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .result-container {
+	display: none !important;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-wrap {
+	background: #fff;
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 6px;
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	margin: 12px 0 0;
+	min-height: 0;
+	overflow: hidden;
+	width: 100%;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-scroll {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: auto;
+	width: 100%;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-pagination {
+	align-items: center;
+	background: #fff;
+	border-top: 1px solid #e7ebf0;
+	display: flex;
+	flex: 0 0 auto;
+	flex-wrap: wrap;
+	gap: 10px;
+	justify-content: space-between;
+	padding: 10px 12px;
+	position: sticky;
+	bottom: 0;
+	z-index: 4;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-pagination > span {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-pagination > div {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-pagination .btn {
+	min-width: 30px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-pagination .btn.is-active {
+	background: #16784a;
+	border-color: #16784a;
+	color: #fff;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-pagination-ellipsis {
+	color: var(--text-muted, #6b7280);
+	padding: 0 2px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table {
+	background: #fff;
+	font-size: 14px;
+	margin: 0;
+	min-width: max-content;
+	min-width: 100%;
+	table-layout: auto;
+	width: max-content;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table th,
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table td {
+	min-width: 72px;
+	vertical-align: middle !important;
+	white-space: nowrap;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table th {
+	background: #f8fafc;
+	color: #4b5563;
+	font-weight: 600;
+	position: sticky;
+	top: 0;
+	z-index: 1;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table th:first-child,
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table td:first-child {
+	min-width: 88px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table th:last-child,
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table td:last-child {
+	min-width: 96px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-column-head {
+	display: grid;
+	gap: 5px;
+	min-width: 92px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-column-head .btn-link {
+	align-items: center;
+	color: inherit;
+	display: flex;
+	font-weight: 600;
+	gap: 4px;
+	justify-content: space-between;
+	padding: 0;
+	text-align: left;
+	text-decoration: none;
+	width: 100%;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-column-head .btn-link:hover,
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-column-head .btn-link.is-sorted {
+	color: #16784a;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-column-head i {
+	color: #9ca3af;
+	font-size: 12px;
+	font-style: normal;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-column-head .form-control {
+	background: #fff;
+	border-color: #dfe5eb;
+	font-size: 11px;
+	height: 25px;
+	min-width: 0;
+	padding: 2px 6px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-column-head .form-control::placeholder {
+	color: inherit;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-identity-cell strong,
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-identity-cell small {
+	display: block;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-identity-cell small {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+	margin-top: 2px;
+}
+
 body.hrms-employee-roster-view .list-row-head.hrms-roster-native-table-header-hidden {
 	display: none !important;
 }

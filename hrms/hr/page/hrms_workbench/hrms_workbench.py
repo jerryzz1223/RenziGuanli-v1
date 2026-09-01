@@ -748,6 +748,7 @@ def get_data():
 			_route("薪资输入表", ["payroll-input-center", "inputs"], "file-text"),
 			_route("薪资结算表", ["payroll-input-center", "settlements"], "file-spreadsheet"),
 			_route("薪酬报表", ["payroll-input-center", "payroll-reports"], "bar-chart"),
+			_route("薪酬修改记录", ["payroll-input-center", "payroll-adjustments"], "clipboard"),
 			_route("薪酬分析", ["payroll-input-center", "payroll-analysis"], "trending-up"),
 			_route("年终奖计算", ["payroll-input-center", "annual-bonus"], "gift"),
 			_route("发送工资条", ["payroll-input-center", "salary-slips"], "send"),

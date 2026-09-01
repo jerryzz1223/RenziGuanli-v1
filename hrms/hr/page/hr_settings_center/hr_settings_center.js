@@ -1,5 +1,5 @@
 frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
-	const SYSTEM_SETTINGS_MODULES = new Set(["钉钉集成", "用户与权限"]);
+	const SYSTEM_SETTINGS_MODULES = new Set(["用户与权限"]);
 	const BUSINESS_SETTINGS_MODULES = [
 		"字段管理中心",
 		"员工属性设置",
@@ -24,7 +24,7 @@ frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
 	sessionStorage.removeItem("hrms_settings_center_focus");
 
 	const state = {
-		active_module: requested_module || (route.includes("dingtalk-integration") ? "钉钉集成" : "字段管理中心"),
+		active_module: requested_module || "字段管理中心",
 		focus: requested_focus || "",
 		data: null,
 		error: "",
@@ -66,7 +66,7 @@ frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
 	}
 
 	function modules() {
-		return is_system_manager() ? [...BUSINESS_SETTINGS_MODULES, "钉钉集成", "用户与权限"] : BUSINESS_SETTINGS_MODULES;
+		return is_system_manager() ? [...BUSINESS_SETTINGS_MODULES, "用户与权限"] : BUSINESS_SETTINGS_MODULES;
 	}
 
 	function normalize_active_module() {
@@ -139,7 +139,6 @@ frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
 		if (state.active_module === "详情资料块设置") return render_detail_blocks();
 		if (state.active_module === "导出模板设置") return render_export_templates();
 		if (state.active_module === "基础资料设置") return render_base_data();
-		if (state.active_module === "钉钉集成") return render_dingtalk_integration();
 		if (state.active_module === "多行记录类型") return render_record_types();
 		if (state.active_module === "用户与权限") return render_user_permissions();
 		return render_field_center(state.active_module === "员工属性设置");
@@ -283,45 +282,6 @@ frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
 		`;
 	}
 
-	function render_dingtalk_integration() {
-		return `
-			<div class="hrms-settings-panel">
-				<div class="hrms-settings-panel-head">
-					<div>
-						<h3>${__("钉钉集成")}</h3>
-						<p>${__("员工端继续使用钉钉，管理、计算、分析、沉淀放在人资系统；钉钉数据先单向同步，不反向深度写入。")}</p>
-					</div>
-					<div class="btn-group">
-						<button class="btn btn-default btn-sm" data-action="apply-dingtalk-defaults">${__("应用安全默认设置")}</button>
-						<button class="btn btn-default btn-sm" data-action="load-dingtalk-status">${__("读取连接状态")}</button>
-					</div>
-				</div>
-				<div class="hrms-settings-card-grid">
-					<button class="hrms-settings-card" data-doctype="HRMS DingTalk Settings">${__("连接配置")}<small>${__("App ID、AgentId、Client Secret、公网小网关")}</small></button>
-					<button class="hrms-settings-card" data-doctype="HRMS DingTalk User Map">${__("员工映射")}<small>${__("dingtalk_userid -> Employee")}</small></button>
-					<button class="hrms-settings-card" data-doctype="HRMS DingTalk Raw Record">${__("原始数据")}<small>${__("部门、员工、考勤、审批 payload")}</small></button>
-					<button class="hrms-settings-card" data-doctype="HRMS DingTalk Sync Log">${__("同步日志")}<small>${__("每次同步的记录数、失败数和错误")}</small></button>
-				</div>
-				<div class="alert alert-info mt-3">
-					<strong>${__("公网小网关")}</strong>：${__("钉钉里只配置员工入口网页；公网只开放 get_employee_gateway_config 和 get_employee_self_snapshot，不开放完整 Desk 后台。")}
-				</div>
-				<div class="alert alert-warning mt-3">
-					<strong>${__("基础数据同步")}</strong>：${__("第一阶段只接部门、员工、考勤、审批结果；身份证、银行卡、合同附件、薪资结果仍留在人资系统内网侧管理。")}
-				</div>
-				<pre class="text-muted">get_dingtalk_connection_status
-apply_dingtalk_default_settings
-save_dingtalk_connection_settings
-get_employee_gateway_config
-get_employee_self_snapshot
-sync_departments_from_dingtalk
-sync_users_from_dingtalk
-sync_attendance_from_dingtalk
-preview_sync_payload
-服务器部署</pre>
-			</div>
-		`;
-	}
-
 	function render_record_types() {
 		return `
 			<div class="hrms-settings-panel">
@@ -447,24 +407,6 @@ preview_sync_payload
 		});
 		$(page.body).find("[data-action='download-template']").on("click", function () {
 			window.open(frappe.urllib.get_full_url("/api/method/hrms.api.employee_field_template.download_employee_import_template"));
-		});
-		$(page.body).find("[data-action='load-dingtalk-status']").on("click", function () {
-			frappe.call("hrms.api.dingtalk_integration.get_dingtalk_connection_status").then((r) => {
-				frappe.msgprint({
-					title: __("钉钉连接状态"),
-					message: `<pre>${escape(JSON.stringify(r.message || {}, null, 2))}</pre>`,
-					wide: true,
-				});
-			});
-		});
-		$(page.body).find("[data-action='apply-dingtalk-defaults']").on("click", function () {
-			frappe.call("hrms.api.dingtalk_integration.apply_dingtalk_default_settings").then((r) => {
-				frappe.msgprint({
-					title: __("已应用安全默认设置"),
-					message: `<pre>${escape(JSON.stringify(r.message || {}, null, 2))}</pre>`,
-					wide: true,
-				});
-			});
 		});
 	}
 

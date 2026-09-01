@@ -144,6 +144,22 @@ for (const marker of [
 	mustInclude(salaryGridApi, marker, `Salary grid must retain each locked attendance employee: ${marker}`);
 }
 
+for (const marker of [
+	"employee_names = [row.name for row in employees]",
+	'"employee": ["in", employee_names or [""]]',
+	"fields=[",
+	'"exclude_from_payroll"',
+]) {
+	mustInclude(salaryGridApi, marker, `Salary grid query must stay scoped and lightweight: ${marker}`);
+}
+
+const salaryAssignmentStep = pageJs.slice(pageJs.indexOf("\tload_salary_assignment_step()"), pageJs.indexOf("\n\texclude_employee_from_payroll"));
+mustInclude(salaryAssignmentStep, "const salaryRowsRequest = this.load_employee_salary_changes({ render: false })", "Salary assignment should fetch rows without waiting for the grade request.");
+mustInclude(salaryAssignmentStep, "salaryRowsRequest.then((rows) => {", "Salary assignment must render employee rows as soon as they arrive.");
+mustInclude(salaryAssignmentStep, "refresh_assignable_salary_grade_options", "Salary grades should fill in after the editable employee form is visible.");
+if (salaryAssignmentStep.includes("Promise.all([")) throw new Error("Salary-grade options must not delay the employee salary form.");
+mustInclude(salaryAssignmentStep, "正在读取员工定薪表…", "Salary assignment should show immediate loading feedback.");
+
 const workbenchJs = read("hrms/hr/page/hrms_workbench/hrms_workbench.js");
 const workbenchPy = read("hrms/hr/page/hrms_workbench/hrms_workbench.py");
 for (const marker of ["薪资主数据", "salary-master", "薪酬管理中心"]) {

@@ -538,7 +538,7 @@ class HybridOrganizationChart {
 			tree.innerHTML = `<div class="hrms-org-empty">${__("暂无组织数据，请先导入员工花名册或维护部门。")}</div>`;
 			return;
 		}
-			const roots = [root];
+		const roots = [root];
 		if (!roots.length) {
 			tree.innerHTML = `<div class="hrms-org-empty">${__("暂无部门，请先在部门管理中新增一级部门。")}</div>`;
 			return;

@@ -184,6 +184,7 @@ ATTENDANCE_DRAFT_RESULT_COLUMNS = (
 	("sick_leave_hours", "病假（小时）"),
 	("annual_leave_hours", "特休（小时）"),
 	("work_injury_hours", "工伤（小时）"),
+	("reunion_leave_hours", "团圆假（小时）"),
 	("rest_arrangement_hours", "排休（小时）"),
 	("absence_hours", "旷工（小时）"),
 	("clock_in_missing_count", "上班漏打卡次数"),
@@ -310,6 +311,7 @@ EXCEPTION_LABELS = {
 	"LATE_MARKED": "迟到（钉钉标记）",
 	"EARLY_MARKED": "早退（钉钉标记）",
 	"ABSENCE_MARKED": "旷工标记待核验",
+	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "休息日有打卡未计加班",
 	"INVALID_NUMERIC_VALUE": "工时或次数格式无效",
 	"SOURCE_FILE_MISSING": "来源文件定位缺失",
 	"SOURCE_SHEET_MISSING": "来源工作表定位缺失",
@@ -357,6 +359,8 @@ def _review_guidance(exception_codes: list[str], source_type: str) -> list[str]:
 		guidance.append("迟到、早退来自钉钉明确标记；先核对请假、主管说明或补卡，不得仅按次数自动扣款。")
 	if "ABSENCE_MARKED" in codes:
 		guidance.append("旷工字段在该来源中没有小时单位；先核对排班、有效请假及主管确认，再决定是否形成薪资缺勤工时。")
+	if "RESTDAY_CLOCKED_WITHOUT_OVERTIME" in codes:
+		guidance.append("休息日已有钉钉打卡，但未匹配加班申请且加班工时为 0；请核对主管确认后，在该日期填写实际休息日加班工时，或确认本次打卡不计加班。")
 	if {"EMPLOYEE_DEPARTMENT_MISMATCH", "EMPLOYEE_DEPARTMENT_CONFLICT", "DEPARTMENT_CONFLICT"} & codes:
 		guidance.append("以花名册当前部门为准；花名册无误可通过，需变更部门时先更新花名册或部门映射。")
 	if {"EMPLOYEE_NOT_FOUND", "EMPLOYEE_MATCH_PENDING", "EMPLOYEE_CODE_MISSING", "EMPLOYEE_CODE_NAME_CONFLICT", "EMPLOYEE_NAME_MISMATCH", "EMPLOYEE_NAME_CONFLICT", "EMPLOYEE_NAME_AMBIGUOUS", "EMPLOYEE_AMBIGUOUS"} & codes:
@@ -390,6 +394,12 @@ def _review_options(exception_codes: list[str], source_type: str) -> list[dict[s
 			{"label": "已核对请假/主管说明，确认当前数据", "review_status": "已通过", "reason": "已核对请假或主管说明，确认当前考勤数据。"},
 			{"label": "等待补充考勤证明", "review_status": "待审核", "reason": "需补充请假、补卡或主管说明后再确认。"},
 			{"label": "确认异常不计入下游", "review_status": "已驳回", "reason": "已核对考勤异常，当前记录不计入下游。"},
+		])
+	if "RESTDAY_CLOCKED_WITHOUT_OVERTIME" in codes:
+		options.extend([
+			{"label": "确认打卡不计加班", "review_status": "已通过", "reason": "已核对休息日打卡，本次不计入休息日加班。"},
+			{"label": "等待主管确认或补充加班依据", "review_status": "待审核", "reason": "等待主管确认或补充加班依据后，再填写休息日加班工时。"},
+			{"label": "确认不应计入下游", "review_status": "已驳回", "reason": "已核对该休息日打卡不应计入本月下游计算。"},
 		])
 	if {"EMPLOYEE_DEPARTMENT_MISMATCH", "EMPLOYEE_DEPARTMENT_CONFLICT", "DEPARTMENT_CONFLICT"} & codes:
 		options.extend([
@@ -1023,12 +1033,14 @@ def _attendance_draft_exception_policy() -> dict[str, bool]:
 		"late": True,
 		"early": True,
 		"absence_marker": True,
+		"restday_clock_without_overtime": True,
 	}
 	rule_keys = {
 		"ATT-DRAFT-MISSING-PUNCH": "missing_punch",
 		"ATT-DRAFT-LATE": "late",
 		"ATT-DRAFT-EARLY": "early",
 		"ATT-DRAFT-ABSENCE-MARKER": "absence_marker",
+		"ATT-DRAFT-RESTDAY-CLOCK-WITHOUT-OVERTIME": "restday_clock_without_overtime",
 	}
 	try:
 		rules = frappe.get_all(
@@ -2346,6 +2358,8 @@ def update_attendance_draft_daily_row(
 	replacement = next((row for row in rebuilt["processed_rows"] if str(row.get("employee_code") or "") == str(doc.employee_code or "")), None)
 	if not replacement:
 		frappe.throw(_("更正后无法重新生成该员工的考勤汇总。"))
+	if review_status == "已通过" and "RESTDAY_CLOCKED_WITHOUT_OVERTIME" in (replacement.get("exception_codes") or []):
+		frappe.throw(_("该休息日打卡仍未填写有效的休息日加班工时；请填写大于 0 的实际时长，或使用“确认打卡不计加班”仅记录处理决定。"))
 	confirmed = dict(replacement["proposed_value"])
 	confirmed["_daily_row_overrides"] = overrides
 	history = _loads(doc.review_history_json, [])
@@ -2792,10 +2806,14 @@ def list_processing_exceptions(company: str, attendance_month: str, source_type:
 		filters={"import_batch": ["in", batch_names], "exception_codes": ["!=", "[]"], "review_status": "待审核"},
 		fields=["name", "attendance_month", "employee_code", "employee_name", "department", "source_type", "original_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "reviewer", "reviewed_on", "review_note", "source_file", "source_sheet", "source_row", "source_id", "approval_no"],
 		order_by="modified desc",
-		limit_start=page_start,
-		limit_page_length=page_length,
+		# Keep the exceptional queue bounded but sort in Python because the
+		# priority lives inside the JSON exception-code column.  A rest-day
+		# punch with no overtime is actionable before the generic queue.
+		limit_page_length=5000,
 	)
-	return {"review_rows": [_serialize_record(row) for row in records], "total_pending_count": total_pending_count, "filtered_pending_count": filtered_pending_count, "source_type": source_type, "page_start": page_start, "page_length": page_length}
+	rows = [_serialize_record(row) for row in records]
+	rows.sort(key=lambda row: ("RESTDAY_CLOCKED_WITHOUT_OVERTIME" not in (row.get("exception_codes") or []), row.get("reviewed_on") or "", row.get("record_id") or ""))
+	return {"review_rows": rows[page_start : page_start + page_length], "total_pending_count": total_pending_count, "filtered_pending_count": filtered_pending_count, "source_type": source_type, "page_start": page_start, "page_length": page_length}
 
 
 @frappe.whitelist()
@@ -2925,6 +2943,12 @@ def list_manual_adjustments(company: str, attendance_month: str, page_length: in
 		for event in _loads(record.review_history_json, []):
 			items.append({"record_id": record.name, "employee_code": record.employee_code, "employee_name": record.employee_name, "source_type": record.source_type, "field_name": event.get("field_name", ""), "original_value": event.get("old_value"), "new_value": event.get("new_value"), "reason": event.get("reason", ""), "modified_by": event.get("reviewer", ""), "modified_at": event.get("reviewed_on", "")})
 	return {"items": items[: min(max(cint(page_length), 1), 5000)]}
+
+
+@frappe.whitelist()
+def list_attendance_manual_adjustments(company: str, attendance_month: str, page_length: int = 500):
+	"""Named attendance ledger API; retain the legacy API for existing callers."""
+	return list_manual_adjustments(company, attendance_month, page_length)
 
 
 @frappe.whitelist()
@@ -3297,6 +3321,7 @@ def _final_calculation(row: dict[str, Any]) -> dict[str, float]:
 	sick = _as_number(row.get("sick_leave_hours"))
 	annual = _as_number(row.get("annual_leave_hours"))
 	injury = _as_number(row.get("work_injury_hours"))
+	reunion = _as_number(row.get("reunion_leave_hours"))
 	rest = _as_number(row.get("rest_arrangement_hours"))
 	absence = _as_number(row.get("absence_hours"))
 	bereavement = _as_number(row.get("bereavement_leave_hours"))
@@ -3307,8 +3332,10 @@ def _final_calculation(row: dict[str, Any]) -> dict[str, float]:
 	settlement_15_pre = regular_special + _as_number(row.get("workday_overtime_hours"))
 	settlement_20_pre = rest_special + _as_number(row.get("restday_overtime_hours"))
 	settlement_30 = holiday_special + _as_number(row.get("holiday_overtime_hours"))
-	actual_checked = actual - sick / 2 - annual - injury - bereavement - marriage
-	credit_one = sick / 2 + annual + injury + bereavement + marriage
+	# 团圆假与特休一样是带薪、免全勤影响的假别；它不参与排休或
+	# 周末加班抵扣，只补足 1 倍出勤工时。
+	actual_checked = actual - sick / 2 - annual - injury - reunion - bereavement - marriage
+	credit_one = sick / 2 + annual + injury + reunion + bereavement + marriage
 	absence_15_pre = rest
 	absence_20_pre = sick / 2 + personal
 	adjusted_absence_15 = max(absence_15_pre - settlement_15_pre, 0)
@@ -3326,6 +3353,23 @@ def _final_calculation(row: dict[str, Any]) -> dict[str, float]:
 		"adjusted_one_absence": standard - adjusted_one,
 		"settlement_15": max(settlement_15_pre - absence_15_pre, 0),
 		"settlement_20": max(settlement_20_pre - absence_20_pre, 0),
+	}
+
+
+def _payroll_settlement_values(row: dict[str, Any]) -> dict[str, float]:
+	"""Return the one-time attendance settlement values payroll must consume.
+
+	The payroll formula must receive these net overtime hours together with the
+	adjusted 1x hours.  Passing the raw hours would pay the same weekday overtime
+	after it has already been used to offset a rest arrangement.
+	"""
+	calculation = _final_calculation(row)
+	return {
+		"adjusted_working_hours": calculation["adjusted_one"],
+		"overtime_1_5_hours": calculation["settlement_15"],
+		"overtime_2_hours": calculation["settlement_20"],
+		"overtime_3_hours": calculation["settlement_30"],
+		"reunion_leave_hours": _as_number(row.get("reunion_leave_hours")),
 	}
 
 

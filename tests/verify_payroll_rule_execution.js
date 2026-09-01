@@ -36,7 +36,7 @@ for (const marker of [
 	"full_salary_hourly_rate",
 	"weekday_overtime_pay",
 	"full_attendance_deduction",
-	"attendance_processing_center._final_calculation(row)",
+	"attendance_processing_center._payroll_settlement_values(row)",
 	"large_night_shift_start",
 	"small_night_shift_start",
 	"_night_shift_ranges_overlap",

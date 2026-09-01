@@ -118,6 +118,10 @@ function get_company_root_label(frm) {
 	return company === "1" ? "永新" : company;
 }
 
+function get_company_root_display(frm) {
+	return `${get_company_root_label(frm)}（${__("总公司")}）`;
+}
+
 function sync_company_root_parent_display(frm) {
 	const field = frm.fields_dict.parent_department;
 	if (!field?.$wrapper) return;
@@ -127,7 +131,7 @@ function sync_company_root_parent_display(frm) {
 	field.$wrapper.find(".control-input").removeClass("hide");
 	if (!technical_root) return;
 
-	const company = escape_html(get_company_root_label(frm));
+	const company = escape_html(get_company_root_display(frm));
 	const root_context = $(
 		`<div class="hrms-company-root-parent">
 			<div class="hrms-company-root-parent__value">${company}</div>
@@ -225,7 +229,7 @@ function render_relationship_sections(frm, children, employees) {
 			: __("末级部门：如需将员工归入此部门，请启用“允许花名册归属”。");
 	const parent = has_business_parent
 		? `<button type="button" class="btn btn-default btn-sm" data-department="${escape_html(frm.doc.parent_department)}">${escape_html(frm.doc.parent_department)}</button>`
-		: `<span class="text-muted">${escape_html(get_company_root_label(frm))}（${__("公司根节点")}）</span>`;
+		: `<span class="text-muted">${escape_html(get_company_root_display(frm))}</span>`;
 	return `
 		<style>
 			.hrms-focused-department-form .layout-side-section,

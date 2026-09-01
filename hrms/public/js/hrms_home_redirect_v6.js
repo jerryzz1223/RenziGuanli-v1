@@ -418,6 +418,24 @@
 			],
 		},
 		{
+			label: "钉钉集成",
+			route: "/desk/attendance-import-center/dingtalk",
+			icon: "D",
+			keys: ["attendance-import-center/dingtalk", "hrms-dingtalk-user-map", "hrms-dingtalk-raw-record", "hrms-dingtalk-sync-log"],
+			items: [
+				{ type: "link", label: "钉钉集成", route: "/desk/attendance-import-center/dingtalk", slug: "attendance-import-center/dingtalk" },
+				{
+					type: "section",
+					label: "数据与记录",
+					children: [
+						{ label: "员工映射", route: "/desk/List/HRMS DingTalk User Map", slug: "hrms-dingtalk-user-map" },
+						{ label: "原始记录", route: "/desk/List/HRMS DingTalk Raw Record", slug: "hrms-dingtalk-raw-record" },
+						{ label: "同步记录", route: "/desk/List/HRMS DingTalk Sync Log", slug: "hrms-dingtalk-sync-log" },
+					],
+				},
+			],
+		},
+		{
 			label: "考勤",
 			route: "/desk/attendance-import-center",
 			icon: "A",
@@ -454,7 +472,7 @@
 					label: "数据台账",
 					children: [
 						{ label: "导入批次", route: "/desk/attendance-import-center/import-batches", slug: "attendance-import-center/import-batches" },
-						{ label: "人工调整记录", route: "/desk/attendance-import-center/manual-adjustments", slug: "attendance-import-center/manual-adjustments" },
+						{ label: "考勤修改记录", route: "/desk/attendance-import-center/manual-adjustments", slug: "attendance-import-center/manual-adjustments" },
 					],
 				},
 				{
@@ -502,6 +520,7 @@
 						{ label: "月度增减项", route: "/desk/payroll-input-center/variables", slug: "variables" },
 						{ label: "薪资试算", route: "/desk/payroll-input-center/monthly-workbench", slug: "monthly-workbench" },
 						{ label: "确认与发放", route: "/desk/payroll-input-center/payroll-reports", slug: "payroll-reports" },
+						{ label: "薪酬修改记录", route: "/desk/payroll-input-center/payroll-adjustments", slug: "payroll-adjustments" },
 					],
 				},
 				{
@@ -698,7 +717,7 @@
 		"审批": "workflow",
 		"培训学习": "training-program",
 		"绩效": "performance",
-		"更多": "hr-settings-center",
+		"更多": "attendance-import-center/dingtalk",
 		"HR Setup": "hrms-workbench",
 		"Personnel": "employee",
 	};
@@ -888,8 +907,13 @@
 
 	function hrms_sidebar_link_html(item, active_slug, group) {
 		var item_slug = item.slug || route_to_slug(item.route);
+		// A child item can use a concise slug (for example `monthly-workbench`)
+		// while its real Desk route is nested (`payroll-input-center/monthly-workbench`).
+		// Match both forms so the persistent selection reflects the open page,
+		// rather than appearing only while the pointer is hovering the item.
+		var route_slug = route_to_slug(item.route);
 		var active =
-			item_slug === active_slug ||
+			[item_slug, route_slug].some(function (slug) { return slug === active_slug; }) ||
 			(item.active_slugs || []).some(function (slug) {
 				return slug === active_slug || route_key_matches(active_slug, slug);
 			});

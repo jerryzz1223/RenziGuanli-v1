@@ -110,7 +110,7 @@ def _resolve_scope(route):
 	if page in PAGE_SCOPES:
 		scope, label = PAGE_SCOPES[page]
 		return scope, label, ""
-	if page == "hr-settings-center" and "dingtalk-integration" in parts:
+	if page == "attendance-import-center" and "dingtalk" in parts:
 		return "dingtalk", _("钉钉同步测试数据"), ""
 	if page == "List" and len(parts) > 1:
 		doctype = parts[1]

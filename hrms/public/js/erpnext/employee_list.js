@@ -1,6 +1,7 @@
 (function () {
 	const EMPLOYEE_DOCTYPE = "Employee";
 	const ROSTER_ALL_EMPLOYEES_PAGE_LENGTH = 500;
+	const ROSTER_TABLE_PAGE_LENGTH = 20;
 	const ROSTER_COLUMN_FILTER_STORAGE_KEY = "hrms_roster_column_filter";
 	const roster_phase_one_markers = {
 		column_filter_mode: "表头联想筛选",
@@ -22,7 +23,8 @@
 	// 业务上只有一个“工作性质”口径；其五个显示值由 Employee 的在职、
 	// 转正、返聘和离职资料共同计算，不再维护另一套人员字段。
 	const roster_cards = [
-		{ label: "全部", filters: {} },
+		// “全部”用于在职花名册，保留待离职人员但不纳入已离职人员。
+		{ label: "全部", filters: { status: ["!=", "Left"] } },
 		{ label: "在职 · 正式", filters: { employment_type: "Full-time", custom_is_confirmed: "是", status: "Active" } },
 		// 转正标记为空的员工由转正日期判断。定时任务会在到期时把他们
 		// 正式办理为“是”；在此之前，他们与明确“否”的员工一样归入试用。
@@ -55,7 +57,7 @@
 
 	frappe.listview_settings[EMPLOYEE_DOCTYPE] = {
 		hide_name_column: true,
-		page_length: ROSTER_ALL_EMPLOYEES_PAGE_LENGTH,
+		page_length: ROSTER_TABLE_PAGE_LENGTH,
 		disable_comment_count: true,
 		add_fields: [
 			"employee_name",
@@ -169,23 +171,11 @@
 	}
 
 	function ensure_roster_records_loaded(listview) {
-		if (
-			listview.__hrmsRosterInitialLoadRequested ||
-			!Array.isArray(listview.data) ||
-			!listview.data.length
-		) {
-			return;
-		}
-
-		// BaseList starts with 20 rows on compact browsers.  Requesting a larger
-		// page from onload races that initial request, which can leave only those
-		// first 20 rows rendered despite the total count being much larger.
-		listview.__hrmsRosterInitialLoadRequested = true;
-		listview.start = 0;
-		listview.page_length = ROSTER_ALL_EMPLOYEES_PAGE_LENGTH;
-		listview.selected_page_count = ROSTER_ALL_EMPLOYEES_PAGE_LENGTH;
-		listview.last_args = null;
-		listview.refresh();
+		// The custom table owns pagination. Keep ListView at the same page size so
+		// every page click fetches the next server-side slice instead of stopping
+		// after the first native 20-row response.
+		listview.page_length = ROSTER_TABLE_PAGE_LENGTH;
+		listview.selected_page_count = ROSTER_TABLE_PAGE_LENGTH;
 	}
 
 	function bind_natural_employee_code_sorting(listview) {
@@ -235,10 +225,10 @@
 	}
 
 	function configure_roster_page_length(listview) {
-		if (listview.page_length === ROSTER_ALL_EMPLOYEES_PAGE_LENGTH) return false;
+		if (listview.page_length === ROSTER_TABLE_PAGE_LENGTH) return false;
 
-		listview.page_length = ROSTER_ALL_EMPLOYEES_PAGE_LENGTH;
-		listview.selected_page_count = ROSTER_ALL_EMPLOYEES_PAGE_LENGTH;
+		listview.page_length = ROSTER_TABLE_PAGE_LENGTH;
+		listview.selected_page_count = ROSTER_TABLE_PAGE_LENGTH;
 		return false;
 	}
 
@@ -408,69 +398,245 @@
 		const header_host = result_container?.parentElement;
 		if (!result_container || !header_host) return;
 
-		// Frappe replaces the complete result container for an empty response, not
-		// merely `.result` / `.no-result`.  Keep the business header as a sibling
-		// in ListView's stable host, so a search can never remove its own filter.
-		result_container.querySelectorAll(":scope > .hrms-roster-table-header").forEach((stale_header) => stale_header.remove());
-		let header = header_host.querySelector(":scope > .hrms-roster-table-header");
-		if (!header) {
-			header = document.createElement("div");
-			header.className = "hrms-roster-table-header";
-			header.setAttribute("aria-label", __("员工花名册表头"));
-			header_host.insertBefore(header, result_container);
+		// Render the roster as one real table, like the payroll workbench.  The
+		// ListView remains the data source (including its status-card filters), but
+		// it no longer contributes a second subject/name column beside the table.
+		result_container.querySelectorAll(":scope > .hrms-roster-table-header").forEach((header) => header.remove());
+		let table_wrap = header_host.querySelector(":scope > .hrms-roster-table-wrap");
+		if (!table_wrap) {
+			table_wrap = document.createElement("div");
+			table_wrap.className = "hrms-payroll-table-wrap hrms-roster-table-wrap";
+			table_wrap.setAttribute("aria-label", __("员工花名册"));
+			header_host.insertBefore(table_wrap, result_container);
 		}
 
-		const active_filter = get_stored_roster_column_filter();
-		const columns = get_visible_roster_columns();
-		const signature = columns.map((column) => column.fieldname).join(",");
-		if (header.dataset.signature === signature) {
-			header.querySelectorAll(".hrms-roster-table-header__input").forEach((input) => {
-				if (document.activeElement === input) return;
-				input.value = input.dataset.fieldname === active_filter?.fieldname ? active_filter.display_value || active_filter.value || "" : "";
-			});
-			return;
-		}
-
-		header.dataset.signature = signature;
-		header.style.setProperty("--hrms-roster-column-count", String(columns.length));
-		header.replaceChildren();
+		const state = get_roster_table_state(listview);
+		if (state.records === null && !state.loading) load_roster_table_records(listview, state);
+		const columns = get_roster_table_columns();
+		table_wrap.replaceChildren();
+		const scroll = document.createElement("div");
+		scroll.className = "hrms-payroll-table-scroll hrms-roster-table-scroll";
+		const table = document.createElement("table");
+		table.className = "table table-bordered hrms-payroll-input-table hrms-roster-input-table";
+		const thead = document.createElement("thead");
+		const header_row = document.createElement("tr");
 		columns.forEach((column) => {
-			const cell = document.createElement("div");
-			cell.className = "hrms-roster-table-header__cell";
-			cell.dataset.fieldname = column.fieldname;
-			const title = document.createElement("button");
-			title.type = "button";
-			title.className = "hrms-roster-table-header__sort";
-			title.textContent = __(column.label);
-			title.setAttribute("title", __("点击按{0}排序", [column.label]));
-			title.addEventListener("click", () => apply_roster_column_sort(listview, column.fieldname));
-			const input = document.createElement("input");
-			input.type = "search";
-			input.className = "form-control input-sm hrms-roster-table-header__input";
-			input.dataset.fieldname = column.fieldname;
-			input.placeholder = __("搜索");
-			input.autocomplete = "off";
-			input.setAttribute("aria-label", __("搜索{0}", [column.label]));
-			input.value = active_filter?.fieldname === column.fieldname ? active_filter.display_value || active_filter.value || "" : "";
-			let filter_timer;
-			const apply_input = () => {
-				const value = input.value.trim();
-				if (!value) return clear_roster_column_filter();
-				apply_roster_column_filter(column, { value, label: value }, false);
-			};
-			input.addEventListener("input", () => {
-				window.clearTimeout(filter_timer);
-				filter_timer = window.setTimeout(apply_input, 450);
+			const th = document.createElement("th");
+			if (!column.sortable && !column.filterable) {
+				th.textContent = __(column.label);
+				header_row.appendChild(th);
+				return;
+			}
+			const head = document.createElement("div");
+			head.className = "hrms-payroll-table-column-head hrms-roster-table-column-head";
+			const sort = document.createElement("button");
+			sort.type = "button";
+			sort.className = "btn btn-link btn-xs";
+			sort.textContent = __(column.label);
+			sort.title = __("点击按{0}排序", [column.label]);
+			const indicator = document.createElement("i");
+			const sorted = state.sort_field === column.sort_field;
+			indicator.textContent = sorted ? (state.sort_order === "asc" ? "↑" : "↓") : "↕";
+			sort.appendChild(indicator);
+			sort.classList.toggle("is-sorted", sorted);
+			sort.addEventListener("click", () => {
+				state.sort_order = state.sort_field === column.sort_field && state.sort_order === "asc" ? "desc" : "asc";
+				state.sort_field = column.sort_field;
+				state.page = 1;
+				ensure_roster_empty_result_header(listview);
 			});
-			input.addEventListener("keydown", (event) => {
-				if (event.key !== "Enter") return;
-				event.preventDefault();
-				window.clearTimeout(filter_timer);
-				apply_input();
-			});
-			cell.append(title, input);
-			header.appendChild(cell);
+			head.appendChild(sort);
+			if (column.filterable) {
+				const input = document.createElement("input");
+				input.type = "search";
+				input.className = "form-control input-xs";
+				input.placeholder = __("搜索");
+				input.autocomplete = "off";
+				input.setAttribute("aria-label", __("搜索{0}", [column.label]));
+				input.value = state.filters[column.fieldname] || "";
+				input.addEventListener("input", () => {
+					state.filters[column.fieldname] = input.value;
+					state.page = 1;
+					ensure_roster_empty_result_header(listview);
+				});
+				head.appendChild(input);
+			}
+			th.appendChild(head);
+			header_row.appendChild(th);
 		});
+		thead.appendChild(header_row);
+		table.appendChild(thead);
+
+		const tbody = document.createElement("tbody");
+		const matching_rows = get_visible_roster_table_rows(listview, columns, state);
+		const page_size = state.page_size;
+		const total = matching_rows.length;
+		const page_count = Math.max(1, Math.ceil(total / page_size));
+		state.page = Math.min(Math.max(1, state.page), page_count);
+		const rows = matching_rows.slice((state.page - 1) * page_size, state.page * page_size);
+		if (!rows.length) {
+			const row = document.createElement("tr");
+			const cell = document.createElement("td");
+			cell.colSpan = columns.length;
+			cell.className = "text-muted";
+			cell.textContent = __("暂无符合条件的员工");
+			row.appendChild(cell);
+			tbody.appendChild(row);
+		}
+		rows.forEach((employee) => {
+			const row = document.createElement("tr");
+			columns.forEach((column) => row.appendChild(render_roster_table_cell(employee, column)));
+			tbody.appendChild(row);
+		});
+		table.appendChild(tbody);
+		scroll.appendChild(table);
+		table_wrap.appendChild(scroll);
+		if (total > page_size) table_wrap.appendChild(render_roster_table_pagination(listview, state, total, page_count));
+	}
+
+	function get_roster_table_columns() {
+		const visible_columns = get_visible_roster_columns().filter(
+			(column) => !["employee_name", "custom_employee_code"].includes(column.fieldname),
+		);
+		return [
+			{ fieldname: "employee_identity", label: "姓名 / 工号", sort_field: "custom_employee_code", filterable: true, sortable: true },
+			...visible_columns.map((column) => ({ ...column, sort_field: column.fieldname, filterable: true, sortable: true })),
+			{ fieldname: "actions", label: "操作", filterable: false, sortable: false },
+		];
+	}
+
+	function get_roster_table_state(listview) {
+		if (!listview.__hrmsRosterTableState) {
+			listview.__hrmsRosterTableState = { filters: {}, loading: false, page: 1, page_size: 20, records: null, sort_field: "", sort_order: "asc", source_key: "" };
+		}
+		const state = listview.__hrmsRosterTableState;
+		state.filters ||= {};
+		state.page ||= 1;
+		state.page_size ||= 20;
+		return state;
+	}
+
+	function load_roster_table_records(listview, state) {
+		const card = get_active_roster_card();
+		const filters = { ...(card.filters || {}) };
+		const company = get_current_roster_company();
+		if (company) filters.company = company;
+		const source_key = JSON.stringify(filters);
+		if ((state.loading && state.source_key === source_key) || (state.source_key === source_key && Array.isArray(state.records))) return;
+
+		state.loading = true;
+		state.source_key = source_key;
+		frappe.call({
+			method: "hrms.api.employee_field_template.get_employee_roster",
+			args: { filters: JSON.stringify(filters), page: 1, page_length: ROSTER_ALL_EMPLOYEES_PAGE_LENGTH },
+			callback(response) {
+				if (state.source_key !== source_key) return;
+				state.loading = false;
+				const message = response.message || {};
+				state.records = Array.isArray(message.rows) ? message.rows : [];
+				state.page = 1;
+				ensure_roster_empty_result_header(listview);
+			},
+			always() {
+				if (state.source_key === source_key) state.loading = false;
+			},
+		});
+	}
+
+	function render_roster_table_pagination(listview, state, total, page_count) {
+		const pagination = document.createElement("nav");
+		pagination.className = "hrms-payroll-table-pagination hrms-roster-table-pagination";
+		pagination.setAttribute("aria-label", __("花名册分页"));
+		const summary = document.createElement("span");
+		summary.textContent = __("共 {0} 条，第 {1} / {2} 页", [total, state.page, page_count]);
+		const controls = document.createElement("div");
+		const go_to_page = (page) => {
+			state.page = Math.min(Math.max(1, page), page_count);
+			ensure_roster_empty_result_header(listview);
+		};
+		const add_button = (label, page, active = false) => {
+			const button = document.createElement("button");
+			button.type = "button";
+			button.className = "btn btn-default btn-xs";
+			button.textContent = label;
+			button.disabled = page < 1 || page > page_count || active;
+			button.classList.toggle("is-active", active);
+			if (active) button.setAttribute("aria-current", "page");
+			button.addEventListener("click", () => go_to_page(page));
+			controls.appendChild(button);
+		};
+		add_button(__("上一页"), state.page - 1);
+		const pages = Array.from({ length: page_count }, (_item, index) => index + 1).filter(
+			(page) => page === 1 || page === page_count || Math.abs(page - state.page) <= 1,
+		);
+		pages.forEach((page, index) => {
+			if (index && page - pages[index - 1] > 1) {
+				const ellipsis = document.createElement("span");
+				ellipsis.className = "hrms-roster-table-pagination-ellipsis";
+				ellipsis.textContent = "…";
+				controls.appendChild(ellipsis);
+			}
+			add_button(String(page), page, page === state.page);
+		});
+		add_button(__("下一页"), state.page + 1);
+		pagination.append(summary, controls);
+		return pagination;
+	}
+
+	function get_visible_roster_table_rows(listview, columns, state) {
+		const filter_value = (employee, column) => {
+			if (column.fieldname === "employee_identity") {
+				return `${employee.employee_name || ""} ${get_employee_business_code(employee)}`;
+			}
+			return get_roster_table_cell_value(employee, column);
+		};
+		const active_filters = Object.entries(state.filters).filter(([, value]) => String(value || "").trim());
+		const rows = (state.records || []).filter((employee) =>
+			active_filters.every(([fieldname, value]) => {
+				const column = columns.find((item) => item.fieldname === fieldname);
+				return String(filter_value(employee, column) || "").toLocaleLowerCase("zh-CN").includes(String(value).trim().toLocaleLowerCase("zh-CN"));
+			}),
+		);
+		if (!state.sort_field) return rows;
+		return rows.slice().sort((left, right) => {
+			const column = columns.find((item) => item.sort_field === state.sort_field);
+			const result = String(filter_value(left, column) || "").localeCompare(String(filter_value(right, column) || ""), "zh-CN", {
+				numeric: true,
+				sensitivity: "base",
+			});
+			return state.sort_order === "asc" ? result : -result;
+		});
+	}
+
+	function get_roster_table_cell_value(employee, column) {
+		const value = employee?.[column?.fieldname];
+		if (column?.fieldname === "department") return get_roster_department_label(value);
+		if (column?.fieldname === "employment_type") return format_roster_employment_type(value, employee);
+		return value == null || value === "" ? "-" : value;
+	}
+
+	function render_roster_table_cell(employee, column) {
+		const cell = document.createElement("td");
+		if (column.fieldname === "employee_identity") {
+			const name = document.createElement("strong");
+			name.textContent = employee.employee_name || employee.name || "-";
+			const code = document.createElement("small");
+			code.textContent = get_employee_business_code(employee) || "-";
+			cell.className = "hrms-roster-identity-cell";
+			cell.append(name, code);
+			return cell;
+		}
+		if (column.fieldname === "actions") {
+			const action = document.createElement("button");
+			action.type = "button";
+			action.className = "btn btn-default btn-xs";
+			action.textContent = __("快速编辑");
+			action.addEventListener("click", () => frappe.set_route("employee-detail", employee.name));
+			cell.appendChild(action);
+			return cell;
+		}
+		cell.textContent = get_roster_table_cell_value(employee, column);
+		return cell;
 	}
 
 	function get_or_create_roster_native_header(wrapper) {
@@ -631,7 +797,9 @@
 	function stretch_roster_result_area(listview) {
 		const wrapper = get_list_wrapper(listview);
 		const result_container = wrapper?.querySelector(".result-container");
-		if (!result_container) return;
+		const table_wrap = wrapper?.querySelector(".hrms-roster-table-wrap");
+		const roster_surface = table_wrap || result_container;
+		if (!roster_surface) return;
 
 		window.requestAnimationFrame(() => {
 			// Frappe's ListView height is normally content-driven.  On the compact
@@ -645,10 +813,10 @@
 			wrapper.style.setProperty("height", `${main_height}px`, "important");
 			wrapper.style.setProperty("min-height", `${main_height}px`, "important");
 
-			const top = result_container.getBoundingClientRect().top;
+			const top = roster_surface.getBoundingClientRect().top;
 			const available_height = Math.max(320, Math.floor((window.innerHeight - top - 12) / desktop_zoom));
-			result_container.style.setProperty("height", `${available_height}px`, "important");
-			result_container.style.setProperty("min-height", `${available_height}px`, "important");
+			roster_surface.style.setProperty("height", `${available_height}px`, "important");
+			roster_surface.style.setProperty("min-height", `${available_height}px`, "important");
 		});
 	}
 
@@ -884,6 +1052,9 @@
 			count_with_available_fields(card.filters)
 				.then((count) => {
 					value.textContent = count;
+					// The custom table gets its page total from the active card when
+					// ListView has only loaded the current server-side slice.
+					if (card.label === get_active_roster_card().label) ensure_roster_empty_result_header(listview);
 				})
 				.catch(() => {
 					value.textContent = "0";
@@ -925,6 +1096,11 @@
 		// setting route_options leaves the old (often one-person) result on screen.
 		// Reset its actual filter state before loading the requested rows.
 		if (listview) {
+			const table_state = get_roster_table_state(listview);
+			table_state.page = 1;
+			table_state.records = null;
+			table_state.source_key = "";
+			load_roster_table_records(listview, table_state);
 			apply_roster_filters_to_live_listview(listview, route_options);
 			return;
 		}

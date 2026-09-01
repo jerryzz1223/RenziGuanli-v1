@@ -48,6 +48,14 @@ for (const marker of ["on_page_show", "refresh_from_route", "bind_route_events",
 	mustInclude(pageJs, marker, `Payroll page must refresh when sidebar route changes without manual reload: ${marker}`);
 }
 
+for (const marker of [
+	"var route_slug = route_to_slug(item.route);",
+	"[item_slug, route_slug].some",
+	"payroll-input-center/monthly-workbench",
+]) {
+	mustInclude(shellJs, marker, `Payroll sidebar must keep the current nested page selected: ${marker}`);
+}
+
 for (const method of [
 	"list_employee_salary_profiles",
 	"list_monthly_payroll_overview",

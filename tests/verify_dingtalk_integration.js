@@ -174,26 +174,29 @@ for (const fieldname of [
 }
 
 const settingsCenter = read("hrms/hr/page/hr_settings_center/hr_settings_center.js");
-for (const marker of [
-	"钉钉集成",
-	"get_dingtalk_connection_status",
-	"apply_dingtalk_default_settings",
-	"save_dingtalk_connection_settings",
-	"get_employee_gateway_config",
-	"get_employee_self_snapshot",
-	"sync_departments_from_dingtalk",
-	"sync_users_from_dingtalk",
-	"sync_attendance_from_dingtalk",
-	"preview_sync_payload",
-	"公网小网关",
-	"服务器部署",
-]) {
-	mustInclude(settingsCenter, marker, `Settings center is missing DingTalk marker: ${marker}`);
+if (settingsCenter.includes("SYSTEM_SETTINGS_MODULES = new Set([\"钉钉集成\"")) {
+	throw new Error("DingTalk must not remain a Settings Center module.");
 }
 
-const workbench = read("hrms/hr/page/hrms_workbench/hrms_workbench.js");
-for (const marker of ["钉钉集成", "dingtalk-integration", "基础数据同步"]) {
-	mustInclude(workbench, marker, `Workbench is missing DingTalk marker: ${marker}`);
+const attendanceCenter = read("hrms/hr/page/attendance_import_center/attendance_import_center.js");
+for (const marker of [
+	"standalone_views",
+	"key: \"dingtalk\"",
+	"render_dingtalk_integration",
+	"open_dingtalk_configuration",
+	"get_dingtalk_connection_status",
+	"save_dingtalk_connection_settings",
+	"queue_dingtalk_local_pilot_sync",
+	"sync_departments_from_dingtalk",
+	"sync_users_from_dingtalk",
+	"list_dingtalk_attendance_sync_runs",
+]) {
+	mustInclude(attendanceCenter, marker, `Standalone DingTalk integration is missing marker: ${marker}`);
+}
+
+const topNav = read("hrms/public/js/hrms_top_nav.js");
+for (const marker of ["label: \"钉钉集成\"", "route: \"/desk/attendance-import-center/dingtalk\"", "钉钉考勤、员工映射与同步记录"]) {
+	mustInclude(topNav, marker, `更多 menu is missing DingTalk entry: ${marker}`);
 }
 
 console.log("DingTalk integration contract passed.");

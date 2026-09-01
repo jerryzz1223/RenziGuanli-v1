@@ -175,6 +175,39 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 			"exception_codes": ["CLOCK_IN_MISSING", "CLOCK_OUT_MISSING"],
 		}])
 
+	def test_exactly_one_clock_time_creates_the_missing_side_review_event(self):
+		rows = [
+			{
+				"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课", "班次": "白班",
+				"上班时间": "08:00", "下班时间": "", "source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+			},
+			{
+				"姓名": "张三", "工号": "E-001", "日期": "26-06-02", "实际部门": "工程课", "班次": "白班",
+				"上班时间": "", "下班时间": "17:00", "source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 4,
+			},
+		]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")["processed_rows"][0]
+
+		self.assertEqual(row["processed_value"]["clock_in_missing_count"], 1)
+		self.assertEqual(row["processed_value"]["clock_out_missing_count"], 1)
+		self.assertTrue({"CLOCK_IN_MISSING", "CLOCK_OUT_MISSING"}.issubset(row["exception_codes"]))
+		self.assertEqual([(item["attendance_date"], item["exception_codes"]) for item in row["processed_value"]["exception_lines"]], [
+			("2026-06-01", ["CLOCK_OUT_MISSING"]),
+			("2026-06-02", ["CLOCK_IN_MISSING"]),
+		])
+
+	def test_no_clock_times_is_not_mistaken_for_a_single_punch(self):
+		rows = [{
+			"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课", "班次": "白班",
+			"上班时间": "", "下班时间": "", "source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+		}]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")["processed_rows"][0]
+
+		self.assertEqual(row["processed_value"]["clock_in_missing_count"], 0)
+		self.assertEqual(row["processed_value"]["clock_out_missing_count"], 0)
+		self.assertNotIn("CLOCK_IN_MISSING", row["exception_codes"])
+		self.assertNotIn("CLOCK_OUT_MISSING", row["exception_codes"])
+
 	def test_daily_attendance_facts_stay_downstream_and_workday_absence_becomes_payroll_hours(self):
 		rows = [
 			{"姓名": "张三", "工号": "E-001", "日期": "26-06-07", "日期类型": "周末休息日", "实际部门": "工程课", "班次": "白班", "旷工": 1, "source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3},
@@ -189,11 +222,46 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(row["processed_value"]["early_count"], 1)
 		self.assertEqual(row["processed_value"]["absence_marker_count"], 2)
 		self.assertEqual(row["processed_value"]["absence_hours"], 10)
-		self.assertTrue({"LATE_MARKED", "EARLY_MARKED", "ABSENCE_MARKED"}.issubset(row["exception_codes"]))
-		self.assertEqual(result["metrics"]["exception_events"], 3)
+		self.assertTrue({"CLOCK_IN_MISSING", "LATE_MARKED", "EARLY_MARKED", "ABSENCE_MARKED"}.issubset(row["exception_codes"]))
+		self.assertEqual(result["metrics"]["exception_events"], 4)
 		self.assertEqual(row["review_status"], "无需审核")
 		self.assertTrue(row["eligible_for_downstream"])
-		self.assertEqual([event["attendance_date"] for event in row["exception_events"]], ["2026-06-08", "2026-06-09", "2026-06-10"])
+		self.assertEqual([(event["attendance_date"], event["code"]) for event in row["exception_events"]], [
+			("2026-06-08", "ABSENCE_MARKED"),
+			("2026-06-09", "CLOCK_IN_MISSING"),
+			("2026-06-09", "EARLY_MARKED"),
+			("2026-06-10", "LATE_MARKED"),
+		])
+
+	def test_rest_day_clock_without_overtime_application_requires_manual_hours_confirmation(self):
+		rows = [{
+			"姓名": "张三", "工号": "E-001", "日期": "26-06-07", "日期类型": "周末休息日", "实际部门": "工程课",
+			"班次": "休息", "上班时间": "09:02", "下班时间": "17:41", "实际出勤（小时）": 0,
+			"休息日加班（小时）": 0, "关联审批单": "", "source_row": 3,
+		}]
+
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")["processed_rows"][0]
+
+		self.assertIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", row["exception_codes"])
+		self.assertEqual(row["review_status"], "待审核")
+		self.assertFalse(row["eligible_for_downstream"])
+		self.assertEqual(row["exception_events"], [{
+			"code": "RESTDAY_CLOCKED_WITHOUT_OVERTIME", "attendance_date": "2026-06-07", "source_row": 3,
+		}])
+		self.assertEqual(row["processed_value"]["exception_lines"][0]["restday_overtime_hours"], 0)
+		self.assertTrue(row["processed_value"]["exception_lines"][0]["restday_clocked_without_overtime"])
+
+	def test_rest_day_clock_with_overtime_application_does_not_require_manual_confirmation(self):
+		rows = [{
+			"姓名": "张三", "工号": "E-001", "日期": "26-06-07", "日期类型": "周末休息日", "实际部门": "工程课",
+			"班次": "休息", "上班时间": "09:02", "下班时间": "17:41", "休息日加班（小时）": 0,
+			"关联审批单": "加班申请 OT-001", "source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+		}]
+
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")["processed_rows"][0]
+
+		self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", row["exception_codes"])
+		self.assertEqual(row["review_status"], "无需审核")
 
 	def test_early_departure_with_leave_evidence_does_not_create_absence_hours(self):
 		rows = [{
@@ -219,6 +287,29 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 			("2026-06-02", ["EARLY_MARKED"]),
 			("2026-06-03", ["CLOCK_OUT_MISSING"]),
 		])
+
+	def test_one_minute_late_without_leave_is_a_review_event(self):
+		rows = [{
+			"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课",
+			"班次": "白班 08:00-17:00", "标准工时": 8, "上班时间": "08:01", "下班时间": "17:00",
+			"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+		}]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")["processed_rows"][0]
+
+		self.assertEqual(row["processed_value"]["late_count"], 1)
+		self.assertIn("LATE_MARKED", row["exception_codes"])
+		self.assertEqual(row["processed_value"]["exception_lines"][0]["attendance_date"], "2026-06-01")
+
+	def test_leave_evidence_prevents_time_only_late_alert(self):
+		rows = [{
+			"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课",
+			"班次": "白班 08:00-17:00", "标准工时": 8, "上班时间": "08:01", "下班时间": "17:00",
+			"请假/事假(小时)": 1, "迟到次数": 1, "source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+		}]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")["processed_rows"][0]
+
+		self.assertEqual(row["processed_value"]["late_count"], 0)
+		self.assertNotIn("LATE_MARKED", row["exception_codes"])
 
 	def test_blank_shift_outside_known_employment_period_is_data_quality_only(self):
 		rows = [

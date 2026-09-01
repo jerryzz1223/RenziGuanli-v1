@@ -187,6 +187,7 @@ ATTENDANCE_DRAFT_IMPORT_RULE_CODES = (
 	"ATT-DRAFT-LATE",
 	"ATT-DRAFT-EARLY",
 	"ATT-DRAFT-ABSENCE-MARKER",
+	"ATT-DRAFT-RESTDAY-CLOCK-WITHOUT-OVERTIME",
 	"ATT-DRAFT-SHIFT-MISSING",
 )
 ATTENDANCE_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
@@ -307,10 +308,10 @@ DEFAULT_ATTENDANCE_CUSTOM_RULES = [
 		"rule_group": "考勤",
 		"rule_type": "导入异常识别",
 		"source_module": "钉钉每日统计",
-		"source_document": "每日统计 / 迟到次数",
-		"trigger_condition": "来源明确给出迟到次数大于 0。",
-		"formula": "late_count > 0",
-		"action_result": "按员工＋日期生成迟到待核验事件；需结合请假或主管说明后处理。",
+		"source_document": "每日统计 / 应上班时间、上班时间、迟到次数、请假",
+		"trigger_condition": "工作日实际上班时间晚于应上班时间，且无请假证据；不存在迟到宽限分钟。",
+		"formula": "late_count > 0 || (actual_in_time > scheduled_in_time && !leave_evidence)",
+		"action_result": "按员工＋日期生成迟到待核验事件；不直接扣款，需结合请假或主管说明后处理。",
 		"priority": 6,
 		"application_mode": "异常提示",
 	},
@@ -341,6 +342,19 @@ DEFAULT_ATTENDANCE_CUSTOM_RULES = [
 		"application_mode": "异常提示",
 	},
 	{
+		"rule_code": "ATT-DRAFT-RESTDAY-CLOCK-WITHOUT-OVERTIME",
+		"rule_name": "考勤初稿：休息日打卡未计加班",
+		"rule_group": "考勤",
+		"rule_type": "导入异常识别",
+		"source_module": "钉钉每日统计",
+		"source_document": "每日统计 / 日期类型、上班时间、下班时间、关联审批单、休息日加班（小时）",
+		"trigger_condition": "日期类型为休息日，存在上班或下班打卡时间，未匹配加班申请，且休息日加班工时为 0。",
+		"formula": "is_rest_day && (clock_in || clock_out) && !overtime_approval && restday_overtime_hours <= 0",
+		"action_result": "置顶进入考勤初稿异常；由人事人工填写实际休息日加班工时或确认本次打卡不计加班。",
+		"priority": 1,
+		"application_mode": "异常提示",
+	},
+	{
 		"rule_code": "ATT-DRAFT-SHIFT-MISSING",
 		"rule_name": "考勤初稿：班次缺失核验",
 		"rule_group": "考勤",
@@ -355,14 +369,14 @@ DEFAULT_ATTENDANCE_CUSTOM_RULES = [
 	},
 	{
 		"rule_code": "ATT-LATE-30",
-		"rule_name": "迟到0-30分钟",
+		"rule_name": "迟到（无宽限）",
 		"rule_group": "考勤",
 		"rule_type": "异常判定",
 		"source_module": "人资考勤",
 		"source_document": "5.2人资考勤.xlsx / 人资考勤制度作业规范",
-		"trigger_condition": "工作日实际上班时间晚于应上班时间，且迟到时长大于0小于等于30分钟。",
-		"formula": "late_minutes > 0 && late_minutes <= 30",
-		"action_result": "计0.5H缺勤，扣全勤10元；需补钉钉事假或主管说明。",
+		"trigger_condition": "工作日实际上班时间晚于应上班时间，且迟到时长大于 0 分钟。",
+		"formula": "late_minutes > 0",
+		"action_result": "生成迟到待核验；无迟到宽限，需核对请假或主管说明后再处理。",
 		"priority": 10,
 		"application_mode": "异常提示",
 	},
@@ -2428,6 +2442,7 @@ def _calculate_monthly_values(values):
 		sick_half_hours
 		+ values["annual_leave_hours"]
 		+ values["work_injury_leave_hours"]
+		+ values["reunion_leave_hours"]
 		+ values["bereavement_leave_hours"]
 		+ values["marriage_leave_hours"]
 	)
@@ -2436,6 +2451,7 @@ def _calculate_monthly_values(values):
 		- sick_half_hours
 		- values["annual_leave_hours"]
 		- values["work_injury_leave_hours"]
+		- values["reunion_leave_hours"]
 		- values["bereavement_leave_hours"]
 		- values["marriage_leave_hours"],
 		0,
@@ -2455,7 +2471,7 @@ def _calculate_monthly_values(values):
 		- adjusted_2_absence_hours
 	)
 	adjusted_absence_hours = max(values["standard_hours"] - adjusted_working_hours, 0)
-	full_attendance_basis = max(values["standard_hours"] - values["actual_attendance_hours"] - values["rest_leave_hours"] + sick_half_hours, 0)
+	full_attendance_basis = max(values["standard_hours"] - values["actual_attendance_hours"] - values["rest_leave_hours"] - values["reunion_leave_hours"] + sick_half_hours, 0)
 	if full_attendance_basis > 48:
 		full_attendance_deduction = 200
 	elif full_attendance_basis > 32:
@@ -2517,6 +2533,7 @@ def generate_monthly_attendance_summary(company: str, attendance_month: str):
 		summaries[key]["annual_leave_hours"] += flt(row.annual_leave_hours)
 		summaries[key]["work_injury_leave_hours"] += flt(row.work_injury_leave_hours)
 		summaries[key]["rest_leave_hours"] += flt(row.rest_leave_hours)
+		summaries[key]["reunion_leave_hours"] += flt(row.reunion_leave_hours)
 		summaries[key]["bereavement_leave_hours"] += flt(row.bereavement_leave_hours)
 		summaries[key]["marriage_leave_hours"] += flt(row.marriage_leave_hours)
 		summaries[key]["large_night_shift_count"] += flt(row.large_night_shift_count)
@@ -2572,6 +2589,7 @@ def generate_monthly_attendance_summary(company: str, attendance_month: str):
 				"annual_leave_hours": values["annual_leave_hours"],
 				"work_injury_leave_hours": values["work_injury_leave_hours"],
 				"rest_leave_hours": values["rest_leave_hours"],
+				"reunion_leave_hours": values["reunion_leave_hours"],
 				"large_night_shift_count": values["large_night_shift_count"],
 				"small_night_shift_count": values["small_night_shift_count"],
 				"actual_clock_attendance_hours": calculated["actual_clock_attendance_hours"],
@@ -3365,7 +3383,7 @@ def _rule_hit_rows(rule_code, day_checks):
 				reason = "应出勤且无上班打卡、无有效请假"
 		elif rule_code == "ATT-LATE-30":
 			late_minutes = _late_minutes_for_rule(row)
-			if late_minutes is not None and 0 < late_minutes <= 30:
+			if late_minutes is not None and late_minutes > 0 and flt(getattr(row, "valid_leave_hours", 0)) <= 0:
 				reason = "实际上班晚于排班开始 %s 分钟" % late_minutes
 		if reason:
 			hits.append({"row": row, "reason": reason})
