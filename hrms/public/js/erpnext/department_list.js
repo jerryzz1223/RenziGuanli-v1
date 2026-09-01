@@ -37,10 +37,10 @@
 			frappe.set_route("organizational-chart");
 		});
 
-		listview.page.add_inner_button(__("快速编辑"), function () {
+		listview.page.add_inner_button(__("调整层级"), function () {
 			const selected = get_selected_departments(listview);
 			if (selected.length !== 1) {
-				frappe.msgprint(__("请选择一个部门进行快速编辑。"));
+				frappe.msgprint(__("请选择一个部门后调整其层级。"));
 				return;
 			}
 			show_department_quick_edit_dialog(listview, selected[0]);
@@ -338,8 +338,13 @@
 	function show_department_quick_edit_dialog(listview, department) {
 		frappe.db.get_doc("Department", department).then((doc) => {
 			const dialog = new frappe.ui.Dialog({
-				title: __("快速编辑部门"),
+				title: __("调整部门层级"),
 				fields: [
+					{
+						fieldname: "structure_hint",
+						fieldtype: "HTML",
+						options: `<div class="text-muted small mb-3">${__("先将承担上级职责的节点勾选为文件夹部门，再为下级选择上级部门；人员只归属到末级部门。")}</div>`,
+					},
 					{
 						fieldname: "department_name",
 						fieldtype: "Data",
@@ -362,13 +367,44 @@
 						default: doc.parent_department,
 						get_query() {
 							return {
-								filters: {
-									name: ["!=", department],
-									company: dialog.get_value("company") || doc.company || YONGXIN_COMPANY,
-								},
-							};
+							filters: {
+								name: ["!=", department],
+								company: dialog.get_value("company") || doc.company || YONGXIN_COMPANY,
+								is_group: 1,
 							},
+							};
 						},
+					},
+					{
+						fieldname: "is_group",
+						fieldtype: "Check",
+						label: __("文件夹部门（可包含下级部门）"),
+						default: doc.is_group,
+					},
+					{
+						fieldname: "hrms_org_level",
+						fieldtype: "Int",
+						label: __("组织层级（数字越小越高）"),
+						default: doc.hrms_org_level,
+					},
+					{
+						fieldname: "hrms_org_role",
+						fieldtype: "Data",
+						label: __("组织角色"),
+						default: doc.hrms_org_role,
+					},
+					{
+						fieldname: "hrms_org_manager",
+						fieldtype: "Data",
+						label: __("负责人"),
+						default: doc.hrms_org_manager,
+					},
+					{
+						fieldname: "hrms_roster_assignable",
+						fieldtype: "Check",
+						label: __("允许花名册归属（仅末级）"),
+						default: doc.hrms_roster_assignable,
+					},
 					],
 				primary_action_label: __("保存"),
 				primary_action(values) {

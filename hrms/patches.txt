@@ -54,6 +54,7 @@ hrms.patches.v16_0.sync_attendance_import_batch_status_options
 hrms.patches.v16_0.create_organization_management_custom_fields #2026-07-06
 hrms.patches.v16_0.repair_yongxin_company_relationships #2026-08-11
 hrms.patches.v16_0.use_company_employee_code_as_employee_name #2026-08-14
+hrms.patches.v16_0.add_department_roster_assignable #2026-08-31
 hrms.patches.v16_0.reset_trial_employee_contribution_defaults #2026-08-27
 hrms.patches.v16_0.normalise_department_document_names #2026-08-27
 hrms.patches.v16_0.backfill_employee_salary_change_grade_links #2026-08-27

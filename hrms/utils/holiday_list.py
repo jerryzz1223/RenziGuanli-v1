@@ -5,6 +5,12 @@ from frappe import _
 from frappe.utils import add_days, formatdate, get_link_to_form, getdate
 
 
+def _get_assignment_value(assignment, key: str):
+	if isinstance(assignment, dict):
+		return assignment.get(key)
+	return getattr(assignment, key, None)
+
+
 def get_holiday_dates_between(
 	holiday_list: str,
 	start_date: str,
@@ -220,21 +226,23 @@ def build_effective_date_ranges_for_holiday_assignments(
 	for assigned_to, assignments in holiday_assignment_map.items():
 		ranges = []
 		for idx, assignment in enumerate(assignments):
-			hl_to_date = getdate(assignment.holiday_list_to_date)
+			hl_to_date = getdate(_get_assignment_value(assignment, "holiday_list_to_date"))
 			next_assignment = assignments[idx + 1] if idx + 1 < len(assignments) else None
 
 			if next_assignment:
-				effective_to_date = min(hl_to_date, add_days(next_assignment.from_date, -1))
+				effective_to_date = min(
+					hl_to_date, add_days(_get_assignment_value(next_assignment, "from_date"), -1)
+				)
 			else:
 				effective_to_date = hl_to_date
 
-			from_date = max(getdate(assignment.from_date), start_date)
+			from_date = max(getdate(_get_assignment_value(assignment, "from_date")), start_date)
 			effective_to_date = min(getdate(effective_to_date), end_date)
 
 			if from_date <= effective_to_date:
 				ranges.append(
 					{
-						"holiday_list": assignment.holiday_list,
+						"holiday_list": _get_assignment_value(assignment, "holiday_list"),
 						"from_date": from_date,
 						"to_date": effective_to_date,
 					}

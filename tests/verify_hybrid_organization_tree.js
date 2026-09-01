@@ -54,13 +54,19 @@ for (const marker of [
 	"def preview_yongxin_department_hierarchy(",
 	"def preview_yongxin_position_hierarchy(",
 	"def preview_yongxin_q3_organization_snapshot(",
+	"def preview_yongxin_q3_department_hierarchy(",
+	"def import_yongxin_q3_department_hierarchy(",
 	"def import_yongxin_q2_org_structure(",
 	"def update_department_fields(",
+	"上级部门不能选择当前部门或其下级部门",
+	"必须先设置为文件夹部门",
+	"文件夹部门不能用于花名册归属",
 	"def move_organization_node(",
 	"def delete_departments(",
 	"YONGXIN_Q2_ORG_TEMPLATE",
 	"YONGXIN_Q3_BASELINE_WORKBOOK",
 	"YONGXIN_Q3_ORG_SHEET",
+	"YONGXIN_Q3_DEPARTMENT_HIERARCHY",
 	"_organization_business_name",
 	"_organization_source_name",
 	"raw_department_name",
@@ -211,7 +217,8 @@ for (const marker of [
 	"get_selected_departments",
 	"hrms.hr.page.organizational_chart.organizational_chart.update_department_fields",
 	"hrms.hr.page.organizational_chart.organizational_chart.delete_departments",
-	"快速编辑",
+	"调整层级",
+	"先将承担上级职责的节点勾选为文件夹部门",
 	"批量删除部门",
 	"parent_department",
 	"上级部门",
@@ -235,6 +242,9 @@ for (const marker of [
 	"frm.set_df_property",
 	"parent_department",
 	"上级部门",
+	"文件夹部门（可包含下级部门）",
+	"允许花名册归属（仅末级）",
+	"enforce_roster_leaf_rule",
 	"下级部门",
 	"当前部门员工",
 	"frappe.db.get_list(\"Department\"",
@@ -274,11 +284,8 @@ for (const marker of [
 	"get_hybrid_tree",
 	"get_hybrid_node_detail",
 	"get_employee_roster_field_map",
-	"部门管理",
-	"架构图",
-	"部门报表",
 	"set_company",
-	"导入架构模板",
+	"同步2026Q3架构",
 	"新增部门",
 	"编辑部门",
 	"删除部门",
@@ -287,6 +294,8 @@ for (const marker of [
 	"data-action=\"delete-department\"",
 	"get_yongxin_q2_org_template_preview",
 	"import_yongxin_q2_org_structure",
+	"import_yongxin_q3_department_hierarchy",
+	"同步2026Q3架构",
 	"show_department_edit_dialog",
 	"quick_edit_node",
 	"get_node_department",
@@ -381,7 +390,6 @@ for (const marker of [
 
 for (const marker of [
 	".hrms-org-page",
-	".hrms-org-sidebar",
 	".hrms-org-tree-canvas",
 	".hrms-org-node",
 	".hrms-org-node--company",
@@ -428,6 +436,12 @@ for (const marker of [".hrms-org-report", "border-collapse: collapse", "border: 
 	mustInclude(css, marker, `Embedded organization report CSS missing marker: ${marker}`);
 }
 mustInclude(css, ".hrms-org-page.is-fullscreen", "Organization chart must provide a dedicated fullscreen layout.");
+
+mustMatch(
+	css,
+	/\.hrms-org-tree,\s*\.hrms-org-tree ul\s*\{[^}]*justify-content:\s*center;[^}]*\}/s,
+	"Organization chart must lay out sibling nodes on the same row",
+);
 
 mustMatch(
 	css,
@@ -486,6 +500,12 @@ for (const marker of [
 }
 
 mustInclude(topNav, '"organizational-chart"', "Top nav must keep organizational chart as an organization route key.");
+
+for (const forbidden of ["render_sidebar()", "hrms-org-sidebar", "data-route="]) {
+	if (js.includes(forbidden) || css.includes(forbidden)) {
+		throw new Error(`Organizational chart must not render a second department sidebar: ${forbidden}`);
+	}
+}
 
 for (const forbidden of [
 	'{ type: "link", label: "公司管理", route: "/desk/company-management"',

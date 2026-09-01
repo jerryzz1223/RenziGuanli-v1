@@ -11,7 +11,7 @@ import frappe
 from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_field
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 
 TEMPLATE_DOCTYPE = "HRMS Employee Field Template"
@@ -4267,29 +4267,47 @@ def _resolve_company(value, default_company, warnings):
 	return default_company
 
 
-def _find_or_create_department(value, company, base_records):
+def _resolve_roster_department(value, company):
+	"""Resolve a roster value to an existing, explicitly assignable leaf node.
+
+	Departments are the organization source of truth.  A roster import may never
+	create one from free text because that would turn an accidental group label
+	into a payroll and reporting dimension.
+	"""
 	value = _clean_import_value(value)
 	if not value:
-		return None
+		return None, ""
 	department_name = _strip_department_company_suffix(value)
 	existing = (
 		frappe.db.get_value("Department", {"department_name": department_name, "company": company}, "name")
 		or frappe.db.get_value("Department", {"department_name": department_name}, "name")
 		or frappe.db.exists("Department", str(value).strip())
 	)
-	if existing:
-		return existing
-	doc = frappe.get_doc(
-		{
-			"doctype": "Department",
-			"department_name": department_name,
-			"company": company,
-			"is_group": 0,
-		}
-	)
-	doc.insert(ignore_permissions=True)
-	base_records["部门"] = base_records.get("部门", 0) + 1
-	return doc.name
+	if not existing:
+		return None, _("部门“{0}”不存在；请先在部门管理中建立并同步组织层级。").format(department_name)
+
+	department = frappe.get_cached_doc("Department", existing)
+	if company and department.company and department.company != company:
+		return None, _("部门“{0}”不属于当前公司。").format(department_name)
+	if cint(department.is_group):
+		return None, _("部门“{0}”是文件夹节点，花名册只能选择最末级组织。").format(department_name)
+	if frappe.get_meta("Department").has_field("hrms_roster_assignable") and not cint(
+		department.get("hrms_roster_assignable")
+	):
+		return None, _("部门“{0}”尚未启用花名册归属。").format(department_name)
+	return department.name, ""
+
+
+def _find_or_create_department(value, company, base_records):
+	"""Compatibility wrapper retained for existing import integrations.
+
+	The historical helper name remains callable, but its unsafe create behaviour
+	is deliberately removed.  ``base_records['部门']`` must stay zero.
+	"""
+	department, error = _resolve_roster_department(value, company)
+	if error:
+		frappe.throw(error)
+	return department
 
 
 def _find_or_create_designation(value, base_records):
@@ -4531,6 +4549,17 @@ def _validate_employee_import_row(values, fields_by_name, meta_fields, row_index
 			"field_label": _("姓名"),
 		}
 		errors.append(_field_error(row_index, name_field, _("缺少员工姓名")))
+
+	if values.get("department") and "department" not in deferred_fields:
+		department, error = _resolve_roster_department(values.get("department"), values.get("company"))
+		if error:
+			department_field = fields_by_name.get("department") or {
+				"fieldname": "department",
+				"field_label": _("部门"),
+			}
+			errors.append(_field_error(row_index, department_field, error))
+		else:
+			values["department"] = department
 
 	return errors
 

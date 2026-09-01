@@ -195,11 +195,19 @@ def get_custom_fields():
 				"insert_after": "hrms_recruitment_plan",
 			},
 			{
+				"fieldname": "hrms_roster_assignable",
+				"fieldtype": "Check",
+				"label": _("Roster Assignable"),
+				"description": _("Only checked leaf organizations may be selected in the employee roster."),
+				"default": "0",
+				"insert_after": "hrms_org_source_cell",
+			},
+			{
 				"description": _("The first Approver in the list will be set as the default Approver."),
 				"fieldname": "approvers",
 				"fieldtype": "Section Break",
 				"label": _("Approvers"),
-				"insert_after": "hrms_org_source_cell",
+				"insert_after": "hrms_roster_assignable",
 			},
 			{
 				"fieldname": "shift_request_approver",

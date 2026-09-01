@@ -28,7 +28,13 @@ export function normalizeSelectOptions(options, translate = (value) => value) {
 	}
 
 	if (typeof options === "string" && options.length) {
-		return options.split("\n").map((option) => ({
+		const lines = options.split("\n").map((option) => option.replace(/\r$/, ""))
+
+		while (lines.length > 1 && lines.at(-1) === "") {
+			lines.pop()
+		}
+
+		return lines.map((option) => ({
 			label: translate(option),
 			value: option,
 		}))

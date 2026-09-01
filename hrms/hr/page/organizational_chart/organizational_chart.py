@@ -13,6 +13,7 @@ from frappe.utils import cint, cstr
 HYBRID_MANAGER_KEYWORDS = ("课长", "组长", "主管", "总监", "副总", "经理", "班长", "代理")
 TEMPLATE_DEPARTMENT_NODE_TYPES = {"division", "department", "team"}
 YONGXIN_Q2_ORG_TEMPLATE = Path(__file__).with_name("yongxin_q2_org_structure.json")
+YONGXIN_Q3_DEPARTMENT_HIERARCHY = Path(__file__).with_name("yongxin_q3_department_hierarchy.json")
 YONGXIN_Q3_BASELINE_WORKBOOK = Path("/Users/lrj/Documents/SAD/YOngxin/人资/副本人资系统沟通表260713.xlsx")
 YONGXIN_ORG_EXPORT_TEMPLATE = Path(
 	"/Users/lrj/Documents/SAD/YOngxin/人资/人资二/人资系统资料/人资流程模块/1.人力资源规划/1.2组织架构.xlsx"
@@ -34,6 +35,7 @@ WORKBOOK_SNAPSHOT_NODE_ROWS = {
 WORKBOOK_SNAPSHOT_EMPLOYEE_ROWS = range(24, 29)
 YONGXIN_Q3_ORG_SHEET = "26Q3组织架构图"
 YONGXIN_Q3_SNAPSHOT_VERSION = "2026Q3"
+YONGXIN_Q3_HIERARCHY_CONFIRMATION = "同步2026Q3组织架构"
 YONGXIN_COMPANY_NAME = "永新"
 YONGXIN_LEGACY_COMPANY_KEYS = ("1",)
 ORGANIZATION_TECHNICAL_SUFFIX_RE = re.compile(r"\s*[-－]\s*(?:\d+[A-Za-z]?|1D|11)\s*$", re.IGNORECASE)
@@ -76,6 +78,7 @@ DEPARTMENT_QUICK_EDIT_FIELDS = {
 	"hrms_actual_headcount",
 	"hrms_vacancy_count",
 	"hrms_recruitment_plan",
+	"hrms_roster_assignable",
 }
 
 
@@ -632,6 +635,208 @@ def preview_yongxin_q3_organization_snapshot(
 	}
 
 
+def _load_yongxin_q3_department_hierarchy():
+	"""Load the reviewed Q3 folder tree, independent of a server-local workbook path."""
+	if not YONGXIN_Q3_DEPARTMENT_HIERARCHY.exists():
+		frappe.throw(_("未找到 2026Q3 部门层级配置。"))
+	payload = json.loads(YONGXIN_Q3_DEPARTMENT_HIERARCHY.read_text(encoding="utf-8"))
+	if not payload.get("nodes"):
+		frappe.throw(_("2026Q3 部门层级配置为空。"))
+	return payload
+
+
+def _q3_department_hierarchy_fields():
+	return [
+		"name",
+		"department_name",
+		"parent_department",
+		"company",
+		"is_group",
+		"disabled",
+		"hrms_org_level",
+		"hrms_org_role",
+		"hrms_org_manager",
+		"hrms_org_proxy",
+		"hrms_planned_headcount",
+		"hrms_actual_headcount",
+		"hrms_vacancy_count",
+		"hrms_org_source_cell",
+		"hrms_roster_assignable",
+	]
+
+
+def _q3_department_hierarchy_records(company):
+	meta = frappe.get_meta("Department")
+	fields = [field for field in _q3_department_hierarchy_fields() if field in {item.fieldname for item in meta.fields} or field in {"name", "department_name", "parent_department", "company", "is_group", "disabled"}]
+	return frappe.get_all("Department", filters={"company": company}, fields=fields, limit_page_length=0)
+
+
+def _q3_department_hierarchy_preview(company):
+	payload = _load_yongxin_q3_department_hierarchy()
+	nodes = payload.get("nodes") or []
+	records = _q3_department_hierarchy_records(company)
+	by_source = {cstr(row.get("hrms_org_source_cell")).strip(): row for row in records if cstr(row.get("hrms_org_source_cell")).strip()}
+	by_name = {cstr(row.get("department_name") or row.get("name")).strip(): row for row in records}
+	target_names = {node["name"] for node in nodes}
+	target_sources = {node["source_cell"] for node in nodes}
+	rows, source_to_target_name = [], {node["source_cell"]: node["name"] for node in nodes}
+	for node in nodes:
+		existing = by_source.get(node["source_cell"]) or by_name.get(node["name"])
+		expected_parent = source_to_target_name.get(node.get("parent_source_cell"), "")
+		current_parent = cstr(existing.get("parent_department")).strip() if existing else ""
+		parent_matches = bool(existing) and current_parent == expected_parent
+		shape_matches = bool(existing) and cint(existing.get("is_group")) == cint(node.get("is_group"))
+		roster_matches = not meta_has_field("Department", "hrms_roster_assignable") or bool(existing) and cint(existing.get("hrms_roster_assignable")) == cint(node.get("roster_assignable"))
+		rows.append(
+			{
+				"source_cell": node["source_cell"],
+				"source_label": node.get("source_label") or node["name"],
+				"department_name": node["name"],
+				"node_type": node.get("node_type"),
+				"expected_parent": expected_parent,
+				"current_parent": current_parent,
+				"is_group": cint(node.get("is_group")),
+				"roster_assignable": cint(node.get("roster_assignable")),
+				"status": "create" if not existing else "aligned" if parent_matches and shape_matches and roster_matches else "update",
+			}
+		)
+
+	existing_names = {row.name for row in records}
+	group_employee_rows = frappe.get_all(
+		"Employee",
+		filters={"company": company, "status": "Active", "department": ["in", list(existing_names)]} if existing_names else {"name": ["=", ""]},
+		fields=["name", "employee_name", "custom_employee_code", "department"],
+		limit_page_length=0,
+	)
+	group_names = {
+		node["name"]
+		for node in nodes
+		if cint(node.get("is_group"))
+	}
+	legacy_employee_assignments = [
+		row
+		for row in group_employee_rows
+		if cstr(row.get("department")).strip() in group_names
+	]
+	return {
+		"company": company,
+		"version": payload.get("version"),
+		"source_document": payload.get("source_document"),
+		"source_sheet": payload.get("source_sheet"),
+		"confirmation_text": payload.get("confirmation_text") or YONGXIN_Q3_HIERARCHY_CONFIRMATION,
+		"write_mode": "preview_only",
+		"summary": {
+			"node_count": len(nodes),
+			"folder_count": len([node for node in nodes if cint(node.get("is_group"))]),
+			"roster_leaf_count": len([node for node in nodes if cint(node.get("roster_assignable"))]),
+			"create_count": len([row for row in rows if row["status"] == "create"]),
+			"update_count": len([row for row in rows if row["status"] == "update"]),
+			"aligned_count": len([row for row in rows if row["status"] == "aligned"]),
+			"legacy_employee_assignment_count": len(legacy_employee_assignments),
+		},
+		"nodes": rows,
+		"legacy_employee_assignments": legacy_employee_assignments,
+		"unmapped_departments": [
+			{
+				"department": row.name,
+				"parent_department": row.get("parent_department"),
+				"source_cell": row.get("hrms_org_source_cell"),
+			}
+			for row in records
+			if row.name not in target_names and cstr(row.get("hrms_org_source_cell")).strip() not in target_sources
+		],
+	}
+
+
+def meta_has_field(doctype, fieldname):
+	return bool(frappe.get_meta(doctype).get_field(fieldname))
+
+
+@frappe.whitelist()
+def preview_yongxin_q3_department_hierarchy(company: str | None = None):
+	"""Return the exact folder/leaf plan before it changes any Department records."""
+	company = _normalize_yongxin_company(company)
+	if not company or not frappe.db.exists("Company", company):
+		frappe.throw(_("请选择有效的公司。"))
+	return _q3_department_hierarchy_preview(company)
+
+
+def _q3_department_apply_node(node, company, source_to_department):
+	department = frappe.db.get_value(
+		"Department", {"company": company, "hrms_org_source_cell": node["source_cell"]}, "name"
+	) if meta_has_field("Department", "hrms_org_source_cell") else None
+	department = department or frappe.db.get_value("Department", {"company": company, "department_name": node["name"]}, "name")
+	doc = frappe.get_doc("Department", department) if department else frappe.new_doc("Department")
+	doc.department_name = node["name"]
+	doc.company = company
+	# Department links store the document name, not the visible label.  The
+	# source-to-document mapping is populated parent-first during this import,
+	# so a renamed/autonamed Department cannot break the folder relationship.
+	doc.parent_department = source_to_department.get(node.get("parent_source_cell"), "")
+	doc.is_group = cint(node.get("is_group"))
+	doc.disabled = 0
+	numeric_fields = {
+		"hrms_planned_headcount",
+		"hrms_actual_headcount",
+		"hrms_vacancy_count",
+		"hrms_roster_assignable",
+	}
+	for fieldname, key in [
+		("hrms_org_level", "level"),
+		("hrms_org_role", "role"),
+		("hrms_org_manager", "manager"),
+		("hrms_org_proxy", "proxy"),
+		("hrms_planned_headcount", "planned"),
+		("hrms_actual_headcount", "current"),
+		("hrms_vacancy_count", "vacancy"),
+		("hrms_org_source_cell", "source_cell"),
+		("hrms_roster_assignable", "roster_assignable"),
+	]:
+		if meta_has_field("Department", fieldname):
+			value = node.get(key)
+			doc.set(fieldname, cint(value) if fieldname in numeric_fields else value or "")
+	doc.save(ignore_permissions=False)
+	return doc.name
+
+
+@frappe.whitelist()
+def import_yongxin_q3_department_hierarchy(
+	company: str | None = None, confirmation: str = "", dry_run: int | str = 0
+):
+	"""Apply the reviewed Q3 folder tree; roster assignments are never guessed."""
+	if not frappe.has_permission("Department", "create") and not frappe.has_permission("Department", "write"):
+		frappe.throw(_("没有权限同步组织架构。"))
+	company = _normalize_yongxin_company(company)
+	if not company or not frappe.db.exists("Company", company):
+		frappe.throw(_("请选择有效的公司。"))
+	preview = _q3_department_hierarchy_preview(company)
+	if cint(dry_run):
+		return {**preview, "dry_run": True}
+	if confirmation != preview["confirmation_text"]:
+		frappe.throw(_("请准确输入确认文字“{0}”后再同步。 ").format(preview["confirmation_text"]))
+
+	payload = _load_yongxin_q3_department_hierarchy()
+	# Parents are listed before their children in the reviewed Q3 source map.
+	# Retain real document names as we save each node, rather than assuming that
+	# a Department document name always equals its department_name.
+	source_to_department = {}
+	savepoint = "yongxin_q3_department_hierarchy"
+	frappe.db.savepoint(savepoint)
+	try:
+		created, updated = [], []
+		for node in payload["nodes"]:
+			existed = frappe.db.exists("Department", {"company": company, "department_name": node["name"]})
+			name = _q3_department_apply_node(node, company, source_to_department)
+			source_to_department[node["source_cell"]] = name
+			(created if not existed else updated).append(name)
+		frappe.db.commit()
+		frappe.clear_cache(doctype="Department")
+		return {**_q3_department_hierarchy_preview(company), "created_departments": created, "updated_departments": updated}
+	except Exception:
+		frappe.db.rollback(save_point=savepoint)
+		raise
+
+
 @frappe.whitelist()
 def import_yongxin_q2_org_structure(company: str | None = None, dry_run: int | str = 0):
 	"""Seed Department parent hierarchy and Designation reporting logic from 1.2组织架构.xlsx."""
@@ -723,9 +928,10 @@ def get_hybrid_tree(company: str | None = None, source_mode: str | None = None):
 		_build_department_node(department, employees_by_department, department_children, staffing)
 		for department in root_departments
 	]
-	root_node = _build_live_management_hierarchy(
+	# The editable view is a Department folder tree. ``All Departments`` remains
+	# ERPNext's technical root only; the visible root is the actual company.
+	root_node = _build_company_root_node(
 		company=company,
-		employees=employees,
 		department_nodes=department_nodes,
 		staffing_summary={
 			"planned_headcount": staffing_summary["planned_headcount"],
@@ -740,6 +946,8 @@ def get_hybrid_tree(company: str | None = None, source_mode: str | None = None):
 
 	return {
 		"company": company,
+		"source_mode": "live",
+		"source_label": _("部门管理文件夹树"),
 		"root": root_node,
 		"summary": {
 			"planned_headcount": root_node["planned_headcount"],
@@ -1126,16 +1334,29 @@ def update_department_fields(department: str, values: str | dict):
 	meta = frappe.get_meta("Department")
 	updated = {}
 	target_name = cstr(values.get("department_name") or doc.department_name).strip()
+	target_parent = cstr(values.get("parent_department") if "parent_department" in values else doc.parent_department).strip()
+	target_is_group = cint(values.get("is_group") if "is_group" in values else doc.is_group)
+	target_roster_assignable = cint(
+		values.get("hrms_roster_assignable") if "hrms_roster_assignable" in values else doc.get("hrms_roster_assignable")
+	)
 	if target_name and target_name != doc.name:
 		from hrms.overrides.department_identity import validate_department_name_available
 
 		validate_department_name_available(target_name, doc.company, doc.name)
+	if target_parent:
+		if target_parent == doc.name or _would_create_department_loop(doc.name, target_parent):
+			frappe.throw(_("上级部门不能选择当前部门或其下级部门。"))
+		parent_doc = frappe.get_doc("Department", target_parent)
+		if parent_doc.company != doc.company:
+			frappe.throw(_("不能跨公司调整部门层级。"))
+		if not cint(parent_doc.is_group):
+			frappe.throw(_("上级部门“{0}”必须先设置为文件夹部门。 ").format(parent_doc.department_name))
+	if target_is_group and target_roster_assignable:
+		frappe.throw(_("文件夹部门不能用于花名册归属；请只在末级部门启用。"))
 
 	for fieldname, value in values.items():
 		if fieldname not in DEPARTMENT_QUICK_EDIT_FIELDS or not meta.has_field(fieldname):
 			continue
-		if fieldname == "parent_department" and value == doc.name:
-			frappe.throw(_("上级部门不能选择当前部门。"))
 		doc.set(fieldname, value)
 		updated[fieldname] = value
 
@@ -1870,7 +2091,12 @@ def _template_department_source_cells():
 			collect(child)
 
 	collect(seed.get("chart_tree"))
-	return cells
+	try:
+		cells.extend(node["source_cell"] for node in _load_yongxin_q3_department_hierarchy().get("nodes") or [])
+	except Exception:
+		# A missing optional Q3 deployment file must not hide ordinary departments.
+		pass
+	return list(dict.fromkeys(cells))
 
 
 def _get_yongxin_template_tree(company=None):
@@ -2435,6 +2661,7 @@ def _get_departments(company=None):
 			"hrms_vacancy_count",
 			"hrms_recruitment_plan",
 			"hrms_org_source_cell",
+			"hrms_roster_assignable",
 		],
 	)
 	departments = frappe.get_all("Department", fields=fields, filters=filters, order_by="lft asc, department_name asc")
@@ -2594,6 +2821,41 @@ def _build_department_node(department, employees_by_department, department_child
 	node["connections"] = len(children)
 	node["expandable"] = bool(children)
 	return node
+
+
+def _build_company_root_node(
+	company,
+	department_nodes,
+	staffing_summary,
+	missing_department_count,
+	missing_manager_count,
+):
+	"""Expose Company as the only visible root of the editable folder tree."""
+	children = sorted(
+		department_nodes,
+		key=lambda node: (
+			cint(node.get("org_level")) or 999,
+			cstr(node.get("name")).strip(),
+		),
+	)
+	return {
+		"node_id": f"company:{company or 'all'}",
+		"id": f"company:{company or 'all'}",
+		"node_type": "company",
+		"name": _("{0}（总公司）").format(_get_company_label(company)),
+		"title": _("公司根节点"),
+		"role": _("总公司"),
+		"people": [],
+		"lines": [],
+		"planned_headcount": staffing_summary.get("planned_headcount", 0),
+		"current_headcount": staffing_summary.get("current_headcount", 0),
+		"vacancy_count": staffing_summary.get("vacancy_count", 0),
+		"missing_department_count": missing_department_count,
+		"missing_manager_count": missing_manager_count,
+		"children": children,
+		"connections": len(children),
+		"expandable": bool(children),
+	}
 
 
 def _build_live_management_hierarchy(

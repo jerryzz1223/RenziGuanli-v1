@@ -1,17 +1,21 @@
 // Copyright (c) 2022, Frappe Technologies Pvt. Ltd. and contributors
 // For license information, please see license.txt
 
-const FOCUSED_DEPARTMENT_FIELDS = ["department_name", "parent_department"];
+const FOCUSED_DEPARTMENT_FIELDS = [
+	"department_name",
+	"parent_department",
+	"is_group",
+	"hrms_org_level",
+	"hrms_org_role",
+	"hrms_org_manager",
+	"hrms_roster_assignable",
+];
 const HIDDEN_DEPARTMENT_FIELDS = [
 	"company",
-	"is_group",
 	"disabled",
 	"payroll_cost_center",
 	"leave_block_list",
 	"hrms_org_section",
-	"hrms_org_level",
-	"hrms_org_role",
-	"hrms_org_manager",
 	"hrms_org_proxy",
 	"hrms_planned_headcount",
 	"hrms_actual_headcount",
@@ -32,11 +36,11 @@ frappe.ui.form.on("Department", {
 		hide_department_sidebar(frm);
 		render_department_relationships(frm);
 
-		frm.add_custom_button(__("快速编辑"), () => {
+		frm.add_custom_button(__("调整层级"), () => {
 			frappe.set_route("List", "Department");
 			frappe.after_ajax(() => {
 				frappe.show_alert({
-					message: __("请在部门列表勾选该部门后使用“快速编辑”。"),
+					message: __("请在部门列表勾选该部门后使用“调整层级”。"),
 					indicator: "blue",
 				});
 			});
@@ -50,6 +54,14 @@ frappe.ui.form.on("Department", {
 	parent_department(frm) {
 		sync_company_root_parent_display(frm);
 		render_department_relationships(frm);
+	},
+
+	is_group(frm) {
+		enforce_roster_leaf_rule(frm);
+	},
+
+	hrms_roster_assignable(frm) {
+		enforce_roster_leaf_rule(frm);
 	},
 
 	after_save(frm) {
@@ -66,6 +78,11 @@ function localize_department_form_labels(frm) {
 	const labels = {
 		department_name: "部门名称",
 		parent_department: "上级部门",
+		is_group: "文件夹部门（可包含下级部门）",
+		hrms_org_level: "组织层级（数字越小越高）",
+		hrms_org_role: "组织角色",
+		hrms_org_manager: "负责人",
+		hrms_roster_assignable: "允许花名册归属（仅末级）",
 	};
 	Object.entries(labels).forEach(([fieldname, label]) => {
 		if (frm.fields_dict[fieldname]) frm.set_df_property(fieldname, "label", __(label));
@@ -81,6 +98,12 @@ function configure_focused_department_form(frm) {
 	FOCUSED_DEPARTMENT_FIELDS.forEach((fieldname) => {
 		if (frm.fields_dict[fieldname]) frm.set_df_property(fieldname, "hidden", 0);
 	});
+	if (frm.fields_dict.is_group) {
+		frm.set_df_property("is_group", "description", __("勾选后可作为其他部门的上级；未勾选即为末级部门。"));
+	}
+	if (frm.fields_dict.hrms_roster_assignable) {
+		frm.set_df_property("hrms_roster_assignable", "description", __("只为实际填入员工花名册的末级部门勾选。"));
+	}
 	set_parent_department_query(frm);
 }
 
@@ -127,8 +150,15 @@ function set_parent_department_query(frm) {
 			company: frm.doc.company,
 			name: ["!=", frm.doc.name || ""],
 			disabled: 0,
+			is_group: 1,
 		},
 	}));
+}
+
+function enforce_roster_leaf_rule(frm) {
+	if (!frm.doc.is_group || !frm.doc.hrms_roster_assignable) return;
+	frm.set_value("hrms_roster_assignable", 0);
+	frappe.show_alert({ message: __("文件夹部门不能用于花名册归属，已自动取消勾选。"), indicator: "orange" });
 }
 
 function hide_department_sidebar(frm) {
@@ -188,6 +218,11 @@ function render_department_relationships(frm) {
 
 function render_relationship_sections(frm, children, employees) {
 	const has_business_parent = Boolean(frm.doc.parent_department) && !is_technical_department_root(frm.doc.parent_department);
+	const structure_state = frm.doc.is_group
+		? __("文件夹部门：可承载下级部门，不直接作为花名册归属。")
+		: frm.doc.hrms_roster_assignable
+			? __("末级部门：可作为花名册归属。")
+			: __("末级部门：如需将员工归入此部门，请启用“允许花名册归属”。");
 	const parent = has_business_parent
 		? `<button type="button" class="btn btn-default btn-sm" data-department="${escape_html(frm.doc.parent_department)}">${escape_html(frm.doc.parent_department)}</button>`
 		: `<span class="text-muted">${escape_html(get_company_root_label(frm))}（${__("公司根节点")}）</span>`;
@@ -211,6 +246,10 @@ function render_relationship_sections(frm, children, employees) {
 			@media (max-width: 900px) { .hrms-department-relation-grid { grid-template-columns: 1fr; } }
 		</style>
 		<div class="hrms-department-relation-grid">
+			<section class="hrms-department-relation hrms-department-structure-state">
+				<h4>${__("当前管理状态")}</h4>
+				<div>${escape_html(structure_state)}</div>
+			</section>
 			<section class="hrms-department-relation">
 				<h4>${__("上级部门")}</h4>
 				<div class="hrms-department-relation-list">${parent}</div>

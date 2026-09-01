@@ -62,6 +62,7 @@ def processing_center_module():
 	)
 	frappe_utils = ModuleType("frappe.utils")
 	frappe_utils.cint = lambda value: int(value or 0)
+	frappe_utils.flt = lambda value, *_args, **_kwargs: float(value or 0)
 	frappe_utils.now_datetime = lambda: None
 	file_manager = ModuleType("frappe.utils.file_manager")
 	frappe_utils.file_manager = file_manager
@@ -458,6 +459,33 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertEqual(calculation["settlement_15"], 23)
 		self.assertEqual(calculation["settlement_20"], 23)
 		self.assertEqual(calculation["adjusted_one_absence"], 0)
+
+	def test_special_hours_use_company_holiday_list_before_weekend_split(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		center.frappe.db.get_value = lambda *_args, **_kwargs: "2026年节假日"
+		center.frappe.get_all = lambda *_args, **_kwargs: ["2026-06-01"]
+		self.assertEqual(
+			center._special_hours_breakdown(
+				[{"day": 1, "hours": 8}, {"day": 6, "hours": 4}, {"day": 8, "hours": 2}],
+				"2026-06",
+				"永新公司",
+			),
+			{"special_workday_hours": 2.0, "special_restday_hours": 4.0, "special_holiday_hours": 8.0},
+		)
+
+	def test_finance_preview_merges_rate_matched_special_hours(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		rows = center._finance_final_preview_rows([{
+			"special_workday_hours": 10.5, "workday_overtime_hours": 12.5,
+			"special_restday_hours": 1, "restday_overtime_hours": 22,
+			"special_holiday_hours": 3, "holiday_overtime_hours": 5,
+		}])
+		self.assertEqual(rows[0]["workday_overtime_hours"], 23)
+		self.assertEqual(rows[0]["restday_overtime_hours"], 23)
+		self.assertEqual(rows[0]["holiday_overtime_hours"], 8)
+		self.assertNotIn(("special_hours", "特殊工时"), center.FINAL_FINANCE_COLUMNS)
+		self.assertNotIn(("special_hours", "特殊工时"), center.FINAL_SIGNED_COLUMNS)
+		self.assertIn(("special_holiday_hours", "节假日特殊工时"), center.FINAL_SIGNED_COLUMNS)
 
 	def test_daily_attendance_date_normalizes_dingtalk_display_dates(self):
 		center, _file_manager, _frappe_modules = processing_center_module()

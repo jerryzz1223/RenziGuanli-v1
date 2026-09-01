@@ -134,6 +134,16 @@ mustInclude(
 	"The salary grid must describe the confirmed-only contribution default.",
 );
 
+const salaryGridApi = api.slice(api.indexOf("def list_employee_salary_change_grid"), api.indexOf("def get_active_salary_change_for_employee"));
+for (const marker of [
+	"current_lock = _current_payroll_attendance_lock(company, payroll_month)",
+	"_attendance_scope_filters(company, payroll_month, attendance_lock_version)",
+	"_monthly_payroll_participation_decision_map(company, payroll_month, attendance_lock_version)",
+	"including leavers and missing-salary",
+]) {
+	mustInclude(salaryGridApi, marker, `Salary grid must retain each locked attendance employee: ${marker}`);
+}
+
 const workbenchJs = read("hrms/hr/page/hrms_workbench/hrms_workbench.js");
 const workbenchPy = read("hrms/hr/page/hrms_workbench/hrms_workbench.py");
 for (const marker of ["薪资主数据", "salary-master", "薪酬管理中心"]) {

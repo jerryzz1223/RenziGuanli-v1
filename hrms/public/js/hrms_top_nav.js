@@ -19,10 +19,15 @@
 		"#navbar-search",
 		".navbar-search",
 		".navbar .search-bar",
+		".navbar .search",
+		".navbar .search-wrapper",
+		".navbar .search-container",
+		".navbar [role='search']",
 		"#navbar-new",
 		".navbar-new",
 		".dropdown-navbar-new",
 		".dropdown-new",
+		".navbar .btn-primary",
 	].join(", ");
 	let renderFrame = null;
 	const CONTEXTUAL_ADMIN_PAGES = {
@@ -980,10 +985,18 @@
 	}
 
 	function removeRedundantFrameworkControls() {
-		// HRMS has its own module navigation and account menu.  Remove the two
-		// framework controls rather than merely hiding them, so they cannot return
-		// as empty blocks after the Desk toolbar rerenders.
+		// HRMS has its own module navigation and account menu. Remove Frappe's
+		// global search and its primary New control rather than merely hiding them,
+		// so neither can return as an empty block after a toolbar rerender. Frappe
+		// has changed the class names between Desk versions, hence the attribute
+		// fallback for the search input below.
 		document.querySelectorAll(REDUNDANT_FRAMEWORK_CONTROL_SELECTOR).forEach((element) => element.remove());
+		document.querySelectorAll(".navbar input").forEach((input) => {
+			const placeholder = String(input.getAttribute("placeholder") || "").toLowerCase();
+			const ariaLabel = String(input.getAttribute("aria-label") || "").toLowerCase();
+			if (input.type !== "search" && !placeholder.includes("search") && !placeholder.includes("搜索") && !ariaLabel.includes("search") && !ariaLabel.includes("搜索")) return;
+			(input.closest("form, .input-group, .form-group, .search, .search-bar") || input).remove();
+		});
 	}
 
 	function render() {

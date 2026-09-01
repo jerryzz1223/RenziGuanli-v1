@@ -28,13 +28,13 @@ add_to_apps_screen = [
 app_include_js = [
 	"hrms.bundle.js",
 	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260827k",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260827g",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260827h",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
 	"/assets/hrms/js/hrms_file_uploader.js?v=20260827a",
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260827c",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260827d",
 	"/assets/hrms/css/hrms_training_learning.css?v=20260827a",
 ]
 

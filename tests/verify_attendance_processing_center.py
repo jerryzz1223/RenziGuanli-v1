@@ -261,6 +261,22 @@ for marker in ('"import_error_count"', '"pending_exception_count": 0', '"can_con
 if 'slot["status"] == "已确认" and not cint(slot.get("exception_count"))' in finalization_body:
 	raise AssertionError("Confirmed main sources must not be blocked by retained audit rows.")
 
+recognition_start = api.find("def _monthly_final_employee_recognition(")
+recognition_end = api.find("\n\n@frappe.whitelist()", recognition_start)
+recognition_body = api[recognition_start:] if recognition_end == -1 else api[recognition_start:recognition_end]
+for marker in (
+	'"draft_recognized_employee_count"',
+	'"roster_employee_count"',
+	'"successful_employee_count"',
+	'"attendance_draft"',
+	"eligible_for_downstream",
+):
+	require(recognition_body, marker, f"Monthly-final employee recognition is incomplete: {marker}")
+get_batch_start = api.find("def get_processing_batch(")
+get_batch_end = api.find("\n\n@frappe.whitelist()", get_batch_start)
+get_batch_body = api[get_batch_start:] if get_batch_end == -1 else api[get_batch_start:get_batch_end]
+require(get_batch_body, '"employee_recognition": _monthly_final_employee_recognition(company, attendance_month)', "Monthly-final employee recognition must be returned to the page.")
+
 # Every callable API must authorize before accessing the batch/record data.
 for method in (
 	"get_processing_batch", "register_source_file", "register_monthly_support_file", "bulk_import_and_process_sources", "precheck_monthly_support_file", "process_monthly_support_file", "confirm_monthly_support_file", "precheck_source_slot", "process_source_slot",

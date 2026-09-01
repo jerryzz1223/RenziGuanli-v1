@@ -10,6 +10,22 @@ test("normalizes newline-delimited select options", () => {
 	])
 })
 
+test("normalizes Windows newline-delimited select options without trailing carriage returns", () => {
+	assert.deepEqual(normalizeSelectOptions("Draft\r\nApproved\r\nRejected"), [
+		{ label: "Draft", value: "Draft" },
+		{ label: "Approved", value: "Approved" },
+		{ label: "Rejected", value: "Rejected" },
+	])
+})
+
+test("drops only trailing empty options created by a final newline", () => {
+	assert.deepEqual(normalizeSelectOptions("\nDraft\nApproved\n"), [
+		{ label: "", value: "" },
+		{ label: "Draft", value: "Draft" },
+		{ label: "Approved", value: "Approved" },
+	])
+})
+
 test("normalizes array select options without throwing", () => {
 	assert.deepEqual(normalizeSelectOptions(["Draft", "Cancelled"]), [
 		{ label: "Draft", value: "Draft" },

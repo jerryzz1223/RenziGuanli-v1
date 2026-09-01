@@ -37,7 +37,10 @@ def process_due_employee_confirmations():
 		"Employee",
 		filters={
 			"status": "Active",
-			"custom_is_confirmed": "否",
+			# Imports sometimes leave the explicit marker blank.  A due date is
+			# sufficient to create the same auditable confirmation as an explicit
+			# trial employee, so the roster stops treating blank as an implicit “否”.
+			"custom_is_confirmed": ["in", ["否", ""]],
 			"final_confirmation_date": ["<=", today],
 		},
 		fields=["name", "company", "department", "final_confirmation_date"],

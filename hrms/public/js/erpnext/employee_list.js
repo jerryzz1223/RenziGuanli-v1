@@ -24,7 +24,9 @@
 	const roster_cards = [
 		{ label: "全部", filters: {} },
 		{ label: "在职 · 正式", filters: { employment_type: "Full-time", custom_is_confirmed: "是", status: "Active" } },
-		{ label: "在职 · 试用期", filters: { employment_type: "Full-time", custom_is_confirmed: "否", status: "Active" } },
+		// 转正标记为空的员工由转正日期判断。定时任务会在到期时把他们
+		// 正式办理为“是”；在此之前，他们与明确“否”的员工一样归入试用。
+		{ label: "在职 · 试用期", filters: { employment_type: "Full-time", custom_is_confirmed: ["!=", "是"], status: "Active" } },
 		{ label: "退休返聘", filters: { employment_type: "Retainer", status: "Active" } },
 		{ label: "待离职", filters: { status: "Inactive" } },
 		{ label: "离职", filters: { status: "Left" } },
@@ -62,6 +64,7 @@
 			"designation",
 			"employment_type",
 			"custom_is_confirmed",
+			"final_confirmation_date",
 			"status",
 			"date_of_joining",
 			"relieving_date",
@@ -105,11 +108,21 @@
 		},
 	};
 
+	function is_roster_probation_employee(value, doc = {}) {
+		if (value === "Probation" || doc.custom_is_confirmed === "否") return true;
+		if (doc.custom_is_confirmed === "是") return false;
+
+		// 只有“是否转正”未维护时，才以转正日期作为兜底依据；当天到期即为正式。
+		const confirmation_date = String(doc.final_confirmation_date || "").slice(0, 10);
+		if (!confirmation_date) return false;
+		return confirmation_date > frappe.datetime.get_today();
+	}
+
 	function format_roster_employment_type(value, doc = {}) {
 		if (doc.status === "Left") return __("离职");
 		if (doc.status === "Inactive") return __("待离职");
 		if (value === "Retainer") return __("退休返聘");
-		if (value === "Probation" || doc.custom_is_confirmed === "否") return __("在职 · 试用期");
+		if (is_roster_probation_employee(value, doc)) return __("在职 · 试用期");
 		if (value) return __("在职 · 正式");
 		return __("未设置");
 	}

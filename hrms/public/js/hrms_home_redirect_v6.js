@@ -390,7 +390,7 @@
 			label: "部门",
 			route: "/desk/department",
 			icon: "O",
-			keys: ["department", "organizational-chart"],
+			keys: ["department", "organizational-chart", "organization-report"],
 			items: [
 				{ type: "link", label: "部门管理", route: "/desk/department", slug: "department" },
 				{ type: "link", label: "架构图", route: "/desk/organizational-chart", slug: "organizational-chart" },
@@ -720,6 +720,9 @@
 				if (route[0] === "query-report") {
 					return normalize_slug(route[1] || route[0]);
 				}
+				if (route[0] === "organizational-chart" && route[1] === "report") {
+					return "organization-report";
+				}
 				if ((route[0] === "attendance-import-center" || route[0] === "payroll-input-center") && route[1]) {
 					return normalize_slug(route[0] + "/" + route[1]);
 				}
@@ -738,6 +741,9 @@
 		if (parts[0].toLowerCase() === "query-report") {
 			return normalize_slug(parts[1] || parts[0]);
 		}
+		if (parts[0].toLowerCase() === "organizational-chart" && parts[1] && parts[1].toLowerCase() === "report") {
+			return "organization-report";
+		}
 		if ((parts[0].toLowerCase() === "attendance-import-center" || parts[0].toLowerCase() === "payroll-input-center") && parts[1]) {
 			return normalize_slug(parts[0] + "/" + parts[1]);
 		}
@@ -750,6 +756,9 @@
 		var normalized = normalize_slug(route);
 		if (normalized.indexOf("query-report/") === 0) {
 			return normalize_slug(normalized.split("/")[1]);
+		}
+		if (normalized === "organizational-chart/report") {
+			return "organization-report";
 		}
 		if (normalized.indexOf("attendance-import-center/") === 0 || normalized.indexOf("payroll-input-center/") === 0) {
 			return normalized;
@@ -878,9 +887,9 @@
 	}
 
 	function hrms_sidebar_link_html(item, active_slug, group) {
+		var item_slug = item.slug || route_to_slug(item.route);
 		var active =
-			item.slug === active_slug ||
-			route_to_slug(item.route) === active_slug ||
+			item_slug === active_slug ||
 			(item.active_slugs || []).some(function (slug) {
 				return slug === active_slug || route_key_matches(active_slug, slug);
 			});
@@ -894,7 +903,7 @@
 			'" data-hrms-route="',
 			escape_html(item.route),
 			'" data-hrms-slug="',
-			escape_html(item.slug || route_to_slug(item.route)),
+			escape_html(item_slug),
 			'">',
 			'<span class="hrms-unified-sidebar-link__icon hrms-unified-sidebar-link__drag-handle" ',
 			'role="button" tabindex="0" aria-label="长按拖动排序" title="长按拖动排序">☰</span>',

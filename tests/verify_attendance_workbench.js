@@ -104,7 +104,6 @@ for (const marker of [
 	"render_attendance_exception_lines(lines, recordId",
 	"register_monthly_support_file",
 	"process_monthly_support_file",
-	"导入并校验",
 	"查看导入校验",
 	"导入错误",
 	"不进入异常处理或二次加工",
@@ -149,7 +148,6 @@ for (const marker of [
 	"render_attendance_summary_markup",
 	"bind_attendance_summary_events",
 	"data-monthly-support-upload",
-	"data-monthly-support-process",
 	"data-monthly-support-results",
 	"data-preview-final",
 	"open_monthly_final_preview",
@@ -272,6 +270,13 @@ for (const forbiddenMarker of ["data-monthly-support-exceptions", "data-monthly-
 	}
 }
 
+if (attendancePageJs.includes("data-monthly-support-process")) {
+	throw new Error("Monthly support uploads must validate automatically without a separate import-and-validate button.");
+}
+if (!attendancePageJs.includes("this.process_monthly_support_file(sourceType);")) {
+	throw new Error("Monthly support uploader must start validation immediately after a file is registered.");
+}
+
 for (const forbiddenMarker of ["download_exception_workbook", "download_exception_result", "异常结果工作簿"]) {
 	if (attendancePageJs.includes(forbiddenMarker)) {
 		throw new Error(`Attendance processing must not create a separate exception deliverable: ${forbiddenMarker}`);
@@ -301,6 +306,9 @@ for (let index = 1; index < monthlyFinalSections.length; index += 1) {
 	if (monthlyFinalBody.indexOf(monthlyFinalSections[index - 1]) >= monthlyFinalBody.indexOf(monthlyFinalSections[index])) {
 		throw new Error("Monthly final page must render attendance summary, supplemental sources, then monthly finalization.");
 	}
+}
+for (const marker of ["employee_recognition", "初稿识别员工", "花名册员工", "成功识别员工", "hrms-attendance-final-recognition"]) {
+	mustInclude(monthlyFinalBody, marker, `Monthly final must display employee-recognition statistics: ${marker}`);
 }
 if (attendancePageJs.includes("data-monthly-support-precheck")) {
 	throw new Error("Monthly support sources must check structure during processing, without a separate precheck button.");

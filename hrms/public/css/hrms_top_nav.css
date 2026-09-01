@@ -72,10 +72,15 @@
 body:has(#hrms-top-module-nav) #navbar-search,
 body:has(#hrms-top-module-nav) .navbar-search,
 body:has(#hrms-top-module-nav) .navbar .search-bar,
+body:has(#hrms-top-module-nav) .navbar .search,
+body:has(#hrms-top-module-nav) .navbar .search-wrapper,
+body:has(#hrms-top-module-nav) .navbar .search-container,
+body:has(#hrms-top-module-nav) .navbar [role="search"],
 body:has(#hrms-top-module-nav) #navbar-new,
 body:has(#hrms-top-module-nav) .navbar-new,
 body:has(#hrms-top-module-nav) .dropdown-navbar-new,
-body:has(#hrms-top-module-nav) .dropdown-new {
+body:has(#hrms-top-module-nav) .dropdown-new,
+body:has(#hrms-top-module-nav) .navbar .btn-primary {
 	display: none !important;
 }
 

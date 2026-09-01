@@ -4281,17 +4281,62 @@ def list_employee_salary_changes(company: str, employee: str = "", payroll_month
 
 @frappe.whitelist()
 def list_employee_salary_change_grid(company: str, payroll_month: str = "", page_length: int = 1000):
-	"""Return one editable salary row for every active employee, including blanks."""
+	"""Return one editable salary row for every payroll-scope employee, including blanks.
+
+	When an attendance final is locked, that immutable roster—not today's
+	``Employee.status``—is the source of truth.  This deliberately keeps a
+	leaver who belongs to the month's attendance/payroll population visible so
+	their required salary can still be entered.
+	"""
 	company = _require_company(company)
 	month_end = _month_end(payroll_month)
 	employee_fields = _safe_fields(
 		"Employee",
 		["name", "employee_name", "custom_employee_code", "department", "designation", "employment_type", "status", "custom_is_confirmed", "date_of_joining", "final_confirmation_date", "confirmation_date", "company"],
 	)
-	filters = {"company": company} if _doctype_has_field("Employee", "company") else {}
-	if _doctype_has_field("Employee", "status"):
-		filters["status"] = "Active"
-	employees = _safe_get_all("Employee", filters=filters, fields=employee_fields, order_by="employee_name asc", limit_page_length=100000)
+	current_lock = _current_payroll_attendance_lock(company, payroll_month) if payroll_month else None
+	attendance_lock_version = str((current_lock or {}).get("attendance_lock_version") or "")
+	if attendance_lock_version.startswith(PROCESSING_ATTENDANCE_LOCK_PREFIX):
+		sync_locked_attendance_final_to_payroll(company, payroll_month, attendance_lock_version)
+	if attendance_lock_version:
+		attendance_rows = frappe.get_all(
+			MONTHLY_ATTENDANCE_DOCTYPE,
+			filters=_attendance_scope_filters(company, payroll_month, attendance_lock_version),
+			fields=_safe_fields(MONTHLY_ATTENDANCE_DOCTYPE, ["employee", "employee_code", "employee_name", "department"]),
+			order_by="department asc, employee_code asc, employee_name asc",
+			limit_page_length=100000,
+		)
+		attendance_employee_names = sorted({row.get("employee") for row in attendance_rows if row.get("employee")})
+		employee_rows = _safe_get_all(
+			"Employee",
+			filters={"name": ["in", attendance_employee_names]} if attendance_employee_names else {"name": ["in", [""]]},
+			fields=employee_fields,
+			order_by="employee_name asc",
+			limit_page_length=100000,
+		)
+		employees_by_name = {row.name: row for row in employee_rows}
+		decisions = _monthly_payroll_participation_decision_map(company, payroll_month, attendance_lock_version)
+		employees = []
+		seen_employees = set()
+		for attendance_row in attendance_rows:
+			# An explicitly approved exclusion is outside the payroll scope.  All
+			# other locked-attendance rows, including leavers and missing-salary
+			# rows, need an editable position in this form.
+			if _participation_decision_excludes(_participation_decision_for_row(decisions, attendance_row)):
+				continue
+			employee_row = employees_by_name.get(attendance_row.get("employee"))
+			if not employee_row or employee_row.name in seen_employees:
+				continue
+			seen_employees.add(employee_row.name)
+			employees.append(employee_row)
+	else:
+		# Before a month has a locked attendance final, retain the master-data
+		# maintenance view for active employees.  Payroll calculation itself still
+		# requires the locked final above.
+		filters = {"company": company} if _doctype_has_field("Employee", "company") else {}
+		if _doctype_has_field("Employee", "status"):
+			filters["status"] = "Active"
+		employees = _safe_get_all("Employee", filters=filters, fields=employee_fields, order_by="employee_name asc", limit_page_length=100000)
 	change_filters = {"company": company}
 	if month_end:
 		change_filters["effective_date"] = ["<=", month_end]

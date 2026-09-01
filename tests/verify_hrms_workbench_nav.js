@@ -40,8 +40,14 @@ for (const marker of ["/assets/hrms/js/hrms_top_nav.js", "/assets/hrms/css/hrms_
 	}
 }
 
-if (!hooksSource.includes("/assets/hrms/css/hrms_top_nav.css?v=20260827c")) {
+if (!hooksSource.includes("/assets/hrms/css/hrms_top_nav.css?v=20260827d")) {
 	throw new Error("The top navigation CSS cache version must change when its desktop layout is corrected.");
+}
+
+for (const marker of [".navbar .search-wrapper", ".navbar .btn-primary", "input.closest(\"form, .input-group, .form-group, .search, .search-bar\")"]) {
+	if (!topNavSource.includes(marker)) {
+		throw new Error(`Top navigation must remove the current Frappe global search and primary New control: ${marker}`);
+	}
 }
 
 if (topNavCssSource.includes("body.hrms-module-shell > .main-section {\n\t\t/* Reserve the drawer") && topNavCssSource.includes("width: calc(100% - 300px);")) {
@@ -104,13 +110,20 @@ for (const marker of [
 	'label: "部门"',
 	'label: "考勤假期"',
 	'label: "薪酬"',
-	'keys: ["department", "organizational-chart"]',
+	'keys: ["department", "organizational-chart", "organization-report"]',
+	'route[0] === "organizational-chart" && route[1] === "report"',
+	'normalized === "organizational-chart/report"',
+	"var item_slug = item.slug || route_to_slug(item.route);",
 	'"attendance-import-center"',
 	'"payroll-input-center"',
 ]) {
 	if (!redirectSource.includes(marker)) {
 		throw new Error(`Global shell sidebar must switch by top module, missing marker: ${marker}`);
 	}
+}
+
+if (redirectSource.includes("route_to_slug(item.route) === active_slug")) {
+	throw new Error("Department sidebar items must use their explicit slugs so chart and report cannot be selected together.");
 }
 
 for (const forbidden of [

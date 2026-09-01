@@ -112,7 +112,7 @@ class HybridOrganizationChart {
 		this.page.add_inner_button(__("全屏查看"), () => this.toggle_fullscreen());
 		this.page.add_inner_button(__("展开全部"), () => this.expand_all());
 		this.page.add_inner_button(__("收起全部"), () => this.collapse_all());
-		this.page.add_inner_button(__("导入架构模板"), () => this.import_yongxin_template());
+		this.page.add_inner_button(__("同步2026Q3架构"), () => this.import_yongxin_q3_department_hierarchy());
 		this.page.add_inner_button(__("导出 Excel"), () => this.export_chart());
 		window.hrmsFormImport?.addPageActions(this.page, "org_structure", "组织架构与编制", "表单导入");
 		this.page.set_primary_action(__("新增部门"), () => this.add_department());
@@ -127,10 +127,6 @@ class HybridOrganizationChart {
 	render_shell() {
 		this.wrapper.innerHTML = `
 			<div class="hrms-org-page">
-				<aside class="hrms-org-sidebar">
-					<div class="hrms-org-sidebar-title">${__("部门")}</div>
-					${this.render_sidebar()}
-				</aside>
 				<section class="hrms-org-main">
 					<div class="hrms-org-toolbar">
 						<div>
@@ -169,10 +165,6 @@ class HybridOrganizationChart {
 	render_report_shell() {
 		this.wrapper.innerHTML = `
 			<div class="hrms-org-page hrms-org-page--report">
-				<aside class="hrms-org-sidebar">
-					<div class="hrms-org-sidebar-title">${__("部门")}</div>
-					${this.render_sidebar()}
-				</aside>
 				<section class="hrms-org-report-host" data-report>
 					<div class="hrms-org-report-empty">${__("正在生成部门报表...")}</div>
 				</section>
@@ -279,31 +271,6 @@ class HybridOrganizationChart {
 		URL.revokeObjectURL(link.href);
 	}
 
-	render_sidebar() {
-		const items = [
-			["部门管理", ["List", "Department"]],
-			["架构图", ["organizational-chart"]],
-			["部门报表", ["organizational-chart", "report"]],
-		];
-		return `
-			<nav>
-				${items
-					.map(
-						([label, route]) => `
-							<button class="hrms-org-sidebar-link ${
-								(route[1] === "report" && this.mode === "report") ||
-								(route[0] === "organizational-chart" && !route[1] && this.mode === "chart")
-									? "active"
-									: ""
-							}" data-route="${frappe.utils.escape_html(JSON.stringify(route))}">
-								${frappe.utils.escape_html(__(label))}
-							</button>`,
-					)
-					.join("")}
-			</nav>
-		`;
-	}
-
 	set_company(company, { publish = true } = {}) {
 		const next_company = (company || "").trim();
 		if (!next_company) return;
@@ -337,15 +304,6 @@ class HybridOrganizationChart {
 			const action = event.target.closest("[data-action]");
 			if (action) {
 				this.handle_action(action.dataset.action, action);
-				return;
-			}
-
-			const route_button = event.target.closest("[data-route]");
-			if (route_button) {
-				const raw_route = (route_button.dataset.route || "").trim();
-				if (!raw_route.startsWith("[")) return;
-				const route = JSON.parse(raw_route);
-				if (route.length) frappe.set_route(...route);
 				return;
 			}
 
@@ -474,6 +432,7 @@ class HybridOrganizationChart {
 				this.field_map = this.tree.field_map || {};
 				this.collapsed_nodes.clear();
 				if (this.source_mode === "workbook_snapshot") this.collapse_snapshot_detail_nodes(this.tree.root);
+				if (this.source_mode === "live") this.collapse_live_folder_nodes(this.tree.root);
 				this.view_mode = "overview";
 				this.render_summary();
 				this.render_source_label();
@@ -579,7 +538,7 @@ class HybridOrganizationChart {
 			tree.innerHTML = `<div class="hrms-org-empty">${__("暂无组织数据，请先导入员工花名册或维护部门。")}</div>`;
 			return;
 		}
-		const roots = root.node_type === "company" ? root.children || [] : [root];
+			const roots = [root];
 		if (!roots.length) {
 			tree.innerHTML = `<div class="hrms-org-empty">${__("暂无部门，请先在部门管理中新增一级部门。")}</div>`;
 			return;
@@ -1049,6 +1008,15 @@ class HybridOrganizationChart {
 		}
 	}
 
+	collapse_live_folder_nodes(root) {
+		// Keep the company root open. Every managed folder below it opens only
+		// when clicked, so the live view behaves like a file tree.
+		for (const child of root?.children || []) {
+			if ((child.children || []).length) this.collapsed_nodes.add(child.node_id);
+			this.collapse_live_folder_nodes(child);
+		}
+	}
+
 	export_chart() {
 		frappe.call({
 			method: "hrms.hr.page.organizational_chart.organizational_chart.export_organization_chart_excel",
@@ -1201,9 +1169,14 @@ class HybridOrganizationChart {
 					if (!company) {
 						return {};
 					}
-					return { filters: { name: ["!=", doc.name], company } };
+					return { filters: { name: ["!=", doc.name], company, is_group: 1 } };
 				},
 			},
+			{ fieldname: "is_group", fieldtype: "Check", label: __("文件夹部门（可包含下级部门）"), default: doc.is_group },
+			{ fieldname: "hrms_org_level", fieldtype: "Int", label: __("组织层级（数字越小越高）"), default: doc.hrms_org_level },
+			{ fieldname: "hrms_org_role", fieldtype: "Data", label: __("组织角色"), default: doc.hrms_org_role },
+			{ fieldname: "hrms_org_manager", fieldtype: "Data", label: __("负责人"), default: doc.hrms_org_manager },
+			{ fieldname: "hrms_roster_assignable", fieldtype: "Check", label: __("允许花名册归属（仅末级）"), default: doc.hrms_roster_assignable },
 		];
 	}
 
@@ -1220,6 +1193,60 @@ class HybridOrganizationChart {
 						[data.title || __("组织架构模板"), data.department_count || 0, data.position_count || 0],
 					),
 					() => this.run_yongxin_template_import(),
+				);
+			});
+	}
+
+	import_yongxin_q3_department_hierarchy() {
+		frappe
+			.call({
+				method: "hrms.hr.page.organizational_chart.organizational_chart.preview_yongxin_q3_department_hierarchy",
+				args: { company: this.company },
+			})
+			.then((preview) => {
+				const data = preview.message || {};
+				const summary = data.summary || {};
+				frappe.prompt(
+					[
+						{
+							fieldname: "confirmation",
+							fieldtype: "Data",
+							label: __("确认文字"),
+							reqd: 1,
+							description: __(
+								"将建立或调整 {0} 个组织节点，其中 {1} 个文件夹、{2} 个花名册末级节点。请输入“{3}”继续。当前有 {4} 名员工仍归属在将成为文件夹的旧部门，系统会保留并列出，绝不猜测分组。",
+								[
+									summary.node_count || 0,
+									summary.folder_count || 0,
+									summary.roster_leaf_count || 0,
+									data.confirmation_text || "",
+									summary.legacy_employee_assignment_count || 0,
+								],
+							),
+						},
+					],
+					(values) => {
+						frappe
+							.call({
+								method: "hrms.hr.page.organizational_chart.organizational_chart.import_yongxin_q3_department_hierarchy",
+								args: { company: this.company, confirmation: values.confirmation },
+								freeze: true,
+								freeze_message: __("正在同步2026Q3文件夹架构..."),
+							})
+							.then((response) => {
+								const result = response.message || {};
+								frappe.show_alert({
+									message: __("已同步 {0} 个组织节点；请处理 {1} 条待分组员工记录。", [
+										(result.created_departments || []).length + (result.updated_departments || []).length,
+										result.summary?.legacy_employee_assignment_count || 0,
+									]),
+									indicator: "green",
+								});
+								this.set_source_mode("live");
+							});
+					},
+					__("同步2026Q3架构"),
+					__("同步"),
 				);
 			});
 	}

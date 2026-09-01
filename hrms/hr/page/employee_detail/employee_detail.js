@@ -690,7 +690,12 @@ class EmployeeDetailPage {
 	}
 
 	is_probation_work_nature(header = {}) {
-		return header.employment_type === "Probation" || header.custom_is_confirmed === "否";
+		if (header.employment_type === "Probation" || header.custom_is_confirmed === "否") return true;
+		if (header.custom_is_confirmed === "是") return false;
+
+		// 未填写“是否转正”时按转正日期判断；日期当天已是正式员工。
+		const confirmation_date = String(header.final_confirmation_date || "").slice(0, 10);
+		return Boolean(confirmation_date && confirmation_date > frappe.datetime.get_today());
 	}
 
 	get_employment_type_display(header = {}) {
@@ -1118,7 +1123,7 @@ class EmployeeDetailPage {
 						{
 							property: __("是否转正"),
 							fieldname: "custom_is_confirmed",
-							current: this.detail?.header?.custom_is_confirmed || "否",
+							current: this.detail?.header?.custom_is_confirmed || "",
 							new: "是",
 						},
 						{

@@ -1683,6 +1683,40 @@ def _refresh_batch_review_status(batch):
 	return batch.status
 
 
+def _monthly_final_employee_recognition(company: str, attendance_month: str) -> dict[str, int]:
+	"""Summarise the attendance-draft/roster match without counting daily rows.
+
+	The monthly final is one row per employee, whereas the DingTalk source is one
+	row per employee per day.  These figures therefore use the persisted
+	employee-centred attendance-draft records and only use a roster employee when
+	it has a business employee code that the source can actually match.
+	"""
+	batch = _latest_batch(company, attendance_month, "attendance_draft")
+	records = _result_rows(batch, 5000) if batch else []
+
+	def employee_key(record: dict[str, Any]) -> str:
+		code = str(record.get("employee_code") or "").strip()
+		name = str(record.get("employee_name") or "").strip()
+		return code or (f"name:{name}" if name else "")
+
+	draft_people = {key for record in records if (key := employee_key(record))}
+	successful_people = {
+		key
+		for record in records
+		if record.get("eligible_for_downstream") and (key := employee_key(record))
+	}
+	roster_people = {
+		str(employee.get("employee_code") or "").strip()
+		for employee in _employee_directory(company)
+		if str(employee.get("employee_code") or "").strip()
+	}
+	return {
+		"draft_recognized_employee_count": len(draft_people),
+		"roster_employee_count": len(roster_people),
+		"successful_employee_count": len(successful_people),
+	}
+
+
 @frappe.whitelist()
 def get_processing_batch(company: str, attendance_month: str):
 	_require_processing_manager()
@@ -1708,6 +1742,7 @@ def get_processing_batch(company: str, attendance_month: str):
 		"finalization_inputs": finalization_inputs,
 		"final_outputs": final_outputs,
 		"signed_final_reconciliation": anchor_meta.get("signed_final_reconciliation", {}),
+		"employee_recognition": _monthly_final_employee_recognition(company, attendance_month),
 		"locked_snapshot_version": final_outputs.get("locked_snapshot_version", ""),
 		"snapshot_ready": bool(finalization_inputs) and all(item["ready"] for item in finalization_inputs),
 	}
@@ -2040,6 +2075,95 @@ def list_processing_results(company: str, attendance_month: str, source_type: st
 		"import_validation": meta.get("monthly_support_precheck") if source_type in MONTHLY_SUPPORT_SOURCE_TYPES else {},
 		"result_summary": _missed_punch_summary(rows) if source_type == "missing_card" else _apple_tree_summary(rows) if source_type == "apple_tree" else {},
 		"can_confirm": bool(rows) or batch.status in {"待处理异常", "待确认"},
+	}
+
+
+def _attendance_draft_data_quality_value(row: dict[str, Any], *fieldnames: str) -> str:
+	"""Read an attendance-draft identity field without guessing from names."""
+	return str(_row_value(row, *fieldnames) or "").strip()
+
+
+def _attendance_draft_data_quality_item(row: dict[str, Any]) -> dict[str, Any]:
+	"""Expose a source row read-only, including its original Excel row number."""
+	metadata_fields = {"source_file", "source_sheet", "source_row"}
+	return {
+		"source_row": cint(row.get("source_row")),
+		"values": {
+			fieldname: "" if value is None else str(value)
+			for fieldname, value in row.items()
+			if fieldname not in metadata_fields
+		},
+	}
+
+
+@frappe.whitelist()
+def get_attendance_data_quality_details(
+	company: str,
+	attendance_month: str,
+	source_type: str,
+	quality_type: str,
+	page_start: int = 0,
+	page_length: int = 500,
+):
+	"""Return the source rows behind the attendance-draft quality notices.
+
+	These rows deliberately remain outside the employee processing records: a
+	missing employee code must not become an employee exception.  Read the
+	immutable uploaded workbook again so the detail view is complete and remains
+	traceable even after the source batch has been confirmed.
+	"""
+	_require_processing_manager()
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	if _require_source_type(source_type) != "attendance_draft":
+		frappe.throw(_("仅考勤初稿支持查看这类数据质量明细。"))
+	quality_type = str(quality_type or "").strip()
+	quality_labels = {
+		"missing_employee_code": "无工号来源行",
+		"blank_shift": "入离职期间空班次",
+	}
+	if quality_type not in quality_labels:
+		frappe.throw(_("不支持的数据质量明细类型。"))
+	batch = _latest_batch(company, attendance_month, source_type)
+	if not batch or not batch.source_file:
+		frappe.throw(_("尚未找到当前月份的考勤初稿来源文件。"))
+	workbook = _load_workbook(batch.source_file)
+	sheet = find_dingtalk_daily_sheet(workbook)
+	if not sheet:
+		frappe.throw(_("来源文件中未找到可读取的钉钉每日明细。"))
+	rows = rows_from_dingtalk_daily_sheet(sheet, source_file=batch.source_file)
+	if quality_type == "missing_employee_code":
+		matched_rows = [
+			row for row in rows
+			if not _attendance_draft_data_quality_value(row, "工号", "员工工号", "employee_code")
+		]
+	else:
+		# This is intentionally the same rule used by the processor: every
+		# employee-code row with a blank shift is retained as a quality event.
+		matched_rows = [
+			row for row in rows
+			if _attendance_draft_data_quality_value(row, "工号", "员工工号", "employee_code")
+			and not _attendance_draft_data_quality_value(row, "班次", "shift")
+		]
+	columns = list(dict.fromkeys(
+		fieldname
+		for row in matched_rows
+		for fieldname in row
+		if fieldname not in {"source_file", "source_sheet", "source_row"}
+	))
+	page_start = max(cint(page_start), 0)
+	page_length = min(max(cint(page_length), 1), 500)
+	return {
+		"title": quality_labels[quality_type],
+		"description": (
+			"以下为工号为空、未进入员工异常的原始来源行。"
+			if quality_type == "missing_employee_code"
+			else "以下为有工号但班次为空、仅作为数据质量证据保留的原始来源行。"
+		),
+		"source_file_name": Path(batch.source_file).name,
+		"source_sheet": sheet.title,
+		"total_count": len(matched_rows),
+		"columns": columns,
+		"items": [_attendance_draft_data_quality_item(row) for row in matched_rows[page_start : page_start + page_length]],
 	}
 
 
@@ -2935,22 +3059,24 @@ def _finalization_inputs(company, attendance_month, slots):
 FINAL_SIGNED_COLUMNS = (
 	("employee_code", "工号"), ("employee_name", "姓名"), ("department", "部门"),
 	("standard_hours", "标准工时"), ("actual_attendance_hours", "实际出勤"),
-	("workday_overtime_hours", "工作日加班"), ("restday_overtime_hours", "休息日加班"), ("holiday_overtime_hours", "节假日加班"),
+	("special_workday_hours", "平日特殊工时"), ("workday_overtime_hours", "工作日加班"),
+	("special_restday_hours", "周末特殊工时"), ("restday_overtime_hours", "休息日加班"),
+	("special_holiday_hours", "节假日特殊工时"), ("holiday_overtime_hours", "节假日加班"),
 	("large_night_shifts", "大夜班"), ("small_night_shifts", "小夜班"),
 	("personal_leave_hours", "事假"), ("sick_leave_hours", "病假"), ("annual_leave_hours", "特休"),
 	("work_injury_hours", "工伤"), ("rest_arrangement_hours", "排休"), ("absence_hours", "旷工"),
 	("clock_in_missing_count", "上班漏打卡"), ("clock_out_missing_count", "下班漏打卡"),
 	("green_apple_amount", "绿苹果金额"), ("red_apple_amount", "红苹果金额"),
-	("housing_allowance", "住房补贴"), ("full_attendance_award", "全勤奖"), ("special_hours", "特殊工时"),
+	("housing_allowance", "住房补贴"), ("full_attendance_award", "全勤奖"),
 	("employee_signature", "员工签字"), ("review_note", "备注"),
 )
 FINAL_FINANCE_COLUMNS = (
 	("employee_code", "工号"), ("employee_name", "姓名"), ("department", "部门"),
-	("actual_attendance_hours", "实际出勤"), ("workday_overtime_hours", "工作日加班"),
-	("restday_overtime_hours", "休息日加班"), ("holiday_overtime_hours", "节假日加班"),
+	("actual_attendance_hours", "实际出勤"), ("workday_overtime_hours", "工作日加班（含特殊工时）"),
+	("restday_overtime_hours", "休息日加班（含特殊工时）"), ("holiday_overtime_hours", "节假日加班（含特殊工时）"),
 	("large_night_shifts", "大夜班"), ("small_night_shifts", "小夜班"),
 	("absence_hours", "旷工"), ("green_apple_amount", "绿苹果金额"), ("red_apple_amount", "红苹果金额"), ("housing_allowance", "住房补贴"),
-	("full_attendance_award", "全勤奖"), ("special_hours", "特殊工时"),
+	("full_attendance_award", "全勤奖"),
 )
 
 # The settings table stores visible Excel headings, while field keys remain
@@ -3085,9 +3211,9 @@ def _attendance_final_excel_config_hash() -> str:
 	return hashlib.sha256(_json(payload).encode()).hexdigest()
 
 
-# Version eight invalidates previous files and also fingerprints heading changes,
+# Version nine invalidates previous files and also fingerprints heading changes,
 # so an edited Settings table cannot accidentally keep an old export.
-MONTHLY_FINAL_LAYOUT_VERSION = 8
+MONTHLY_FINAL_LAYOUT_VERSION = 9
 
 
 # The employee-facing file deliberately follows the paper confirmation form
@@ -3104,21 +3230,45 @@ def _as_number(value: Any) -> float:
 		return 0.0
 
 
-def _special_hours_breakdown(entries: list[dict[str, Any]] | None, attendance_month: str) -> dict[str, float]:
+def _company_statutory_holidays(company: str, attendance_month: str) -> set[date]:
+	"""Return the company's non-weekly-off holidays for the target month."""
+	try:
+		year, month = (int(part) for part in attendance_month.split("-", 1))
+		holiday_list = frappe.db.get_value("Company", company, "default_holiday_list") if company else ""
+		if not holiday_list:
+			return set()
+		values = frappe.get_all(
+			"Holiday",
+			filters={
+				"parent": holiday_list,
+				"holiday_date": ["between", [date(year, month, 1), date(year, month, monthrange(year, month)[1])]],
+				"weekly_off": 0,
+			},
+			pluck="holiday_date",
+		)
+		return {
+			value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
+			for value in values
+		}
+	except (AttributeError, TypeError, ValueError):
+		return set()
+
+
+def _special_hours_breakdown(entries: list[dict[str, Any]] | None, attendance_month: str, company: str = "") -> dict[str, float]:
 	"""Split special-hour entries into the three overtime-rate inputs.
 
 	The special-hours worksheet records one value for each calendar date.  The
 	monthly final needs those values at their correct rate: weekday, weekend or
 	holiday.  A dated row is therefore never treated as one undifferentiated
-	``特殊工时`` total again.  Statutory-holiday dates are intentionally left for
-	the reviewer to enter as a holiday adjustment because the current source
-	workbook does not identify them separately from ordinary calendar days.
+	``特殊工时`` total again.  Statutory-holiday dates come from the company's
+	configured Holiday List and take precedence over the weekend split.
 	"""
 	try:
 		year, month = (int(part) for part in attendance_month.split("-", 1))
 	except (TypeError, ValueError):
 		return {"special_workday_hours": 0.0, "special_restday_hours": 0.0, "special_holiday_hours": 0.0}
 	result = {"special_workday_hours": 0.0, "special_restday_hours": 0.0, "special_holiday_hours": 0.0}
+	statutory_holidays = _company_statutory_holidays(company, attendance_month)
 	for entry in entries or []:
 		day = cint(entry.get("day"))
 		if not day:
@@ -3128,7 +3278,13 @@ def _special_hours_breakdown(entries: list[dict[str, Any]] | None, attendance_mo
 		except ValueError:
 			continue
 		hours = _as_number(entry.get("hours"))
-		key = "special_restday_hours" if day_date.weekday() >= 5 else "special_workday_hours"
+		key = (
+			"special_holiday_hours"
+			if day_date in statutory_holidays
+			else "special_restday_hours"
+			if day_date.weekday() >= 5
+			else "special_workday_hours"
+		)
 		result[key] += hours
 	return result
 
@@ -3253,7 +3409,7 @@ def _monthly_final_rows(batches: dict[str, Any]):
 			elif source_type == "special_hours":
 				# The grid supplies a dated value for every entry.  Retain the total
 				# for audit, but pass the rate-specific values to the final calculator.
-				breakdown = _special_hours_breakdown(values.get("special_hours_days"), batch.attendance_month)
+				breakdown = _special_hours_breakdown(values.get("special_hours_days"), batch.attendance_month, batch.company)
 				output["special_hours"] = _as_number(output.get("special_hours")) + _as_number(values.get("special_hours"))
 				for field, amount in breakdown.items():
 					output[field] = _as_number(output.get(field)) + amount
@@ -3263,6 +3419,24 @@ def _monthly_final_rows(batches: dict[str, Any]):
 				field = MONTHLY_SUPPORT_SOURCE_CONFIG[source_type]["value_field"]
 				output[field] = _as_number(output.get(field)) + _as_number(values.get(field))
 	return sorted(rows_by_employee.values(), key=lambda row: (str(row.get("department") or ""), str(row.get("employee_code") or ""), str(row.get("employee_name") or "")))
+
+
+def _finance_final_preview_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	"""Present special hours inside the finance overtime totals.
+
+	The finance workbook already uses the three rate-specific settlement totals.
+	Keep the webpage view on that same contract, rather than exposing a separate
+	"特殊工时" total that payroll could accidentally omit.
+	"""
+	preview_rows = []
+	for source_row in rows:
+		row = dict(source_row)
+		calculation = _final_calculation(row)
+		row["workday_overtime_hours"] = calculation["settlement_15_pre"]
+		row["restday_overtime_hours"] = calculation["settlement_20_pre"]
+		row["holiday_overtime_hours"] = calculation["settlement_30"]
+		preview_rows.append(row)
+	return preview_rows
 
 
 def _save_monthly_final_file(attendance_month: str, title: str, columns, rows):
@@ -3570,6 +3744,7 @@ def get_monthly_final_preview(company: str, attendance_month: str, kind: str = "
 		if not legacy_matches:
 			return {"available": False, "stale": True, "reason": _("来源或人工处理已变化，请重新锁定并生成终稿后再查看。")}
 		preview_batches = legacy_batches
+	rows = _monthly_final_rows(preview_batches)
 	columns = FINAL_SIGNED_COLUMNS if kind == "signed" else FINAL_FINANCE_COLUMNS
 	return {
 		"available": True,
@@ -3577,5 +3752,5 @@ def get_monthly_final_preview(company: str, attendance_month: str, kind: str = "
 		"title": _("员工签字版") if kind == "signed" else _("财务版"),
 		"locked_snapshot_version": locked_version,
 		"columns": [{"field": field, "label": label} for field, label in columns],
-		"rows": _monthly_final_rows(preview_batches),
+		"rows": rows if kind == "signed" else _finance_final_preview_rows(rows),
 	}

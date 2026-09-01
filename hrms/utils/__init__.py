@@ -85,11 +85,16 @@ def get_employee_email(employee_id: str) -> str | None:
 	if not employee_emails:
 		return None
 
+	def get_value(fieldname: str):
+		if isinstance(employee_emails, dict):
+			return employee_emails.get(fieldname)
+		return getattr(employee_emails, fieldname, None)
+
 	for email in (
-		employee_emails.prefered_email,
-		employee_emails.user_id,
-		employee_emails.company_email,
-		employee_emails.personal_email,
+		get_value("prefered_email"),
+		get_value("user_id"),
+		get_value("company_email"),
+		get_value("personal_email"),
 	):
 		if isinstance(email, str) and email.strip():
 			return email.strip()
