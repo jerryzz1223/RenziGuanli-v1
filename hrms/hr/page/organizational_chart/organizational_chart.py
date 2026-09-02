@@ -20,6 +20,7 @@ YONGXIN_ORG_EXPORT_TEMPLATE = Path(
 )
 YONGXIN_Q3_ORG_WORKBOOK_CANDIDATES = (
 	Path("/Users/lrj/Documents/SAD/YOngxin/模版/组织架构图260626.xlsx"),
+	Path("/home/frappe/frappe-bench/sites/hrms.localhost/private/files/组织架构图260626.xlsx"),
 	YONGXIN_ORG_EXPORT_TEMPLATE,
 )
 YONGXIN_ORG_SHEET_ALIASES = ("26Q3组织架构图", "组织架构图")
@@ -39,6 +40,7 @@ YONGXIN_Q3_HIERARCHY_CONFIRMATION = "同步2026Q3组织架构"
 YONGXIN_COMPANY_NAME = "永新"
 YONGXIN_LEGACY_COMPANY_KEYS = ("1",)
 ORGANIZATION_TECHNICAL_SUFFIX_RE = re.compile(r"\s*[-－]\s*(?:\d+[A-Za-z]?|1D|11)\s*$", re.IGNORECASE)
+GRADE_TAG_CANDIDATES = {"直线级", "间师级", "文师级", "文组级"}
 
 HYBRID_ROSTER_FIELD_MAP = {
 	"工号": "custom_employee_code",
@@ -89,6 +91,307 @@ def _company_business_weight(company: str):
 	return frappe.db.count("Department", {"company": company}) + frappe.db.count(
 		"Employee", {"company": company, "status": "Active"}
 	)
+
+
+@frappe.whitelist()
+def preview_multiple_position_organization_import(company: str | None = None, version_code: str | None = None):
+	"""Return a no-write staging payload for the Q3 visual organization chart.
+
+	The source workbook is spatial and deliberately contains ambiguous labels.  This
+	preview creates only candidates: organization nodes, position nodes, known
+	grade-tag candidates, and rows that still need HR confirmation.  It never
+	creates Employee, Department, Designation, or assignment records.
+	"""
+	from openpyxl import load_workbook
+
+	if not frappe.has_permission("Employee", "read"):
+		frappe.throw(_("您无权预览包含员工映射信息的组织架构。"))
+
+	source = _resolve_yongxin_org_workbook()
+	if not source:
+		frappe.throw(_("未找到组织架构原表。"))
+	workbook = load_workbook(source, read_only=False, data_only=True)
+	sheet = next((workbook[name] for name in YONGXIN_ORG_SHEET_ALIASES if name in workbook.sheetnames), None)
+	if not sheet:
+		frappe.throw(_("组织架构原表中未找到组织图工作表。"))
+
+	company = _normalize_yongxin_company(company or YONGXIN_COMPANY_NAME) or YONGXIN_COMPANY_NAME
+	version_code = cstr(version_code).strip() or YONGXIN_Q3_SNAPSHOT_VERSION
+	employee_lookup = _get_employee_lookup(_get_active_employees(company))
+	nodes = _parse_workbook_snapshot_nodes(sheet, employee_lookup)
+	root = next((node for node in nodes if node.get("node_type") == "company_leadership"), None)
+	if not root:
+		frappe.throw(_("组织架构原表中未找到总经理节点。"))
+	_build_workbook_snapshot_relationships(nodes, root)
+	return _build_multiple_position_import_preview(
+		nodes=nodes,
+		company=company,
+		version_code=version_code,
+		source_document=source.name,
+		source_sheet=sheet.title,
+	)
+
+
+@frappe.whitelist()
+def create_multiple_position_organization_draft(company: str | None = None, version_code: str | None = None):
+	"""Persist only source-derived draft candidates; never assign or update employees."""
+	if not frappe.has_permission("Employee", "read"):
+		frappe.throw(_("您无权创建包含员工映射信息的组织草稿。"))
+
+	preview = preview_multiple_position_organization_import(company=company, version_code=version_code)
+	company = preview["company"]
+	version_code = preview["version_code"]
+	existing = frappe.db.exists(
+		"Organization Structure Version", {"company": company, "version_code": version_code}
+	)
+	if existing:
+		return {
+			"version": existing,
+			"created": False,
+			"message": _("多岗位组织草稿已存在；未重复创建。"),
+			"summary": preview["summary"],
+		}
+
+	version = frappe.get_doc(
+		{
+			"doctype": "Organization Structure Version",
+			"version_code": version_code,
+			"company": company,
+			"status": "草稿",
+			"source_file_name": preview["source_document"],
+			"source_sheet": preview["source_sheet"],
+			"source_reference": f"{preview['source_document']}::{preview['source_sheet']}",
+		}
+	).insert(ignore_permissions=False)
+
+	grade_tags = {}
+	for row in preview["grade_tag_candidates"]:
+		grade_tag = frappe.get_doc(
+			{
+				"doctype": "Grade Tag",
+				"tag_code": row["tag_code"],
+				"tag_name": row["tag_name"],
+				"source_version": version.name,
+			}
+		).insert(ignore_permissions=False)
+		grade_tags[row["tag_name"]] = grade_tag.name
+
+	organization_nodes = {}
+	for row in preview["organization_nodes"]:
+		parent = organization_nodes.get(row.get("parent_node_code"))
+		node = frappe.get_doc(
+			{
+				"doctype": "Organization Node",
+				"node_code": row["node_code"],
+				"structure_version": version.name,
+				"node_type": row["node_type"],
+				"display_name": row["display_name"],
+				"parent_node": parent,
+				"source_sheet": row["source_sheet"],
+				"source_cell": row["source_cell"],
+				"source_text": row["source_text"],
+				"confirmation_status": row["confirmation_status"],
+				"planned_headcount": row["planned_headcount"],
+				"current_headcount": row["current_headcount"],
+				"vacancy_count": row["vacancy_count"],
+			}
+		).insert(ignore_permissions=False)
+		organization_nodes[row["node_code"]] = node.name
+
+	for row in preview["positions"]:
+		position = frappe.get_doc(
+			{
+				"doctype": "Organization Position",
+				"position_code": row["position_code"],
+				"structure_version": version.name,
+				"organization_node": organization_nodes.get(row["organization_node_code"]),
+				"position_name": row["position_name"],
+				"source_sheet": row["source_sheet"],
+				"source_cell": row["source_cell"],
+				"source_text": row["source_text"],
+				"confirmation_status": row["confirmation_status"],
+				"suggested_grade_tags": [
+					{"grade_tag": grade_tags[tag]}
+					for tag in row["suggested_grade_tags"]
+					if tag in grade_tags
+				],
+			}
+		).insert(ignore_permissions=False)
+
+	return {
+		"version": version.name,
+		"created": True,
+		"message": _("已创建多岗位组织草稿；尚未改动任何员工主职或附职。"),
+		"summary": preview["summary"],
+	}
+
+
+@frappe.whitelist()
+def get_multiple_position_draft_status(company: str | None = None, version_code: str | None = None):
+	"""Expose draft progress without mixing it into the published live tree."""
+	company = _normalize_yongxin_company(company or YONGXIN_COMPANY_NAME) or YONGXIN_COMPANY_NAME
+	version_code = cstr(version_code).strip() or YONGXIN_Q3_SNAPSHOT_VERSION
+	version = frappe.db.get_value(
+		"Organization Structure Version",
+		{"company": company, "version_code": version_code},
+		["name", "status", "modified"],
+		as_dict=True,
+	)
+	if not version:
+		return {
+			"exists": False,
+			"company": company,
+			"version_code": version_code,
+			"message": _("尚未建立多岗位组织草稿；实时架构仍按当前已发布的部门与员工资料显示。"),
+		}
+
+	return {
+		"exists": True,
+		"version": version.name,
+		"version_code": version_code,
+		"status": version.status,
+		"organization_node_count": frappe.db.count("Organization Node", {"structure_version": version.name}),
+		"position_count": frappe.db.count("Organization Position", {"structure_version": version.name}),
+		"message": _("多岗位组织草稿已建立，仍待人工确认主职、附职和职级标签后发布。"),
+	}
+
+
+def _build_multiple_position_import_preview(nodes, company, version_code, source_document, source_sheet):
+	"""Translate parsed visual cards into explicit candidates without guessing data."""
+	nodes_by_id = {node["node_id"]: node for node in nodes}
+	organization_types = {"company_leadership", "director", "division", "department", "team"}
+	organization_type_labels = {
+		"company_leadership": "公司",
+		"director": "分管",
+		"division": "分管",
+		"department": "课",
+		"team": "组",
+	}
+
+	def ancestor(node, allowed_types):
+		current = nodes_by_id.get(node.get("parent_node_id"))
+		while current:
+			if current.get("node_type") in allowed_types:
+				return current
+			current = nodes_by_id.get(current.get("parent_node_id"))
+		return None
+
+	def node_code(node):
+		return f"ORG-{version_code}-{node['source_cell']}"
+
+	def position_code(node):
+		return f"POS-{version_code}-{node['source_cell']}"
+
+	organization_nodes = []
+	positions = []
+	grade_tags = set()
+	unclassified_level_cards = []
+	manager_cards_requiring_confirmation = []
+	employee_candidates = []
+
+	for node in nodes:
+		node_type = node.get("node_type")
+		if node_type in organization_types:
+			parent = ancestor(node, organization_types)
+			organization_nodes.append(
+				{
+					"node_code": node_code(node),
+					"node_type": organization_type_labels[node_type],
+					"display_name": node.get("name"),
+					"parent_node_code": node_code(parent) if parent else None,
+					"source_sheet": source_sheet,
+					"source_cell": node.get("source_cell"),
+					"source_text": "\n".join(node.get("lines") or []),
+					"planned_headcount": node.get("planned_headcount", 0),
+					"current_headcount": node.get("current_headcount", 0),
+					"vacancy_count": node.get("vacancy_count", 0),
+					"confirmation_status": "待确认",
+				}
+			)
+			if node.get("manager_names") or node.get("proxy_names"):
+				manager_cards_requiring_confirmation.append(
+					{
+						"organization_node_code": node_code(node),
+						"source_cell": node.get("source_cell"),
+						"manager_names": node.get("manager_names") or [],
+						"proxy_names": node.get("proxy_names") or [],
+						"reason": _("原表负责人/代理人需人工选择实际岗位节点和任职类型。"),
+					}
+				)
+			continue
+
+		if node_type == "work_level":
+			label = cstr(node.get("name")).strip()
+			if label in GRADE_TAG_CANDIDATES:
+				grade_tags.add(label)
+			else:
+				unclassified_level_cards.append(
+					{
+						"source_cell": node.get("source_cell"),
+						"label": label,
+						"source_text": "\n".join(node.get("lines") or []),
+						"reason": _("该行位于职级位置，但名称不属于已确认的非互斥职级标签。"),
+					}
+				)
+			continue
+
+		if node_type == "position_group":
+			organization_parent = ancestor(node, organization_types)
+			work_level = ancestor(node, {"work_level"})
+			level_label = cstr(work_level.get("name") if work_level else "").strip()
+			if level_label in GRADE_TAG_CANDIDATES:
+				grade_tags.add(level_label)
+			positions.append(
+				{
+					"position_code": position_code(node),
+					"organization_node_code": node_code(organization_parent) if organization_parent else None,
+					"position_name": node.get("name"),
+					"suggested_grade_tags": [level_label] if level_label in GRADE_TAG_CANDIDATES else [],
+					"source_sheet": source_sheet,
+					"source_cell": node.get("source_cell"),
+					"source_text": "\n".join(node.get("lines") or []),
+					"confirmation_status": "待确认",
+				}
+			)
+			continue
+
+		if node_type == "employee_group":
+			for person in node.get("people") or []:
+				if person.get("role") != _("员工"):
+					continue
+				employee_candidates.append(
+					{
+						"employee_name": person.get("employee_name"),
+						"matched_employee": person.get("matched_employee"),
+						"source_cell": node.get("source_cell"),
+						"reason": _("人员只生成待映射清单；初始预览不创建主职或附职。"),
+					}
+				)
+
+	return {
+		"write_mode": "preview_only",
+		"company": company,
+		"version_code": version_code,
+		"source_document": source_document,
+		"source_sheet": source_sheet,
+		"organization_nodes": organization_nodes,
+		"positions": positions,
+		"grade_tag_candidates": [
+			{"tag_code": f"GRADE-{version_code}-{label}", "tag_name": label, "source_version": version_code}
+			for label in sorted(grade_tags)
+		],
+		"unclassified_level_cards": unclassified_level_cards,
+		"manager_cards_requiring_confirmation": manager_cards_requiring_confirmation,
+		"employee_candidates": employee_candidates,
+		"summary": {
+			"organization_node_count": len(organization_nodes),
+			"position_count": len(positions),
+			"grade_tag_candidate_count": len(grade_tags),
+			"unclassified_level_count": len(unclassified_level_cards),
+			"manager_confirmation_count": len(manager_cards_requiring_confirmation),
+			"employee_mapping_count": len(employee_candidates),
+		},
+	}
 
 
 def _resolve_yongxin_company_candidates(company: str | None = None):
@@ -969,6 +1272,7 @@ def export_organization_chart_excel(company: str | None = None):
 	from openpyxl import load_workbook
 	from openpyxl.styles import Alignment, Border, Font, Side
 	from frappe.utils.file_manager import save_file
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	if not YONGXIN_ORG_EXPORT_TEMPLATE.exists():
 		frappe.throw(_("未找到组织架构 Excel 模板。"))
@@ -986,7 +1290,7 @@ def export_organization_chart_excel(company: str | None = None):
 	_refresh_organization_export_summary(sheet, get_organization_report(payload.get("company")), copy, Alignment, Border, Font, Side)
 
 	output = BytesIO()
-	book.save(output)
+	save_workbook_with_logo_watermark(book, output)
 	company_label = _get_company_label(payload.get("company")) or YONGXIN_COMPANY_NAME
 	file = save_file(f"{company_label}_组织架构图.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}

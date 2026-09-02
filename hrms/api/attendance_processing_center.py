@@ -1519,11 +1519,12 @@ def _apple_tree_trace(row: dict[str, Any]) -> str:
 	) or "--"
 
 
-def _export_processed_result(batch) -> dict[str, str]:
+def _export_processed_result(batch, include_logo: bool = True) -> dict[str, str]:
 	from openpyxl import Workbook
 	from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 	from openpyxl.utils import get_column_letter
 	from frappe.utils.file_manager import save_file
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	rows = _result_rows(batch)
 	book = Workbook()
@@ -1630,8 +1631,12 @@ def _export_processed_result(batch) -> dict[str, str]:
 		for column_letter, width in {"A": 8, "B": 20, "C": 14, "D": 15, "E": 12, "F": 8, "G": 8, "H": 50, "I": 28, "J": 12, "K": 14, "L": 16}.items():
 			sheet.column_dimensions[column_letter].width = width
 	output = BytesIO()
-	book.save(output)
-	file = save_file(f"{batch.attendance_month}_{SOURCE_LABELS[batch.source_type]}_加工结果.xlsx", output.getvalue(), None, None, is_private=1)
+	if include_logo:
+		save_workbook_with_logo_watermark(book, output)
+	else:
+		book.save(output)
+	logo_suffix = "" if include_logo else "_无Logo"
+	file = save_file(f"{batch.attendance_month}_{SOURCE_LABELS[batch.source_type]}_加工结果{logo_suffix}.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
 
 
@@ -2180,7 +2185,7 @@ def get_attendance_data_quality_details(
 
 
 @frappe.whitelist()
-def export_processing_result(company: str, attendance_month: str, source_type: str):
+def export_processing_result(company: str, attendance_month: str, source_type: str, hide_logo: int = 0):
 	"""Generate the one current result file from persisted review values."""
 	_require_processing_manager()
 	company, attendance_month, source_type = _require_company(company), _require_month(attendance_month), _require_processing_source_type(source_type)
@@ -2189,12 +2194,13 @@ def export_processing_result(company: str, attendance_month: str, source_type: s
 		frappe.throw(_("尚未上传该来源文件。"))
 	if not frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": batch.name}):
 		frappe.throw(_("该来源尚未完成加工，不能下载加工结果。"))
-	processed_result = _export_processed_result(batch)
-	_save_batch_notes(batch, {
-		"processed_result": processed_result,
-		"processed_result_refreshed_on": now_datetime().isoformat(),
-		"processed_result_refresh_reason": "manual_download",
-	})
+	processed_result = _export_processed_result(batch, include_logo=not cint(hide_logo))
+	if not cint(hide_logo):
+		_save_batch_notes(batch, {
+			"processed_result": processed_result,
+			"processed_result_refreshed_on": now_datetime().isoformat(),
+			"processed_result_refresh_reason": "manual_download",
+		})
 	return {"batch": batch.name, "source_type": source_type, "processed_result": processed_result}
 
 
@@ -3486,6 +3492,7 @@ def _finance_final_preview_rows(rows: list[dict[str, Any]]) -> list[dict[str, An
 def _save_monthly_final_file(attendance_month: str, title: str, columns, rows):
 	from openpyxl import Workbook
 	from frappe.utils.file_manager import save_file
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	book = Workbook()
 	sheet = book.active
@@ -3497,7 +3504,7 @@ def _save_monthly_final_file(attendance_month: str, title: str, columns, rows):
 		sheet.column_dimensions[column[0].column_letter].width = min(max(max(len(str(cell.value or "")) for cell in column) + 2, 12), 24)
 	sheet.freeze_panes = "A2"
 	output = BytesIO()
-	book.save(output)
+	save_workbook_with_logo_watermark(book, output)
 	file = save_file(f"{attendance_month}_{title}.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
 
@@ -3508,6 +3515,7 @@ def _save_monthly_finance_confirmation_file(attendance_month: str, rows):
 	from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 	from openpyxl.utils import get_column_letter
 	from frappe.utils.file_manager import save_file
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	book = Workbook()
 	sheet = book.active
@@ -3611,7 +3619,7 @@ def _save_monthly_finance_confirmation_file(attendance_month: str, rows):
 	sheet.freeze_panes = "A5"
 	sheet.sheet_view.showGridLines = False
 	output = BytesIO()
-	book.save(output)
+	save_workbook_with_logo_watermark(book, output)
 	file = save_file(f"{attendance_month}_财务版.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
 
@@ -3622,6 +3630,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 	from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 	from openpyxl.utils import get_column_letter
 	from frappe.utils.file_manager import save_file
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	book = Workbook()
 	sheet = book.active
@@ -3720,7 +3729,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 	sheet.freeze_panes = "B5"
 	sheet.sheet_view.showGridLines = False
 	output = BytesIO()
-	book.save(output)
+	save_workbook_with_logo_watermark(book, output)
 	file = save_file(f"{attendance_month}_员工签字版.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
 

@@ -1225,7 +1225,7 @@ class AttendanceImportCenter {
 			: isMissedPunch ? this.render_missed_punch_summary(meta.result_summary || {}) : "";
 		return `
 			<div class="hrms-attendance-section">
-				<div class="hrms-attendance-list-head"><div><h3>${this.escape(resultTitle)}</h3><small>${this.escape(resultDescription)}</small></div><div>${resultSummary}<button class="btn btn-default btn-sm" data-download-processing-result ${canDownload ? "" : "disabled"}>${this.escape(__(isMonthlySupport ? "下载导入校验结果" : "下载最新加工结果"))}</button></div></div>
+				<div class="hrms-attendance-list-head"><div><h3>${this.escape(resultTitle)}</h3><small>${this.escape(resultDescription)}</small></div><div>${resultSummary}<button class="btn btn-default btn-sm" data-download-processing-result ${canDownload ? "" : "disabled"}>${this.escape(__(isMonthlySupport ? "下载导入校验结果" : "下载最新加工结果"))}</button>${!isMonthlySupport ? `<button class="btn btn-default btn-sm" data-download-processing-result-without-logo ${canDownload ? "" : "disabled"}>${this.escape(__("下载无 Logo 版本"))}</button>` : ""}</div></div>
 				<div class="hrms-attendance-result-controls">${this.render_processing_source_tabs()}</div>
 				${meta.error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(meta.error)}</span></div>` : ""}
 				${!loading && isMonthlySupport && importErrorCount ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("发现 {0} 条导入错误", [importErrorCount]))}</strong><span>${this.escape(__("请根据本页的来源工作表、行号和错误说明更正原文件后重新上传。错误记录不会进入月度终稿。"))}</span></div>` : ""}
@@ -1305,6 +1305,7 @@ class AttendanceImportCenter {
 			this.load_processing_results();
 		}));
 		body.querySelector("[data-download-processing-result]")?.addEventListener("click", () => this.download_processing_result(this.selected_source_type));
+		body.querySelector("[data-download-processing-result-without-logo]")?.addEventListener("click", () => this.download_processing_result(this.selected_source_type, true));
 	}
 
 	show_bulk_processing_dialog(sourceType) {
@@ -1374,13 +1375,13 @@ class AttendanceImportCenter {
 		dialog.show();
 	}
 
-	download_processing_result(sourceType) {
+	download_processing_result(sourceType, hideLogo = false) {
 		this.call_processing_api(
 			"export_processing_result",
-			{ company: this.company, attendance_month: this.attendance_month, source_type: sourceType },
+			{ company: this.company, attendance_month: this.attendance_month, source_type: sourceType, hide_logo: hideLogo ? 1 : 0 },
 			{
 				freeze: true,
-				freeze_message: __("正在生成最新加工结果..."),
+				freeze_message: __(hideLogo ? "正在生成无 Logo 加工结果..." : "正在生成最新加工结果..."),
 				on_success: (data) => {
 					const fileUrl = data?.processed_result?.file_url;
 					if (fileUrl) this.download_processing_file(fileUrl, data?.processed_result?.file_name);

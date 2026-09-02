@@ -2245,6 +2245,7 @@ def create_payroll_formula_template_file(company: str):
 	from openpyxl import Workbook
 	from openpyxl.styles import Alignment, Font, PatternFill
 	from frappe.utils.file_manager import save_file
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	company = _require_company(company)
 	workbook = Workbook()
@@ -2276,7 +2277,7 @@ def create_payroll_formula_template_file(company: str):
 		cell.fill = fill
 		cell.font = Font(bold=True)
 	output = BytesIO()
-	workbook.save(output)
+	save_workbook_with_logo_watermark(workbook, output)
 	file_doc = save_file(f"{company}-计薪公式导入模板-{datetime.today().strftime('%Y%m%d%H%M%S')}.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file_doc.file_url, "file_name": file_doc.file_name}
 
@@ -4892,6 +4893,7 @@ def create_payroll_data_closure_template_file():
 	from openpyxl import Workbook
 	from openpyxl.styles import Alignment, Font, PatternFill
 	from frappe.utils.file_manager import save_file
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	workbook = Workbook()
 	workbook.remove(workbook.active)
@@ -4940,7 +4942,7 @@ def create_payroll_data_closure_template_file():
 		mapping_sheet.column_dimensions[mapping_sheet.cell(1, width_index).column_letter].width = width
 
 	output = BytesIO()
-	workbook.save(output)
+	save_workbook_with_logo_watermark(workbook, output)
 	file_doc = save_file(
 		f"薪资数据闭环导入模板-{datetime.today().strftime('%Y%m%d%H%M%S')}.xlsx",
 		output.getvalue(),
@@ -4963,6 +4965,7 @@ def create_employee_salary_change_template_file():
 	from openpyxl import Workbook
 	from openpyxl.styles import Alignment, Font, PatternFill
 	from frappe.utils.file_manager import save_file
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	workbook = Workbook()
 	sheet = workbook.active
@@ -4992,7 +4995,7 @@ def create_employee_salary_change_template_file():
 	notes.column_dimensions["B"].width = 88
 
 	output = BytesIO()
-	workbook.save(output)
+	save_workbook_with_logo_watermark(workbook, output)
 	file_doc = save_file(
 		f"员工薪资异动导入模板-{datetime.today().strftime('%Y%m%d%H%M%S')}.xlsx",
 		output.getvalue(),
@@ -5009,6 +5012,7 @@ def create_housing_allowance_base_data_template_file(company: str, payroll_month
 	from openpyxl import Workbook
 	from openpyxl.styles import Alignment, Font, PatternFill
 	from frappe.utils.file_manager import save_file
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	company = _require_company(company)
 	payroll_month = _workflow_month(payroll_month or datetime.today().strftime("%Y-%m"))
@@ -5049,7 +5053,7 @@ def create_housing_allowance_base_data_template_file(company: str, payroll_month
 	notes.column_dimensions["B"].width = 96
 
 	output = BytesIO()
-	workbook.save(output)
+	save_workbook_with_logo_watermark(workbook, output)
 	file_doc = save_file(
 		f"{payroll_month}-住房补贴一阶数据模板-{datetime.today().strftime('%Y%m%d%H%M%S')}.xlsx",
 		output.getvalue(),
@@ -6394,7 +6398,9 @@ def download_payroll_source_signature_sheet(batch_name: str, company: str, payro
 	sheet.auto_filter.ref = f"A2:{get_column_letter(len(headers))}{max(sheet.max_row, 2)}"
 
 	output = BytesIO()
-	workbook.save(output)
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+
+	save_workbook_with_logo_watermark(workbook, output)
 	# Source labels such as “证书/多能工津贴” are valid on screen but `/` is a
 	# path separator.  Sanitise only the saved filename, never the displayed
 	# source name or the signature sheet title.

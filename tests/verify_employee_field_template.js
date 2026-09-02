@@ -226,8 +226,12 @@ for (const marker of [
 	"remember_employee_list_return",
 	"return_to_employee_roster_after_insert",
 	"setup_employee_form_defaults",
+	"setup_employee_gender_field",
 	"group_employee_fields_by_template",
+	"restore_employee_form_controls",
+	"get_employee_form_control_wrapper",
 	"EMPLOYEE_FORM_CATEGORY_SECTIONS",
+	"EMPLOYEE_GENDER_VALUES",
 	"hrms.api.employee_field_template.get_employee_field_template",
 	"frm.toggle_display",
 	"frm.set_df_property(field.fieldname, \"label\"",
@@ -258,6 +262,14 @@ for (const marker of [
 
 if (!employeeForm.includes("!managed_fieldnames.has(field.fieldname)")) {
 	throw new Error("Employee form must hide template-controlled fields that are not present/enabled in the template.");
+}
+
+for (const marker of [
+	'frm.set_query("gender"',
+	'gender: ["in", EMPLOYEE_GENDER_VALUES]',
+	'frm.set_df_property("gender", "only_select", 1)',
+]) {
+	mustInclude(employeeForm, marker, `Employee gender must use only the approved choices: ${marker}`);
 }
 
 console.log("Employee field template contract is wired to real Frappe configuration.");

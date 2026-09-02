@@ -1325,7 +1325,7 @@ body.hrms-employee-roster-view .hrms-roster-empty-result-header__clear {
 		transform: translateX(0);
 		transition: background 180ms ease, border-color 180ms ease, box-shadow 220ms ease, opacity 180ms ease, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s;
 		visibility: visible;
-		width: 272px;
+		width: 204px;
 		z-index: 1025;
 	}
 
@@ -1450,7 +1450,7 @@ body.hrms-employee-roster-view .hrms-roster-empty-result-header__clear {
 		pointer-events: none;
 		transform: translateX(-110%);
 		visibility: hidden;
-		width: 272px !important;
+		width: 204px !important;
 	}
 
 	body.hrms-module-shell.hrms-unified-sidebar-collapsed > .main-section {
@@ -1463,8 +1463,8 @@ body.hrms-employee-roster-view .hrms-roster-empty-result-header__clear {
 	 * fixed against the viewport, and a percentage width can resolve against a
 	 * transient Desk flex container during SPA navigation. */
 	body.hrms-module-shell:not(.hrms-unified-sidebar-collapsed) > .main-section {
-		margin-left: 300px !important;
-		width: calc(100vw - 300px) !important;
+		margin-left: 232px !important;
+		width: calc(100vw - 232px) !important;
 	}
 
 }
@@ -1518,7 +1518,10 @@ body.hrms-employee-roster-view .hrms-roster-empty-result-header__clear {
 	transform: translateX(-115%);
 	transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 240ms;
 	visibility: hidden;
-	width: 248px;
+	/* Keep the HR navigation at three quarters of its former 248px drawer
+	 * width.  The smaller rail lets operational tables retain more horizontal
+	 * room without crowding the labels or their icons. */
+	width: 186px;
 	z-index: 1035;
 }
 
@@ -1623,8 +1626,8 @@ body.hrms-custom-drawer-active > .main-section {
 	/* While the user has the custom drawer open, reserve its visual lane rather
 	 * than covering the current page. Closing it restores the full page width. */
 	body.hrms-custom-drawer-active.hrms-custom-drawer-open > .main-section {
-		margin-left: 300px !important;
-		width: calc(100vw - 300px) !important;
+		margin-left: 238px !important;
+		width: calc(100vw - 238px) !important;
 	}
 }
 
@@ -2381,9 +2384,33 @@ body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-r
 	color: inherit;
 }
 
-body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-identity-cell strong,
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-employee-name-link,
 body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-identity-cell small {
 	display: block;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-employee-name-link {
+	background: transparent;
+	border: 0;
+	color: inherit;
+	cursor: pointer;
+	font-weight: 600;
+	padding: 0;
+	text-align: left;
+	transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-employee-name-link:hover,
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-employee-name-link:focus-visible {
+	color: #2563eb;
+	text-decoration: underline;
+	text-decoration-color: currentColor;
+	text-underline-offset: 3px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-row:focus-visible {
+	outline: 2px solid #16784a;
+	outline-offset: -2px;
 }
 
 body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-identity-cell small {
@@ -2425,8 +2452,9 @@ body.hrms-personnel-social-controls-hidden .form-sidebar .comment-box {
  * in the editor.  These dedicated grid slots keep labels, controls, helpers,
  * and validation messages aligned at every screen size. */
 .hrms-employee-form-template-sections {
-	margin: 4px 0 32px;
-	padding: 0 48px;
+	margin: 8px auto 32px;
+	max-width: 1440px;
+	padding: 0 32px;
 }
 
 .hrms-employee-form-section {
@@ -2443,12 +2471,12 @@ body.hrms-personnel-social-controls-hidden .form-sidebar .comment-box {
 	line-height: 1.4;
 	margin: 0 0 16px;
 	padding: 0;
-	text-align: left;
+	text-align: left !important;
 }
 
 .hrms-employee-form-section__grid {
 	display: grid;
-	gap: 18px 20px;
+	gap: 16px 24px;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
@@ -2465,6 +2493,12 @@ body.hrms-personnel-social-controls-hidden .form-sidebar .comment-box {
 	margin-bottom: 0;
 	min-width: 0;
 	width: 100%;
+}
+
+/* Hidden native controls must not reserve a grid cell. */
+.hrms-employee-form-field:has(.hide-control),
+.hrms-employee-form-field:has(.frappe-control.hide-control) {
+	display: none;
 }
 
 .hrms-employee-form-field .control-input,
@@ -2487,7 +2521,7 @@ body.hrms-personnel-social-controls-hidden .form-sidebar .comment-box {
 @media (max-width: 767px) {
 	.hrms-employee-form-template-sections {
 		margin-bottom: 20px;
-		padding: 0 24px;
+		padding: 0 20px;
 	}
 
 	.hrms-employee-form-section {

@@ -68,6 +68,8 @@ for method in (
 ):
 	require(api, f"def {method}(", f"Processing-center API is missing {method}.")
 
+require(api, "hide_logo: int = 0", "Processing-result export must allow a no-logo copy.")
+
 for marker in (
 	"process_attendance_draft_rows",
 	"process_apple_tree_rows",

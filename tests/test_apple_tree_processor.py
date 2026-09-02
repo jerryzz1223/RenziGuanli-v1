@@ -8,6 +8,7 @@ from io import BytesIO
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
+from zipfile import ZipFile
 
 try:
 	from openpyxl import load_workbook
@@ -668,9 +669,40 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		with patch.object(center, "_latest_batch", return_value=batch), patch.object(center, "_export_processed_result", return_value=generated) as export_result, patch.object(center, "_save_batch_notes") as save_notes, patch.object(center, "now_datetime", return_value=SimpleNamespace(isoformat=lambda: "2026-06-30T12:00:00")):
 			result = center.export_processing_result("测试公司", "2026-06", "apple_tree")
 
-		export_result.assert_called_once_with(batch)
+		export_result.assert_called_once_with(batch, include_logo=True)
 		save_notes.assert_called_once()
 		self.assertEqual(result["processed_result"], generated)
+
+	def test_download_endpoint_can_generate_a_logo_free_copy_without_replacing_current_result(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		center.frappe.get_roles = lambda _user: ["HR Manager"]
+		center.frappe.db.count = lambda *_args, **_kwargs: 1
+		batch = SimpleNamespace(name="BATCH-001")
+		generated = {"file_url": "/private/files/apple-tree-no-logo.xlsx", "file_name": "苹果树加工结果_无Logo.xlsx"}
+		with patch.object(center, "_latest_batch", return_value=batch), patch.object(center, "_export_processed_result", return_value=generated) as export_result, patch.object(center, "_save_batch_notes") as save_notes:
+			result = center.export_processing_result("测试公司", "2026-06", "apple_tree", hide_logo=1)
+
+		export_result.assert_called_once_with(batch, include_logo=False)
+		save_notes.assert_not_called()
+		self.assertEqual(result["processed_result"], generated)
+
+	def test_logo_free_processed_export_has_no_sheet_background_picture(self):
+		if load_workbook is None:
+			self.skipTest("openpyxl is unavailable")
+		center, file_manager, frappe_modules = processing_center_module()
+		saved = {}
+		file_manager.save_file = lambda file_name, content, *_args, **_kwargs: (
+			saved.update({"file_name": file_name, "content": content})
+			or SimpleNamespace(file_name=file_name, file_url="/private/files/no-logo.xlsx")
+		)
+		batch = SimpleNamespace(source_type="attendance_draft", attendance_month="2026-06")
+		with patch.dict(sys.modules, frappe_modules), patch.object(center, "_result_rows", return_value=[]):
+			center._export_processed_result(batch, include_logo=False)
+
+		self.assertIn("_无Logo.xlsx", saved["file_name"])
+		with ZipFile(BytesIO(saved["content"])) as workbook:
+			self.assertNotIn("xl/media/hrms-yongxin-watermark.png", workbook.namelist())
+			self.assertNotIn(b"<picture r:id=", workbook.read("xl/worksheets/sheet1.xml"))
 
 	def test_red_project_accepts_blank_inactive_value(self):
 		row = source_row(

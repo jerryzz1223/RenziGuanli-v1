@@ -27,6 +27,15 @@ function expect(condition, message) {
 ].forEach((needle) => expect(source.includes(needle), `Empty roster result must retain its fixed header and recoverable filter entry point: ${needle}`));
 
 [
+	'row.className = "hrms-roster-table-row"',
+	'row.addEventListener("click"',
+	'row.addEventListener("keydown"',
+	'"hrms-roster-employee-name-link"',
+	"function open_roster_employee_detail",
+	'frappe.set_route("employee-detail", employee_name)',
+].forEach((needle) => expect(source.includes(needle), `Roster table rows must open the employee detail: ${needle}`));
+
+[
 	"ROSTER_SEARCH_RECOVERY_STORAGE_KEY",
 	"function recover_empty_roster_search",
 	"function has_roster_transient_search",

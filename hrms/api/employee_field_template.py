@@ -1742,6 +1742,7 @@ def _make_employee_workbook(fields):
 	from openpyxl.comments import Comment
 	from openpyxl.styles import Font, PatternFill
 	from openpyxl.utils import get_column_letter
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	workbook = Workbook()
 	data_sheet = workbook.active
@@ -1784,7 +1785,7 @@ def _make_employee_workbook(fields):
 	enum_sheet.column_dimensions["B"].width = 80
 
 	output = BytesIO()
-	workbook.save(output)
+	save_workbook_with_logo_watermark(workbook, output)
 	return output.getvalue()
 
 
@@ -4858,6 +4859,7 @@ def import_employee_roster(
 
 def _make_employee_roster_failure_workbook(failed_rows):
 	from openpyxl import Workbook
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	workbook = Workbook()
 	sheet = workbook.active
@@ -4878,7 +4880,7 @@ def _make_employee_roster_failure_workbook(failed_rows):
 	_write_sheet_rows(sheet, rows)
 
 	output = BytesIO()
-	workbook.save(output)
+	save_workbook_with_logo_watermark(workbook, output)
 	return output.getvalue()
 
 
@@ -4994,6 +4996,7 @@ def _format_employee_export_value(fieldname, value, department_names):
 
 def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tables, filters=None):
 	from openpyxl import Workbook
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	filters = filters or {}
 	workbook = Workbook()
@@ -5061,7 +5064,7 @@ def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tab
 		_write_sheet_rows(sheet, rows)
 
 	output = BytesIO()
-	workbook.save(output)
+	save_workbook_with_logo_watermark(workbook, output)
 	return output.getvalue()
 
 

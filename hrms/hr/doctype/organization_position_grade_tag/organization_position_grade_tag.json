@@ -1,0 +1,23 @@
+{
+ "actions": [],
+ "creation": "2026-09-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": ["grade_tag"],
+ "fields": [
+  {"fieldname": "grade_tag", "fieldtype": "Link", "label": "建议职级标签", "options": "Grade Tag", "reqd": 1, "in_list_view": 1}
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "Organization Position Grade Tag",
+ "owner": "Administrator",
+ "permissions": [],
+ "quick_entry": 1,
+ "sort_field": "idx",
+ "sort_order": "ASC",
+ "states": []
+}

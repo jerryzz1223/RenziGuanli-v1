@@ -1,0 +1,28 @@
+{
+ "actions": [],
+ "autoname": "field:tag_code",
+ "creation": "2026-09-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["tag_code", "tag_name", "enabled", "source_version", "description"],
+ "fields": [
+  {"fieldname": "tag_code", "fieldtype": "Data", "label": "职级标签编码", "reqd": 1, "unique": 1, "in_list_view": 1},
+  {"fieldname": "tag_name", "fieldtype": "Data", "label": "职级标签", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "enabled", "fieldtype": "Check", "label": "启用", "default": "1", "in_list_view": 1},
+  {"fieldname": "source_version", "fieldtype": "Link", "label": "来源组织架构版本", "options": "Organization Structure Version"},
+  {"fieldname": "description", "fieldtype": "Small Text", "label": "说明"}
+ ],
+ "links": [],
+ "modified": "2026-09-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "Grade Tag",
+ "owner": "Administrator",
+ "permissions": [],
+ "quick_entry": 1,
+ "sort_field": "tag_name",
+ "sort_order": "ASC",
+ "states": [],
+ "title_field": "tag_name",
+ "track_changes": 1
+}

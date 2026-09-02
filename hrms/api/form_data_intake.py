@@ -838,6 +838,7 @@ def list_form_import_templates(module_name: str = ""):
 def create_form_import_template_file(template_key: str):
 	from openpyxl import Workbook
 	from openpyxl.styles import Alignment, Font, PatternFill
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	profile = _profile_or_throw(template_key)
 	workbook = Workbook()
@@ -862,7 +863,7 @@ def create_form_import_template_file(template_key: str):
 	data_sheet.freeze_panes = "A2"
 	data_sheet.auto_filter.ref = f"A1:{data_sheet.cell(row=1, column=len(headers)).column_letter}2"
 	output = BytesIO()
-	workbook.save(output)
+	save_workbook_with_logo_watermark(workbook, output)
 	filename = f"{profile['label']}导入模板.xlsx"
 	file_doc = frappe.get_doc({"doctype": "File", "file_name": filename, "content": output.getvalue(), "is_private": 0}).insert(ignore_permissions=True)
 	return {"file_url": file_doc.file_url, "file_name": filename}

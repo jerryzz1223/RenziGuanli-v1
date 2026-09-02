@@ -6,6 +6,7 @@ frappe.ui.form.on("Employee", {
 		if (redirect_existing_employee_form_to_detail(frm)) return;
 		remember_employee_list_return(frm);
 		setup_employee_form_defaults(frm);
+		setup_employee_gender_field(frm);
 		apply_employee_field_template(frm);
 		setup_personnel_employee_detail(frm);
 
@@ -216,6 +217,21 @@ const EMPLOYEE_FORM_WIDE_FIELDNAMES = new Set([
 ]);
 
 const EMPLOYEE_FORM_WIDE_FIELDTYPES = new Set(["Small Text", "Text", "Text Editor", "Long Text"]);
+const EMPLOYEE_GENDER_VALUES = ["Male", "Female", "Other"];
+
+function setup_employee_gender_field(frm) {
+	if (!frm.fields_dict.gender) return;
+
+	// Gender is a Link field in the standard Employee DocType. Leaving it
+	// unrestricted exposed every historical Gender record and the nested
+	// “create Gender” action while entering an employee.
+	frm.set_query("gender", () => ({
+		filters: {
+			gender: ["in", EMPLOYEE_GENDER_VALUES],
+		},
+	}));
+	frm.set_df_property("gender", "only_select", 1);
+}
 
 function apply_employee_field_template(frm) {
 	frappe
@@ -283,7 +299,10 @@ function group_employee_fields_by_template(frm, template) {
 	const body = $(frm.wrapper).find(".form-layout, .form-page").first();
 	if (!body.length) return;
 
-	$(frm.wrapper).find(".hrms-employee-form-template-sections").remove();
+	// A refresh may apply the template again. Put controls back before
+	// discarding the prior presentation container so Frappe retains the same
+	// control instances and the form never accumulates a second layout layer.
+	restore_employee_form_controls(frm, body);
 	$(frm.wrapper).find(".hrms-employee-empty-native-section").removeClass("hrms-employee-empty-native-section");
 	const container = $(`<div class="hrms-employee-form-template-sections"></div>`);
 	body.prepend(container);
@@ -313,9 +332,8 @@ function group_employee_fields_by_template(frm, template) {
 
 		category_fields.forEach((field) => {
 			const control = frm.fields_dict[field.fieldname];
-			const wrapper = $(control.wrapper).closest(".frappe-control").length
-				? $(control.wrapper).closest(".frappe-control")
-				: $(control.wrapper);
+			const wrapper = get_employee_form_control_wrapper(control);
+			if (!wrapper.length || wrapper.hasClass("hide-control")) return;
 			const is_wide =
 				EMPLOYEE_FORM_WIDE_FIELDNAMES.has(field.fieldname) ||
 				EMPLOYEE_FORM_WIDE_FIELDTYPES.has(field.fieldtype);
@@ -359,4 +377,22 @@ function setup_personnel_employee_detail(frm) {
 			company: frm.doc.company,
 		});
 	});
+}
+
+function restore_employee_form_controls(frm, body) {
+	const existing_sections = $(frm.wrapper).find(".hrms-employee-form-template-sections");
+	if (!existing_sections.length) return;
+
+	existing_sections.find(".frappe-control").each(function () {
+		$(this).detach().appendTo(body);
+	});
+	existing_sections.remove();
+}
+
+function get_employee_form_control_wrapper(control) {
+	if (!control?.wrapper) return $();
+	const control_wrapper = $(control.wrapper);
+	return control_wrapper.closest(".frappe-control").length
+		? control_wrapper.closest(".frappe-control")
+		: control_wrapper;
 }

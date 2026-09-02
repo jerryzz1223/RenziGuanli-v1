@@ -1,0 +1,26 @@
+{
+ "actions": [],
+ "creation": "2026-09-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": ["grade_tag", "valid_from", "valid_to", "evidence"],
+ "fields": [
+  {"fieldname": "grade_tag", "fieldtype": "Link", "label": "职级标签", "options": "Grade Tag", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "valid_from", "fieldtype": "Date", "label": "有效开始日"},
+  {"fieldname": "valid_to", "fieldtype": "Date", "label": "有效结束日"},
+  {"fieldname": "evidence", "fieldtype": "Data", "label": "认定依据"}
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "Employee Assignment Grade Tag",
+ "owner": "Administrator",
+ "permissions": [],
+ "quick_entry": 1,
+ "sort_field": "idx",
+ "sort_order": "ASC",
+ "states": []
+}

@@ -41,6 +41,7 @@ class HybridOrganizationChart {
 		this.mode = null;
 		this.report_data = null;
 		this.report_loading = false;
+		this.multiple_position_draft = null;
 		// Live is the only editable source.  The original workbook remains a
 		// comparison view, never the default hierarchy users accidentally edit.
 		this.source_mode = "live";
@@ -90,6 +91,7 @@ class HybridOrganizationChart {
 		this.setup_actions();
 		this.render_shell();
 		this.load_field_map();
+		this.load_multiple_position_draft_status();
 		this.load_tree();
 	}
 
@@ -112,6 +114,8 @@ class HybridOrganizationChart {
 		this.page.add_inner_button(__("全屏查看"), () => this.toggle_fullscreen());
 		this.page.add_inner_button(__("展开全部"), () => this.expand_all());
 		this.page.add_inner_button(__("收起全部"), () => this.collapse_all());
+		this.page.add_inner_button(__("多岗位导入预览"), () => this.preview_multiple_position_import());
+		this.page.add_inner_button(__("建立多岗位草稿"), () => this.create_multiple_position_draft());
 		this.page.add_inner_button(__("同步2026Q3架构"), () => this.import_yongxin_q3_department_hierarchy());
 		this.page.add_inner_button(__("导出 Excel"), () => this.export_chart());
 		window.hrmsFormImport?.addPageActions(this.page, "org_structure", "组织架构与编制", "表单导入");
@@ -494,14 +498,35 @@ class HybridOrganizationChart {
 			});
 	}
 
+	load_multiple_position_draft_status() {
+		const company = this.company;
+		frappe
+			.call({
+				method: "hrms.hr.page.organizational_chart.organizational_chart.get_multiple_position_draft_status",
+				args: { company },
+			})
+			.then((r) => {
+				if (company !== this.company || !this.is_active()) return;
+				this.multiple_position_draft = r.message || null;
+				this.render_summary();
+			});
+	}
+
 	render_summary() {
 		const summary = this.tree?.summary || {};
+		const draft = this.multiple_position_draft;
 		const cards = [
 			["编制人数", summary.planned_headcount || 0],
 			["现有人数", summary.current_headcount || 0],
 			["空缺人数", summary.vacancy_count || 0],
 			["部门数", summary.department_count || 0],
 		];
+		if (draft) {
+			cards.push([
+				"多岗位草稿",
+				draft.exists ? `${draft.status || __("草稿")} · ${draft.position_count || 0}${__("岗位")}` : __("未建立"),
+			]);
+		}
 		if (this.source_mode === "workbook_snapshot") {
 			cards.push(["原表人员", summary.source_employee_count || 0], ["已匹配档案", summary.matched_employee_count || 0]);
 		} else {
@@ -1249,6 +1274,73 @@ class HybridOrganizationChart {
 					__("同步"),
 				);
 			});
+	}
+
+	preview_multiple_position_import() {
+		frappe
+			.call({
+				method: "hrms.hr.page.organizational_chart.organizational_chart.preview_multiple_position_organization_import",
+				args: { company: this.company },
+				freeze: true,
+				freeze_message: __("正在解析原表中的组织、岗位和职级标签..."),
+			})
+			.then((response) => {
+				const data = response.message || {};
+				const summary = data.summary || {};
+				frappe.msgprint({
+					title: __("多岗位初始导入预览"),
+					indicator: "blue",
+					message: `
+						<p>${__("来源：{0} / {1}。本操作仅生成预览，不写入任何员工、部门或岗位数据。", [
+							frappe.utils.escape_html(data.source_document || ""),
+							frappe.utils.escape_html(data.source_sheet || ""),
+						])}</p>
+						<ul>
+							<li>${__("组织节点候选：{0}", [summary.organization_node_count || 0])}</li>
+							<li>${__("岗位节点候选：{0}", [summary.position_count || 0])}</li>
+							<li>${__("非互斥职级标签候选：{0}", [summary.grade_tag_candidate_count || 0])}</li>
+							<li>${__("需人工分类的职级行：{0}", [summary.unclassified_level_count || 0])}</li>
+							<li>${__("需确认岗位的负责人/代理人卡片：{0}", [summary.manager_confirmation_count || 0])}</li>
+							<li>${__("待映射人员：{0}", [summary.employee_mapping_count || 0])}</li>
+						</ul>
+						<p>${__("下一步会将这些候选保存为草稿组织版本，由人事确认岗位、主职和附职后再发布。")}</p>
+					`,
+					});
+				});
+	}
+
+	create_multiple_position_draft() {
+		frappe.prompt(
+			[
+				{
+					fieldname: "confirmation",
+					fieldtype: "Data",
+					label: __("确认文字"),
+					reqd: 1,
+					description: __("请输入“建立多岗位草稿”。此操作只保存原表候选节点、岗位和职级标签，不会改动任何员工主职、部门或薪资考勤数据。"),
+				},
+			],
+			(values) => {
+				if (values.confirmation !== "建立多岗位草稿") {
+					frappe.msgprint(__("确认文字不正确，未创建草稿。"));
+					return;
+				}
+				frappe
+					.call({
+						method: "hrms.hr.page.organizational_chart.organizational_chart.create_multiple_position_organization_draft",
+						args: { company: this.company },
+						freeze: true,
+						freeze_message: __("正在建立多岗位组织草稿..."),
+					})
+					.then((response) => {
+						const result = response.message || {};
+						frappe.show_alert({ message: result.message || __("多岗位组织草稿已建立"), indicator: "green" });
+						this.load_tree();
+					});
+			},
+			__("建立多岗位草稿"),
+			__("建立草稿"),
+		);
 	}
 
 	run_yongxin_template_import() {

@@ -485,6 +485,18 @@
 		}
 		rows.forEach((employee) => {
 			const row = document.createElement("tr");
+			row.className = "hrms-roster-table-row";
+			row.tabIndex = 0;
+			row.addEventListener("click", (event) => {
+				if (is_roster_table_control(event.target)) return;
+				open_roster_employee_detail(employee.name);
+			});
+			row.addEventListener("keydown", (event) => {
+				if (event.key !== "Enter" && event.key !== " ") return;
+				if (is_roster_table_control(event.target)) return;
+				event.preventDefault();
+				open_roster_employee_detail(employee.name);
+			});
 			columns.forEach((column) => row.appendChild(render_roster_table_cell(employee, column)));
 			tbody.appendChild(row);
 		});
@@ -618,8 +630,12 @@
 	function render_roster_table_cell(employee, column) {
 		const cell = document.createElement("td");
 		if (column.fieldname === "employee_identity") {
-			const name = document.createElement("strong");
+			const name = document.createElement("button");
+			name.type = "button";
+			name.className = "hrms-roster-employee-name-link";
 			name.textContent = employee.employee_name || employee.name || "-";
+			name.setAttribute("aria-label", __("查看{0}的档案", [employee.employee_name || employee.name]));
+			name.addEventListener("click", () => open_roster_employee_detail(employee.name));
 			const code = document.createElement("small");
 			code.textContent = get_employee_business_code(employee) || "-";
 			cell.className = "hrms-roster-identity-cell";
@@ -631,12 +647,21 @@
 			action.type = "button";
 			action.className = "btn btn-default btn-xs";
 			action.textContent = __("快速编辑");
-			action.addEventListener("click", () => frappe.set_route("employee-detail", employee.name));
+			action.addEventListener("click", () => open_roster_employee_detail(employee.name));
 			cell.appendChild(action);
 			return cell;
 		}
 		cell.textContent = get_roster_table_cell_value(employee, column);
 		return cell;
+	}
+
+	function is_roster_table_control(target) {
+		return Boolean(target?.closest?.("button, input, select, textarea, a, [data-action]"));
+	}
+
+	function open_roster_employee_detail(employee) {
+		const employee_name = String(employee || "").trim();
+		if (employee_name) frappe.set_route("employee-detail", employee_name);
 	}
 
 	function get_or_create_roster_native_header(wrapper) {

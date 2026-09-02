@@ -34,7 +34,7 @@ app_include_js = [
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260901c",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260901d",
 	"/assets/hrms/css/hrms_training_learning.css?v=20260827a",
 ]
 

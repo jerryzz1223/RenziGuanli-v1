@@ -1,0 +1,40 @@
+{
+ "actions": [],
+ "autoname": "field:version_code",
+ "creation": "2026-09-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "version_code",
+  "company",
+  "status",
+  "source_file_name",
+  "source_sheet",
+  "source_reference",
+  "imported_on",
+  "notes"
+ ],
+ "fields": [
+  {"fieldname": "version_code", "fieldtype": "Data", "label": "版本编码", "reqd": 1, "unique": 1, "in_list_view": 1},
+  {"fieldname": "company", "fieldtype": "Link", "label": "公司", "options": "Company", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "status", "fieldtype": "Select", "label": "状态", "options": "草稿\n已发布\n已归档", "default": "草稿", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "source_file_name", "fieldtype": "Data", "label": "来源文件"},
+  {"fieldname": "source_sheet", "fieldtype": "Data", "label": "来源工作表"},
+  {"fieldname": "source_reference", "fieldtype": "Data", "label": "来源标识"},
+  {"fieldname": "imported_on", "fieldtype": "Datetime", "label": "导入时间", "read_only": 1},
+  {"fieldname": "notes", "fieldtype": "Small Text", "label": "备注"}
+ ],
+ "links": [],
+ "modified": "2026-09-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "Organization Structure Version",
+ "owner": "Administrator",
+ "permissions": [],
+ "quick_entry": 1,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "version_code",
+ "track_changes": 1
+}

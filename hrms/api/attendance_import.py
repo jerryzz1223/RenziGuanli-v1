@@ -1119,6 +1119,7 @@ def _add_template_instructions(workbook, template):
 @frappe.whitelist()
 def create_attendance_import_template_file(template_key: str):
 	from openpyxl import Workbook
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	template = _attendance_template_or_throw(template_key)
 	workbook = Workbook()
@@ -1142,7 +1143,7 @@ def create_attendance_import_template_file(template_key: str):
 		_add_legacy_template_sheets(workbook)
 
 	output = BytesIO()
-	workbook.save(output)
+	save_workbook_with_logo_watermark(workbook, output)
 	filename = f"{template['label']}导入模板.xlsx"
 	file_doc = frappe.get_doc({"doctype": "File", "file_name": filename, "content": output.getvalue(), "is_private": 0}).insert(ignore_permissions=True)
 	return {"file_url": file_doc.file_url, "file_name": filename, "template_key": template_key}
@@ -1385,6 +1386,7 @@ def _add_monthly_attendance_export_sheet(workbook, profile_key, attendance_month
 def download_attendance_export(company: str, attendance_month: str, export_profile: str = "company_attendance_workbook"):
 	"""Generate a read-only company/month export in the source workbook formats."""
 	from openpyxl import Workbook
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	_require_attendance_reviewer()
 	company = _require_company(company)
@@ -1418,7 +1420,7 @@ def download_attendance_export(company: str, attendance_month: str, export_profi
 			_add_monthly_attendance_export_sheet(workbook, sheet_key, attendance_month, monthly_rows)
 
 	output = BytesIO()
-	workbook.save(output)
+	save_workbook_with_logo_watermark(workbook, output)
 	filename = f"{attendance_month}_{profile['label']}.xlsx"
 	file_doc = frappe.get_doc({"doctype": "File", "file_name": filename, "content": output.getvalue(), "is_private": 0}).insert(ignore_permissions=True)
 	return {
