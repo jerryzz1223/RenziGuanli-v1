@@ -330,6 +330,11 @@ mustInclude(
 	"#employee-basic_details_tab",
 	"Employee one-page display must remove the tab navigation bar.",
 );
+mustInclude(
+	employeeFormCss,
+	".hrms-employee-one-page .form-layout > .form-page.tab-pane",
+	"Employee Select refresh must keep every native form pane visible.",
+);
 
 if (employeeForm.includes(".detach()") || employeeForm.includes(".remove()") || employeeFormCss.includes("display: contents !important")) {
 	throw new Error("Employee one-page display must not move controls or flatten Frappe's grid containers.");
