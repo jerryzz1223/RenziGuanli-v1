@@ -129,26 +129,15 @@ function setup_employee_work_nature_field(frm) {
 
 function apply_employee_work_nature_choice(frm, work_nature) {
 	// The selector is business-facing, while `employment_type` remains a Link
-	// to standard Employment Type records.  Always write valid linked values
-	// plus every dependent Employee field, rather than saving the display label
-	// and letting Frappe reject it as a missing Link record.
-	const updates = {
-		"在职·正式": { employment_type: "Full-time", status: "Active", custom_is_confirmed: "是", relieving_date: null },
-		"在职·试用期": { employment_type: "Full-time", status: "Active", custom_is_confirmed: "否", relieving_date: null },
-		"退休返聘": { employment_type: "Retainer", status: "Active", relieving_date: null },
-		"待离职": { employment_type: "Full-time", status: "Inactive", relieving_date: null },
-		"离职": { employment_type: "Full-time", status: "Left" },
-	};
-	const values = updates[work_nature];
-	if (!values) return;
-	Object.entries(values).forEach(([fieldname, value]) => {
-		if (Object.hasOwn(frm.doc, fieldname)) frm.set_value(fieldname, value);
-	});
-	sync_employee_work_nature_dependent_fields(frm);
+	// to standard Employment Type records.  Do not touch those implementation
+	// fields while the user is still completing this long native form: Frappe
+	// rebuilds its Tab Break panes when they change and hides later sections.
+	// The server applies the complete mapping atomically during Save instead.
+	sync_employee_work_nature_dependent_fields(frm, work_nature);
 }
 
-function sync_employee_work_nature_dependent_fields(frm) {
-	const is_leaving = frm.doc.status === "Left";
+function sync_employee_work_nature_dependent_fields(frm, work_nature = frm.doc.custom_work_nature) {
+	const is_leaving = work_nature === "离职";
 	if (!frm.fields_dict.relieving_date) return;
 
 	frm.toggle_display("relieving_date", is_leaving);

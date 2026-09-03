@@ -274,6 +274,7 @@ for (const marker of [
 	"frm.set_df_property(field.fieldname, \"reqd\"",
 	"apply_configured_field_label",
 	"apply_configured_field_required",
+	"sync_employee_work_nature_dependent_fields(frm, work_nature)",
 	"configured_field.enabled",
 	"configured_field.required",
 	"configured_field.form_visible",
@@ -295,6 +296,10 @@ if (employeeForm.includes('frm.toggle_display(field.fieldname, false);\n\t\t\t\t
 
 if (!employeeForm.includes("frm.__hrms_employee_template_request_id !== request_id")) {
 	throw new Error("Employee form must ignore stale template responses during refresh.");
+}
+
+if (employeeForm.includes("const updates = {") || employeeForm.includes("set_employee_form_value_without_layout_reset")) {
+	throw new Error("Changing 工作性质 must not update implementation fields before Save.");
 }
 
 if (employeeForm.includes(".detach()") || employeeForm.includes(".remove()")) {
@@ -332,7 +337,7 @@ mustInclude(
 );
 mustInclude(
 	employeeFormCss,
-	".hrms-employee-one-page .form-layout > .form-page.tab-pane",
+	".hrms-employee-one-page .form-tab-content.tab-content > .tab-pane:not(.hide)",
 	"Employee Select refresh must keep every native form pane visible.",
 );
 

@@ -2485,12 +2485,12 @@ body.hrms-personnel-social-controls-hidden .form-sidebar .comment-box {
 }
 
 /* Frappe restores the active Tab Break pane when a Select control refreshes.
- * Keep every Employee pane in the normal document flow with CSS as well as
- * the form-script classes, so choosing a value never switches HR back to a
- * shortened single-pane form before the user presses Save. */
-.hrms-employee-one-page .form-layout > .form-page.tab-pane,
-.hrms-employee-one-page .form-layout > .form-page.fade {
+ * The actual panes live under `.form-tab-content`, not under `.form-page`.
+ * Keep every visible Employee pane in the document flow, so choosing a value
+ * never switches HR back to a shortened single-pane form before Save. */
+.hrms-employee-one-page .form-tab-content.tab-content > .tab-pane:not(.hide) {
 	display: block !important;
+	visibility: visible !important;
 	opacity: 1 !important;
 }
 
