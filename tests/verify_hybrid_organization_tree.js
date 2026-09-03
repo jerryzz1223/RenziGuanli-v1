@@ -14,6 +14,8 @@ const setupPath = path.join(root, "hrms", "setup.py");
 const localizeZhPath = path.join(root, "hrms", "localize_zh.py");
 const navPath = path.join(root, "hrms", "public", "js", "hrms_home_redirect_v6.js");
 const topNavPath = path.join(root, "hrms", "public", "js", "hrms_top_nav.js");
+const organizationNodePath = path.join(root, "hrms", "hr", "doctype", "organization_node", "organization_node.json");
+const organizationVersionPath = path.join(root, "hrms", "hr", "doctype", "organization_structure_version", "organization_structure_version.json");
 
 function read(file) {
 	if (!fs.existsSync(file)) {
@@ -45,6 +47,20 @@ const setup = read(setupPath);
 const localizeZh = read(localizeZhPath);
 const nav = read(navPath);
 const topNav = read(topNavPath);
+const organizationNode = JSON.parse(read(organizationNodePath));
+const organizationVersion = JSON.parse(read(organizationVersionPath));
+
+for (const [label, definition] of [
+	["Organization Node", organizationNode],
+	["Organization Structure Version", organizationVersion],
+]) {
+	for (const role of ["System Manager", "HR Manager"]) {
+		const permission = definition.permissions.find((entry) => entry.role === role);
+		if (!permission || !permission.read || !permission.create || !permission.write || permission.delete) {
+			throw new Error(`${label} must grant ${role} access so its desk route and quick entry are available.`);
+		}
+	}
+}
 
 for (const marker of [
 	"def get_hybrid_tree(",
@@ -96,7 +112,7 @@ for (const marker of [
 	"_is_all_departments_name",
 	"_build_department_node",
 	"_build_company_root_node",
-	"部门管理文件夹树",
+	"部门管理文件夹树（与部门管理页面使用同一上下级关系）",
 	"_build_live_management_hierarchy",
 	"_build_live_division_nodes",
 	"_wrap_deputy_divisions",
@@ -188,6 +204,7 @@ for (const marker of [
 	'"fieldname": "hrms_org_level"',
 	'"fieldname": "hrms_org_role"',
 	'"fieldname": "hrms_org_manager"',
+	'"fieldname": "hrms_org_card_content"',
 	'"fieldname": "hrms_org_proxy"',
 	'"fieldname": "hrms_planned_headcount"',
 	'"fieldname": "hrms_actual_headcount"',
@@ -375,6 +392,8 @@ for (const marker of [
 	"def _parse_workbook_snapshot_nodes",
 	"def _build_workbook_snapshot_relationships",
 	"def _get_workbook_snapshot_node_detail",
+	"_apply_workbook_snapshot_card_overrides",
+	"_split_organization_people",
 	'"snapshot_fallback": True',
 	"原始 Excel 未部署，当前页面仍可正常查看",
 	'"source_mode": "workbook_snapshot"',
@@ -384,7 +403,8 @@ for (const marker of [
 }
 
 for (const marker of [
-	'this.source_mode = "live"',
+	'this.source_mode = "workbook_snapshot"',
+	"卡片说明",
 	"set_source_mode",
 	"move_organization_node",
 	"handle_drag_start",

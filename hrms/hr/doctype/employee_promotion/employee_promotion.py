@@ -90,6 +90,8 @@ class EmployeePromotion(Document):
 
 		employee = frappe.get_doc("Employee", self.employee)
 		employee = update_employee_work_history(employee, self.promotion_details, date=self.promotion_date)
+		if employee.meta.has_field("custom_work_nature") and self.custom_confirmation_result == CONFIRMATION_PASSED:
+			employee.custom_work_nature = "在职·正式"
 
 		if self.revised_ctc:
 			employee.ctc = self.revised_ctc
@@ -102,6 +104,8 @@ class EmployeePromotion(Document):
 
 		employee = frappe.get_doc("Employee", self.employee)
 		employee = update_employee_work_history(employee, self.promotion_details, cancel=True)
+		if employee.meta.has_field("custom_work_nature") and self.custom_confirmation_result == CONFIRMATION_PASSED:
+			employee.custom_work_nature = "在职·试用期"
 
 		if self.revised_ctc:
 			employee.ctc = self.current_ctc

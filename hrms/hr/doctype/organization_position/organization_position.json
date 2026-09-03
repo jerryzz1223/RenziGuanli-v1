@@ -26,8 +26,8 @@
  ],
  "fields": [
   {"fieldname": "position_code", "fieldtype": "Data", "label": "岗位节点编码", "reqd": 1, "unique": 1, "in_list_view": 1},
-  {"fieldname": "structure_version", "fieldtype": "Link", "label": "组织架构版本", "options": "Organization Structure Version", "reqd": 1, "in_list_view": 1},
-  {"fieldname": "organization_node", "fieldtype": "Link", "label": "所属组织节点", "options": "Organization Node", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "structure_version", "fieldtype": "Link", "label": "岗位方案版本（可选）", "options": "Organization Structure Version", "description": "仅作岗位方案留档，不参与组织图谱显示或系统规则。", "in_list_view": 1},
+  {"fieldname": "organization_node", "fieldtype": "Link", "label": "图谱参考节点（可选）", "options": "Organization Node", "description": "仅供人工备注；不会让组织图谱或员工资料自动互相修改。", "in_list_view": 1},
   {"fieldname": "position_name", "fieldtype": "Data", "label": "岗位名称", "reqd": 1, "in_list_view": 1},
   {"fieldname": "responsibility_role", "fieldtype": "Select", "label": "责任角色", "options": "负责人\n管理岗位\n普通岗位\n其他", "default": "普通岗位"},
   {"fieldname": "parent_position", "fieldtype": "Link", "label": "上级岗位节点", "options": "Organization Position"},

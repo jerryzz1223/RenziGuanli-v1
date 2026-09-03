@@ -384,6 +384,11 @@
 	overflow-x: auto;
 }
 
+.hrms-monthly-final-editor-dialog .modal-dialog {
+	max-width: calc(100vw - 32px);
+	width: calc(100vw - 32px);
+}
+
 .hrms-attendance-table {
 	background: #fff;
 	font-size: 12px;

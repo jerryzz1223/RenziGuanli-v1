@@ -2,9 +2,10 @@
 
 This module intentionally does not change ``attendance_import.py``.  It owns a
 small, auditable workflow backed by existing import batches plus one unified
-processing-record DocType.  Attendance-only monthly support files are import-only:
-they are validated on upload but never enter the attendance exception/review
-workflow or receive a second manual transformation.
+processing-record DocType.  Attendance-only monthly support files are normally
+import-only: validation errors never enter the attendance exception/review
+workflow.  Special hours additionally supports an explicit, date-level manual
+correction overlay with its own audit history.
 """
 
 from __future__ import annotations
@@ -2296,6 +2297,148 @@ def update_processing_record(company: str, attendance_month: str, source_type: s
 
 
 @frappe.whitelist()
+def update_special_hours_manual_entry(
+	company: str,
+	attendance_month: str,
+	employee_code: str,
+	attendance_date: str,
+	hours: Any,
+	reason: str = "",
+):
+	"""Overlay one employee/date special-hours value without changing the Excel.
+
+	Only an employee in the effective attendance-draft population may be added.
+	That keeps a manual correction from creating a new payroll recipient while
+	still allowing HR to add a missing special-hours row for an existing worker.
+	"""
+	_require_processing_manager()
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	employee_code = str(employee_code or "").strip()
+	if not employee_code:
+		frappe.throw(_("请填写员工工号。"))
+	if not (reason or "").strip():
+		frappe.throw(_("手动修改必须填写原因。"))
+	try:
+		change_date = date.fromisoformat(str(attendance_date or ""))
+	except (TypeError, ValueError):
+		frappe.throw(_("日期必须使用 YYYY-MM-DD。"))
+	if change_date.strftime("%Y-%m") != attendance_month:
+		frappe.throw(_("日期必须属于当前考勤月份。"))
+	if _as_nonnegative_number(hours) is None:
+		frappe.throw(_("特殊工时必须为大于或等于 0 的数字。"))
+
+	batch = _latest_batch(company, attendance_month, "special_hours")
+	if not batch or batch.status != "已确认":
+		frappe.throw(_("请先完成特殊工时文件的导入校验。"))
+	if not frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": batch.name}):
+		frappe.throw(_("特殊工时尚未生成可修改的导入记录。"))
+	attendance_batch = _latest_batch(company, attendance_month, "attendance_draft")
+	attendance_codes = {
+		str(row.get("employee_code") or "").strip()
+		for row in _result_rows(attendance_batch, 5000)
+		if row.get("eligible_for_downstream")
+	} if attendance_batch else set()
+	if employee_code not in attendance_codes:
+		frappe.throw(_("该工号不在本月可进入终稿的考勤初稿人员范围。"))
+	employee = next(
+		(item for item in _employee_directory(company) if str(item.get("employee_code") or "").strip() == employee_code),
+		None,
+	)
+	if not employee:
+		frappe.throw(_("未在当前公司花名册中找到该员工工号。"))
+	records = frappe.get_all(
+		PROCESSING_RECORD_DOCTYPE,
+		filters={"import_batch": batch.name, "employee_code": employee_code},
+		fields=["name"],
+		limit_page_length=2,
+	)
+	if len(records) > 1:
+		frappe.throw(_("该员工在特殊工时来源中存在重复记录，请先更正来源文件。"))
+
+	if records:
+		doc = frappe.get_doc(PROCESSING_RECORD_DOCTYPE, records[0].name)
+		if _loads(doc.exception_codes, []):
+			frappe.throw(_("该员工的特殊工时存在导入校验错误，请先更正来源文件后重新上传。"))
+		proposed = _loads(doc.proposed_value_json, {})
+		confirmed = _loads(doc.confirmed_value_json, None) or dict(proposed)
+	else:
+		proposed = {
+			"employee_code": employee_code,
+			"employee_name": employee.get("employee_name") or "",
+			"department": employee.get("department") or "",
+			"special_hours": 0.0,
+			"special_hours_days": [],
+			"eligible_for_downstream": True,
+		}
+		confirmed = dict(proposed)
+		doc = frappe.get_doc(_record_payload(batch, {
+			"employee_code": employee_code,
+			"employee_name": proposed["employee_name"],
+			"department": proposed["department"],
+			"original_data": {"manual_entry": True, "employee_code": employee_code},
+			"proposed_value": proposed,
+			"processed_value": proposed,
+			"confirmed_value": confirmed,
+			"review_status": "无需审核",
+			"eligible_for_downstream": True,
+			"source_file": batch.source_file,
+			"source_sheet": "系统手动修改",
+			"source_row": 0,
+			"source_id": f"manual:{employee_code}",
+		})).insert(ignore_permissions=True)
+
+	day = change_date.day
+	old_entries = confirmed.get("special_hours_days") or []
+	old_hours = next((entry.get("hours") for entry in old_entries if isinstance(entry, dict) and cint(entry.get("day")) == day), None)
+	new_entries = _special_hours_entries_with_manual_change(old_entries, attendance_month, day, hours)
+	confirmed.update({
+		"employee_code": employee_code,
+		"employee_name": employee.get("employee_name") or confirmed.get("employee_name") or "",
+		"department": employee.get("department") or confirmed.get("department") or "",
+		"special_hours_days": new_entries,
+		"special_hours": sum(_as_number(entry["hours"]) for entry in new_entries),
+		"eligible_for_downstream": True,
+	})
+	history = _loads(doc.review_history_json, [])
+	history.append({
+		"old_value": {"day": day, "hours": old_hours},
+		"new_value": {"day": day, "hours": _as_nonnegative_number(hours)},
+		"field_name": f"special_hours_days:{day}",
+		"original_value": {"day": day, "hours": old_hours},
+		"reason": reason.strip(),
+		"review_status": "已通过",
+		"reviewer": frappe.session.user,
+		"reviewed_on": now_datetime().isoformat(),
+	})
+	doc.employee_name = confirmed["employee_name"]
+	doc.department = confirmed["department"]
+	doc.processed_value_json = _json(confirmed)
+	doc.confirmed_value_json = _json(confirmed)
+	doc.review_status = "无需审核"
+	doc.reviewer = frappe.session.user
+	doc.reviewed_on = now_datetime()
+	doc.review_note = reason.strip()
+	doc.review_history_json = _json(history)
+	doc.eligible_for_downstream = 1
+	doc.save(ignore_permissions=True)
+	processed_result = _export_processed_result(batch)
+	_save_batch_notes(batch, {
+		"processed_result": processed_result,
+		"processed_result_refreshed_on": now_datetime().isoformat(),
+		"processed_result_refresh_reason": "special_hours_manual_update",
+	})
+	frappe.db.commit()
+	return {
+		"record_id": doc.name,
+		"employee_code": employee_code,
+		"attendance_date": change_date.isoformat(),
+		"hours": _as_nonnegative_number(hours),
+		"processed_result": processed_result,
+		"notice": _("已保存特殊工时手动修改；原始导入和本次修改记录均已保留。"),
+	}
+
+
+@frappe.whitelist()
 def update_attendance_draft_daily_row(
 	company: str,
 	attendance_month: str,
@@ -3109,6 +3252,17 @@ FINAL_FINANCE_COLUMNS = (
 	("full_attendance_award", "全勤奖"),
 )
 
+# A web edit is an explicit signed-final correction layer.  Rate-specific
+# special hours stay date-level because changing a monthly total would lose the
+# weekday/rest-day/holiday multiplier evidence used by both finance and payroll.
+MONTHLY_FINAL_IDENTITY_FIELDS = frozenset({"employee_code", "employee_name", "department"})
+MONTHLY_FINAL_SPECIAL_HOURS_FIELDS = frozenset({"special_workday_hours", "special_restday_hours", "special_holiday_hours"})
+MONTHLY_FINAL_WEB_EDITABLE_FIELDS = tuple(
+	field
+	for field, _label in FINAL_SIGNED_COLUMNS
+	if field not in MONTHLY_FINAL_IDENTITY_FIELDS | MONTHLY_FINAL_SPECIAL_HOURS_FIELDS
+)
+
 # The settings table stores visible Excel headings, while field keys remain
 # stable implementation identifiers.  A user may therefore rename or regroup
 # the workbook without changing the calculation chain or import contract.
@@ -3319,6 +3473,41 @@ def _special_hours_breakdown(entries: list[dict[str, Any]] | None, attendance_mo
 	return result
 
 
+def _special_hours_entries_with_manual_change(
+	entries: list[dict[str, Any]] | None,
+	attendance_month: str,
+	day: int | str,
+	hours: Any,
+) -> list[dict[str, float]]:
+	"""Return dated special hours with one approved employee/day overlay.
+
+	The import grid remains the source record.  This helper changes only the
+	effective value for one day, making a zero-hour correction explicit instead
+	of deleting the original imported fact from the audit trail.
+	"""
+	try:
+		year, month = (int(part) for part in str(attendance_month).split("-", 1))
+		last_day = monthrange(year, month)[1]
+	except (TypeError, ValueError):
+		frappe.throw(_("考勤月份必须使用 YYYY-MM。"))
+	day = cint(day)
+	number = _as_nonnegative_number(hours)
+	if not day or day > last_day:
+		frappe.throw(_("日期必须属于当前考勤月份。"))
+	if number is None:
+		frappe.throw(_("特殊工时必须为大于或等于 0 的数字。"))
+	by_day: dict[int, float] = {}
+	for entry in entries or []:
+		if not isinstance(entry, dict):
+			continue
+		entry_day = cint(entry.get("day"))
+		entry_hours = _as_nonnegative_number(entry.get("hours"))
+		if 1 <= entry_day <= last_day and entry_hours is not None:
+			by_day[entry_day] = entry_hours
+	by_day[day] = number
+	return [{"day": entry_day, "hours": by_day[entry_day]} for entry_day in sorted(by_day)]
+
+
 def _final_calculation(row: dict[str, Any]) -> dict[str, float]:
 	"""Mirror the HR paper-form calculation chain for one monthly employee row."""
 	actual = _as_number(row.get("actual_attendance_hours"))
@@ -3443,7 +3632,7 @@ def _monthly_final_rows(batches: dict[str, Any]):
 			if source_type == "attendance_draft":
 				for field, _label in ATTENDANCE_DRAFT_RESULT_COLUMNS:
 					output[field] = values.get(field, output.get(field, 0))
-				for field in ("green_apple_amount", "red_apple_amount", "housing_allowance", "full_attendance_award", "signed_final_override"):
+				for field in ("green_apple_amount", "red_apple_amount", "housing_allowance", "full_attendance_award", "employee_signature", "review_note", "signed_final_override"):
 					if field in values:
 						output[field] = values.get(field)
 			elif source_type == "missing_card":
@@ -3805,5 +3994,156 @@ def get_monthly_final_preview(company: str, attendance_month: str, kind: str = "
 		"title": _("员工签字版") if kind == "signed" else _("财务版"),
 		"locked_snapshot_version": locked_version,
 		"columns": [{"field": field, "label": label} for field, label in columns],
+		"web_editable_fields": list(MONTHLY_FINAL_WEB_EDITABLE_FIELDS) if kind == "signed" else [],
+		"special_hours_fields": list(MONTHLY_FINAL_SPECIAL_HOURS_FIELDS) if kind == "signed" else [],
 		"rows": rows if kind == "signed" else _finance_final_preview_rows(rows),
+	}
+
+
+@frappe.whitelist()
+def update_monthly_final_rows(company: str, attendance_month: str, changes: str | list[dict], reason: str = ""):
+	"""Apply audited web corrections to the signed final, then require a relock.
+
+	The locked workbook itself remains historical evidence.  Corrections are
+	written to the attendance-draft confirmation layer, with the displayed
+	supplemental values copied into that layer before it takes precedence.  That
+	keeps the regenerated signed and finance files, as well as payroll, on the
+	same post-correction facts.
+	"""
+	_require_processing_manager()
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	audit_reason = (reason or "").strip() or _("网页终稿修改")
+	if isinstance(changes, str):
+		changes = _loads(changes, [])
+	if not isinstance(changes, list) or not changes:
+		frappe.throw(_("请至少修改一项终稿数据。"))
+
+	state = get_processing_batch(company, attendance_month)
+	outputs = state.get("final_outputs") or {}
+	locked_version = str(outputs.get("locked_snapshot_version") or "")
+	if not locked_version:
+		frappe.throw(_("请先锁定并生成月度终稿。"))
+	batches = _final_snapshot_batches(company, attendance_month)
+	if any(not batch for batch in batches.values()):
+		frappe.throw(_("终稿来源不完整，不能网页修改。"))
+	if _monthly_snapshot_version(batches) != locked_version:
+		frappe.throw(_("来源或人工处理已变化，请先重新锁定并生成终稿后再编辑。"))
+
+	final_rows = _monthly_final_rows(batches)
+	final_by_code = {
+		str(row.get("employee_code") or "").strip(): row
+		for row in final_rows
+		if str(row.get("employee_code") or "").strip()
+	}
+	attendance_batch = batches["attendance_draft"]
+	records = frappe.get_all(
+		PROCESSING_RECORD_DOCTYPE,
+		filters={"import_batch": attendance_batch.name},
+		fields=["name", "employee_code"],
+		limit_page_length=5000,
+	)
+	record_by_code = {}
+	for record in records:
+		code = str(record.get("employee_code") or "").strip()
+		if code in record_by_code:
+			frappe.throw(_("考勤初稿存在重复工号，不能网页修改终稿：{0}").format(code))
+		if code:
+			record_by_code[code] = record.name
+
+	changed_codes = set()
+	processed_at = now_datetime()
+	for item in changes:
+		if not isinstance(item, dict):
+			frappe.throw(_("网页修改数据格式不正确。"))
+		code = str(item.get("employee_code") or "").strip()
+		values = item.get("values")
+		if not code or code not in final_by_code or code not in record_by_code:
+			frappe.throw(_("员工工号不属于当前锁定终稿：{0}").format(code or "--"))
+		if not isinstance(values, dict) or not values:
+			frappe.throw(_("员工 {0} 没有可保存的修改项。").format(code))
+		invalid_fields = sorted(set(values) - set(MONTHLY_FINAL_WEB_EDITABLE_FIELDS))
+		if invalid_fields:
+			frappe.throw(_("不能网页修改终稿字段：{0}").format("、".join(invalid_fields)))
+
+		final_row = final_by_code[code]
+		doc = frappe.get_doc(PROCESSING_RECORD_DOCTYPE, record_by_code[code])
+		proposed = _loads(doc.proposed_value_json, {})
+		confirmed = _loads(doc.confirmed_value_json, None) or dict(proposed)
+		# Compare against the value shown in the locked final.  Some totals are
+		# contributed by supplemental sources and do not yet exist on the draft
+		# record that will become the signed-final override.
+		old_values = {field: final_row.get(field) for field in values}
+		new_values = {}
+		for field, value in values.items():
+			if field in {"employee_signature", "review_note"}:
+				new_values[field] = str(value or "").strip()
+			else:
+				number = _as_nonnegative_number(value)
+				if number is None:
+					frappe.throw(_("{0} 的 {1} 必须为大于或等于 0 的数字。").format(code, dict(FINAL_SIGNED_COLUMNS).get(field, field)))
+				new_values[field] = number
+		if all(
+			(str(old_values[field] or "") == str(value or ""))
+			if field in {"employee_signature", "review_note"}
+			else _as_number(old_values[field]) == _as_number(value)
+			for field, value in new_values.items()
+		):
+			continue
+
+		# A signed-final override supersedes aggregate apple/housing/full-attendance
+		# sources.  Copy their current effective values first so editing one cell
+		# cannot make unrelated, already-confirmed amounts disappear on regeneration.
+		for field in MONTHLY_FINAL_WEB_EDITABLE_FIELDS:
+			if field in {"employee_signature", "review_note"}:
+				continue
+			if field in final_row:
+				confirmed[field] = final_row.get(field)
+		confirmed.update(new_values)
+		confirmed["signed_final_override"] = 1
+		history = _loads(doc.review_history_json, [])
+		history.append({
+			"old_value": old_values,
+			"new_value": new_values,
+			"field_name": "__web_monthly_final__",
+			"original_value": deepcopy_json(old_values),
+			"reason": audit_reason,
+			"review_status": "已通过",
+			"reviewer": frappe.session.user,
+			"reviewed_on": processed_at.isoformat(),
+			"locked_snapshot_version": locked_version,
+		})
+		doc.confirmed_value_json = _json(confirmed)
+		processed = _loads(doc.processed_value_json, {})
+		processed.update(confirmed)
+		doc.processed_value_json = _json(processed)
+		doc.reviewer = frappe.session.user
+		doc.reviewed_on = processed_at
+		doc.review_note = audit_reason
+		doc.review_history_json = _json(history)
+		doc.eligible_for_downstream = 1
+		doc.save(ignore_permissions=True)
+		changed_codes.add(code)
+
+	if not changed_codes:
+		return {"updated_rows": 0, "notice": _("没有检测到需要保存的终稿修改。")}
+	processed_result = _export_processed_result(attendance_batch)
+	# Keep the old private files as evidence, but remove their active reference so
+	# neither download nor payroll can be mistaken for the newly edited values.
+	_save_batch_notes(attendance_batch, {
+		"monthly_final_outputs": {},
+		"monthly_final_web_edit": {
+			"previous_locked_snapshot_version": locked_version,
+			"updated_rows": len(changed_codes),
+			"updated_by": frappe.session.user,
+			"updated_on": processed_at.isoformat(),
+			"reason": audit_reason,
+		},
+		"processed_result": processed_result,
+		"processed_result_refreshed_on": processed_at.isoformat(),
+		"processed_result_refresh_reason": "web_monthly_final_update",
+	})
+	frappe.db.commit()
+	return {
+		"updated_rows": len(changed_codes),
+		"notice": _("已保存网页修改。原锁定版已保留为审计证据，请重新锁定并生成员工签字版和财务版。"),
 	}

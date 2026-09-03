@@ -495,6 +495,15 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 			{"special_workday_hours": 2.0, "special_restday_hours": 4.0, "special_holiday_hours": 8.0},
 		)
 
+	def test_special_hours_manual_change_overlays_one_day_and_preserves_other_days(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		self.assertEqual(
+			center._special_hours_entries_with_manual_change(
+				[{"day": 2, "hours": 4}, {"day": 6, "hours": 8}], "2026-06", 2, 0,
+			),
+			[{"day": 2, "hours": 0.0}, {"day": 6, "hours": 8.0}],
+		)
+
 	def test_finance_preview_merges_rate_matched_special_hours(self):
 		center, _file_manager, _frappe_modules = processing_center_module()
 		rows = center._finance_final_preview_rows([{

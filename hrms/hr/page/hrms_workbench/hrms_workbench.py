@@ -50,6 +50,66 @@ def _count_in_date_range(doctype, date_field, start_date, end_date, filters=None
 	return _count(doctype, safe_filters)
 
 
+def _employee_distribution(fieldname, limit=8, include_employee_names=False):
+	"""Return a permission-aware distribution of visible active employees.
+
+	``include_employee_names`` is used only by the personnel home map.  It
+	returns each permitted employee's document name and display name so the UI
+	can link to the exact employee record without exposing contact or identity
+	fields.
+	"""
+	if not _has_field("Employee", fieldname):
+		return {"items": [], "total": 0, "unreported": 0, "other": 0, "members": {}}
+
+	filters = _safe_filters("Employee", {"status": "Active"})
+	try:
+		rows = frappe.get_list(
+			"Employee",
+			fields=[fieldname, {"COUNT": "name", "as": "count"}],
+			filters=filters,
+			group_by=fieldname,
+			order_by="count desc",
+			page_length=1000,
+		)
+	except Exception:
+		return {"items": [], "total": 0, "unreported": 0, "other": 0, "members": {}}
+
+	total = 0
+	unreported = 0
+	items = []
+	for row in rows:
+		count = _as_int(row.get("count"))
+		total += count
+		label = str(row.get(fieldname) or "").strip()
+		if not label:
+			unreported += count
+			continue
+		items.append({"label": label, "count": count})
+
+	members = {}
+	if include_employee_names:
+		try:
+			people = frappe.get_list(
+				"Employee",
+				fields=[fieldname, "name", "employee_name"],
+				filters=filters,
+				order_by=f"{fieldname} asc, employee_name asc",
+				page_length=10000,
+			)
+			for person in people:
+				label = str(person.get(fieldname) or "").strip()
+				employee = str(person.get("name") or "").strip()
+				employee_name = str(person.get("employee_name") or "").strip()
+				if label and employee and employee_name:
+					members.setdefault(label, []).append({"name": employee, "employee_name": employee_name})
+		except Exception:
+			members = {}
+
+	visible_items = items[:limit]
+	other = sum(item["count"] for item in items[limit:])
+	return {"items": visible_items, "total": total, "unreported": unreported, "other": other, "members": members}
+
+
 def _calendar_days(today):
 	_, days_in_month = calendar.monthrange(today.year, today.month)
 	start_weekday = date(today.year, today.month, 1).weekday()
@@ -689,6 +749,17 @@ def get_performance_view(
 
 @frappe.whitelist()
 def get_data():
+	"""Data for the system-wide home page; it deliberately has no people analytics."""
+	return _get_home_data(include_personnel_analytics=False)
+
+
+@frappe.whitelist()
+def get_personnel_home_data():
+	"""Data for the dedicated personnel home page."""
+	return _get_home_data(include_personnel_analytics=True)
+
+
+def _get_home_data(include_personnel_analytics=False):
 	today = getdate(nowdate())
 	month_start = today.replace(day=1)
 	weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
@@ -710,6 +781,13 @@ def get_data():
 	onboarding = _count_with_safe_filters("Employee Onboarding", {"boarding_status": "Pending"})
 	separation = _count_with_safe_filters("Employee Separation", {"boarding_status": "Pending"})
 	monthly_new_hires = _count_in_date_range("Employee", "date_of_joining", month_start, today)
+	analytics = {}
+	if include_personnel_analytics:
+		analytics = {
+			"native_place": _employee_distribution("custom_native_place", limit=34, include_employee_names=True),
+			"education": _employee_distribution("custom_education_level", limit=5),
+			"department": _employee_distribution("department", limit=8),
+		}
 
 	return {
 		"today": {
@@ -778,6 +856,7 @@ def get_data():
 			"resignation": {"count": separation},
 			"leave": {"open": open_leave, "approved": approved_leave},
 		},
+		"analytics": analytics,
 		"right_rail": {
 			"risk_level": "正常" if employee_total else "暂无数据",
 			"reminders": {

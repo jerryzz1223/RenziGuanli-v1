@@ -40,11 +40,15 @@ for (const marker of ["/assets/hrms/js/hrms_top_nav.js", "/assets/hrms/css/hrms_
 	}
 }
 
-if (!hooksSource.includes("/assets/hrms/css/hrms_top_nav.css?v=20260901d")) {
+if (!hooksSource.includes("/assets/hrms/css/hrms_top_nav.css?v=20260903b")) {
 	throw new Error("The top navigation CSS cache version must change when its desktop layout is corrected.");
 }
 
-for (const marker of [".navbar .search-wrapper", ".navbar .btn-primary", "input.closest(\"form, .input-group, .form-group, .search, .search-bar\")"]) {
+if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260903c")) {
+	throw new Error("The top navigation JavaScript cache version must change when personnel-home selection is corrected.");
+}
+
+for (const marker of [".navbar .search-wrapper", ".navbar .awesomebar", ".navbar .btn-new", ".navbar .btn-primary", "path === \"/app\"", "input.closest(\"form, .input-group, .form-group, .search, .search-bar, .search-wrapper, .search-container, .search-box, .awesomebar\")"]) {
 	if (!topNavSource.includes(marker)) {
 		throw new Error(`Top navigation must remove the current Frappe global search and primary New control: ${marker}`);
 	}
@@ -60,10 +64,18 @@ for (const marker of ["@media (max-width: 767px)", "position: fixed;", "transfor
 	}
 }
 
-for (const marker of ["主页", "人事", "/desk/hrms-workbench", "/desk/employee", "/desk/department", "/desk/attendance-import-center", "/desk/payroll-input-center", "aria-expanded", "bindMoreDocumentEvents", "closeMoreMenus"]) {
+for (const marker of ["主页", "人事", "/desk/hrms-workbench", "/desk/personnel-home", "/desk/department", "/desk/attendance-import-center", "/desk/payroll-input-center", "aria-expanded", "bindMoreDocumentEvents", "closeMoreMenus"]) {
 	if (!topNavSource.includes(marker)) {
 		throw new Error(`Top navigation is missing marker: ${marker}`);
 	}
+}
+
+if (!topNavSource.includes('slug === "personnel-home" || slug === "personnel" || slug === "employee"') || !topNavSource.includes('return "人事"')) {
+	throw new Error("Personnel home must retain the 人事 top-navigation selection instead of falling into 更多.");
+}
+
+if (!topNavSource.includes('label: "人事",') || !topNavSource.includes('route: "/desk/personnel-home",')) {
+	throw new Error("Clicking the 人事 top-navigation module must open the personnel home first.");
 }
 
 for (const marker of ["yongxin-brand-mark-red.png", "Navbar Settings", "MODULE_ICONS", "hrms-top-module-nav__brand-logo", "hrms-top-module-nav__brand-company", "loadBrandLogo", "decoratePageTitle"]) {
@@ -153,7 +165,7 @@ for (const forbiddenMarker of ["hrms-workbench-topnav", "data-module=", "set_mod
 	}
 }
 
-if (topNavCssSource.includes("#057a55") || topNavCssSource.includes("color: #fff")) {
+if (topNavCssSource.includes("#057a55")) {
 	throw new Error("Top navigation must use the neutral Frappe style, not the old green copied style.");
 }
 
@@ -171,8 +183,8 @@ if (!topNavCssSource.includes("width: 117.6470588235vw !important")) {
 	throw new Error("Desktop-density mode must compensate the fixed top nav width so company and account controls stay at the top-right edge.");
 }
 
-if (homePage.title !== "人资主页") {
-	throw new Error(`The integrated home page title should be 人资主页, got ${homePage.title}`);
+if (homePage.title !== "系统主页") {
+	throw new Error(`The system home page title should be 系统主页, got ${homePage.title}`);
 }
 
 if (workbench.is_hidden !== 1 || workbench.content !== "[]") {

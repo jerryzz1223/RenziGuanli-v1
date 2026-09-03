@@ -20,18 +20,14 @@
 		get_employee_roster_summary: true,
 	};
 
-	// 业务上只有一个“工作性质”口径；其五个显示值由 Employee 的在职、
-	// 转正、返聘和离职资料共同计算，不再维护另一套人员字段。
+	// 花名册只按员工表单已保存的工作性质筛选，不从状态或转正字段反推。
 	const roster_cards = [
-		// “全部”用于在职花名册，保留待离职人员但不纳入已离职人员。
-		{ label: "全部", filters: { status: ["!=", "Left"] } },
-		{ label: "在职 · 正式", filters: { employment_type: "Full-time", custom_is_confirmed: "是", status: "Active" } },
-		// 转正标记为空的员工由转正日期判断。定时任务会在到期时把他们
-		// 正式办理为“是”；在此之前，他们与明确“否”的员工一样归入试用。
-		{ label: "在职 · 试用期", filters: { employment_type: "Full-time", custom_is_confirmed: ["!=", "是"], status: "Active" } },
-		{ label: "退休返聘", filters: { employment_type: "Retainer", status: "Active" } },
-		{ label: "待离职", filters: { status: "Inactive" } },
-		{ label: "离职", filters: { status: "Left" } },
+		{ label: "全部", filters: { custom_work_nature: ["!=", "离职"] } },
+		{ label: "在职 · 正式", filters: { custom_work_nature: "在职·正式" } },
+		{ label: "在职 · 试用期", filters: { custom_work_nature: "在职·试用期" } },
+		{ label: "退休返聘", filters: { custom_work_nature: "退休返聘" } },
+		{ label: "待离职", filters: { custom_work_nature: "待离职" } },
+		{ label: "离职", filters: { custom_work_nature: "离职" } },
 	];
 
 	const roster_list_columns = [
@@ -39,7 +35,7 @@
 		{ fieldname: "custom_employee_code", label: "工号" },
 		{ fieldname: "department", label: "部门" },
 		{ fieldname: "designation", label: "岗位" },
-		{ fieldname: "employment_type", label: "工作性质" },
+		{ fieldname: "custom_work_nature", label: "工作性质" },
 		{ fieldname: "date_of_joining", label: "入职日期" },
 		{ fieldname: "relieving_date", label: "离职日期" },
 		{ fieldname: "custom_id_type", label: "证件类型" },
@@ -64,7 +60,7 @@
 			"custom_employee_code",
 			"department",
 			"designation",
-			"employment_type",
+			"custom_work_nature",
 			"custom_is_confirmed",
 			"final_confirmation_date",
 			"status",
@@ -97,8 +93,8 @@
 			department(value, df, doc) {
 				return format_roster_department_display(value, doc);
 			},
-			employment_type(value, df, doc) {
-				return frappe.utils.escape_html(format_roster_employment_type(value, doc));
+			custom_work_nature(value) {
+				return frappe.utils.escape_html(format_roster_work_nature(value));
 			},
 		},
 		onload(listview) {
@@ -110,23 +106,8 @@
 		},
 	};
 
-	function is_roster_probation_employee(value, doc = {}) {
-		if (value === "Probation" || doc.custom_is_confirmed === "否") return true;
-		if (doc.custom_is_confirmed === "是") return false;
-
-		// 只有“是否转正”未维护时，才以转正日期作为兜底依据；当天到期即为正式。
-		const confirmation_date = String(doc.final_confirmation_date || "").slice(0, 10);
-		if (!confirmation_date) return false;
-		return confirmation_date > frappe.datetime.get_today();
-	}
-
-	function format_roster_employment_type(value, doc = {}) {
-		if (doc.status === "Left") return __("离职");
-		if (doc.status === "Inactive") return __("待离职");
-		if (value === "Retainer") return __("退休返聘");
-		if (is_roster_probation_employee(value, doc)) return __("在职 · 试用期");
-		if (value) return __("在职 · 正式");
-		return __("未设置");
+	function format_roster_work_nature(value) {
+		return value || __("未设置");
 	}
 
 	function setup_roster_page(listview) {
@@ -382,7 +363,7 @@
 				`<span class="hrms-roster-card__unit">人</span>`,
 			].join("");
 			button.addEventListener("click", function () {
-				apply_single_roster_filter(card, get_stored_roster_column_filter());
+				apply_single_roster_filter(card, get_stored_roster_column_filter(), listview);
 			});
 			cards.appendChild(button);
 		});
@@ -411,7 +392,16 @@
 		}
 
 		const state = get_roster_table_state(listview);
-		if (state.records === null && !state.loading) load_roster_table_records(listview, state);
+		if (state.records === null && !state.loading && !state.load_scheduled) {
+			// Frappe begins its native ListView refresh in the same turn as the
+			// card navigation. Defer our roster request until that refresh has
+			// settled; otherwise a card can show a correct count with an empty table.
+			state.load_scheduled = true;
+			window.setTimeout(() => {
+				state.load_scheduled = false;
+				if (state.records === null && !state.loading) load_roster_table_records(listview, state);
+			}, 250);
+		}
 		const columns = get_roster_table_columns();
 		table_wrap.replaceChildren();
 		const scroll = document.createElement("div");
@@ -519,10 +509,22 @@
 
 	function get_roster_table_state(listview) {
 		if (!listview.__hrmsRosterTableState) {
-			listview.__hrmsRosterTableState = { filters: {}, loading: false, page: 1, page_size: 20, records: null, sort_field: "", sort_order: "asc", source_key: "" };
+			listview.__hrmsRosterTableState = {
+				filters: {},
+				loading: false,
+				page: 1,
+				page_size: 20,
+				records: null,
+				records_card_label: "",
+				request_id: 0,
+				sort_field: "",
+				sort_order: "asc",
+				source_key: "",
+			};
 		}
 		const state = listview.__hrmsRosterTableState;
 		state.filters ||= {};
+		state.load_scheduled ||= false;
 		state.page ||= 1;
 		state.page_size ||= 20;
 		return state;
@@ -536,21 +538,24 @@
 		const source_key = JSON.stringify(filters);
 		if ((state.loading && state.source_key === source_key) || (state.source_key === source_key && Array.isArray(state.records))) return;
 
+		const request_id = state.request_id + 1;
+		state.request_id = request_id;
 		state.loading = true;
 		state.source_key = source_key;
 		frappe.call({
 			method: "hrms.api.employee_field_template.get_employee_roster",
 			args: { filters: JSON.stringify(filters), page: 1, page_length: ROSTER_ALL_EMPLOYEES_PAGE_LENGTH },
 			callback(response) {
-				if (state.source_key !== source_key) return;
+				if (state.request_id !== request_id) return;
 				state.loading = false;
 				const message = response.message || {};
 				state.records = Array.isArray(message.rows) ? message.rows : [];
+				state.records_card_label = card.label;
 				state.page = 1;
 				ensure_roster_empty_result_header(listview);
 			},
 			always() {
-				if (state.source_key === source_key) state.loading = false;
+				if (state.request_id === request_id) state.loading = false;
 			},
 		});
 	}
@@ -596,19 +601,47 @@
 	}
 
 	function get_visible_roster_table_rows(listview, columns, state) {
+		const active_card = get_active_roster_card();
+		// A callback from an earlier card must never repaint the newly selected
+		// card.  Match by the card that issued the current request instead of
+		// serialising mutable company defaults into a browser cache key.
+		const custom_records = Array.isArray(state.records) ? state.records : [];
+		if (state.records_card_label !== active_card.label && custom_records.length) return [];
+		// On a fresh route Frappe can complete the native ListView request after
+		// (or cancel) the parallel custom request. Its rows are a safe fallback:
+		// the address already contains the simple card filters and the business
+		// predicate below still enforces every card condition before rendering.
+		const source_records = custom_records.length
+			? custom_records
+			: Array.isArray(listview.data)
+				? listview.data
+				: [];
+
+		const matches_card_filter = (employee, [fieldname, expected]) => {
+			const actual = employee?.[fieldname];
+			if (Array.isArray(expected)) {
+				const [operator, value] = expected;
+				return operator === "!=" ? actual !== value : actual === value;
+			}
+			return actual === expected;
+		};
 		const filter_value = (employee, column) => {
 			if (column.fieldname === "employee_identity") {
 				return `${employee.employee_name || ""} ${get_employee_business_code(employee)}`;
 			}
 			return get_roster_table_cell_value(employee, column);
 		};
-		const active_filters = Object.entries(state.filters).filter(([, value]) => String(value || "").trim());
-		const rows = (state.records || []).filter((employee) =>
-			active_filters.every(([fieldname, value]) => {
-				const column = columns.find((item) => item.fieldname === fieldname);
-				return String(filter_value(employee, column) || "").toLocaleLowerCase("zh-CN").includes(String(value).trim().toLocaleLowerCase("zh-CN"));
-			}),
-		);
+		const column_filters = Object.entries(state.filters).filter(([, value]) => String(value || "").trim());
+		const rows = source_records
+			.filter((employee) => Object.entries(active_card.filters || {}).every((filter) => matches_card_filter(employee, filter)))
+			.filter((employee) =>
+				column_filters.every(([fieldname, value]) => {
+					const column = columns.find((item) => item.fieldname === fieldname);
+					return String(filter_value(employee, column) || "")
+						.toLocaleLowerCase("zh-CN")
+						.includes(String(value).trim().toLocaleLowerCase("zh-CN"));
+				}),
+			);
 		if (!state.sort_field) return rows;
 		return rows.slice().sort((left, right) => {
 			const column = columns.find((item) => item.sort_field === state.sort_field);
@@ -623,7 +656,7 @@
 	function get_roster_table_cell_value(employee, column) {
 		const value = employee?.[column?.fieldname];
 		if (column?.fieldname === "department") return get_roster_department_label(value);
-		if (column?.fieldname === "employment_type") return format_roster_employment_type(value, employee);
+		if (column?.fieldname === "custom_work_nature") return format_roster_work_nature(value);
 		return value == null || value === "" ? "-" : value;
 	}
 
@@ -746,7 +779,7 @@
 	}
 
 	function get_visible_roster_columns() {
-		const show_departure_date = get_active_roster_card().filters.status === "Left";
+		const show_departure_date = get_active_roster_card().filters.custom_work_nature === "离职";
 		return roster_list_columns.filter((column) =>
 			show_departure_date ? column.fieldname !== "date_of_joining" : column.fieldname !== "relieving_date",
 		);
@@ -758,7 +791,7 @@
 		if (!wrapper) return;
 
 		// 离职日期只属于“已离职”视图；其余人员仍以入职日期作为时间字段。
-		const show_departure_date = get_active_roster_card().filters.status === "Left";
+		const show_departure_date = get_active_roster_card().filters.custom_work_nature === "离职";
 		toggle_roster_date_column(wrapper, "date_of_joining", show_departure_date);
 		toggle_roster_date_column(wrapper, "relieving_date", !show_departure_date);
 	}
@@ -1110,26 +1143,30 @@
 		return has_employee_field("company") ? frappe.defaults.get_user_default("Company") : "";
 	}
 
-	function apply_single_roster_filter(card, search) {
+	function apply_single_roster_filter(card, search, current_listview) {
 		sessionStorage.setItem("hrms_roster_active_card", card.label || "");
 		const route_options = build_roster_route_options(card.filters, search);
-		const listview = get_active_employee_roster_listview();
-		frappe.route_options = route_options;
+		// Keep the instance captured when the card was rendered. `window.cur_listview`
+		// is not guaranteed to be set inside a native click callback, which used to
+		// send the card through Frappe's in-place router instead of the fresh route.
+		const listview = current_listview || get_active_employee_roster_listview();
 
 		// A status-card click can happen while the Employee List is already the
-		// current route. In that case Frappe does not re-create ListView, so merely
-		// setting route_options leaves the old (often one-person) result on screen.
-		// Reset its actual filter state before loading the requested rows.
+		// current route.  Frappe then keeps its old ListView instance and can abort
+		// the custom-table RPC during filter refresh.  Navigate to the canonical
+		// route instead: it rebuilds the ListView and cannot reuse prior-card rows.
 		if (listview) {
-			const table_state = get_roster_table_state(listview);
-			table_state.page = 1;
-			table_state.records = null;
-			table_state.source_key = "";
-			load_roster_table_records(listview, table_state);
-			apply_roster_filters_to_live_listview(listview, route_options);
+			const target_url = new URL(window.location.href);
+			target_url.search = build_roster_query(card.filters, search);
+			target_url.hash = "";
+			// Use a browser navigation rather than Frappe's in-place router. Its
+			// pending ListView refresh otherwise can overwrite the address before
+			// reload and leave the departure card with an empty native result.
+			window.location.assign(target_url.toString());
 			return;
 		}
 
+		frappe.route_options = route_options;
 		frappe.set_route("List", EMPLOYEE_DOCTYPE);
 	}
 
@@ -1199,7 +1236,11 @@
 		const params = new URLSearchParams();
 		Object.keys(filters || {}).forEach((fieldname) => {
 			if (has_employee_field(fieldname)) {
-				params.set(fieldname, filters[fieldname]);
+				const value = filters[fieldname];
+				// The custom roster API handles comparison filters itself.  Sending
+				// them through the native ListView route makes Frappe parse its array
+				// representation differently and can blank the visible table.
+				if (!Array.isArray(value)) params.set(fieldname, value);
 			}
 		});
 

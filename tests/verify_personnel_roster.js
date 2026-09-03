@@ -61,7 +61,7 @@ for (const marker of [
 	'"custom_employee_code": "工号"',
 	'"department": "部门"',
 	'"designation": "岗位"',
-	'"employment_type": "工作性质"',
+	'"custom_work_nature": "工作性质"',
 	'"date_of_joining": "入职日期"',
 	'"custom_id_type": "证件类型"',
 	'"passport_number": "证件号码"',
@@ -221,15 +221,18 @@ for (const marker of [
 	"背景调查",
 	"员工对比",
 	"人事异动",
-	"redirect_existing_employee_form_to_detail",
-	"bind_employee_detail_route_redirect",
 	"openEmployeeFormForEdit",
-	"EMPLOYEE_FORM_EDIT_ACCESS_KEY",
-	"is_new_employee_form_route",
-	"/^new-employee(?:-|$)/",
-	"frappe.set_route(\"employee-detail\", frm.doc.name)",
 ]) {
 	mustInclude(employeeForm, marker, `Employee form is missing detail marker: ${marker}`);
+}
+
+for (const marker of [
+	"redirect_existing_employee_form_to_detail",
+	"bind_employee_detail_route_redirect",
+	"EMPLOYEE_FORM_EDIT_ACCESS_KEY",
+	"frappe.set_route(\"employee-detail\", frm.doc.name)",
+]) {
+	if (employeeForm.includes(marker)) throw new Error(`Employee edit form must not be redirected to the detail page: ${marker}`);
 }
 
 if (personnel.is_hidden !== 1 || personnel.content !== "[]") {

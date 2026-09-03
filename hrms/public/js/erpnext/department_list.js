@@ -412,8 +412,14 @@
 					{
 						fieldname: "hrms_org_manager",
 						fieldtype: "Data",
-						label: __("负责人"),
+						label: __("部门负责人（可多个）"),
 						default: doc.hrms_org_manager,
+					},
+					{
+						fieldname: "hrms_org_card_content",
+						fieldtype: "Small Text",
+						label: __("架构图卡片说明"),
+						default: doc.hrms_org_card_content,
 					},
 					{
 						fieldname: "hrms_roster_assignable",

@@ -98,7 +98,6 @@ for (const marker of [
 	"_ensure_employee_base_records",
 	"_validate_employee_import_row",
 	"_make_employee_roster_failure_workbook",
-	"_find_or_create_department",
 	"_find_or_create_designation",
 	"EMPLOYEE_ROSTER_QUICK_EDIT_FIELDS",
 	"_find_or_create_employment_type",
@@ -116,10 +115,12 @@ for (const marker of [
 	mustInclude(api, marker, `Employee roster API missing marker: ${marker}`);
 }
 
+mustInclude(api, 'values.pop("department", None)', "花名册导入必须忽略独立组织图部门，不创建或写入系统部门。");
+
 for (const marker of [
 	'if fieldname == "department":',
 	"department_names = _get_department_display_names",
-	"department_name = _strip_department_company_suffix(value)",
+	"return _strip_department_company_suffix(value)",
 	'headers = ["工号", "员工姓名"]',
 	"employee_code.get(row.parent, row.parent)",
 ]) {
@@ -135,6 +136,11 @@ for (const marker of [
 	'"cell_number": "手机号码"',
 ]) {
 	mustInclude(api, marker, `首版最小导入字段集缺少: ${marker}`);
+}
+
+const minimumImportFields = api.match(/EMPLOYEE_MINIMUM_IMPORT_REQUIRED_COLUMNS = \{([\s\S]*?)\n\}/)?.[1] || "";
+if (minimumImportFields.includes('"department": "部门"')) {
+	throw new Error("独立组织图部门不应作为花名册导入的必填字段。");
 }
 
 if (api.includes("if field.get(\"required\") and fieldname in meta_fields and _is_blank_value(values.get(fieldname))")) {
@@ -218,6 +224,7 @@ for (const marker of [
 	"当前内容",
 	"仅显示需要人工校正的数据",
 	"render_result",
+	"查看 {0} 条其他非阻塞提示",
 ]) {
 	mustInclude(importJs, marker, `Import page missing behavior: ${marker}`);
 }

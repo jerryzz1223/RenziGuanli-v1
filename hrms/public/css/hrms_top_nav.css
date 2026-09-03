@@ -6,6 +6,32 @@
  * height by the inverse scale. Without that compensation list views end early
  * and leave an empty strip at the bottom of the screen.
  */
+
+/* Frappe's Desk boot screen reads Website Settings.splash_image.  Use the
+ * existing Yongxin mark there rather than its framework logo, then soften it
+ * into a lightweight progress cue.  This is a compositor-friendly transform
+ * only: no JavaScript, timers, or additional network resource are introduced.
+ */
+.splash img[src*="/assets/hrms/images/yongxin-brand-mark.png"] {
+	animation: hrms-splash-brand-spin 1.2s linear infinite;
+	filter: grayscale(1);
+	max-width: 52px !important;
+	opacity: 0.42;
+	width: 52px !important;
+}
+
+@keyframes hrms-splash-brand-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.splash img[src*="/assets/hrms/images/yongxin-brand-mark.png"] {
+		animation: none;
+	}
+}
+
 @media screen and (min-width: 1280px) {
 	html:has(#hrms-top-module-nav) {
 		zoom: 0.85;
@@ -71,15 +97,20 @@
  * confusing entry points here, so keep them out of the Desk chrome. */
 body:has(#hrms-top-module-nav) #navbar-search,
 body:has(#hrms-top-module-nav) .navbar-search,
+body:has(#hrms-top-module-nav) .navbar .search-form,
 body:has(#hrms-top-module-nav) .navbar .search-bar,
 body:has(#hrms-top-module-nav) .navbar .search,
 body:has(#hrms-top-module-nav) .navbar .search-wrapper,
 body:has(#hrms-top-module-nav) .navbar .search-container,
+body:has(#hrms-top-module-nav) .navbar .search-box,
+body:has(#hrms-top-module-nav) .navbar .awesomebar,
 body:has(#hrms-top-module-nav) .navbar [role="search"],
 body:has(#hrms-top-module-nav) #navbar-new,
 body:has(#hrms-top-module-nav) .navbar-new,
 body:has(#hrms-top-module-nav) .dropdown-navbar-new,
 body:has(#hrms-top-module-nav) .dropdown-new,
+body:has(#hrms-top-module-nav) .navbar .btn-new,
+body:has(#hrms-top-module-nav) .navbar .btn-new-doc,
 body:has(#hrms-top-module-nav) .navbar .btn-primary {
 	display: none !important;
 }
@@ -2446,97 +2477,17 @@ body.hrms-personnel-social-controls-hidden .form-sidebar .comment-box {
 	display: none !important;
 }
 
-/* Employee files use a template-driven form.  Frappe's built-in layout is
- * section/column based, so moving a control straight into a row makes its
- * width depend on the source column and produces the compressed fields seen
- * in the editor.  These dedicated grid slots keep labels, controls, helpers,
- * and validation messages aligned at every screen size. */
-.hrms-employee-form-template-sections {
-	margin: 8px auto 32px;
-	max-width: 1440px;
-	padding: 0 32px;
-}
-
-.hrms-employee-form-section {
-	border-bottom: 1px solid var(--border-color, #e5e7eb);
-	margin: 0 0 24px;
-	padding: 0 0 24px;
-}
-
-.hrms-employee-form-section__heading {
-	border: 0;
-	color: var(--heading-color, var(--text-color, #1f2937));
-	font-size: 15px;
-	font-weight: 600;
-	line-height: 1.4;
-	margin: 0 0 16px;
-	padding: 0;
-	text-align: left !important;
-}
-
-.hrms-employee-form-section__grid {
-	display: grid;
-	gap: 16px 24px;
-	grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.hrms-employee-form-field {
-	min-width: 0;
-}
-
-.hrms-employee-form-field--wide {
-	grid-column: span 2;
-}
-
-.hrms-employee-form-field .frappe-control,
-.hrms-employee-form-field .form-group {
-	margin-bottom: 0;
-	min-width: 0;
-	width: 100%;
-}
-
-/* Hidden native controls must not reserve a grid cell. */
-.hrms-employee-form-field:has(.hide-control),
-.hrms-employee-form-field:has(.frappe-control.hide-control) {
-	display: none;
-}
-
-.hrms-employee-form-field .control-input,
-.hrms-employee-form-field .control-value,
-.hrms-employee-form-field input,
-.hrms-employee-form-field textarea {
-	max-width: 100%;
-}
-
-.hrms-employee-empty-native-section {
+/* Employee remains the one native Frappe form. Its Tab Break panes retain
+ * their original controls and grid columns; the form script makes each pane
+ * visible in document order, while this removes only the redundant tab bar. */
+.hrms-employee-one-page .form-tabs-list {
 	display: none !important;
 }
 
-@media (max-width: 1199px) {
-	.hrms-employee-form-section__grid {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-	}
-}
-
-@media (max-width: 767px) {
-	.hrms-employee-form-template-sections {
-		margin-bottom: 20px;
-		padding: 0 20px;
-	}
-
-	.hrms-employee-form-section {
-		margin-bottom: 20px;
-		padding-bottom: 20px;
-	}
-
-	.hrms-employee-form-section__grid {
-		gap: 16px;
-		grid-template-columns: minmax(0, 1fr);
-	}
-
-	.hrms-employee-form-field--wide {
-		grid-column: auto;
-	}
+/* This selector takes effect as soon as Frappe creates Employee's first
+ * native tab pane, before any form event callback runs. */
+body:has(#employee-basic_details_tab) .form-layout > .form-page > .form-tabs-list {
+	display: none !important;
 }
 
 .hrms-staff-attribute-page {

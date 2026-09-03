@@ -40,6 +40,7 @@ const attendancePageJsonPath = mustExist("hrms/hr/page/attendance_import_center/
 const attendancePageJsPath = mustExist("hrms/hr/page/attendance_import_center/attendance_import_center.js");
 const attendancePageJson = JSON.parse(fs.readFileSync(attendancePageJsonPath, "utf8"));
 const attendancePageJs = fs.readFileSync(attendancePageJsPath, "utf8");
+const attendancePageCss = read("hrms/hr/page/attendance_import_center/attendance_import_center.css");
 const homeRedirectJs = read("hrms/public/js/hrms_home_redirect_v6.js");
 const topNavCss = read("hrms/public/css/hrms_top_nav.css");
 const hooks = read("hrms/hooks.py");
@@ -128,6 +129,7 @@ for (const marker of [
 	"hide_logo: hideLogo ? 1 : 0",
 	"异常日期及原因",
 	"update_processing_record",
+	"update_special_hours_manual_entry",
 	"bulk_update_processing_records",
 	"查看/更正记录",
 	"该记录已处理；如需更正",
@@ -140,8 +142,14 @@ for (const marker of [
 	"list_manual_adjustments",
 	"generate_monthly_final_files",
 	"get_monthly_final_preview",
+	"update_monthly_final_rows",
 	"员工签字版",
 	"财务版",
+	"网页编辑",
+	"data-edit-final",
+	"open_monthly_final_editor",
+	"保存修改并重新锁定",
+	"特殊工时 → 手动修改",
 	"同一已锁定数据",
 	"住房补贴",
 	"全勤奖",
@@ -152,6 +160,10 @@ for (const marker of [
 	"bind_attendance_summary_events",
 	"data-monthly-support-upload",
 	"data-monthly-support-results",
+	"data-special-hours-manual",
+	"open_special_hours_manual_dialog",
+	"手动修改特殊工时",
+	"原值、原因、操作人和时间都会保留",
 	"data-preview-final",
 	"open_monthly_final_preview",
 	"monthly_support_columns",
@@ -261,6 +273,15 @@ for (const marker of [
 	"source_kind",
 ]) {
 	mustInclude(attendancePageJs, marker, `Attendance import center is missing marker: ${marker}`);
+}
+
+const monthlyFinalEditorStart = attendancePageJs.indexOf('open_monthly_final_editor(kind = "signed")');
+const monthlyFinalEditorEnd = attendancePageJs.indexOf("\n\topen_uploader()", monthlyFinalEditorStart);
+const monthlyFinalEditor = attendancePageJs.slice(monthlyFinalEditorStart, monthlyFinalEditorEnd);
+mustInclude(monthlyFinalEditor, "hrms-monthly-final-editor-dialog", "Monthly-final editor must use the wide dialog class.");
+mustInclude(attendancePageCss, ".hrms-monthly-final-editor-dialog .modal-dialog", "Monthly-final editor must define its wide dialog layout.");
+if (monthlyFinalEditor.includes('fieldname: "reason"') || monthlyFinalEditor.includes("reason: values.reason")) {
+	throw new Error("Monthly-final editor must not request or send a modification reason.");
 }
 
 if (attendancePageJs.includes("请继续从同一窗口选择剩余文件")) {

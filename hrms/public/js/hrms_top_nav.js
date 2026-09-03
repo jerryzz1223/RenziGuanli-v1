@@ -18,15 +18,20 @@
 	const REDUNDANT_FRAMEWORK_CONTROL_SELECTOR = [
 		"#navbar-search",
 		".navbar-search",
+		".navbar .search-form",
 		".navbar .search-bar",
 		".navbar .search",
 		".navbar .search-wrapper",
 		".navbar .search-container",
+		".navbar .search-box",
+		".navbar .awesomebar",
 		".navbar [role='search']",
 		"#navbar-new",
 		".navbar-new",
 		".dropdown-navbar-new",
 		".dropdown-new",
+		".navbar .btn-new",
+		".navbar .btn-new-doc",
 		".navbar .btn-primary",
 	].join(", ");
 	let renderFrame = null;
@@ -74,8 +79,9 @@
 		{
 			label: "人事",
 			icon: "people",
-			route: "/desk/employee",
+			route: "/desk/personnel-home",
 			keys: [
+				"personnel-home",
 				"personnel",
 				"employee",
 				"employee-detail",
@@ -439,7 +445,8 @@
 	}
 
 	function isDeskPage() {
-		return window.location.pathname === "/desk" || window.location.pathname.indexOf("/desk/") === 0;
+		const path = window.location.pathname;
+		return path === "/desk" || path.indexOf("/desk/") === 0 || path === "/app" || path.indexOf("/app/") === 0;
 	}
 
 	function routeSlug() {
@@ -467,8 +474,9 @@
 	function activeLabel() {
 		const slug = routeSlug();
 		if (isDingtalkIntegrationRoute()) return "";
+		// 人事首页是人事模块的首个页面，不能落入“更多”的兜底状态。
+		if (slug === "personnel-home" || slug === "personnel" || slug === "employee") return "人事";
 		if (slug === "hrms-workbench") return "主页";
-		if (slug === "personnel" || slug === "employee") return "人事";
 		const match = modules.find((module) => module.keys.some((key) => slug === key || slug.indexOf(`${key}/`) === 0));
 		return match ? match.label : "";
 	}
@@ -1005,11 +1013,11 @@
 		// has changed the class names between Desk versions, hence the attribute
 		// fallback for the search input below.
 		document.querySelectorAll(REDUNDANT_FRAMEWORK_CONTROL_SELECTOR).forEach((element) => element.remove());
-		document.querySelectorAll(".navbar input").forEach((input) => {
+		document.querySelectorAll(".navbar input, #navbar-search input, .navbar-search input").forEach((input) => {
 			const placeholder = String(input.getAttribute("placeholder") || "").toLowerCase();
 			const ariaLabel = String(input.getAttribute("aria-label") || "").toLowerCase();
 			if (input.type !== "search" && !placeholder.includes("search") && !placeholder.includes("搜索") && !ariaLabel.includes("search") && !ariaLabel.includes("搜索")) return;
-			(input.closest("form, .input-group, .form-group, .search, .search-bar") || input).remove();
+			(input.closest("form, .input-group, .form-group, .search, .search-bar, .search-wrapper, .search-container, .search-box, .awesomebar") || input).remove();
 		});
 	}
 

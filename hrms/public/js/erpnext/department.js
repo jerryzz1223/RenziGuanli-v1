@@ -8,6 +8,7 @@ const FOCUSED_DEPARTMENT_FIELDS = [
 	"hrms_org_level",
 	"hrms_org_role",
 	"hrms_org_manager",
+	"hrms_org_card_content",
 	"hrms_roster_assignable",
 ];
 const HIDDEN_DEPARTMENT_FIELDS = [
@@ -82,6 +83,7 @@ function localize_department_form_labels(frm) {
 		hrms_org_level: "组织层级（数字越小越高）",
 		hrms_org_role: "组织角色",
 		hrms_org_manager: "负责人",
+		hrms_org_card_content: "架构图卡片说明",
 		hrms_roster_assignable: "允许花名册归属（仅末级）",
 	};
 	Object.entries(labels).forEach(([fieldname, label]) => {
@@ -103,6 +105,12 @@ function configure_focused_department_form(frm) {
 	}
 	if (frm.fields_dict.hrms_roster_assignable) {
 		frm.set_df_property("hrms_roster_assignable", "description", __("只为实际填入员工花名册的末级部门勾选。"));
+	}
+	if (frm.fields_dict.hrms_org_manager) {
+		frm.set_df_property("hrms_org_manager", "description", __("可填写多位负责人，用顿号、逗号或换行分隔。"));
+	}
+	if (frm.fields_dict.hrms_org_card_content) {
+		frm.set_df_property("hrms_org_card_content", "description", __("仅显示在来源单元格对应的原表架构卡片中，不改变部门层级。"));
 	}
 	set_parent_department_query(frm);
 }

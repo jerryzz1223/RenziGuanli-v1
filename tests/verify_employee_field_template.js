@@ -21,6 +21,14 @@ const settingsCenterPath = path.join(
 	"hr_settings_center.js",
 );
 const employeeFormPath = path.join(root, "hrms", "public", "js", "erpnext", "employee.js");
+const employeeTabMigrationPath = path.join(
+	root,
+	"hrms",
+	"patches",
+	"v16_0",
+	"convert_employee_tabs_to_sections.py",
+);
+const employeeFormCssPath = path.join(root, "hrms", "public", "css", "hrms_top_nav.css");
 const templateJsonPath = path.join(
 	root,
 	"hrms",
@@ -57,6 +65,8 @@ const api = read(apiPath);
 const settingsPage = read(settingsPagePath);
 const settingsCenter = read(settingsCenterPath);
 const employeeForm = read(employeeFormPath);
+const employeeTabMigration = read(employeeTabMigrationPath);
+const employeeFormCss = read(employeeFormCssPath);
 
 if (templateJson.name !== "HRMS Employee Field Template" || templateJson.issingle !== 1) {
 	throw new Error("HRMS Employee Field Template must be a Single DocType.");
@@ -175,6 +185,25 @@ if (!employeeForm.includes('frm.toggle_display("naming_series", false);')) {
 }
 
 for (const marker of [
+	'"fieldname": "custom_native_place",\n\t\t"fieldtype": "Select",',
+	'"fieldname": "custom_ethnicity",\n\t\t"fieldtype": "Select",',
+	'"fieldname": "custom_ethnicity",',
+	"员工籍贯所属的中国省级行政区",
+	"中国 56 个民族",
+	"北京市",
+	"台湾省",
+	"汉族",
+	"基诺族",
+	"ensure_employee_china_profile_selectors",
+]) {
+	mustInclude(api, marker, `Chinese employee profile selector is missing marker: ${marker}`);
+}
+
+if (api.includes('"fieldtype": "Autocomplete",')) {
+	throw new Error("Frappe does not support Autocomplete employee custom fields; use Select.");
+}
+
+for (const marker of [
 	"frappe.pages[\"hr-settings-center\"]",
 	"字段管理中心",
 	"字段别名配置",
@@ -222,15 +251,12 @@ if (settingsPage.includes("fieldname: \"field_label\",\n\t\t\t\t\tfieldtype: \"D
 
 for (const marker of [
 	"apply_employee_field_template",
+	"__hrms_employee_template_request_id",
 	"prepare_employee_save_defaults",
 	"remember_employee_list_return",
 	"return_to_employee_roster_after_insert",
 	"setup_employee_form_defaults",
 	"setup_employee_gender_field",
-	"group_employee_fields_by_template",
-	"restore_employee_form_controls",
-	"get_employee_form_control_wrapper",
-	"EMPLOYEE_FORM_CATEGORY_SECTIONS",
 	"EMPLOYEE_GENDER_VALUES",
 	"hrms.api.employee_field_template.get_employee_field_template",
 	"frm.toggle_display",
@@ -247,13 +273,6 @@ for (const marker of [
 	"field.fieldtype",
 	"create_user_automatically",
 	"frm.set_value(\"create_user_automatically\", 0)",
-	"基础信息",
-	"在职信息",
-	"联系信息",
-	"合同信息",
-	"工资社保",
-	"个税信息",
-	"附件",
 	"create_user_permission",
 	"frappe.set_route(\"List\", \"Employee\")",
 ]) {
@@ -262,6 +281,48 @@ for (const marker of [
 
 if (!employeeForm.includes("!managed_fieldnames.has(field.fieldname)")) {
 	throw new Error("Employee form must hide template-controlled fields that are not present/enabled in the template.");
+}
+
+if (!employeeForm.includes("frm.__hrms_employee_template_request_id !== request_id")) {
+	throw new Error("Employee form must ignore stale template responses during refresh.");
+}
+
+if (employeeForm.includes(".detach()") || employeeForm.includes(".remove()")) {
+	throw new Error("Employee form must retain its one native control tree without moving or removing form pages.");
+}
+
+for (const marker of [
+	"EMPLOYEE_TAB_FIELDNAMES",
+	"frappe.db.delete",
+	'"Property Setter"',
+	'"fieldtype"',
+	'"Section Break"',
+	"frappe.clear_cache(doctype=EMPLOYEE_DOCTYPE)",
+]) {
+	mustInclude(employeeTabMigration, marker, `Employee tab metadata repair missing marker: ${marker}`);
+}
+
+if (employeeForm.includes("enable_employee_native_single_page") || employeeForm.includes("hrms-employee-single-page")) {
+	throw new Error("Employee form must not use a second client-side page layout.");
+}
+
+for (const marker of [
+	"show_employee_form_as_one_page",
+	'$(frm.wrapper).addClass("hrms-employee-one-page")',
+	"tab.wrapper.addClass(\"show active\")",
+	"window.requestAnimationFrame",
+]) {
+	mustInclude(employeeForm, marker, `Employee native one-page display missing marker: ${marker}`);
+}
+
+mustInclude(
+	employeeFormCss,
+	"#employee-basic_details_tab",
+	"Employee one-page display must remove the tab navigation bar.",
+);
+
+if (employeeForm.includes(".detach()") || employeeForm.includes(".remove()") || employeeFormCss.includes("display: contents !important")) {
+	throw new Error("Employee one-page display must not move controls or flatten Frappe's grid containers.");
 }
 
 for (const marker of [

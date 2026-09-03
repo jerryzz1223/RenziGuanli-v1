@@ -2,12 +2,17 @@
 // For license information, please see license.txt
 
 frappe.ui.form.on("Employee", {
+	onload_post_render: function (frm) {
+		show_employee_form_as_one_page(frm);
+	},
+
 	refresh: function (frm) {
-		if (redirect_existing_employee_form_to_detail(frm)) return;
 		remember_employee_list_return(frm);
 		setup_employee_form_defaults(frm);
 		setup_employee_gender_field(frm);
+		setup_employee_work_nature_field(frm);
 		apply_employee_field_template(frm);
+		show_employee_form_as_one_page(frm);
 		setup_personnel_employee_detail(frm);
 
 		frm.set_query("payroll_cost_center", function () {
@@ -55,108 +60,21 @@ frappe.ui.form.on("Employee", {
 		prepare_employee_save_defaults(frm);
 	},
 
+	custom_work_nature(frm) {
+		apply_employee_work_nature_choice(frm, frm.doc.custom_work_nature);
+	},
+
 	after_save(frm) {
+		setup_employee_work_nature_field(frm);
+		sync_employee_work_nature_dependent_fields(frm);
 		return_to_employee_roster_after_insert(frm);
 	},
 });
 
-function redirect_existing_employee_form_to_detail(frm) {
-	if (frm.is_new()) return false;
-	if (frm.__hrms_return_to_employee_roster) return false;
-	const route = frappe.get_route();
-	if (route[0] !== "Form" || route[1] !== "Employee" || route[2] !== frm.doc.name) return false;
-	if (consume_employee_form_edit_access(frm.doc.name)) return false;
-	if (frm.__hrms_employee_detail_redirecting) return true;
-	frm.__hrms_employee_detail_redirecting = true;
-	// The page is created by migration. Do not wait for a server round-trip
-	// here: doing so lets the native form render first and caused the old
-	// "refresh once to enter employee detail" behaviour.
-	frappe.set_route("employee-detail", frm.doc.name);
-	return true;
-}
-
-const EMPLOYEE_FORM_EDIT_ACCESS_KEY = "hrms_allow_employee_form_name";
-
-function mark_employee_form_edit_access(employee) {
-	const name = String(employee || "");
-	if (!name) return;
-	window.__hrms_employee_form_edit_name = name;
-	try {
-		sessionStorage.setItem(EMPLOYEE_FORM_EDIT_ACCESS_KEY, name);
-	} catch (error) {
-		// Private browsing can block session storage; the in-memory marker still
-		// covers the current Desk navigation.
-	}
-}
-
-function is_employee_form_edit_access_allowed(employee) {
-	const name = String(employee || "");
-	if (!name) return false;
-	if (window.__hrms_employee_form_edit_name === name) return true;
-	try {
-		return sessionStorage.getItem(EMPLOYEE_FORM_EDIT_ACCESS_KEY) === name;
-	} catch (error) {
-		return false;
-	}
-}
-
-function consume_employee_form_edit_access(employee) {
-	if (frappe.route_options && frappe.route_options.hrms_allow_employee_form) {
-		frappe.route_options = null;
-		return true;
-	}
-	if (!is_employee_form_edit_access_allowed(employee)) return false;
-
-	window.__hrms_employee_form_edit_name = null;
-	try {
-		sessionStorage.removeItem(EMPLOYEE_FORM_EDIT_ACCESS_KEY);
-	} catch (error) {
-		// No action needed when session storage is unavailable.
-	}
-	return true;
-}
-
-function redirect_employee_form_route_to_detail() {
-	const route = frappe.get_route();
-	if (route[0] !== "Form" || route[1] !== "Employee" || !route[2]) return;
-	// frappe.new_doc() first opens a temporary route such as
-	// "new-employee-wefamctblb".  It is not an existing Employee name, so
-	// redirecting it to the read-only detail page turns a normal create action
-	// into a misleading “not found” error.
-	if (is_new_employee_form_route(route[2])) return;
-	if (is_employee_form_edit_access_allowed(route[2])) return;
-	if (frappe.route_options && frappe.route_options.hrms_allow_employee_form) return;
-	frappe.set_route("employee-detail", route[2]);
-}
-
-function is_new_employee_form_route(route_name) {
-	return /^new-employee(?:-|$)/.test(String(route_name || ""));
-}
-
-function bind_employee_detail_route_redirect() {
-	if (window.__hrms_employee_detail_route_redirect_bound || !frappe.router || typeof frappe.router.on !== "function") return;
-	window.__hrms_employee_detail_route_redirect_bound = true;
-
-	let timer;
-	const schedule_redirect = () => {
-		window.clearTimeout(timer);
-		timer = window.setTimeout(redirect_employee_form_route_to_detail, 0);
-	};
-
-	frappe.router.on("change", schedule_redirect);
-	window.addEventListener("hashchange", schedule_redirect);
-	window.addEventListener("popstate", schedule_redirect);
-}
-
 window.hrmsEmployeeNavigation = window.hrmsEmployeeNavigation || {};
 window.hrmsEmployeeNavigation.openEmployeeFormForEdit = function (employee) {
-	mark_employee_form_edit_access(employee);
 	frappe.set_route("Form", "Employee", employee);
 };
-
-// This is a fallback for direct native-form URLs and third-party links. The
-// roster itself intercepts its click before the native form is opened.
-bind_employee_detail_route_redirect();
 
 function remember_employee_list_return(frm) {
 	if (!frm.is_new()) return;
@@ -197,27 +115,54 @@ function return_to_employee_roster_after_insert(frm) {
 	}, 350);
 }
 
-const EMPLOYEE_FORM_CATEGORY_SECTIONS = [
-	{ category: "个人信息", label: "基础信息" },
-	{ category: "教育信息", label: "教育信息" },
-	{ category: "在职信息", label: "在职信息" },
-	{ category: "联系信息", label: "联系信息" },
-	{ category: "合同保险", label: "合同信息" },
-	{ category: "工资社保", label: "工资社保" },
-	{ category: "个税申报", label: "个税信息" },
-	{ category: "附件", label: "附件" },
-];
-
-const EMPLOYEE_FORM_WIDE_FIELDNAMES = new Set([
-	"current_address",
-	"permanent_address",
-	"family_background",
-	"health_details",
-	"bio",
-]);
-
-const EMPLOYEE_FORM_WIDE_FIELDTYPES = new Set(["Small Text", "Text", "Text Editor", "Long Text"]);
 const EMPLOYEE_GENDER_VALUES = ["Male", "Female", "Other"];
+const EMPLOYEE_WORK_NATURE_VALUES = ["在职·正式", "在职·试用期", "退休返聘", "待离职", "离职"];
+function setup_employee_work_nature_field(frm) {
+	const field = frm.fields_dict.custom_work_nature;
+	if (!field) return;
+	// This Select field is the persisted HR source. Do not overlay a temporary
+	// control on top of `employment_type`, or the roster would have to infer the
+	// choice from implementation fields after every save.
+	frm.set_df_property("custom_work_nature", "label", __("工作性质"));
+	frm.set_df_property("custom_work_nature", "options", EMPLOYEE_WORK_NATURE_VALUES.join("\n"));
+}
+
+function apply_employee_work_nature_choice(frm, work_nature) {
+	// The selector is business-facing, while `employment_type` remains a Link
+	// to standard Employment Type records.  Always write valid linked values
+	// plus every dependent Employee field, rather than saving the display label
+	// and letting Frappe reject it as a missing Link record.
+	const updates = {
+		"在职·正式": { employment_type: "Full-time", status: "Active", custom_is_confirmed: "是", relieving_date: null },
+		"在职·试用期": { employment_type: "Full-time", status: "Active", custom_is_confirmed: "否", relieving_date: null },
+		"退休返聘": { employment_type: "Retainer", status: "Active", relieving_date: null },
+		"待离职": { employment_type: "Full-time", status: "Inactive", relieving_date: null },
+		"离职": { employment_type: "Full-time", status: "Left" },
+	};
+	const values = updates[work_nature];
+	if (!values) return;
+	Object.entries(values).forEach(([fieldname, value]) => {
+		if (Object.hasOwn(frm.doc, fieldname)) frm.set_value(fieldname, value);
+	});
+	sync_employee_work_nature_dependent_fields(frm);
+}
+
+function sync_employee_work_nature_dependent_fields(frm) {
+	const is_leaving = frm.doc.status === "Left";
+	if (!frm.fields_dict.relieving_date) return;
+
+	frm.toggle_display("relieving_date", is_leaving);
+	frm.set_df_property("relieving_date", "reqd", is_leaving);
+}
+
+function get_employee_work_nature_display(employee = {}) {
+	if (EMPLOYEE_WORK_NATURE_VALUES.includes(employee.employment_type)) return employee.employment_type;
+	if (employee.status === "Left") return "离职";
+	if (employee.status === "Inactive") return "待离职";
+	if (employee.employment_type === "Retainer") return "退休返聘";
+	if (employee.employment_type === "Probation" || employee.custom_is_confirmed === "否") return "在职·试用期";
+	return "在职·正式";
+}
 
 function setup_employee_gender_field(frm) {
 	if (!frm.fields_dict.gender) return;
@@ -234,9 +179,16 @@ function setup_employee_gender_field(frm) {
 }
 
 function apply_employee_field_template(frm) {
+	const request_id = (frm.__hrms_employee_template_request_id || 0) + 1;
+	frm.__hrms_employee_template_request_id = request_id;
+
 	frappe
 		.call("hrms.api.employee_field_template.get_employee_field_template")
 		.then((r) => {
+			// A refresh can start another request while this one is in flight. Only
+			// the latest response may alter or reveal the form, otherwise the native
+			// layout can briefly reappear before the template layout is restored.
+			if (frm.__hrms_employee_template_request_id !== request_id) return;
 			const template = r.message;
 			if (!template || !template.enabled || !Array.isArray(template.fields)) return;
 
@@ -276,8 +228,24 @@ function apply_employee_field_template(frm) {
 				}
 			});
 
-			setTimeout(() => group_employee_fields_by_template(frm, template), 100);
+			sync_employee_work_nature_dependent_fields(frm);
+			show_employee_form_as_one_page(frm);
+		})
+		.catch(() => {});
+}
+
+function show_employee_form_as_one_page(frm) {
+	$(frm.wrapper).addClass("hrms-employee-one-page");
+
+	// Tab Breaks are the source of Frappe's original per-tab column layout.
+	// Do not reparent their controls or replace the layout.  Giving each
+	// already-visible pane its normal Bootstrap active state simply places all
+	// native panes in the same scrolling Employee document.
+	window.requestAnimationFrame(() => {
+		(frm.layout?.tabs || []).forEach((tab) => {
+			if (!tab.hidden) tab.wrapper.addClass("show active");
 		});
+	});
 }
 
 function apply_configured_field_label(frm, field, configured_field) {
@@ -288,74 +256,6 @@ function apply_configured_field_label(frm, field, configured_field) {
 function apply_configured_field_required(frm, field, configured_field) {
 	if (!configured_field || !frm.fields_dict[field.fieldname]) return;
 	frm.set_df_property(field.fieldname, "reqd", Boolean(configured_field.required));
-}
-
-function group_employee_fields_by_template(frm, template) {
-	const fields = (template.fields || []).filter(
-		(field) => field.enabled && field.form_visible !== 0 && frm.fields_dict[field.fieldname],
-	);
-	if (!fields.length) return;
-
-	const body = $(frm.wrapper).find(".form-layout, .form-page").first();
-	if (!body.length) return;
-
-	// A refresh may apply the template again. Put controls back before
-	// discarding the prior presentation container so Frappe retains the same
-	// control instances and the form never accumulates a second layout layer.
-	restore_employee_form_controls(frm, body);
-	$(frm.wrapper).find(".hrms-employee-empty-native-section").removeClass("hrms-employee-empty-native-section");
-	const container = $(`<div class="hrms-employee-form-template-sections"></div>`);
-	body.prepend(container);
-
-	const fields_by_category = new Map();
-	fields.forEach((field) => {
-		const category = EMPLOYEE_FORM_CATEGORY_SECTIONS.some((section) => section.category === field.category)
-			? field.category
-			: "个人信息";
-		const category_fields = fields_by_category.get(category) || [];
-		category_fields.push(field);
-		fields_by_category.set(category, category_fields);
-	});
-
-	EMPLOYEE_FORM_CATEGORY_SECTIONS.forEach((section) => {
-		const category_fields = fields_by_category.get(section.category);
-		if (!category_fields?.length) return;
-
-		const section_wrapper = $(`
-			<section class="hrms-employee-form-section" data-employee-section="${section.category}">
-				<div class="section-head hrms-employee-form-section__heading">${__(section.label)}</div>
-				<div class="hrms-employee-form-section__grid"></div>
-			</section>
-		`);
-		const grid = section_wrapper.find(".hrms-employee-form-section__grid");
-		container.append(section_wrapper);
-
-		category_fields.forEach((field) => {
-			const control = frm.fields_dict[field.fieldname];
-			const wrapper = get_employee_form_control_wrapper(control);
-			if (!wrapper.length || wrapper.hasClass("hide-control")) return;
-			const is_wide =
-				EMPLOYEE_FORM_WIDE_FIELDNAMES.has(field.fieldname) ||
-				EMPLOYEE_FORM_WIDE_FIELDTYPES.has(field.fieldtype);
-			const field_slot = $("<div class=\"hrms-employee-form-field\"></div>")
-				.attr("data-fieldname", field.fieldname)
-				.toggleClass("hrms-employee-form-field--wide", is_wide);
-			if (wrapper.length) field_slot.append(wrapper);
-			grid.append(field_slot);
-		});
-	});
-
-	// Fields are moved out of Frappe's original section columns.  Hide the now
-	// empty containers so the native layout cannot leave large visual gaps
-	// between the personnel sections.
-	body
-		.find(".form-section")
-		.not(".hrms-employee-form-section")
-		.each(function () {
-			if (!$(this).find(".frappe-control").length) {
-				$(this).addClass("hrms-employee-empty-native-section");
-			}
-		});
 }
 
 function setup_personnel_employee_detail(frm) {
@@ -377,22 +277,4 @@ function setup_personnel_employee_detail(frm) {
 			company: frm.doc.company,
 		});
 	});
-}
-
-function restore_employee_form_controls(frm, body) {
-	const existing_sections = $(frm.wrapper).find(".hrms-employee-form-template-sections");
-	if (!existing_sections.length) return;
-
-	existing_sections.find(".frappe-control").each(function () {
-		$(this).detach().appendTo(body);
-	});
-	existing_sections.remove();
-}
-
-function get_employee_form_control_wrapper(control) {
-	if (!control?.wrapper) return $();
-	const control_wrapper = $(control.wrapper);
-	return control_wrapper.closest(".frappe-control").length
-		? control_wrapper.closest(".frappe-control")
-		: control_wrapper;
 }

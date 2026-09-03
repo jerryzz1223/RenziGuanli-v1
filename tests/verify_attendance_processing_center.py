@@ -53,6 +53,7 @@ for method in (
 	"export_processing_result",
 	"get_processing_record",
 	"update_processing_record",
+	"update_special_hours_manual_entry",
 	"bulk_update_processing_records",
 	"confirm_source_result",
 	"list_processing_exceptions",
@@ -65,6 +66,7 @@ for method in (
 	"upsert_department_mapping",
 	"generate_monthly_final_files",
 	"get_monthly_final_preview",
+	"update_monthly_final_rows",
 ):
 	require(api, f"def {method}(", f"Processing-center API is missing {method}.")
 
@@ -86,6 +88,7 @@ for marker in (
 	"月度终稿来源未完备",
 	"FINAL_SIGNED_COLUMNS",
 	"FINAL_FINANCE_COLUMNS",
+	"MONTHLY_FINAL_WEB_EDITABLE_FIELDS",
 	"_monthly_final_rows",
 	"monthly_final_outputs",
 	"_monthly_snapshot_version",
@@ -240,9 +243,10 @@ process_body = api[process_start:] if process_end == -1 else api[process_start:p
 for marker in ('batch.status = "已确认"', "wait for a second source-confirmation"):
 	require(process_body, marker, f"One-step source processing missing: {marker}")
 
-# Full-attendance and special-hours files are attendance-only one-time
-# imports.  Their validation errors remain traceable on the source result, but
-# must not create manual-review tasks or a secondary data-processing path.
+# Monthly support validation errors remain traceable on the source result, but
+# must not create manual-review tasks.  Special hours is the sole exception to
+# the import-only UI: its approved date-level correction overlay is audited
+# separately from validation errors.
 monthly_start = api.find("def _process_monthly_support_rows(")
 monthly_end = api.find("\n\ndef _simple_sheet_rows", monthly_start)
 monthly_body = api[monthly_start:monthly_end]
@@ -254,6 +258,36 @@ for marker in (
 	require(monthly_body, marker, f"One-time monthly-import contract missing: {marker}")
 if '"review_status": "待审核" if exception_codes else "无需审核"' in monthly_body:
 	raise AssertionError("Monthly support validation errors must not enter the manual-review queue.")
+
+manual_special_start = api.find("def update_special_hours_manual_entry(")
+manual_special_end = api.find("\n\n@frappe.whitelist()", manual_special_start + 1)
+manual_special_body = api[manual_special_start:] if manual_special_end == -1 else api[manual_special_start:manual_special_end]
+for marker in (
+	"_require_processing_manager()",
+	"_special_hours_entries_with_manual_change",
+	"attendance_codes",
+	'"field_name": f"special_hours_days:{day}"',
+	'"processed_result_refresh_reason": "special_hours_manual_update"',
+	"原始导入和本次修改记录均已保留",
+):
+	require(manual_special_body, marker, f"Special-hours manual correction contract missing: {marker}")
+
+web_final_edit_start = api.find("def update_monthly_final_rows(")
+web_final_edit_end = api.find("\n\n@frappe.whitelist()", web_final_edit_start + 1)
+web_final_edit_body = api[web_final_edit_start:] if web_final_edit_end == -1 else api[web_final_edit_start:web_final_edit_end]
+for marker in (
+	"_require_processing_manager()",
+	"monthly_final_outputs",
+	"previous_locked_snapshot_version",
+	"__web_monthly_final__",
+	"MONTHLY_FINAL_WEB_EDITABLE_FIELDS",
+	"请重新锁定并生成员工签字版和财务版",
+):
+	require(web_final_edit_body, marker, f"Monthly-final web edit contract missing: {marker}")
+if 'reason: str = ""' not in api[web_final_edit_start:web_final_edit_start + 160]:
+	raise AssertionError("Monthly-final web editing must not require a user-entered reason.")
+if 'audit_reason = (reason or "").strip() or _("网页终稿修改")' not in web_final_edit_body:
+	raise AssertionError("Monthly-final web edits must retain an automatic audit reason.")
 
 finalization_start = api.find("def _finalization_inputs(")
 finalization_end = api.find("\n\nFINAL_SIGNED_COLUMNS", finalization_start)
@@ -282,9 +316,9 @@ require(get_batch_body, '"employee_recognition": _monthly_final_employee_recogni
 # Every callable API must authorize before accessing the batch/record data.
 for method in (
 	"get_processing_batch", "register_source_file", "register_monthly_support_file", "bulk_import_and_process_sources", "precheck_monthly_support_file", "process_monthly_support_file", "confirm_monthly_support_file", "precheck_source_slot", "process_source_slot",
-	"list_processing_results", "export_processing_result", "get_processing_record", "update_processing_record", "bulk_update_processing_records", "confirm_source_result",
+	"list_processing_results", "export_processing_result", "get_processing_record", "update_processing_record", "update_special_hours_manual_entry", "bulk_update_processing_records", "confirm_source_result",
 	"list_processing_exceptions", "list_processing_batches", "list_daily_attendance_records", "reset_attendance_month", "list_manual_adjustments",
-	"get_processing_configuration", "list_department_mappings", "upsert_department_mapping", "generate_monthly_final_files", "get_monthly_final_preview",
+	"get_processing_configuration", "list_department_mappings", "upsert_department_mapping", "generate_monthly_final_files", "get_monthly_final_preview", "update_monthly_final_rows",
 ):
 	start = api.find(f"def {method}(")
 	end = api.find("\n@frappe.whitelist()", start + 1)

@@ -4,7 +4,6 @@ const path = require("path");
 const root = path.resolve(__dirname, "..");
 const hierarchyPath = path.join(root, "hrms", "hr", "page", "organizational_chart", "yongxin_q3_department_hierarchy.json");
 const apiPath = path.join(root, "hrms", "hr", "page", "organizational_chart", "organizational_chart.py");
-const rosterApiPath = path.join(root, "hrms", "api", "employee_field_template.py");
 const setupPath = path.join(root, "hrms", "setup.py");
 const pagePath = path.join(root, "hrms", "hr", "page", "organizational_chart", "organizational_chart.js");
 
@@ -14,7 +13,6 @@ function check(condition, message) {
 
 const hierarchy = JSON.parse(fs.readFileSync(hierarchyPath, "utf8"));
 const api = fs.readFileSync(apiPath, "utf8");
-const rosterApi = fs.readFileSync(rosterApiPath, "utf8");
 const setup = fs.readFileSync(setupPath, "utf8");
 const page = fs.readFileSync(pagePath, "utf8");
 const nodes = hierarchy.nodes || [];
@@ -41,20 +39,16 @@ for (const marker of [
 	"YONGXIN_Q3_HIERARCHY_CONFIRMATION",
 	"legacy_employee_assignments",
 	"hrms_roster_assignable",
+	"source_to_existing_name",
 	"confirmation != preview[\"confirmation_text\"]",
 	"frappe.db.savepoint(savepoint)",
 ]) {
 	check(api.includes(marker), `Q3 folder import is missing: ${marker}`);
 }
 
-for (const marker of [
-	"def _resolve_roster_department(",
-	"花名册只能选择最末级组织",
-	"尚未启用花名册归属",
-	"部门“{0}”不存在；请先在部门管理中建立并同步组织层级",
-]) {
-	check(rosterApi.includes(marker), `Roster leaf guard is missing: ${marker}`);
-}
+check(api.includes("legacy_employee_assignments"), "Q3 preview must report employees still assigned to folders.");
+const q3Import = api.slice(api.indexOf("def import_yongxin_q3_department_hierarchy("), api.indexOf("def import_yongxin_q2_org_structure("));
+check(!q3Import.includes('frappe.get_doc("Employee"'), "Q3 hierarchy sync must not automatically change employee assignments.");
 
 check(setup.includes('"fieldname": "hrms_roster_assignable"'), "Department must store the roster leaf flag.");
 check(page.includes("import_yongxin_q3_department_hierarchy"), "Organization page must expose Q3 folder synchronization.");

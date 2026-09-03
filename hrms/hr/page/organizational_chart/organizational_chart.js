@@ -42,9 +42,9 @@ class HybridOrganizationChart {
 		this.report_data = null;
 		this.report_loading = false;
 		this.multiple_position_draft = null;
-		// Live is the only editable source.  The original workbook remains a
-		// comparison view, never the default hierarchy users accidentally edit.
-		this.source_mode = "live";
+		// The workbook owns the chart structure. Department fields only provide
+		// explicit presentation overrides for source-cell-mapped cards.
+		this.source_mode = "workbook_snapshot";
 		this.fullscreen_bound = false;
 	}
 
@@ -114,11 +114,8 @@ class HybridOrganizationChart {
 		this.page.add_inner_button(__("全屏查看"), () => this.toggle_fullscreen());
 		this.page.add_inner_button(__("展开全部"), () => this.expand_all());
 		this.page.add_inner_button(__("收起全部"), () => this.collapse_all());
-		this.page.add_inner_button(__("多岗位导入预览"), () => this.preview_multiple_position_import());
-		this.page.add_inner_button(__("建立多岗位草稿"), () => this.create_multiple_position_draft());
 		this.page.add_inner_button(__("同步2026Q3架构"), () => this.import_yongxin_q3_department_hierarchy());
 		this.page.add_inner_button(__("导出 Excel"), () => this.export_chart());
-		window.hrmsFormImport?.addPageActions(this.page, "org_structure", "组织架构与编制", "表单导入");
 		this.page.set_primary_action(__("新增部门"), () => this.add_department());
 	}
 
@@ -136,7 +133,7 @@ class HybridOrganizationChart {
 						<div>
 							<strong class="hrms-org-toolbar-title">${__("部门层级与人员归属")}</strong>
 							<small class="hrms-org-source" data-source-label>${__("正在读取组织架构来源...")}</small>
-							<small class="hrms-org-builder-hint">${__("实时组织：拖动部门、岗位或人员到目标节点，即同步部门、岗位与花名册。")}</small>
+							<small class="hrms-org-builder-hint">${__("实时组织与部门管理共用同一上下级关系；Q3 同步仅在输入确认文字后才会写入部门层级。")}</small>
 						</div>
 						<div class="hrms-org-search">
 							<input class="form-control" data-search placeholder="${__("搜索部门、员工、岗位")}" />
@@ -322,14 +319,6 @@ class HybridOrganizationChart {
 			"input",
 			frappe.utils.debounce((event) => this.filter_tree(event.target.value), 180),
 		);
-		this.wrapper.addEventListener("dragstart", (event) => this.handle_drag_start(event));
-		this.wrapper.addEventListener("dragover", (event) => this.handle_drag_over(event));
-		this.wrapper.addEventListener("dragleave", (event) => this.handle_drag_leave(event));
-		this.wrapper.addEventListener("drop", (event) => this.handle_drop(event));
-		this.wrapper.addEventListener("dragend", () => {
-			this.dragged_node_id = null;
-			this.clear_drag_targets();
-		});
 	}
 
 	handle_action(action, element) {
@@ -427,7 +416,7 @@ class HybridOrganizationChart {
 				method: "hrms.hr.page.organizational_chart.organizational_chart.get_hybrid_tree",
 				args: { company, source_mode: this.source_mode },
 				freeze: true,
-				freeze_message: __("正在生成组织架构图..."),
+				freeze_message: __("正在读取部门层级关系..."),
 			})
 			.then((r) => {
 				if (request_id !== this.tree_request_id || company !== this.company || !this.is_active()) return;
@@ -453,6 +442,7 @@ class HybridOrganizationChart {
 
 	find_initial_department_node(node) {
 		if (!node) return null;
+		if (node.node_type === "organization_node") return node;
 		if (node.node_type === "department") return node;
 		for (const child of node.children || []) {
 			const department = this.find_initial_department_node(child);
@@ -546,7 +536,7 @@ class HybridOrganizationChart {
 	render_source_label() {
 		const label = this.wrapper.querySelector("[data-source-label]");
 		if (!label) return;
-		label.textContent = this.tree?.source_label || (this.source_mode === "live" ? __("实时组织主数据") : __("原表组织架构"));
+		label.textContent = this.tree?.source_label || (this.source_mode === "live" ? __("部门管理文件夹树") : __("原表组织架构（只读对照）"));
 	}
 
 	set_source_mode(source_mode) {
@@ -585,8 +575,10 @@ class HybridOrganizationChart {
 		const children = node.children || [];
 		const has_children = children.length > 0;
 		const department = this.get_node_department(node);
-		const editable = ["department", "work_level", "position_group"].includes(node.node_type);
-		const movable = this.source_mode === "live" && ["department", "position_group", "employee"].includes(node.node_type);
+		const editable =
+			["department", "work_level", "position_group"].includes(node.node_type) ||
+			(this.source_mode === "workbook_snapshot" && Boolean(node.department));
+		const movable = false;
 		return `
 			<li class="${collapsed ? "is-collapsed" : ""}">
 				<div
@@ -616,6 +608,7 @@ class HybridOrganizationChart {
 						${this.render_node_heading(node)}
 						<span>${frappe.utils.escape_html(node.title || "")}</span>
 						${this.render_node_lines(node)}
+						${node.card_content ? `<p class="hrms-org-node-note">${frappe.utils.escape_html(node.card_content)}</p>` : ""}
 						${this.render_vacancy_marker(node)}
 						${
 							node.node_type === "employee"
@@ -671,7 +664,7 @@ class HybridOrganizationChart {
 				person.role,
 			])
 			.filter(Boolean);
-		return [node.name, node.title, node.department, ...(node.lines || []), ...people].filter(Boolean).join(" ");
+		return [node.name, node.title, node.card_content, node.department, ...(node.lines || []), ...people].filter(Boolean).join(" ");
 	}
 
 	render_node_lines(node) {
@@ -836,6 +829,7 @@ class HybridOrganizationChart {
 					}
 				</div>
 			</div>
+			${detail.card_content ? `<div class="hrms-org-detail-note">${frappe.utils.escape_html(detail.card_content)}</div>` : ""}
 			${this.render_department_relationships(detail.relationships || {})}
 			${this.render_employee_list(detail.employees || [])}
 		`;
@@ -1071,6 +1065,18 @@ class HybridOrganizationChart {
 		frappe.new_doc("Department");
 	}
 
+	add_organization_node() {
+		frappe.new_doc("Organization Node");
+	}
+
+	open_manual_version_list() {
+		frappe.set_route("List", "Organization Structure Version");
+	}
+
+	open_manual_node_list() {
+		frappe.set_route("List", "Organization Node");
+	}
+
 	quick_edit_node(element) {
 		const node_id = element?.dataset.nodeId || "";
 		const node_type = element?.dataset.nodeType || "";
@@ -1200,7 +1206,20 @@ class HybridOrganizationChart {
 			{ fieldname: "is_group", fieldtype: "Check", label: __("文件夹部门（可包含下级部门）"), default: doc.is_group },
 			{ fieldname: "hrms_org_level", fieldtype: "Int", label: __("组织层级（数字越小越高）"), default: doc.hrms_org_level },
 			{ fieldname: "hrms_org_role", fieldtype: "Data", label: __("组织角色"), default: doc.hrms_org_role },
-			{ fieldname: "hrms_org_manager", fieldtype: "Data", label: __("负责人"), default: doc.hrms_org_manager },
+			{
+				fieldname: "hrms_org_manager",
+				fieldtype: "Data",
+				label: __("部门负责人"),
+				description: __("可填写多位负责人，用顿号、逗号或换行分隔；每位人员仍以员工档案中的唯一正式职位显示。"),
+				default: doc.hrms_org_manager,
+			},
+			{
+				fieldname: "hrms_org_card_content",
+				fieldtype: "Small Text",
+				label: __("卡片说明"),
+				description: __("仅覆盖此来源单元格对应原表卡片的补充说明，不改变原表层级。"),
+				default: doc.hrms_org_card_content,
+			},
 			{ fieldname: "hrms_roster_assignable", fieldtype: "Check", label: __("允许花名册归属（仅末级）"), default: doc.hrms_roster_assignable },
 		];
 	}
@@ -1479,7 +1498,7 @@ class HybridOrganizationChart {
 
 	get_selected_department() {
 		const node_id = this.selected_node?.node_id || "";
-		return this.get_node_department(node_id, this.selected_node?.node_type);
+		return this.get_node_department(this.find_node(node_id) || node_id, this.selected_node?.node_type);
 	}
 
 	get_node_department(node_or_id, node_type = "") {
@@ -1487,8 +1506,8 @@ class HybridOrganizationChart {
 			const node = node_or_id;
 			node_type = node_or_id.node_type || node_type;
 			node_or_id = node_or_id.node_id || "";
-			if (!["department", "employee_group"].includes(node_type)) return null;
 			if (node.department) return node.department;
+			if (!["department", "employee_group"].includes(node_type)) return null;
 			if (node_type === "employee_group") return null;
 		}
 		const node_id = String(node_or_id || "");

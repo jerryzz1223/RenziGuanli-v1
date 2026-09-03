@@ -690,6 +690,7 @@ class EmployeeDetailPage {
 	}
 
 	is_probation_work_nature(header = {}) {
+		if (header.custom_work_nature) return header.custom_work_nature === "在职·试用期";
 		if (header.employment_type === "Probation" || header.custom_is_confirmed === "否") return true;
 		if (header.custom_is_confirmed === "是") return false;
 
@@ -699,6 +700,7 @@ class EmployeeDetailPage {
 	}
 
 	get_employment_type_display(header = {}) {
+		if (header.custom_work_nature) return header.custom_work_nature;
 		if (header.status === "Left") return __("离职");
 		if (header.status === "Inactive") return __("待离职");
 		if (header.employment_type === "Retainer") return __("退休返聘");
@@ -869,8 +871,8 @@ class EmployeeDetailPage {
 	}
 
 	render_readonly_field(field) {
-		const value = field.fieldname === "employment_type"
-			? this.get_employment_type_display({ ...this.detail?.header, employment_type: field.value })
+		const value = field.fieldname === "custom_work_nature"
+			? this.get_employment_type_display({ ...this.detail?.header, custom_work_nature: field.value })
 			: field.value;
 		return `
 			<div class="hrms-employee-detail-field">
@@ -974,15 +976,7 @@ class EmployeeDetailPage {
 		}
 		return `
 			<div class="hrms-employee-detail-related-detail">
-				<h4>${__("记录说明")}</h4>
-				<div class="hrms-employee-detail-related-description">${frappe.utils.escape_html(row.description || "")}</div>
-				<h4>${__("字段信息")}</h4>
-				<div class="hrms-employee-detail-related-fields">
-					${(row.fields || [])
-						.map((field) => `<span class="hrms-employee-detail-related-field-chip">${frappe.utils.escape_html(__(field))}</span>`)
-						.join("")}
-				</div>
-				${items.length ? this.render_related_items(items) : `<div class="text-muted">${__("当前没有记录，下面的字段是后续维护该资料时应填写的信息。")}</div>`}
+				${items.length ? this.render_related_items(items) : `<div class="text-muted">${__("暂无记录")}</div>`}
 				<div class="hrms-employee-detail-related-footer">
 					<span class="text-muted">${__("办理入口")}</span>
 					${

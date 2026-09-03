@@ -159,9 +159,16 @@ def get_custom_fields():
 				"insert_after": "hrms_org_manager",
 			},
 			{
+				"fieldname": "hrms_org_card_content",
+				"fieldtype": "Small Text",
+				"label": _("Organization Card Content"),
+				"description": _("Optional text shown on the source organization card."),
+				"insert_after": "hrms_org_proxy",
+			},
+			{
 				"fieldname": "hrms_org_column_break",
 				"fieldtype": "Column Break",
-				"insert_after": "hrms_org_proxy",
+				"insert_after": "hrms_org_card_content",
 			},
 			{
 				"fieldname": "hrms_planned_headcount",

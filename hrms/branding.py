@@ -6,6 +6,7 @@ from werkzeug.wrappers import Response
 BLANK_BRAND_ASSET = "/assets/hrms/images/blank-brand.svg"
 DEFAULT_DESK_BRAND_ASSET = "/assets/hrms/images/yongxin-brand-mark-red.png"
 LEGACY_DESK_BRAND_ASSET = "/assets/hrms/images/yongxin-brand-mark.png"
+DEFAULT_SPLASH_BRAND_ASSET = "/assets/hrms/images/yongxin-brand-mark.png"
 
 
 def serve_blank_for_undefined_image():
@@ -38,13 +39,14 @@ def ensure_default_desk_branding():
 
 
 def apply_login_page_customizations():
-	"""Keep the system login page neutral and focused on username/password login."""
+	"""Keep login neutral while using the Yongxin mark for the Desk splash screen."""
 	_set_supported_single_values(
 		"Website Settings",
 		{
 			"app_name": "人资管理系统",
 			"app_logo": BLANK_BRAND_ASSET,
 			"favicon": BLANK_BRAND_ASSET,
+			"splash_image": DEFAULT_SPLASH_BRAND_ASSET,
 		},
 	)
 	ensure_default_desk_branding()

@@ -1,0 +1,5 @@
+China provincial boundary data: Apache ECharts map/json/china.json.
+Source: https://apache.googlesource.com/echarts-www/+/3036115a067a405fce01ed37467cd06ffc32f60d/vendors/echarts/map/json/china.json
+Retrieved for this local HRMS build on 2026-09-03.  The original asset uses
+ECharts UTF8Encoding and is decoded locally by personnel_home.js; no external
+map service is requested by the browser at runtime.

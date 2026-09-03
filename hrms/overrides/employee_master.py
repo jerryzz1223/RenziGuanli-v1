@@ -8,9 +8,13 @@ from frappe.utils import add_years, cint, cstr, get_link_to_form, getdate
 from erpnext.setup.doctype.employee.employee import Employee
 
 
+WORK_NATURE_OPTIONS = ("在职·正式", "在职·试用期", "退休返聘", "待离职", "离职")
+
+
 class EmployeeMaster(Employee):
 	def validate(self):
 		self._apply_company_employee_code()
+		apply_employee_work_nature(self)
 		return super().validate()
 
 	def autoname(self):
@@ -37,6 +41,93 @@ class EmployeeMaster(Employee):
 		existing = frappe.db.get_value("Employee", {"custom_employee_code": code}, "name")
 		if existing and existing != self.name:
 			frappe.throw(_("公司员工号 {0} 已被员工档案 {1} 使用。").format(code, existing))
+
+
+def get_employee_work_nature(employee):
+	"""Return the one HR-facing work-nature label from standard Employee data."""
+	if employee.get("custom_work_nature") in WORK_NATURE_OPTIONS:
+		return employee.get("custom_work_nature")
+	if employee.get("employment_type") in WORK_NATURE_OPTIONS:
+		return employee.get("employment_type")
+	if employee.get("status") == "Left":
+		return "离职"
+	if employee.get("status") == "Inactive":
+		return "待离职"
+	if employee.get("employment_type") in {"Retainer", "退休返聘", "返聘"}:
+		return "退休返聘"
+	if employee.get("employment_type") == "Probation" or employee.get("custom_is_confirmed") == "否":
+		return "在职·试用期"
+	return "在职·正式"
+
+
+def _find_employment_type(*candidates):
+	for candidate in candidates:
+		if frappe.db.exists("Employment Type", candidate):
+			return candidate
+		name = frappe.db.get_value("Employment Type", {"employee_type_name": candidate}, "name")
+		if name:
+			return name
+	frappe.throw(_("未找到工作性质需要的基础资料：{0}。").format(" / ".join(candidates)))
+
+
+def apply_employee_work_nature(employee):
+	"""Apply the original work-nature field to the fields consumed by ERPNext.
+
+	The browser persists `custom_work_nature` as the one five-option HR control.
+	Before standard Employee validation it synchronises the stock Employment
+	Type/status values expected by attendance, payroll and separation code.
+	"""
+	if not employee.meta.has_field("employment_type"):
+		return
+
+	selected = cstr(employee.get("custom_work_nature")).strip()
+	selected_changed = employee.is_new() or employee.has_value_changed("custom_work_nature")
+	if selected and selected not in WORK_NATURE_OPTIONS:
+		frappe.throw(_("工作性质只能选择：{0}").format("、".join(WORK_NATURE_OPTIONS)))
+	if not selected:
+		# Compatibility for an old form submission that still posted the public
+		# label through the standard Link field.
+		selected = cstr(employee.get("employment_type")).strip()
+		selected_changed = employee.is_new() or employee.has_value_changed("employment_type")
+	if selected not in WORK_NATURE_OPTIONS:
+		return
+	if employee.meta.has_field("custom_work_nature"):
+		employee.custom_work_nature = selected
+
+	# A submitted confirmation or separation can update an implementation field
+	# outside the form. Keep the public source in sync, never make roster reads
+	# infer it again.
+	if not selected_changed:
+		if employee.has_value_changed("status"):
+			if employee.status == "Left":
+				selected = "离职"
+			elif employee.status == "Inactive":
+				selected = "待离职"
+		elif employee.has_value_changed("custom_is_confirmed") and selected in {"在职·正式", "在职·试用期"}:
+			selected = "在职·正式" if employee.custom_is_confirmed == "是" else "在职·试用期"
+		if employee.meta.has_field("custom_work_nature"):
+			employee.custom_work_nature = selected
+
+	if selected == "在职·正式":
+		employee.employment_type = _find_employment_type("Full-time", "全职")
+		employee.custom_is_confirmed = "是"
+		employee.relieving_date = None
+		employee.status = "Active"
+	elif selected == "在职·试用期":
+		employee.employment_type = _find_employment_type("Full-time", "全职", "Probation", "试用")
+		employee.custom_is_confirmed = "否"
+		employee.relieving_date = None
+		employee.status = "Active"
+	elif selected == "退休返聘":
+		employee.employment_type = _find_employment_type("Retainer", "退休返聘", "返聘")
+		employee.relieving_date = None
+		employee.status = "Active"
+	elif selected == "待离职":
+		employee.employment_type = _find_employment_type("Full-time", "全职")
+		employee.status = "Inactive"
+	elif selected == "离职":
+		employee.employment_type = _find_employment_type("Full-time", "全职")
+		employee.status = "Left"
 
 
 def validate_onboarding_process(doc, method=None):

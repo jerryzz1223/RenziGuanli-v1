@@ -58,3 +58,9 @@ hrms.patches.v16_0.add_department_roster_assignable #2026-08-31
 hrms.patches.v16_0.reset_trial_employee_contribution_defaults #2026-08-27
 hrms.patches.v16_0.normalise_department_document_names #2026-08-27
 hrms.patches.v16_0.backfill_employee_salary_change_grade_links #2026-08-27
+hrms.patches.v16_0.ensure_employee_work_nature_selector #2026-09-02
+hrms.patches.v16_0.ensure_employee_china_profile_selectors #2026-09-03
+hrms.patches.v16_0.repair_employee_china_profile_selectors #2026-09-03
+hrms.patches.v16_0.ensure_employee_work_nature_source #2026-09-03
+hrms.patches.v16_0.convert_employee_tabs_to_sections #2026-09-03
+hrms.patches.v16_0.add_department_organization_card_content #2026-09-03

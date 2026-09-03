@@ -20,6 +20,12 @@ REQUIRED_PROMOTION_FIELDS = (
 )
 
 
+def _get_value(row, fieldname):
+	if isinstance(row, dict):
+		return row.get(fieldname)
+	return getattr(row, fieldname, None)
+
+
 def process_due_employee_confirmations():
 	"""Submit one auditable Employee Promotion for every due trial employee.
 
@@ -48,17 +54,19 @@ def process_due_employee_confirmations():
 	)
 	updated = 0
 	for employee in employees:
-		if _has_submitted_confirmation(employee.name, employee.final_confirmation_date):
+		employee_name = _get_value(employee, "name")
+		confirmation_date = _get_value(employee, "final_confirmation_date")
+		if _has_submitted_confirmation(employee_name, confirmation_date):
 			continue
 		promotion = frappe.get_doc(
 			{
 				"doctype": "Employee Promotion",
-				"employee": employee.name,
-				"company": employee.company,
-				"department": employee.department,
-				"promotion_date": employee.final_confirmation_date,
+				"employee": employee_name,
+				"company": _get_value(employee, "company"),
+				"department": _get_value(employee, "department"),
+				"promotion_date": confirmation_date,
 				"custom_is_confirmation_interview": 1,
-				"custom_confirmation_interview_date": employee.final_confirmation_date,
+				"custom_confirmation_interview_date": confirmation_date,
 				"custom_confirmation_interviewer": "系统自动",
 				"custom_confirmation_interview_notes": AUTO_CONFIRMATION_NOTE,
 				"custom_confirmation_result": "转正通过",
@@ -72,8 +80,8 @@ def process_due_employee_confirmations():
 					{
 						"property": "转正日期",
 						"fieldname": "final_confirmation_date",
-						"current": employee.final_confirmation_date,
-						"new": employee.final_confirmation_date,
+						"current": confirmation_date,
+						"new": confirmation_date,
 					},
 				],
 			}

@@ -7,9 +7,14 @@ from frappe.model.document import Document
 from frappe.utils import cstr, getdate, nowdate
 
 from hrms.hr.utils import update_employee_work_history, validate_active_employee
+from hrms.overrides.employee_master import (
+	WORK_NATURE_OPTIONS as PUBLIC_WORK_NATURE_OPTIONS,
+	apply_employee_work_nature,
+	get_employee_work_nature,
+)
 
 
-WORK_NATURE_OPTIONS = ("在职 · 正式", "在职 · 试用期", "退休返聘", "待离职", "离职")
+WORK_NATURE_OPTIONS = tuple(option.replace("·", " · ") for option in PUBLIC_WORK_NATURE_OPTIONS)
 
 
 # The first rollout only permits changes that belong to an employee's current role.
@@ -180,15 +185,7 @@ class EmployeeTransfer(Document):
 
 
 def _get_work_nature(employee):
-	if employee.get("status") == "Left":
-		return "离职"
-	if employee.get("status") == "Inactive":
-		return "待离职"
-	if employee.get("employment_type") == "Retainer":
-		return "退休返聘"
-	if employee.get("employment_type") == "Probation" or employee.get("custom_is_confirmed") == "否":
-		return "在职 · 试用期"
-	return "在职 · 正式"
+	return get_employee_work_nature(employee).replace("·", " · ")
 
 
 def _find_employment_type(*candidates):
@@ -207,26 +204,11 @@ def _set_if_present(employee, fieldname, value):
 
 
 def _apply_work_nature(employee, work_nature):
-	if work_nature not in WORK_NATURE_OPTIONS:
+	canonical_work_nature = cstr(work_nature).replace(" ", "")
+	if canonical_work_nature not in PUBLIC_WORK_NATURE_OPTIONS:
 		frappe.throw(_("工作性质不在现有五类范围内：{0}").format(work_nature))
-	if work_nature == "在职 · 正式":
-		_set_if_present(employee, "employment_type", _find_employment_type("Full-time", "全职"))
-		_set_if_present(employee, "custom_is_confirmed", "是")
-		_set_if_present(employee, "relieving_date", None)
-		_set_if_present(employee, "status", "Active")
-	elif work_nature == "在职 · 试用期":
-		_set_if_present(employee, "employment_type", _find_employment_type("Full-time", "全职"))
-		_set_if_present(employee, "custom_is_confirmed", "否")
-		_set_if_present(employee, "relieving_date", None)
-		_set_if_present(employee, "status", "Active")
-	elif work_nature == "退休返聘":
-		_set_if_present(employee, "employment_type", _find_employment_type("Retainer", "退休返聘", "返聘"))
-		_set_if_present(employee, "relieving_date", None)
-		_set_if_present(employee, "status", "Active")
-	elif work_nature == "待离职":
-		_set_if_present(employee, "status", "Inactive")
-	elif work_nature == "离职":
-		_set_if_present(employee, "status", "Left")
+	_set_if_present(employee, "custom_work_nature", canonical_work_nature)
+	apply_employee_work_nature(employee)
 
 
 @frappe.whitelist()

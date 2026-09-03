@@ -1842,7 +1842,10 @@ class AttendanceImportCenter {
 						const processedRows = Number(check.processed_rows || 0);
 						const detectionCompleted = processedRows > 0 || ["导入异常", "已确认", "已就绪"].includes(check.status);
 						const errorDisplay = detectionCompleted ? importErrors : __("待校验");
-						return `<article class="hrms-attendance-source-card"><div class="hrms-attendance-source-card__head"><div><strong>${this.escape(__(source.label))}</strong></div>${this.status_badge(check.status)}</div><dl><div><dt>${this.escape(__("文件"))}</dt><dd title="${this.escape(fileName)}">${this.escape(fileName)}</dd></div><div><dt>${this.escape(__("识别记录"))}</dt><dd>${this.escape(check.record_count || "--")}</dd></div><div><dt>${this.escape(__("导入错误"))}</dt><dd>${this.escape(errorDisplay)}</dd></div><div><dt>${this.escape(__("已导入记录"))}</dt><dd>${this.escape(processedRows || "--")}</dd></div></dl><div class="hrms-attendance-source-card__actions"><button class="btn btn-default btn-xs" data-monthly-support-upload="${this.escape(source.key)}">${this.escape(__(check.source_file ? "重新上传" : "上传文件"))}</button><button class="btn btn-default btn-xs" data-monthly-support-results="${this.escape(source.key)}" ${processedRows || check.status === "结构异常" ? "" : "disabled"}>${this.escape(__("查看导入校验"))}</button></div></article>`;
+						const manualAction = source.key === "special_hours"
+							? `<button class="btn btn-default btn-xs" data-special-hours-manual ${processedRows && check.status === "已就绪" ? "" : "disabled"}>${this.escape(__("手动修改"))}</button>`
+							: "";
+						return `<article class="hrms-attendance-source-card"><div class="hrms-attendance-source-card__head"><div><strong>${this.escape(__(source.label))}</strong></div>${this.status_badge(check.status)}</div><dl><div><dt>${this.escape(__("文件"))}</dt><dd title="${this.escape(fileName)}">${this.escape(fileName)}</dd></div><div><dt>${this.escape(__("识别记录"))}</dt><dd>${this.escape(check.record_count || "--")}</dd></div><div><dt>${this.escape(__("导入错误"))}</dt><dd>${this.escape(errorDisplay)}</dd></div><div><dt>${this.escape(__("已导入记录"))}</dt><dd>${this.escape(processedRows || "--")}</dd></div></dl><div class="hrms-attendance-source-card__actions"><button class="btn btn-default btn-xs" data-monthly-support-upload="${this.escape(source.key)}">${this.escape(__(check.source_file ? "重新上传" : "上传文件"))}</button><button class="btn btn-default btn-xs" data-monthly-support-results="${this.escape(source.key)}" ${processedRows || check.status === "结构异常" ? "" : "disabled"}>${this.escape(__("查看导入校验"))}</button>${manualAction}</div></article>`;
 					}).join("")}
 				</div>
 			</section>
@@ -1863,15 +1866,17 @@ class AttendanceImportCenter {
 			["花名册员工", recognition.roster_employee_count, "已填工号，可参与匹配"],
 			["成功识别员工", recognition.successful_employee_count, "已通过校验，可进入终稿"],
 		];
-		return `<section class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("月度终稿"))}</h3></div><button class="btn btn-primary btn-sm" data-generate-final ${ready ? "" : "disabled"}>${this.escape(__("锁定并生成终稿"))}</button></div><section class="hrms-attendance-final-checklist"><div class="hrms-attendance-final-checklist__head"><strong>${this.escape(__("来源完备性 / 锁定快照"))}</strong></div><div class="hrms-attendance-final-recognition">${recognitionCards.map(([label, count]) => `<div><strong>${this.escape(__("{0} 人", [count || 0]))}</strong><span>${this.escape(__(label))}</span></div>`).join("")}</div><div class="hrms-attendance-final-readiness">${checks.map((check) => `<div><strong>${this.escape(__(check.label))}</strong>${this.status_badge(check.status)}<em>${this.escape(lockedSnapshot ? __("锁定快照：{0}", [lockedSnapshot]) : __("生成时锁定"))}</em></div>`).join("")}</div></section><div class="hrms-attendance-final-grid"><article><strong>${this.escape(__("员工签字版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="signed" ${outputs.signed_file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-download-final="signed" ${outputs.signed_file_url ? "" : "disabled"}>${this.escape(__("下载员工签字版"))}</button></article><article><strong>${this.escape(__("财务版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-download-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("下载财务版"))}</button></article></div><div class="hrms-attendance-process-footnote">${this.escape(__(outputs.locked_version ? `当前锁定版本：${outputs.locked_version}` : "尚未生成锁定版本。"))}</div></section>`;
+		return `<section class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("月度终稿"))}</h3></div><button class="btn btn-primary btn-sm" data-generate-final ${ready ? "" : "disabled"}>${this.escape(__("锁定并生成终稿"))}</button></div><section class="hrms-attendance-final-checklist"><div class="hrms-attendance-final-checklist__head"><strong>${this.escape(__("来源完备性 / 锁定快照"))}</strong></div><div class="hrms-attendance-final-recognition">${recognitionCards.map(([label, count]) => `<div><strong>${this.escape(__("{0} 人", [count || 0]))}</strong><span>${this.escape(__(label))}</span></div>`).join("")}</div><div class="hrms-attendance-final-readiness">${checks.map((check) => `<div><strong>${this.escape(__(check.label))}</strong>${this.status_badge(check.status)}<em>${this.escape(lockedSnapshot ? __("锁定快照：{0}", [lockedSnapshot]) : __("生成时锁定"))}</em></div>`).join("")}</div></section><div class="hrms-attendance-final-grid"><article><strong>${this.escape(__("员工签字版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="signed" ${outputs.signed_file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-edit-final="signed" ${outputs.signed_file_url ? "" : "disabled"}>${this.escape(__("网页编辑"))}</button> <button class="btn btn-default btn-sm" data-download-final="signed" ${outputs.signed_file_url ? "" : "disabled"}>${this.escape(__("下载员工签字版"))}</button></article><article><strong>${this.escape(__("财务版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-edit-final="signed" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("网页编辑"))}</button> <button class="btn btn-default btn-sm" data-download-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("下载财务版"))}</button></article></div><div class="hrms-attendance-process-footnote">${this.escape(__(outputs.locked_version ? `当前锁定版本：${outputs.locked_version}` : "尚未生成锁定版本。"))}</div></section>`;
 	}
 
 	bind_monthly_final_events(body) {
 		body.querySelector("[data-generate-final]")?.addEventListener("click", () => this.generate_monthly_final_files());
 		body.querySelectorAll("[data-download-final]").forEach((button) => button.addEventListener("click", () => this.download_final_file(button.dataset.downloadFinal)));
 		body.querySelectorAll("[data-preview-final]").forEach((button) => button.addEventListener("click", () => this.open_monthly_final_preview(button.dataset.previewFinal)));
+		body.querySelectorAll("[data-edit-final]").forEach((button) => button.addEventListener("click", () => this.open_monthly_final_editor(button.dataset.editFinal)));
 		body.querySelectorAll("[data-monthly-support-upload]").forEach((button) => button.addEventListener("click", () => this.open_monthly_support_uploader(button.dataset.monthlySupportUpload)));
 		body.querySelectorAll("[data-monthly-support-results]").forEach((button) => button.addEventListener("click", () => { this.selected_source_type = button.dataset.monthlySupportResults; this.set_view("processing-results"); }));
+		body.querySelector("[data-special-hours-manual]")?.addEventListener("click", () => this.open_special_hours_manual_dialog());
 	}
 
 	open_signed_final_reconciliation_uploader() {
@@ -1945,6 +1950,45 @@ class AttendanceImportCenter {
 		});
 	}
 
+	open_special_hours_manual_dialog() {
+		if (!this.ensure_company()) return;
+		const dialog = new frappe.ui.Dialog({
+			title: __("手动修改特殊工时"),
+			fields: [
+				{ fieldtype: "HTML", options: `<div class="hrms-attendance-dialog-note">${this.escape(__("按工号和日期修改该日特殊工时。保存后会重新汇总平日、休息日和节假日倍率；不会改写上传的 Excel，原值、原因、操作人和时间都会保留。工时填 0 可明确清零该日记录。"))}</div>` },
+				{ fieldname: "employee_code", fieldtype: "Data", label: __("员工工号"), description: __("须为本月可进入终稿的考勤初稿人员"), reqd: 1 },
+				{ fieldname: "attendance_date", fieldtype: "Date", label: __("日期"), reqd: 1 },
+				{ fieldname: "hours", fieldtype: "Float", label: __("特殊工时（小时）"), reqd: 1 },
+				{ fieldname: "reason", fieldtype: "Small Text", label: __("修改原因"), reqd: 1 },
+			],
+			primary_action_label: __("保存手动修改"),
+			primary_action: (values) => {
+				if (!String(values.attendance_date || "").startsWith(`${this.attendance_month}-`)) {
+					frappe.msgprint(__("日期必须属于当前处理月份 {0}。", [this.attendance_month]));
+					return;
+				}
+				this.call_processing_api("update_special_hours_manual_entry", {
+					company: this.company,
+					attendance_month: this.attendance_month,
+					employee_code: values.employee_code,
+					attendance_date: values.attendance_date,
+					hours: values.hours,
+					reason: values.reason,
+				}, {
+					freeze: true,
+					freeze_message: __("正在保存特殊工时手动修改..."),
+					on_success: (data) => {
+						dialog.hide();
+						frappe.show_alert({ message: data.notice || __("特殊工时手动修改已保存。"), indicator: "green" });
+						this.load_monthly_final();
+					},
+					on_error: (message) => frappe.msgprint(message),
+				});
+			},
+		});
+		dialog.show();
+	}
+
 	generate_monthly_final_files() {
 		this.call_processing_api(
 			"generate_monthly_final_files",
@@ -1992,6 +2036,73 @@ class AttendanceImportCenter {
 					fields: [{ fieldtype: "HTML", fieldname: "final_preview", options: `<div class="hrms-attendance-dialog-note">${this.escape(__("锁定快照：{0}；此表与下载文件使用相同数据。", [data.locked_snapshot_version]))}</div>${table}` }],
 					size: "extra-large",
 				});
+				dialog.show();
+			},
+			on_error: (message) => frappe.msgprint(message),
+		});
+	}
+
+	open_monthly_final_editor(kind = "signed") {
+		this.call_processing_api("get_monthly_final_preview", {
+			company: this.company, attendance_month: this.attendance_month, kind,
+		}, {
+			freeze: true,
+			freeze_message: __("正在读取可编辑终稿..."),
+			on_success: (data) => {
+				if (!data?.available) {
+					frappe.msgprint({ title: __("暂不能编辑终稿"), indicator: "orange", message: this.escape(data?.reason || __("请先生成终稿。")) });
+					return;
+				}
+				const columns = data.columns || [];
+				const editableFields = new Set(data.web_editable_fields || []);
+				const rows = data.rows || [];
+				const editableCell = (row, column) => {
+					const value = String(row[column.field] ?? "");
+					const attrs = `data-final-edit-field data-employee-code="${this.escape(row.employee_code || "")}" data-field-name="${this.escape(column.field)}" data-initial="${this.escape(value)}"`;
+					if (column.field === "employee_signature" || column.field === "review_note") {
+						return `<textarea class="form-control input-xs" rows="1" ${attrs}>${this.escape(value)}</textarea>`;
+					}
+					return `<input class="form-control input-xs" type="number" min="0" step="any" value="${this.escape(value)}" ${attrs}>`;
+				};
+				const table = `<div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr>${columns.map((column) => `<th>${this.escape(__(column.label))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${editableFields.has(column.field) ? editableCell(row, column) : this.escape(row[column.field] ?? "")}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${columns.length || 1}" class="text-muted">${this.escape(__("当前锁定版本没有可编辑的数据。"))}</td></tr>`}</tbody></table></div>`;
+				const dialog = new frappe.ui.Dialog({
+					title: __("编辑员工签字版（会同步重生成财务版）"),
+					fields: [
+						{ fieldtype: "HTML", fieldname: "final_editor", options: `<div class="hrms-attendance-dialog-note">${this.escape(__("此处修改的是员工签字版的同源数据。保存后会记录原值和操作人，当前锁定版将不再作为有效版本；请重新锁定生成两个版本。平日、周末、节假日特殊工时必须按日期在“特殊工时 → 手动修改”中维护，以保留倍率依据。"))}</div>${table}` },
+					],
+					size: "extra-large",
+					primary_action_label: __("保存修改并重新锁定"),
+					primary_action: (values) => {
+						const changesByCode = new Map();
+						dialog.$wrapper[0].querySelectorAll("[data-final-edit-field]").forEach((input) => {
+							if (String(input.value ?? "") === String(input.dataset.initial ?? "")) return;
+							const code = input.dataset.employeeCode;
+							const valuesForEmployee = changesByCode.get(code) || {};
+							valuesForEmployee[input.dataset.fieldName] = input.value;
+							changesByCode.set(code, valuesForEmployee);
+						});
+						const changes = [...changesByCode.entries()].map(([employee_code, valuesForEmployee]) => ({ employee_code, values: valuesForEmployee }));
+						if (!changes.length) {
+							frappe.msgprint(__("请先修改至少一个字段。"));
+							return;
+						}
+						this.call_processing_api("update_monthly_final_rows", {
+							company: this.company,
+							attendance_month: this.attendance_month,
+							changes: JSON.stringify(changes),
+						}, {
+							freeze: true,
+							freeze_message: __("正在保存终稿网页修改..."),
+							on_success: (result) => {
+								dialog.hide();
+								frappe.show_alert({ message: result.notice || __("网页修改已保存，请重新锁定终稿。"), indicator: "green" });
+								this.load_monthly_final();
+							},
+							on_error: (message) => frappe.msgprint(message),
+						});
+					},
+				});
+				dialog.$wrapper.addClass("hrms-monthly-final-editor-dialog");
 				dialog.show();
 			},
 			on_error: (message) => frappe.msgprint(message),

@@ -53,14 +53,13 @@ const chartApi = read("hrms/hr/page/organizational_chart/organizational_chart.py
 assert.ok(chartApi.includes("def preview_multiple_position_organization_import"));
 assert.ok(chartApi.includes("def create_multiple_position_organization_draft"));
 assert.ok(chartApi.includes("def get_multiple_position_draft_status"));
-assert.ok(chartApi.includes('"write_mode": "preview_only"'));
+assert.ok(chartApi.includes("MANUAL_ORGANIZATION_MODE_MESSAGE"));
 assert.ok(chartApi.includes("GRADE_TAG_CANDIDATES"));
 
 const chartUi = read("hrms/hr/page/organizational_chart/organizational_chart.js");
-assert.ok(chartUi.includes("多岗位导入预览"));
-assert.ok(chartUi.includes("建立多岗位草稿"));
-assert.ok(chartUi.includes("preview_multiple_position_organization_import"));
-assert.ok(chartUi.includes("create_multiple_position_organization_draft"));
-assert.ok(chartUi.includes("get_multiple_position_draft_status"));
+assert.ok(chartUi.includes("手动维护组织节点"));
+assert.ok(chartUi.includes("维护图谱版本"));
+assert.ok(chartUi.includes("独立展示模式"));
+assert.ok(chartApi.includes("no HR master data is part of this view"));
 
-console.log("Multiple-position assignment schema and preview hooks are wired.");
+console.log("Multiple-position schema and standalone organization chart boundary are wired.");

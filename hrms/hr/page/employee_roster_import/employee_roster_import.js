@@ -194,6 +194,14 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		return fields.filter((field) => !selected.has(field.fieldname));
 	}
 
+	function render_warnings(warnings) {
+		if (!warnings.length) return "";
+		return `<details class="hrms-import-warnings"><summary>${__("查看 {0} 条其他非阻塞提示", [warnings.length])}</summary><ul>${warnings
+			.slice(0, 50)
+			.map((warning) => `<li>${frappe.utils.escape_html(warning)}</li>`)
+			.join("")}${warnings.length > 50 ? `<li>${__("其余提示已省略")}</li>` : ""}</ul></details>`;
+	}
+
 	function request_preview() {
 		const request_id = ++state.request_id;
 		frappe
@@ -220,6 +228,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	function render_preview() {
 		const result = state.preview_result || {};
 		const errors = result.errors || [];
+		const warnings = result.warnings || [];
 		const is_replace = state.mode === "replace";
 		const can_write = !is_replace || !result.failed;
 		page.set_title(__("智能花名册导入-预览导入结果"));
@@ -245,6 +254,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 					}
 					${result.manual_corrections ? `<div class="alert alert-info">${__("已应用 {0} 项本次导入的人工校正；原 Excel 文件不会被修改。", [result.manual_corrections])}</div>` : ""}
 					${result.deferred ? `<div class="alert alert-info">${__("有 {0} 项资料以“-”暂缓填写，将以空值导入，可在员工档案中后续补充。", [result.deferred])}</div>` : ""}
+					${render_warnings(warnings)}
 					${errors.length ? render_errors(errors, "", true) : ""}
 					${errors.length ? "" : `<div class="alert alert-success">${__("预览通过，仅显示需要人工校正的数据。")}</div>`}
 					<div class="hrms-import-actions">
@@ -386,11 +396,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 						<h4>${__("自动补齐的基础资料")}</h4>
 						<p>${__("性别")}：${frappe.utils.escape_html(base_records["性别"] || 0)}　${__("部门")}：${frappe.utils.escape_html(base_records["部门"] || 0)}　${__("岗位")}：${frappe.utils.escape_html(base_records["岗位"] || 0)}　${__("工作性质")}：${frappe.utils.escape_html(base_records["工作性质"] || 0)}</p>
 					</div>
-					${
-						warnings.length
-							? `<div class="alert alert-warning">${warnings.map((warning) => frappe.utils.escape_html(warning)).join("<br>")}</div>`
-							: ""
-					}
+					${render_warnings(warnings)}
 					${
 						errors.length
 							? render_errors(errors, __("导入完成，没有发现行级错误。"))

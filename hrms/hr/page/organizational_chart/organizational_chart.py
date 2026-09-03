@@ -42,6 +42,10 @@ YONGXIN_LEGACY_COMPANY_KEYS = ("1",)
 ORGANIZATION_TECHNICAL_SUFFIX_RE = re.compile(r"\s*[-－]\s*(?:\d+[A-Za-z]?|1D|11)\s*$", re.IGNORECASE)
 GRADE_TAG_CANDIDATES = {"直线级", "间师级", "文师级", "文组级"}
 
+MANUAL_ORGANIZATION_MODE_MESSAGE = _(
+	"组织架构现为手动维护模式；请在人事界面逐项创建部门、岗位和任职关系，系统不会再依据原表或员工档案自动生成。"
+)
+
 HYBRID_ROSTER_FIELD_MAP = {
 	"工号": "custom_employee_code",
 	"员工编号": "custom_employee_code",
@@ -76,6 +80,7 @@ DEPARTMENT_QUICK_EDIT_FIELDS = {
 	"hrms_org_role",
 	"hrms_org_manager",
 	"hrms_org_proxy",
+	"hrms_org_card_content",
 	"hrms_planned_headcount",
 	"hrms_actual_headcount",
 	"hrms_vacancy_count",
@@ -102,7 +107,7 @@ def preview_multiple_position_organization_import(company: str | None = None, ve
 	grade-tag candidates, and rows that still need HR confirmation.  It never
 	creates Employee, Department, Designation, or assignment records.
 	"""
-	from openpyxl import load_workbook
+	frappe.throw(MANUAL_ORGANIZATION_MODE_MESSAGE)
 
 	if not frappe.has_permission("Employee", "read"):
 		frappe.throw(_("您无权预览包含员工映射信息的组织架构。"))
@@ -135,6 +140,7 @@ def preview_multiple_position_organization_import(company: str | None = None, ve
 @frappe.whitelist()
 def create_multiple_position_organization_draft(company: str | None = None, version_code: str | None = None):
 	"""Persist only source-derived draft candidates; never assign or update employees."""
+	frappe.throw(MANUAL_ORGANIZATION_MODE_MESSAGE)
 	if not frappe.has_permission("Employee", "read"):
 		frappe.throw(_("您无权创建包含员工映射信息的组织草稿。"))
 
@@ -983,9 +989,13 @@ def _q3_department_hierarchy_preview(company):
 	target_names = {node["name"] for node in nodes}
 	target_sources = {node["source_cell"] for node in nodes}
 	rows, source_to_target_name = [], {node["source_cell"]: node["name"] for node in nodes}
+	source_to_existing_name = {
+		node["source_cell"]: (by_source.get(node["source_cell"]) or by_name.get(node["name"]) or {}).get("name")
+		for node in nodes
+	}
 	for node in nodes:
 		existing = by_source.get(node["source_cell"]) or by_name.get(node["name"])
-		expected_parent = source_to_target_name.get(node.get("parent_source_cell"), "")
+		expected_parent = source_to_existing_name.get(node.get("parent_source_cell")) or source_to_target_name.get(node.get("parent_source_cell"), "")
 		current_parent = cstr(existing.get("parent_department")).strip() if existing else ""
 		parent_matches = bool(existing) and current_parent == expected_parent
 		shape_matches = bool(existing) and cint(existing.get("is_group")) == cint(node.get("is_group"))
@@ -1011,15 +1021,15 @@ def _q3_department_hierarchy_preview(company):
 		fields=["name", "employee_name", "custom_employee_code", "department"],
 		limit_page_length=0,
 	)
-	group_names = {
-		node["name"]
+	group_department_names = {
+		source_to_existing_name.get(node["source_cell"]) or node["name"]
 		for node in nodes
 		if cint(node.get("is_group"))
 	}
 	legacy_employee_assignments = [
 		row
 		for row in group_employee_rows
-		if cstr(row.get("department")).strip() in group_names
+		if cstr(row.get("department")).strip() in group_department_names
 	]
 	return {
 		"company": company,
@@ -1128,13 +1138,21 @@ def import_yongxin_q3_department_hierarchy(
 	try:
 		created, updated = [], []
 		for node in payload["nodes"]:
-			existed = frappe.db.exists("Department", {"company": company, "department_name": node["name"]})
+			existed = frappe.db.get_value(
+				"Department", {"company": company, "hrms_org_source_cell": node["source_cell"]}, "name"
+			) if meta_has_field("Department", "hrms_org_source_cell") else None
+			existed = existed or frappe.db.exists("Department", {"company": company, "department_name": node["name"]})
 			name = _q3_department_apply_node(node, company, source_to_department)
 			source_to_department[node["source_cell"]] = name
 			(created if not existed else updated).append(name)
 		frappe.db.commit()
 		frappe.clear_cache(doctype="Department")
-		return {**_q3_department_hierarchy_preview(company), "created_departments": created, "updated_departments": updated}
+		return {
+			**_q3_department_hierarchy_preview(company),
+			"write_mode": "applied",
+			"created_departments": created,
+			"updated_departments": updated,
+		}
 	except Exception:
 		frappe.db.rollback(save_point=savepoint)
 		raise
@@ -1143,6 +1161,7 @@ def import_yongxin_q3_department_hierarchy(
 @frappe.whitelist()
 def import_yongxin_q2_org_structure(company: str | None = None, dry_run: int | str = 0):
 	"""Seed Department parent hierarchy and Designation reporting logic from 1.2组织架构.xlsx."""
+	frappe.throw(MANUAL_ORGANIZATION_MODE_MESSAGE)
 
 	if not frappe.has_permission("Department", "create") and not frappe.has_permission("Department", "write"):
 		frappe.throw(_("没有权限导入组织架构。"))
@@ -1194,6 +1213,9 @@ def get_hybrid_tree(company: str | None = None, source_mode: str | None = None):
 	if source_mode == "quarterly_template":
 		return _get_yongxin_template_tree(company)
 
+	# The published view reads the same Department folder links shown in the
+	# Department list.  The workbook is only used by the explicit, confirmed Q3
+	# sync action; it never rewrites this hierarchy during ordinary page loads.
 	departments = _get_departments(company)
 	employees = _get_active_employees(company)
 	staffing = _get_department_staffing(company)
@@ -1226,13 +1248,10 @@ def get_hybrid_tree(company: str | None = None, source_mode: str | None = None):
 	staffing_summary = _summarize_staffing(root_departments, staffing)
 	reported_current_headcount = staffing_summary["current_headcount"]
 	current_headcount = len(employees) or reported_current_headcount
-
 	department_nodes = [
 		_build_department_node(department, employees_by_department, department_children, staffing)
 		for department in root_departments
 	]
-	# The editable view is a Department folder tree. ``All Departments`` remains
-	# ERPNext's technical root only; the visible root is the actual company.
 	root_node = _build_company_root_node(
 		company=company,
 		department_nodes=department_nodes,
@@ -1250,7 +1269,7 @@ def get_hybrid_tree(company: str | None = None, source_mode: str | None = None):
 	return {
 		"company": company,
 		"source_mode": "live",
-		"source_label": _("部门管理文件夹树"),
+		"source_label": _("部门管理文件夹树（与部门管理页面使用同一上下级关系）"),
 		"root": root_node,
 		"summary": {
 			"planned_headcount": root_node["planned_headcount"],
@@ -1261,6 +1280,54 @@ def get_hybrid_tree(company: str | None = None, source_mode: str | None = None):
 			"missing_manager_count": missing_manager_count,
 		},
 		"field_map": HYBRID_ROSTER_FIELD_MAP,
+	}
+
+
+def _get_manual_organization_records(company=None):
+	"""Read a standalone chart only; no HR master data is part of this view."""
+	if not frappe.db.exists("DocType", "Organization Node"):
+		return {"nodes": []}
+
+	versions = frappe.get_all(
+		"Organization Structure Version",
+		filters={"company": company, "status": ["!=", "已归档"]} if company else {"status": ["!=", "已归档"]},
+		pluck="name",
+	)
+	if not versions:
+		return {"nodes": []}
+
+	nodes = frappe.get_all(
+		"Organization Node",
+		filters={"structure_version": ["in", versions], "confirmation_status": "已确认"},
+		fields=["name", "node_code", "node_type", "display_name", "parent_node", "planned_headcount", "current_headcount", "vacancy_count"],
+		order_by="creation asc",
+	)
+	return {"nodes": nodes}
+
+
+def _build_manual_organization_tree(company, manual):
+	nodes_by_name = {node.name: node for node in manual["nodes"]}
+	children_by_parent = defaultdict(list)
+	for node in manual["nodes"]:
+		(children_by_parent[node.parent_node] if node.parent_node in nodes_by_name else children_by_parent[None]).append(node)
+	def organization_node(node):
+		child_nodes = [organization_node(child) for child in children_by_parent[node.name]]
+		return {
+			"node_id": f"organization_node:{node.name}", "id": f"organization_node:{node.name}",
+			"node_type": "organization_node", "name": node.display_name, "title": node.node_type,
+			"people": [], "planned_headcount": cint(node.planned_headcount),
+			"current_headcount": cint(node.current_headcount), "vacancy_count": cint(node.vacancy_count),
+			"children": child_nodes, "connections": len(child_nodes), "expandable": bool(child_nodes),
+		}
+
+	children = [organization_node(node) for node in children_by_parent[None]]
+	return {
+		"node_id": f"company:{company or 'all'}", "id": f"company:{company or 'all'}", "node_type": "company",
+		"name": _("{0}（总公司）").format(_get_company_label(company)), "title": _("人工维护组织根节点"),
+		"people": [], "lines": [], "planned_headcount": sum(cint(node.planned_headcount) for node in manual["nodes"] if not node.parent_node),
+		"current_headcount": sum(cint(node.current_headcount) for node in manual["nodes"] if not node.parent_node),
+		"vacancy_count": sum(cint(node.vacancy_count) for node in manual["nodes"] if not node.parent_node), "children": children,
+		"connections": len(children), "expandable": bool(children),
 	}
 
 
@@ -1508,7 +1575,6 @@ def get_hybrid_node_detail(
 	search = (search or "").strip()
 	if cstr(source_mode).strip() == "workbook_snapshot":
 		return _get_workbook_snapshot_node_detail(node_id, node_type, company, search)
-
 	if not node_id.startswith("department:"):
 		template_detail = _get_template_node_detail(
 			node_id,
@@ -1526,7 +1592,7 @@ def get_hybrid_node_detail(
 			"node_type": "company",
 			"node_id": node_id,
 			"title": _get_company_label(company),
-			"subtitle": "公司组织总览",
+			"subtitle": _("公司组织总览"),
 			"metrics": _company_metrics(company),
 			"employees": employees[:100],
 			"actions": {"can_add_department": frappe.has_permission("Department", "create")},
@@ -1615,6 +1681,24 @@ def get_hybrid_node_detail(
 	}
 
 
+def _get_manual_organization_node_detail(node_id, node_type, company, search):
+	"""Details for the standalone chart; it never loads Employee or Department."""
+	if node_type != "organization_node":
+		return None
+	manual = _get_manual_organization_records(company)
+	node_name = _node_value(node_id)
+	node = next((row for row in manual["nodes"] if row.name == node_name), None)
+	if not node:
+		return None
+	return {
+		"node_type": node_type, "node_id": node_id, "title": node.display_name,
+		"subtitle": _("{0}；仅用于组织图展示。 ").format(node.node_type),
+		"metrics": {"planned_headcount": cint(node.planned_headcount), "current_headcount": cint(node.current_headcount), "vacancy_count": cint(node.vacancy_count)},
+		"employees": [], "people": [],
+		"actions": {},
+	}
+
+
 def _get_template_people_for_department(department_doc, company=None):
 	source_cell = getattr(department_doc, "hrms_org_source_cell", None)
 	if not source_cell:
@@ -1635,6 +1719,12 @@ def update_department_fields(department: str, values: str | dict):
 	doc = frappe.get_doc("Department", department)
 	doc.check_permission("write")
 	values = frappe.parse_json(values) if isinstance(values, str) else (values or {})
+	if "hrms_org_manager" in values:
+		values["hrms_org_manager"] = "、".join(_split_organization_people(values["hrms_org_manager"]))
+	if "hrms_org_proxy" in values:
+		values["hrms_org_proxy"] = "、".join(_split_organization_people(values["hrms_org_proxy"]))
+	if "hrms_org_card_content" in values:
+		values["hrms_org_card_content"] = cstr(values["hrms_org_card_content"]).strip()
 	meta = frappe.get_meta("Department")
 	updated = {}
 	target_name = cstr(values.get("department_name") or doc.department_name).strip()
@@ -1880,6 +1970,7 @@ def _get_yongxin_workbook_snapshot_tree(company=None):
 
 	employee_lookup = _get_employee_lookup(_get_active_employees(company))
 	nodes = _parse_workbook_snapshot_nodes(sheet, employee_lookup)
+	_apply_workbook_snapshot_card_overrides(nodes, company, employee_lookup)
 	root = next((node for node in nodes if node.get("node_type") == "company_leadership"), None)
 	if not root:
 		frappe.throw(_("组织架构原表中未找到总经理节点。"))
@@ -1895,6 +1986,46 @@ def _get_yongxin_workbook_snapshot_tree(company=None):
 		"source_sheet": sheet.title,
 		"source_label": _("原表视图 · {0} / {1}").format(source.name, sheet.title),
 	}
+
+
+def _split_organization_people(value):
+	"""Accept the department editor's common multi-person separators."""
+	if isinstance(value, (list, tuple)):
+		values = value
+	else:
+		values = re.split(r"[、,，;；\n]+", cstr(value))
+	return _deduplicate_names(cstr(name).strip() for name in values if cstr(name).strip())
+
+
+def _apply_workbook_snapshot_card_overrides(nodes, company, employee_lookup):
+	"""Layer editable Department card fields over the source-faithful Excel tree.
+
+	The workbook still owns node identity and parent/child layout. A Department
+	mapped to the same source cell may only replace card presentation fields; it
+	never changes the Excel hierarchy or writes employee assignments.
+	"""
+	departments_by_source = {
+		department.get("hrms_org_source_cell"): department
+		for department in _get_departments(company)
+		if department.get("hrms_org_source_cell")
+	}
+	for node in nodes:
+		department = departments_by_source.get(node.get("source_cell"))
+		if not department:
+			continue
+		node["department"] = department.name
+		node["department_label"] = department.get("department_name") or department.name
+		role = cstr(department.get("hrms_org_role")).strip() or node.get("role") or _("负责人")
+		manager_names = _split_organization_people(department.get("hrms_org_manager")) or node.get("manager_names") or []
+		proxy_names = _split_organization_people(department.get("hrms_org_proxy")) or node.get("proxy_names") or []
+		node["role"] = role
+		node["manager_names"] = manager_names
+		node["proxy_names"] = proxy_names
+		node["card_content"] = cstr(department.get("hrms_org_card_content")).strip()
+		node["title"] = _workbook_snapshot_title(node.get("lines") or [], node.get("node_type"), manager_names, proxy_names)
+		if node["card_content"]:
+			node["title"] = " · ".join(part for part in [node["title"], node["card_content"]] if part)
+		node["people"] = _build_workbook_snapshot_people(node, employee_lookup)
 
 
 def _parse_workbook_snapshot_nodes(sheet, employee_lookup):
@@ -2022,7 +2153,7 @@ def _workbook_snapshot_title(lines, node_type, manager_names, proxy_names):
 def _build_workbook_snapshot_people(node, employee_lookup):
 	people = []
 	for role, names in [
-		(_("负责人"), node.get("manager_names") or []),
+		(node.get("role") or _("负责人"), node.get("manager_names") or []),
 		(_("代理人"), node.get("proxy_names") or []),
 		(_("员工"), node.get("employee_names") or []),
 	]:
@@ -2152,6 +2283,7 @@ def _get_workbook_snapshot_node_detail(node_id, node_type, company=None, search=
 			]
 			if part
 		),
+		"card_content": node.get("card_content"),
 		"metrics": {
 			"planned_headcount": node.get("planned_headcount", 0),
 			"current_headcount": node.get("current_headcount", 0),
@@ -2164,7 +2296,10 @@ def _get_workbook_snapshot_node_detail(node_id, node_type, company=None, search=
 			"parent": _workbook_snapshot_relation(parent),
 			"children": [_workbook_snapshot_relation(child) for child in node.get("children") or []],
 		},
-		"actions": {},
+		"actions": {
+			"can_edit_department": bool(node.get("department"))
+			and frappe.has_permission("Department", "write", node.get("department")),
+		},
 	}
 
 
@@ -2472,6 +2607,7 @@ def _build_template_tree_node(
 		"role": node.get("role"),
 		"manager_names": "、".join(node.get("manager_names") or []),
 		"proxy_names": "、".join(node.get("proxy_names") or []),
+		"card_content": "",
 		"lines": node.get("lines") or [],
 		"employee_names": node.get("employee_names") or [],
 		"people": _build_template_people(node, employee_lookup, effective_department),
@@ -2495,6 +2631,7 @@ def _build_template_tree_node(
 				"role": department.get("hrms_org_role") or node.get("role"),
 				"manager_names": department.get("hrms_org_manager") or "、".join(node.get("manager_names") or []),
 				"proxy_names": department.get("hrms_org_proxy") or "、".join(node.get("proxy_names") or []),
+				"card_content": cstr(department.get("hrms_org_card_content")).strip(),
 				"planned_headcount": cint(department.get("hrms_planned_headcount")) or node.get("planned_headcount") or 0,
 				"current_headcount": cint(department.get("hrms_actual_headcount")) or node.get("current_headcount") or 0,
 				"vacancy_count": cint(department.get("hrms_vacancy_count")) or node.get("vacancy_count") or 0,
@@ -2960,6 +3097,7 @@ def _get_departments(company=None):
 			"hrms_org_role",
 			"hrms_org_manager",
 			"hrms_org_proxy",
+			"hrms_org_card_content",
 			"hrms_planned_headcount",
 			"hrms_actual_headcount",
 			"hrms_vacancy_count",
@@ -3109,6 +3247,7 @@ def _build_department_node(department, employees_by_department, department_child
 		"role": department.get("hrms_org_role"),
 		"manager_names": department.get("hrms_org_manager"),
 		"proxy_names": department.get("hrms_org_proxy"),
+		"card_content": department.get("hrms_org_card_content"),
 		# Employees are rendered once as leaf nodes under 职级 → 岗位.  Keeping
 		# them as department chips as well was the source of the apparent
 		# "unclassified people" in the old hybrid chart.

@@ -331,9 +331,10 @@
 		},
 		{
 			label: "人事",
-			route: "/desk/employee",
+			route: "/desk/personnel-home",
 			icon: "P",
 			keys: [
+				"personnel-home",
 				"personnel",
 				"employee",
 				"employee-detail",
@@ -354,7 +355,7 @@
 				"cross-department-support-capability",
 			],
 			items: [
-				{ type: "link", label: "主页", route: "/desk/employee", slug: "employee" },
+				{ type: "link", label: "人事首页", route: "/desk/personnel-home", slug: "personnel-home" },
 				{
 					type: "section",
 					label: "员工管理",
