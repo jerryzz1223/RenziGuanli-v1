@@ -188,15 +188,25 @@ for (const marker of [
 	'"fieldname": "custom_native_place",\n\t\t"fieldtype": "Select",',
 	'"fieldname": "custom_ethnicity",\n\t\t"fieldtype": "Select",',
 	'"fieldname": "custom_ethnicity",',
+	"ETHNICITY_VALUE_ALIASES",
+	'"汉": "汉族",',
+	"_normalise_ethnicity_value",
 	"员工籍贯所属的中国省级行政区",
 	"中国 56 个民族",
 	"北京市",
 	"台湾省",
 	"汉族",
 	"基诺族",
+	"LEGACY_ETHNICITY_VALUE_MAP",
+	"_normalise_employee_ethnicity_values",
 	"ensure_employee_china_profile_selectors",
 ]) {
 	mustInclude(api, marker, `Chinese employee profile selector is missing marker: ${marker}`);
+}
+
+const importValueNormaliser = api.match(/def _normalise_import_value\(fieldname, value, field\):([\s\S]*?)\n\ndef _get_default_company/)?.[1] || "";
+if (!importValueNormaliser.includes('if fieldname == "custom_ethnicity":') || !importValueNormaliser.includes("return _normalise_ethnicity_value(value)")) {
+	throw new Error("花名册导入必须将“汉”规范为民族选择器的“汉族”值。");
 }
 
 if (api.includes('"fieldtype": "Autocomplete",')) {
@@ -279,8 +289,8 @@ for (const marker of [
 	mustInclude(employeeForm, marker, `Employee form must apply field template: ${marker}`);
 }
 
-if (!employeeForm.includes("!managed_fieldnames.has(field.fieldname)")) {
-	throw new Error("Employee form must hide template-controlled fields that are not present/enabled in the template.");
+if (employeeForm.includes('frm.toggle_display(field.fieldname, false);\n\t\t\t\t\treturn;')) {
+	throw new Error("Employee form must not hide a field solely because a stale template response omits it.");
 }
 
 if (!employeeForm.includes("frm.__hrms_employee_template_request_id !== request_id")) {

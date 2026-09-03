@@ -19,6 +19,11 @@ for (const marker of [
 	"open_roster_column_filter",
 	"get_roster_filter_suggestions",
 	"apply_roster_column_filter",
+	"ROSTER_TABLE_FILTER_DELAY_MS",
+	"schedule_roster_table_filter",
+	"apply_roster_table_filter",
+	'input.addEventListener("compositionend"',
+	"event.stopPropagation();",
 	"search.exact ? search.value",
 ]) {
 	mustInclude(employeeList, marker, `花名册缺少表头筛选逻辑：${marker}`);

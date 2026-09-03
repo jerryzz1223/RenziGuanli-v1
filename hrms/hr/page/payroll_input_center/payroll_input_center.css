@@ -2243,6 +2243,44 @@
 	z-index: 1;
 }
 
+/* Keep the employee identity visible while reviewing the wide payroll tables. */
+.hrms-payroll-input-table--sticky-identity th:nth-child(-n + 3),
+.hrms-payroll-input-table--sticky-identity td:nth-child(-n + 3) {
+	background: #fff;
+	position: sticky;
+	z-index: 2;
+}
+
+.hrms-payroll-input-table--sticky-identity th:nth-child(1),
+.hrms-payroll-input-table--sticky-identity td:nth-child(1) {
+	left: 0;
+	max-width: 112px;
+	min-width: 112px;
+	width: 112px;
+}
+
+.hrms-payroll-input-table--sticky-identity th:nth-child(2),
+.hrms-payroll-input-table--sticky-identity td:nth-child(2) {
+	left: 112px;
+	max-width: 92px;
+	min-width: 92px;
+	width: 92px;
+}
+
+.hrms-payroll-input-table--sticky-identity th:nth-child(3),
+.hrms-payroll-input-table--sticky-identity td:nth-child(3) {
+	box-shadow: 2px 0 3px rgba(15, 23, 42, 0.12);
+	left: 204px;
+	max-width: 144px;
+	min-width: 144px;
+	width: 144px;
+}
+
+.hrms-payroll-input-table--sticky-identity th:nth-child(-n + 3) {
+	background: #f8fafc;
+	z-index: 3;
+}
+
 .hrms-payroll-table-column-head {
 	display: grid;
 	gap: 5px;

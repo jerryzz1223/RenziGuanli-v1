@@ -217,7 +217,9 @@ function apply_employee_field_template(frm) {
 				apply_configured_field_required(frm, field, configured_field);
 
 				if (!managed_fieldnames.has(field.fieldname)) {
-					frm.toggle_display(field.fieldname, false);
+					// A Custom Field can reach the browser before the administrator's
+					// template document is synchronised.  Preserve its native visibility
+					// in that short window; only an explicit template row may hide it.
 					return;
 				}
 

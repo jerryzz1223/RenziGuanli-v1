@@ -61,6 +61,7 @@ hrms.patches.v16_0.backfill_employee_salary_change_grade_links #2026-08-27
 hrms.patches.v16_0.ensure_employee_work_nature_selector #2026-09-02
 hrms.patches.v16_0.ensure_employee_china_profile_selectors #2026-09-03
 hrms.patches.v16_0.repair_employee_china_profile_selectors #2026-09-03
+hrms.patches.v16_0.normalise_employee_ethnicity_values #2026-09-03
 hrms.patches.v16_0.ensure_employee_work_nature_source #2026-09-03
 hrms.patches.v16_0.convert_employee_tabs_to_sections #2026-09-03
 hrms.patches.v16_0.add_department_organization_card_content #2026-09-03

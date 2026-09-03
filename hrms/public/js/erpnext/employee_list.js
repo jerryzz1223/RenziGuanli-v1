@@ -2,6 +2,7 @@
 	const EMPLOYEE_DOCTYPE = "Employee";
 	const ROSTER_ALL_EMPLOYEES_PAGE_LENGTH = 500;
 	const ROSTER_TABLE_PAGE_LENGTH = 20;
+	const ROSTER_TABLE_FILTER_DELAY_MS = 400;
 	const ROSTER_COLUMN_FILTER_STORAGE_KEY = "hrms_roster_column_filter";
 	const roster_phase_one_markers = {
 		column_filter_mode: "表头联想筛选",
@@ -443,11 +444,20 @@
 				input.placeholder = __("搜索");
 				input.autocomplete = "off";
 				input.setAttribute("aria-label", __("搜索{0}", [column.label]));
-				input.value = state.filters[column.fieldname] || "";
-				input.addEventListener("input", () => {
-					state.filters[column.fieldname] = input.value;
-					state.page = 1;
-					ensure_roster_empty_result_header(listview);
+				const pending_filter = state.pending_filter;
+				input.value = pending_filter?.fieldname === column.fieldname ? pending_filter.value : state.filters[column.fieldname] || "";
+				input.addEventListener("input", (event) => {
+					if (event.isComposing) return;
+					schedule_roster_table_filter(listview, state, column.fieldname, input.value);
+				});
+				input.addEventListener("compositionend", () => {
+					schedule_roster_table_filter(listview, state, column.fieldname, input.value);
+				});
+				input.addEventListener("keydown", (event) => {
+					if (event.key !== "Enter") return;
+					event.preventDefault();
+					event.stopPropagation();
+					apply_roster_table_filter(listview, state, column.fieldname, input.value);
 				});
 				head.appendChild(input);
 			}
@@ -528,6 +538,25 @@
 		state.page ||= 1;
 		state.page_size ||= 20;
 		return state;
+	}
+
+	function schedule_roster_table_filter(listview, state, fieldname, value) {
+		state.pending_filter = { fieldname, value };
+		window.clearTimeout(state.filter_timer);
+		state.filter_timer = window.setTimeout(() => {
+			state.filter_timer = null;
+			if (state.pending_filter?.fieldname !== fieldname || state.pending_filter.value !== value) return;
+			apply_roster_table_filter(listview, state, fieldname, value);
+		}, ROSTER_TABLE_FILTER_DELAY_MS);
+	}
+
+	function apply_roster_table_filter(listview, state, fieldname, value) {
+		window.clearTimeout(state.filter_timer);
+		state.filter_timer = null;
+		state.pending_filter = null;
+		state.filters[fieldname] = value;
+		state.page = 1;
+		ensure_roster_empty_result_header(listview);
 	}
 
 	function load_roster_table_records(listview, state) {

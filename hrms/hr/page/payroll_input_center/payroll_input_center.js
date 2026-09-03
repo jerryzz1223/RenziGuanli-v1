@@ -4852,10 +4852,11 @@ class PayrollInputCenter {
 	}
 
 	render_table(title, columns, rows, mapRow, { fill_viewport = false } = {}) {
+		const has_sticky_identity_columns = ["姓名", "工号", "部门"].every((label, index) => columns[index] === label);
 		return `
 			<div class="hrms-payroll-table-wrap${fill_viewport ? " hrms-payroll-table-wrap--viewport" : ""}">
 				<div class="hrms-payroll-table-scroll">
-					<table class="table table-bordered hrms-payroll-input-table">
+					<table class="table table-bordered hrms-payroll-input-table${has_sticky_identity_columns ? " hrms-payroll-input-table--sticky-identity" : ""}">
 						<thead><tr>${columns.map((column) => `<th>${frappe.utils.escape_html(__(column))}</th>`).join("")}</tr></thead>
 						<tbody>
 							${

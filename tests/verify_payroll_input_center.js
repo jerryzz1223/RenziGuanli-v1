@@ -31,6 +31,7 @@ for (const marker of ["PERSONNEL_PAGE_DEFINITIONS", '"payroll-input-center"', '"
 
 const pageJson = JSON.parse(read("hrms/hr/page/payroll_input_center/payroll_input_center.json"));
 const pageJs = read("hrms/hr/page/payroll_input_center/payroll_input_center.js");
+const pageCss = read("hrms/hr/page/payroll_input_center/payroll_input_center.css");
 
 if (pageJson.name !== "payroll-input-center" || pageJson.title !== "薪资输入中心") {
 	throw new Error("Payroll input center route/title is incorrect.");
@@ -89,8 +90,18 @@ for (const marker of [
 	"PAYROLL_SIGNATURE_SOURCE_CODES",
 	"data-download-source-signature-sheet",
 	"download_source_signature_sheet",
+	"has_sticky_identity_columns",
+	"hrms-payroll-input-table--sticky-identity",
 ]) {
 	mustInclude(pageJs, marker, `Payroll input center page is missing marker: ${marker}`);
+}
+
+for (const marker of [
+	".hrms-payroll-input-table--sticky-identity th:nth-child(-n + 3)",
+	"left: 112px",
+	"left: 204px",
+]) {
+	mustInclude(pageCss, marker, `Payroll input center sticky identity columns are missing marker: ${marker}`);
 }
 
 if (pageJs.includes("window.hrmsFormImport?.addPageActions")) {

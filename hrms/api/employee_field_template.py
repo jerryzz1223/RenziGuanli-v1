@@ -24,6 +24,18 @@ EMPLOYEE_FAILED_ROWS_FILENAME = "员工花名册失败行.xlsx"
 EMPLOYEE_FALLBACK_DATE_OF_BIRTH = "1905-01-01"
 EMPLOYEE_MATERIAL_FIELD_PREFIX = "hrms_material_"
 EMPLOYEE_MATERIAL_FILE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
+CHINA_ETHNICITY_VALUES = (
+	"汉族", "蒙古族", "回族", "藏族", "维吾尔族", "苗族", "彝族", "壮族", "布依族", "朝鲜族",
+	"满族", "侗族", "瑶族", "白族", "土家族", "哈尼族", "哈萨克族", "傣族", "黎族", "傈僳族",
+	"佤族", "畲族", "高山族", "拉祜族", "水族", "东乡族", "纳西族", "景颇族", "柯尔克孜族", "土族",
+	"达斡尔族", "仫佬族", "羌族", "布朗族", "撒拉族", "毛南族", "仡佬族", "锡伯族", "阿昌族", "普米族",
+	"塔吉克族", "怒族", "乌孜别克族", "俄罗斯族", "鄂温克族", "德昂族", "保安族", "裕固族", "京族", "塔塔尔族",
+	"独龙族", "鄂伦春族", "赫哲族", "门巴族", "珞巴族", "基诺族",
+)
+# Older roster workbooks commonly omit the suffix.  Keep stored values on the
+# official selector values so an unrelated edit cannot be blocked by a legacy
+# value such as "汉" after the field becomes a Select.
+LEGACY_ETHNICITY_VALUE_MAP = {value.removesuffix("族"): value for value in CHINA_ETHNICITY_VALUES}
 PAYROLL_WELFARE_SOURCE_DOCTYPE = "HRMS Payroll Welfare Source Record"
 PAYROLL_SOCIAL_INSURANCE_SOURCE_TYPES = (
 	"社保个人",
@@ -199,6 +211,9 @@ GENDER_VALUE_ALIASES = {
 	"其它": "Other",
 	"other": "Other",
 	"Other": "Other",
+}
+ETHNICITY_VALUE_ALIASES = {
+	"汉": "汉族",
 }
 EMPLOYEE_DUPLICATE_MATCH_FIELDS = {
 	"employee_code": ("custom_employee_code",),
@@ -409,16 +424,7 @@ COMPANY_ROSTER_CUSTOM_FIELDS = [
 		"field_label": "民族",
 		"fieldname": "custom_ethnicity",
 		"fieldtype": "Select",
-		"options": "\n".join(
-			[
-				"汉族", "蒙古族", "回族", "藏族", "维吾尔族", "苗族", "彝族", "壮族", "布依族", "朝鲜族",
-				"满族", "侗族", "瑶族", "白族", "土家族", "哈尼族", "哈萨克族", "傣族", "黎族", "傈僳族",
-				"佤族", "畲族", "高山族", "拉祜族", "水族", "东乡族", "纳西族", "景颇族", "柯尔克孜族", "土族",
-				"达斡尔族", "仫佬族", "羌族", "布朗族", "撒拉族", "毛南族", "仡佬族", "锡伯族", "阿昌族", "普米族",
-				"塔吉克族", "怒族", "乌孜别克族", "俄罗斯族", "鄂温克族", "德昂族", "保安族", "裕固族", "京族", "塔塔尔族",
-				"独龙族", "鄂伦春族", "赫哲族", "门巴族", "珞巴族", "基诺族",
-			]
-		),
+		"options": "\n".join(CHINA_ETHNICITY_VALUES),
 		"description": "中国 56 个民族",
 		"insert_after": "passport_number",
 	},
@@ -1467,7 +1473,34 @@ def ensure_employee_china_profile_selectors():
 	"""Keep China profile fields as Frappe-supported fixed selectors."""
 	doc = _get_template_doc()
 	_sync_company_roster_fields(doc, {"custom_native_place", "custom_ethnicity"})
-	return {"updated": True}
+	return {"updated": True, "ethnicity_backfilled": _normalise_employee_ethnicity_values()}
+
+
+def _normalise_employee_ethnicity_values():
+	"""Convert safe legacy short ethnicity values before Select validation runs."""
+	frappe.clear_cache(doctype=EMPLOYEE_DOCTYPE)
+	if not frappe.get_meta(EMPLOYEE_DOCTYPE).has_field("custom_ethnicity"):
+		return 0
+
+	updated = 0
+	for employee in frappe.get_all(
+		EMPLOYEE_DOCTYPE,
+		filters={"custom_ethnicity": ["in", list(LEGACY_ETHNICITY_VALUE_MAP)]},
+		fields=["name", "custom_ethnicity"],
+		limit_page_length=0,
+	):
+		canonical_value = LEGACY_ETHNICITY_VALUE_MAP.get((employee.custom_ethnicity or "").strip())
+		if not canonical_value or canonical_value == employee.custom_ethnicity:
+			continue
+		frappe.db.set_value(
+			EMPLOYEE_DOCTYPE,
+			employee.name,
+			"custom_ethnicity",
+			canonical_value,
+			update_modified=False,
+		)
+		updated += 1
+	return updated
 
 
 def _property_history_doc_filters(employee=None, department=None, company=None):
@@ -4242,6 +4275,15 @@ def _normalise_gender_value(value):
 	return GENDER_VALUE_ALIASES.get(text, GENDER_VALUE_ALIASES.get(text.lower(), text))
 
 
+def _normalise_ethnicity_value(value):
+	"""Persist short Han ethnicity labels as the selector's canonical value."""
+	value = _clean_import_value(value)
+	if value is None:
+		return None
+	text = str(value).strip()
+	return ETHNICITY_VALUE_ALIASES.get(text, text)
+
+
 def _derive_identity_card_values(identity_card_number, today=None):
 	"""Derive only non-sensitive structured values from a mainland China ID number."""
 	identity_card_number = re.sub(r"\s+", "", str(identity_card_number or "")).upper()
@@ -4301,6 +4343,9 @@ def _normalise_import_value(fieldname, value, field):
 
 	if fieldname == "gender":
 		return _normalise_gender_value(value)
+
+	if fieldname == "custom_ethnicity":
+		return _normalise_ethnicity_value(value)
 
 	if fieldname in PHONE_FIELDNAMES:
 		return _normalise_phone_value(value)
