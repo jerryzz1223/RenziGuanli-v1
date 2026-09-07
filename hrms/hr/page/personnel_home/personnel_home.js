@@ -44,6 +44,7 @@ class PersonnelHome {
 					${this.metric("试用期", number(overview.probation), `本月入职 ${number(personnel.new_hires)}`)}
 					${this.metric("待办入转离", number((personnel.onboarding || 0) + (personnel.separation || 0)), `待入职 ${number(personnel.onboarding)} · 待离职 ${number(personnel.separation)}`)}
 				</div>
+				<section class="personnel-home__apple-tree"><div><h3>苹果树统计</h3><p>按员工、月份和年份查看绿苹果、红苹果及逐条奖惩明细。</p></div><button class="btn btn-default" data-route='["apple-tree-center"]'>查看苹果树</button></section>
 				<section class="personnel-home__analytics">
 					${this.map(analytics.native_place || {})}
 					<div class="personnel-home__side">

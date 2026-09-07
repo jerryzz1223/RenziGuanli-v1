@@ -22,6 +22,19 @@ for (const marker of [
 	"upload_employee_material(material_type)",
 	"allow_take_photo: true",
 	"员工材料已归档",
+	"data-action=\"preview-material-image\"",
+	"preview_employee_material_image(file_url, file_name)",
+	"data-action=\"delete-material\"",
+	"delete_employee_material(file_name, display_name)",
+	"hrms-employee-material-preview",
+	"hrms-employee-material-preview-dialog",
+	"width: calc(100vw - 48px)",
+	"height: calc(100vh - 48px)",
+	"data-action=\"material-image-zoom-in\"",
+	"data-action=\"material-image-zoom-out\"",
+	"data-action=\"material-image-zoom-reset\"",
+	"const set_zoom = (next_zoom)",
+	"员工材料已删除",
 ]) {
 	assert(detail.includes(marker), `Employee photo upload UI is missing: ${marker}`);
 }
@@ -39,6 +52,10 @@ for (const marker of [
 	"def _get_employee_materials(doc):",
 	"def upload_employee_material(employee: str, material_type: str, file_url: str):",
 	'file_doc.db_set("attached_to_field", material["fieldname"])',
+	"def delete_employee_material(employee: str, file_name: str):",
+	'file_doc.check_permission("delete")',
+	'frappe.delete_doc("File", file_doc.name)',
+	"当前仅支持删除员工材料中的图片",
 ]) {
 	assert(api.includes(marker), `Employee photo upload API is missing: ${marker}`);
 }
@@ -46,13 +63,19 @@ for (const marker of [
 for (const marker of [
 	"get_roster_employee_name_cell(cells, doc)",
 	"prepend_roster_employee_photo(employee_name_cell, doc.image, doc.employee_name)",
+	"create_roster_employee_photo(employee.image, employee.employee_name)",
+	"hrms-roster-identity-text",
+	"align-items:center;display:flex;gap:8px;white-space:normal;",
+	'!row.classList.contains("list-row-head")',
+	'cell.dataset.fieldname === "name"',
+	'(cell.textContent || "").includes(employee_name)',
 	"bind_roster_row_decorations(listview)",
 	"listview.after_render = function",
 	"checkbox_container.insertAdjacentElement(\"afterend\", photo)",
 	"document.createElement(\"img\")",
 	"row.querySelectorAll(\".list-row-activity\").forEach((activity) => activity.remove())",
 	"append_roster_default_avatar(photo)",
-	"max-height:18px",
+	"max-height:28px",
 	"hrms-roster-photo-frame--default",
 	"disable_comment_count: true",
 	"hrms-roster-employee-name-cell",
@@ -63,8 +86,8 @@ for (const marker of [
 
 for (const marker of [
 	"border-radius: 50%",
-	"height: 18px",
-	"width: 18px",
+	"height: 28px",
+	"width: 28px",
 	"object-fit: cover",
 	".list-row .list-row-activity",
 	".list-row .list-row-modified",

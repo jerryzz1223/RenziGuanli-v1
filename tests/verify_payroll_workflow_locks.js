@@ -23,7 +23,7 @@ for (const marker of [
 ]) mustInclude(page, marker);
 
 const areas = page.slice(page.indexOf("this.workspace_areas = ["), page.indexOf("this.active_tab ="));
-if ((areas.match(/\{ key:/g) || []).length !== 5) throw new Error("Payroll workspace must expose exactly five business areas.");
+if ((areas.match(/\{ key:/g) || []).length !== 6 || !areas.includes('route: "termination-settlement"')) throw new Error("Payroll workspace must expose six business areas including departure settlement.");
 if (areas.includes('key: "attendance"') || areas.includes('route: "data-closure"')) throw new Error("Attendance must not be a payroll workspace area.");
 
 for (const forbidden of ["data-payroll-step-lock", "render_active_step_lock", "load_payroll_workflow_status()", "请先按顺序锁定"]) {

@@ -68,20 +68,21 @@ def get_holiday_dates_between_range(
 	if (
 		from_holiday_list
 		and to_holiday_list
-		and from_holiday_list.holiday_list != to_holiday_list.holiday_list
+		and _get_assignment_value(from_holiday_list, "holiday_list")
+		!= _get_assignment_value(to_holiday_list, "holiday_list")
 	):
 		return list(
 			set(
 				get_holiday_dates_between(
-					holiday_list=from_holiday_list.holiday_list,
+					holiday_list=_get_assignment_value(from_holiday_list, "holiday_list"),
 					start_date=start_date,
-					end_date=add_days(to_holiday_list.from_date, -1),
+					end_date=add_days(_get_assignment_value(to_holiday_list, "from_date"), -1),
 					select_weekly_off=select_weekly_offs,
 					skip_weekly_offs=skip_weekly_offs,
 				)
 				+ get_holiday_dates_between(
-					holiday_list=to_holiday_list.holiday_list,
-					start_date=to_holiday_list.from_date,
+					holiday_list=_get_assignment_value(to_holiday_list, "holiday_list"),
+					start_date=_get_assignment_value(to_holiday_list, "from_date"),
 					end_date=end_date,
 					select_weekly_off=select_weekly_offs,
 					skip_weekly_offs=skip_weekly_offs,

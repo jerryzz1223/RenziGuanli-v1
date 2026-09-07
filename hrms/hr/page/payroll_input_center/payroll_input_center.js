@@ -65,6 +65,7 @@ class PayrollInputCenter {
 			{ key: "monthly-workbench", label: "本月算薪" },
 			{ key: "employee-salary", label: "员工薪资" },
 			{ key: "monthly-payroll", label: "月工资表" },
+			{ key: "termination-settlement", label: "离职结算" },
 			{ key: "payroll-disbursement", label: "工资发放" },
 			{ key: "salary-rules", label: "薪资规则" },
 			{ key: "attendance-pay-rules", label: "考勤计薪规则" },
@@ -84,6 +85,7 @@ class PayrollInputCenter {
 			{ key: "salary", label: "员工定薪", route: "salary-assignments", description: "维护有变化或缺失的员工固定薪资" },
 			{ key: "sources", label: "月度增减项", route: "variables", description: "导入奖金、补贴、扣款、社保与公积金" },
 			{ key: "calculation", label: "薪资试算", route: "monthly-workbench", description: "条件满足时生成并复核本月工资" },
+			{ key: "termination", label: "离职结算", route: "termination-settlement", description: "按离职薪资表核对工时、加扣款及个人结算明细" },
 			{ key: "delivery", label: "确认与发放", route: "payroll-reports", description: "确认结算、导出报表和发放工资条" },
 		];
 		this.active_tab = this.resolve_tab(frappe.get_route()[1] || "monthly-workbench");
@@ -571,6 +573,7 @@ class PayrollInputCenter {
 	}
 
 	process_step_for(tab) {
+		if (tab === "termination-settlement") return "termination";
 		if (tab === "payroll-adjustments") return "delivery";
 		if (tab === "employee-salary") return "master";
 		if (["salary-assignments", "salary-rules", "salary-templates"].includes(tab)) return "salary";
@@ -679,10 +682,17 @@ class PayrollInputCenter {
 		// Ignore a request that completed after the user switched its calculation
 		// scope; stale locks must never overwrite the current company/month.
 		if (company !== this.company || payroll_month !== this.payroll_month) return;
+		const previousVersion = this.attendance_lock_version;
 		this.attendance_dependency = dependency || { ready: false };
 		this.attendance_lock_version = this.attendance_dependency.attendance_lock_version || "";
 		this.render_attendance_dependency();
 		this.update_attendance_dependent_controls();
+		// The tab's first request can finish before this asynchronous dependency.
+		// Reload read-only calculation tables once the version arrives so a blank
+		// version can never mix historic monthly rows into the current view.
+		if (previousVersion !== this.attendance_lock_version && ["monthly-workbench", "monthly-payroll", "payroll-disbursement", "inputs", "settlements", "termination-settlement"].includes(this.active_tab)) {
+			this.load_active_tab();
+		}
 		if (this.active_tab === "employee-salary") {
 			this.load_payroll_participation_preview(this.body()?.querySelector("[data-payroll-participation-preview]"));
 		}
@@ -797,6 +807,10 @@ class PayrollInputCenter {
 		}
 		if (this.active_tab === "settlements") {
 			this.load_settlements();
+			return;
+		}
+		if (this.active_tab === "termination-settlement") {
+			this.load_termination_settlements();
 			return;
 		}
 		if (this.active_tab === "inputs") {
@@ -1018,6 +1032,14 @@ class PayrollInputCenter {
 	}
 
 	load_monthly_workbench() {
+		// The attendance lock is loaded asynchronously.  A prior, unscoped table
+		// request may contain rows from multiple historical lock versions, so a
+		// response is allowed to render only for the current workbench load.
+		const workbenchLoadId = (this.monthly_workbench_load_id || 0) + 1;
+		this.monthly_workbench_load_id = workbenchLoadId;
+		const isCurrentWorkbenchLoad = () => (
+			this.active_tab === "monthly-workbench" && this.monthly_workbench_load_id === workbenchLoadId
+		);
 		this.body().innerHTML = `
 			<section class="hrms-payroll-dashboard" aria-label="${this.escape(__("本月薪资概览"))}">
 				<div class="hrms-payroll-dashboard-head">
@@ -1037,18 +1059,23 @@ class PayrollInputCenter {
 			method: "hrms.api.payroll_input.get_payroll_home_dashboard",
 			args: this.scope_args(),
 			callback: (response) => {
+				if (!isCurrentWorkbenchLoad()) return;
 				const target = this.wrapper.querySelector("[data-payroll-dashboard-content]");
 				if (target) target.innerHTML = this.render_payroll_home_dashboard(response.message || {});
 			},
 		});
-		frappe.call({
-			method: "hrms.api.payroll_input.list_payroll_settlement_records",
-			args: this.scope_args({ page_length: 500 }),
-			callback: (response) => {
-				const target = this.wrapper.querySelector("[data-payroll-calculation-table]");
-				if (!target) return;
-				this.render_monthly_calculation_table(target, response.message || []);
-			},
+		this.load_attendance_dependency().then(() => {
+			if (!isCurrentWorkbenchLoad()) return;
+			frappe.call({
+				method: "hrms.api.payroll_input.list_payroll_settlement_records",
+				args: this.scope_args({ page_length: 500 }),
+				callback: (response) => {
+					if (!isCurrentWorkbenchLoad()) return;
+					const target = this.wrapper.querySelector("[data-payroll-calculation-table]");
+					if (!target) return;
+					this.render_monthly_calculation_table(target, response.message || []);
+				},
+			});
 		});
 	}
 
@@ -1417,6 +1444,10 @@ class PayrollInputCenter {
 			],
 			primary_action_label: __("保存本月处理决定"),
 			primary_action: (values) => {
+				if (values.decision === "离职结算") {
+					dialog.hide();
+					return this.open_termination_settlement(row.employee);
+				}
 				frappe.call({
 					method: "hrms.api.payroll_input.save_monthly_payroll_participation_decision",
 					args: { company: this.company, payroll_month: this.payroll_month, attendance_lock_version: this.attendance_lock_version, employee: row.employee, ...values },
@@ -1701,7 +1732,7 @@ class PayrollInputCenter {
 		if (rule.rule_code === "PAYROLL_SETTLEMENT_ABSENCE_DEDUCTION") return __("标准计薪工时：{0} 小时 · 旷工按 {1} 倍扣款", [parameters.standard_hours_divisor || "-", parameters.absenteeism_multiplier || "-"]);
 		if (rule.rule_code === "ATTENDANCE_MISSED_PUNCH") return __("每次 {0} 颗红苹果 · 每颗 {1} 元", [parameters.red_apples_per_record ?? "-", parameters.amount_per_apple ?? "-"]);
 		if (rule.rule_code === "PAYROLL_SETTLEMENT_OVERTIME_PAY") return __("平日 {0} 倍 · 周末 {1} 倍 · 节假日 {2} 倍 · 基准 {3} 小时", [parameters.weekday || "-", parameters.weekend || "-", parameters.holiday || "-", parameters.standard_hours_divisor || "-"]);
-		if (rule.rule_code === "PAYROLL_SETTLEMENT_NIGHT_SHIFT") return __("深夜班 {0} 元/次（{1}–{2}，容差前后 {3} 分钟）· 大夜班 {4} 元/次、 小夜班 {5} 元/次（次数均取钉钉终稿）", [parameters.deep_night_shift || "-", parameters.deep_night_shift_start || "08:00", parameters.deep_night_shift_end || "20:00", parameters.deep_night_shift_tolerance_minutes ?? 10, parameters.large_night_shift || "-", parameters.small_night_shift || "-"]);
+		if (rule.rule_code === "PAYROLL_SETTLEMENT_NIGHT_SHIFT") return __("深夜班 {0} 元/次（仅生产夜班 20:00–次日08:00）· 大夜班 {1} 元/次、 小夜班 {2} 元/次（后两项取钉钉终稿）", [parameters.deep_night_shift || "-", parameters.large_night_shift || "-", parameters.small_night_shift || "-"]);
 		return __("已设置");
 	}
 
@@ -1719,7 +1750,7 @@ class PayrollInputCenter {
 		} else if (rule.rule_code === "PAYROLL_SETTLEMENT_OVERTIME_PAY") {
 			fields = `<div class="hrms-payroll-rule-fields">${input("标准计薪工时", "standard_hours_divisor", parameters.standard_hours_divisor, "小时")}${input("平日加班", "weekday", parameters.weekday, "倍")}${input("周末加班", "weekend", parameters.weekend, "倍")}${input("法定节假日加班", "holiday", parameters.holiday, "倍")}</div>`;
 		} else if (rule.rule_code === "PAYROLL_SETTLEMENT_NIGHT_SHIFT") {
-			fields = `<div class="hrms-payroll-rule-fields">${input("深夜班每次津贴", "deep_night_shift", parameters.deep_night_shift || 55, "元/次")}${input("深夜班上班时间", "deep_night_shift_start", parameters.deep_night_shift_start || "08:00", "", "time")}${input("深夜班下班时间", "deep_night_shift_end", parameters.deep_night_shift_end || "20:00", "", "time")}${input("深夜班打卡容差", "deep_night_shift_tolerance_minutes", parameters.deep_night_shift_tolerance_minutes ?? 10, "分钟", "number", "默认前后各 10 分钟，例如 07:50 上班、20:10 下班都按深夜班计。")}</div><p class="hrms-payroll-rule-guide">${frappe.utils.escape_html(__("深夜班按同日 08:00–20:00 和打卡容差自动识别，并优先从钉钉大夜班次数中扣除，避免重复发放。大夜班、小夜班不再提供本地时段设置，始终直接使用钉钉考勤终稿次数；津贴标准分别为 {0} 元/次和 {1} 元/次。", [parameters.large_night_shift || 45, parameters.small_night_shift || 24]))}</p>`;
+			fields = `<div class="hrms-payroll-rule-fields">${input("深夜班每次津贴", "deep_night_shift", parameters.deep_night_shift || 55, "元/次")}</div><p class="hrms-payroll-rule-guide">${frappe.utils.escape_html(__("深夜班由锁定考勤中的班次识别：仅“生产夜班”且排定 20:00 至次日 08:00 的记录计入，不按实际打卡跨夜或容差推断。大夜班、小夜班始终使用钉钉考勤终稿次数；深夜班会从大夜班次数中扣除，避免重复发放。"))}</p>`;
 		}
 		return `<section class="hrms-payroll-inline-rule-editor" data-attendance-rule-editor data-rule-code="${frappe.utils.escape_html(rule.rule_code || "")}"><div class="hrms-payroll-project-map-head"><div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("正在设置"))}</span><h3>${frappe.utils.escape_html(__(rule.title || rule.rule_name || ""))}</h3><p>${frappe.utils.escape_html(__(rule.description || ""))}</p></div><button class="btn btn-default btn-sm" data-close-attendance-editor>${frappe.utils.escape_html(__("收起"))}</button></div><div class="hrms-payroll-inline-rule-body">${fields}</div><div class="hrms-payroll-action-group"><button class="btn btn-primary btn-sm" data-save-attendance-rule>${frappe.utils.escape_html(__("保存本项设置"))}</button><span>${frappe.utils.escape_html(__("保存后仅影响之后重新处理或重新试算的月份。"))}</span></div></section>`;
 	}
@@ -4408,6 +4439,127 @@ class PayrollInputCenter {
 		});
 	}
 
+	load_termination_settlements() {
+		const target = this.body();
+		const escape = (value) => frappe.utils.escape_html(String(value ?? ""));
+		target.innerHTML = `<h3>离职结算</h3><p>固定工资按当月标准工时折算，周末加班不抵缺勤。个人结算结果统一进入本月工资表。</p><div data-termination-content>正在读取锁定考勤名单…</div>`;
+		if (!this.attendance_lock_version) {
+			target.querySelector("[data-termination-content]").textContent = "请先完成并锁定本月考勤终稿。离职结算使用所选月份的已锁定考勤。";
+			return;
+		}
+		const scope = this.scope_args();
+		frappe.call({
+			method: "hrms.api.payroll_input.get_termination_settlement_workbench", args: scope,
+			callback: ({ message: data }) => {
+				if (!target.isConnected || this.active_tab !== "termination-settlement" || JSON.stringify(scope) !== JSON.stringify(this.scope_args())) return;
+				const content = target.querySelector("[data-termination-content]");
+				if (!content) return;
+				const rows = data?.rows || [];
+				content.innerHTML = `<div class="hrms-payroll-action-group"><select class="form-control" data-termination-employee><option value="">选择锁定名单中的员工…</option>${(data?.candidates || []).map((row) => `<option value="${escape(row.employee)}">${escape(row.employee_code)} ${escape(row.employee_name)}</option>`).join("")}</select><button class="btn btn-primary btn-sm" data-termination-add>办理离职结算</button><button class="btn btn-default btn-sm" data-termination-monthly>进入本月试算与确认</button></div>
+				<p class="text-muted">${rows.length} 人。尚未生成的金额显示“待试算”；已确认结果通过原结算记录进入工资发放，不另建付款记录。</p>
+				<div class="hrms-payroll-table-wrap"><table class="table table-bordered"><thead><tr><th>工号</th><th>姓名</th><th>离职日期</th><th>处理决定</th><th>审核</th><th>应付工资</th><th>实发工资</th><th>结算状态</th><th>操作</th></tr></thead><tbody>${rows.map((row, i) => `<tr><td>${escape(row.employee_code)}</td><td>${escape(row.employee_name)}</td><td>${escape(row.relieving_date)}</td><td>${escape(row.decision)}</td><td>${escape(row.review_status)}</td><td>${row.settlement ? this.format_money(row.settlement.gross_pay) : "待试算"}</td><td>${row.settlement ? this.format_money(row.settlement.net_pay) : "待试算"}</td><td>${escape(row.settlement?.calculation_status || row.calculation_status)}</td><td><button class="btn btn-default btn-xs" data-termination-edit="${i}">核对输入</button> ${row.settlement ? `<button class="btn btn-default btn-xs" data-termination-detail="${i}">结算明细</button>` : ""}</td></tr>`).join("") || '<tr><td colspan="9">本月暂无离职待结算人员，可从上方锁定名单选择员工办理。</td></tr>'}</tbody></table></div>`;
+				content.querySelector("[data-termination-add]").onclick = () => {
+					const employee = content.querySelector("[data-termination-employee]").value;
+					if (employee) this.open_termination_settlement(employee);
+				};
+				content.querySelector("[data-termination-monthly]").onclick = () => frappe.set_route("payroll-input-center", "monthly-workbench");
+				content.querySelectorAll("[data-termination-edit]").forEach((button) => button.onclick = () => this.open_termination_settlement(rows[Number(button.dataset.terminationEdit)].employee));
+				content.querySelectorAll("[data-termination-detail]").forEach((button) => button.onclick = () => this.show_termination_detail(rows[Number(button.dataset.terminationDetail)]));
+			},
+			error: () => {
+				const content = target.querySelector("[data-termination-content]");
+				if (content) content.textContent = "读取离职结算失败，请检查提示后刷新。";
+			},
+		});
+	}
+
+	termination_result_html(result) {
+		const escape = (value) => frappe.utils.escape_html(String(value ?? ""));
+		return `<div class="alert alert-info">应付工资：${this.format_money(result.calculated.gross_pay)}　实发工资：${this.format_money(result.calculated.net_pay)}</div><table class="table table-bordered"><thead><tr><th>项目</th><th>原表单元格</th><th>计算方式</th><th>结果</th></tr></thead><tbody>${result.formula_trace.map((item) => `<tr><td>${escape(item.label)}</td><td>${escape(item.cell)}</td><td>${escape(item.expression)}</td><td>${escape(Number(item.value).toFixed(["L5", "R5", "S5", "Z5"].includes(item.cell) ? 6 : 2))}</td></tr>`).join("")}</tbody></table>`;
+	}
+
+	open_termination_settlement(employee) {
+		const scope = this.scope_args();
+		const escape = (value) => frappe.utils.escape_html(String(value ?? ""));
+		frappe.call({
+			method: "hrms.api.payroll_input.get_termination_settlement_context", args: { ...scope, employee },
+			callback: ({ message: context }) => {
+				if (!context || JSON.stringify(scope) !== JSON.stringify(this.scope_args())) return;
+				const saved = context.saved || {};
+				const stale = saved.source_hash && saved.source_hash !== context.source_hash;
+				const inputs = !stale && saved.inputs ? saved.inputs : context.inputs;
+				let reviewedInputs = "";
+				const fields = [
+					{ fieldtype: "HTML", fieldname: "source_note", options: `<p>${escape(scope.company)}　${escape(scope.payroll_month)}　${escape(context.employee_code)} ${escape(context.employee_name)}　入职：${escape(context.date_of_joining)}　离职：${escape(context.relieving_date)}</p><p>核对抵扣前的工时；无金额或工时请明确填写0。空白代表来源缺失。津贴及加扣款均以本单确认为准。</p>${stale ? '<p class="text-danger">来源已变化，已重新读取来源，请重新核对。</p>' : ""}` },
+					{ fieldtype: "Date", fieldname: "settlement_date", label: "结算日期", reqd: 1, default: saved.settlement_date || frappe.datetime.get_today() },
+					{ fieldtype: "Small Text", fieldname: "decision_reason", label: "处理说明／输入调整原因", reqd: 1, default: context.decision.decision_reason || "" },
+					{ fieldtype: "Small Text", fieldname: "settlement_basis", label: "结算依据", reqd: 1, default: context.decision.settlement_basis || "离职人员薪资计算.xlsx" },
+					{ fieldtype: "Section Break", label: "原表输入" },
+				];
+				context.fields.forEach((field, index) => {
+					if (index === 9) fields.push({ fieldtype: "Column Break" });
+					fields.push({ fieldtype: "Float", fieldname: field.fieldname, label: field.label, reqd: 1, default: inputs[field.fieldname], precision: 4 });
+				});
+				fields.push(
+					{ fieldtype: "Section Break", label: "所得税" },
+					{ fieldtype: "Check", fieldname: "use_confirmed_income_tax", label: "使用财务确认税额", default: inputs.income_tax_override != null ? 1 : 0, description: "默认按原表AF5计算。原表超过40000的分支异常，该区间必须使用财务确认税额。" },
+					{ fieldtype: "Float", fieldname: "income_tax_override", label: "财务确认所得税", depends_on: "eval:doc.use_confirmed_income_tax", default: inputs.income_tax_override, precision: 2, description: "勾选后填写0，表示财务确认税额为0。" },
+					{ fieldtype: "Section Break", label: "试算预览" },
+					{ fieldtype: "HTML", fieldname: "preview", options: "请点击“试算预览”核对每一项，再确认输入。" },
+				);
+				const readInputs = () => ({ ...Object.fromEntries(context.fields.map((field) => [field.fieldname, dialog.get_value(field.fieldname) ?? null])), income_tax_override: dialog.get_value("use_confirmed_income_tax") ? dialog.get_value("income_tax_override") : null });
+				const dialog = new frappe.ui.Dialog({
+					title: `离职结算：${context.employee_name}`, size: "extra-large", fields,
+					secondary_action_label: "试算预览",
+					secondary_action: () => {
+						const inputJson = JSON.stringify(readInputs());
+						frappe.call({ method: "hrms.api.payroll_input.preview_termination_settlement", args: { ...scope, employee, inputs_json: inputJson }, callback: ({ message: result }) => {
+							if (JSON.stringify(readInputs()) !== inputJson) return;
+							reviewedInputs = inputJson;
+							dialog.fields_dict.preview.$wrapper.html(this.termination_result_html(result));
+						} });
+					},
+					primary_action_label: "确认输入并参与本月结算",
+					primary_action: (values) => {
+						if (JSON.stringify(scope) !== JSON.stringify(this.scope_args())) return frappe.msgprint("公司、月份或考勤版本已切换，请重新打开离职结算。");
+						if (reviewedInputs !== JSON.stringify(readInputs())) return frappe.msgprint("请先试算预览；修改输入后需要重新试算。");
+						frappe.call({
+							method: "hrms.api.payroll_input.save_monthly_payroll_participation_decision",
+							args: { ...scope, employee, decision: "离职结算", approved: 1, decision_reason: values.decision_reason,
+								settlement_basis: values.settlement_basis, termination_inputs_json: JSON.stringify({ inputs: readInputs(), source_hash: context.source_hash, settlement_date: values.settlement_date }) },
+							freeze: true, callback: () => {
+								dialog.hide(); this.payroll_participation_preview = null; this.process_readiness = {};
+								frappe.show_alert({ message: "离职结算输入已确认，请在本月算薪中生成工资并复核。", indicator: "green" });
+								this.load_active_tab();
+							},
+						});
+					},
+				});
+				dialog.show();
+			},
+		});
+	}
+
+	show_termination_detail(row) {
+		const trace = JSON.parse(row.settlement.source_trace_json || "{}");
+		if (!trace.termination) return frappe.msgprint("该记录使用正常计薪规则，请先核对离职结算输入并重新试算。");
+		const result = trace.termination;
+		const escape = (value) => frappe.utils.escape_html(String(value ?? ""));
+		const inputTable = `<table class="table table-bordered"><tbody>${Object.entries(result.inputs).map(([key, value]) => `<tr><td>${escape(this.termination_field_label(key))}</td><td>${escape(value)}</td></tr>`).join("")}</tbody></table>`;
+		const html = `<h3>离职人员薪资结算表</h3><p>${escape(row.employee_name)}　${escape(row.employee_code)}　工资月份：${escape(row.settlement.payroll_month)}　结算日期：${escape(result.approved_source.settlement_date)}</p><p>状态：${escape(row.settlement.calculation_status)}　离职日期：${escape(result.approved_source.source.relieving_date)}</p>${this.termination_result_html(result)}<details><summary>已确认输入</summary>${inputTable}</details><p>财务确认：________________　收款人签名：________________　签收日期：________________</p>`;
+		const dialog = new frappe.ui.Dialog({ title: "个人离职结算明细", size: "extra-large", fields: [{ fieldtype: "HTML", fieldname: "detail", options: html }], primary_action_label: "打印结算单", primary_action: () => {
+			const printWindow = window.open("", "_blank");
+			if (!printWindow) return frappe.msgprint("请允许打开打印窗口。");
+			printWindow.document.write(`<html><head><title>离职薪资结算单</title><style>body{font:14px sans-serif;padding:20px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #aaa;padding:6px}details{display:block}h3{text-align:center}</style></head><body>${html}</body></html>`);
+			printWindow.document.close(); printWindow.focus(); printWindow.print();
+		} });
+		dialog.show();
+	}
+
+	termination_field_label(key) {
+		return ({ base_salary: "底薪", function_allowance: "津贴", standard_hours: "当月标准工时", basic_attendance_hours: "基本出勤工时", raw_weekend_overtime_hours: "周末加班工时", weekday_overtime_hours: "平日加班工时", holiday_overtime_hours: "节假日加班工时", large_night_shift_count: "大夜班次数", small_night_shift_count: "小夜班次数", green_apple_amount: "奖金／绿苹果", red_apple_amount: "惩处／红苹果", attendance_housing_allowance: "全勤／住房津贴", absenteeism_hours: "旷工工时", social_security_personal: "社保个人", housing_fund_personal: "公积金个人", utilities_deduction: "住宿伙食及水电费", insurance_deduction: "意外险／全额社保扣款", income_tax_override: "财务确认所得税" })[key] || key;
+	}
+
 	load_settlement_dependencies() {
 		frappe.call({
 			method: "hrms.api.payroll_input.list_payroll_dependency_status",
@@ -4452,6 +4604,7 @@ class PayrollInputCenter {
 	settlement_columns(show_all_details) {
 		const core = [
 			{ label: "姓名", field: "employee_name", type: "text" },
+			{ label: "结算方式", field: "settlement_type", type: "text" },
 			{ label: "工号", field: "employee_code", type: "text" },
 			{ label: "部门", field: "department", type: "text" },
 			{ label: "底薪", field: "base_salary", type: "money" },

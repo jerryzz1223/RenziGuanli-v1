@@ -8,6 +8,7 @@ import frappe
 from frappe import _
 from frappe.query_builder.functions import Count
 from frappe.utils import cint, cstr
+from hrms.utils.organization_roles import role_lines
 
 
 HYBRID_MANAGER_KEYWORDS = ("课长", "组长", "主管", "总监", "副总", "经理", "班长", "代理")
@@ -45,6 +46,14 @@ GRADE_TAG_CANDIDATES = {"直线级", "间师级", "文师级", "文组级"}
 MANUAL_ORGANIZATION_MODE_MESSAGE = _(
 	"组织架构现为手动维护模式；请在人事界面逐项创建部门、岗位和任职关系，系统不会再依据原表或员工档案自动生成。"
 )
+MANUAL_ORGANIZATION_REFERENCE_PREFIX = "manual_organization_chart:"
+MANUAL_ORGANIZATION_NODE_KINDS = {"分管", "室", "课", "组", "线", "岗位", "员工"}
+# Manual layout is not the HR department tree. Any container may hold another
+# container or role; only person leaves and cycles are prohibited.
+MANUAL_ORGANIZATION_CHILD_KINDS = {
+	kind: set(MANUAL_ORGANIZATION_NODE_KINDS) if kind != "员工" else set()
+	for kind in (None, *MANUAL_ORGANIZATION_NODE_KINDS)
+}
 
 HYBRID_ROSTER_FIELD_MAP = {
 	"工号": "custom_employee_code",
@@ -1210,6 +1219,16 @@ def get_hybrid_tree(company: str | None = None, source_mode: str | None = None):
 	source_mode = cstr(source_mode).strip() or "live"
 	if source_mode == "workbook_snapshot":
 		return _get_yongxin_workbook_snapshot_tree(company)
+	manual = _get_manual_organization_records(company)
+	root = _build_manual_organization_tree(company, manual)
+	return {
+		"company": company,
+		"source_mode": "manual",
+		"source_label": root.pop("source_label"),
+		"root": root,
+		"summary": root.pop("summary"),
+		"version": root.pop("version"),
+	}
 	if source_mode == "quarterly_template":
 		return _get_yongxin_template_tree(company)
 
@@ -1283,52 +1302,459 @@ def get_hybrid_tree(company: str | None = None, source_mode: str | None = None):
 	}
 
 
-def _get_manual_organization_records(company=None):
-	"""Read a standalone chart only; no HR master data is part of this view."""
-	if not frappe.db.exists("DocType", "Organization Node"):
-		return {"nodes": []}
+def _manual_organization_reference(company):
+	return f"{MANUAL_ORGANIZATION_REFERENCE_PREFIX}{company or YONGXIN_COMPANY_NAME}"
 
-	versions = frappe.get_all(
+
+def _get_manual_organization_version(company=None):
+	company = company or YONGXIN_COMPANY_NAME
+	return frappe.db.get_value(
 		"Organization Structure Version",
-		filters={"company": company, "status": ["!=", "已归档"]} if company else {"status": ["!=", "已归档"]},
-		pluck="name",
+		{"company": company, "source_reference": _manual_organization_reference(company), "status": ["!=", "已归档"]},
+		"name",
 	)
-	if not versions:
-		return {"nodes": []}
+
+
+def _ensure_manual_organization_version(company=None):
+	company = company or YONGXIN_COMPANY_NAME
+	version = _get_manual_organization_version(company)
+	if version:
+		return version
+	frappe.only_for(("System Manager", "HR Manager"))
+	code = f"手工组织架构-{company}"
+	if frappe.db.exists("Organization Structure Version", {"version_code": code}):
+		code = f"{code}-{frappe.generate_hash(length=6)}"
+	return frappe.get_doc(
+		{
+			"doctype": "Organization Structure Version",
+			"version_code": code,
+			"company": company,
+			"status": "已发布",
+			"source_reference": _manual_organization_reference(company),
+			"notes": _("仅用于手工组织图谱；不关联部门、岗位或员工档案的业务字段。"),
+		}
+	).insert(ignore_permissions=False).name
+
+
+def _get_manual_organization_records(company=None):
+	"""Read the standalone manual chart; it never derives hierarchy from HR master data."""
+	if not frappe.db.exists("DocType", "Organization Node"):
+		return {"nodes": [], "version": None}
+
+	version = _get_manual_organization_version(company)
+	if not version:
+		return {"nodes": [], "version": None}
 
 	nodes = frappe.get_all(
 		"Organization Node",
-		filters={"structure_version": ["in", versions], "confirmation_status": "已确认"},
-		fields=["name", "node_code", "node_type", "display_name", "parent_node", "planned_headcount", "current_headcount", "vacancy_count"],
+		filters={"structure_version": version, "confirmation_status": "已确认"},
+		fields=[
+			"name", "node_code", "node_type", "display_name", "parent_node", "source_text",
+			"planned_headcount", "current_headcount", "vacancy_count",
+		],
 		order_by="creation asc",
 	)
-	return {"nodes": nodes}
+	for node in nodes:
+		node.manual_config = _manual_node_config(node.get("source_text"))
+	return {"nodes": nodes, "version": version}
+
+
+def _manual_node_config(source_text):
+	try:
+		config = json.loads(cstr(source_text))
+		return frappe._dict(config) if isinstance(config, dict) and config.get("manual_organization") else frappe._dict()
+	except (TypeError, ValueError):
+		return frappe._dict()
+
+
+def _manual_node_kind(node):
+	return node.get("manual_config", {}).get("node_kind") or node.get("node_type")
+
+
+def _manual_primary_employee(node):
+	"""Keep the previous responsible-person value visible after the field split."""
+	config = node.get("manual_config", {})
+	return config.get("primary_employee") or config.get("responsible_person")
+
+
+def _normalize_manual_employee_names(value):
+	"""Accept Frappe MultiSelectList values without creating employee records."""
+	if isinstance(value, str):
+		try:
+			value = json.loads(value)
+		except (TypeError, ValueError):
+			value = [item.strip() for item in value.split("\n")]
+	if not isinstance(value, (list, tuple, set)):
+		return []
+	return list(dict.fromkeys(cstr(item).strip() for item in value if cstr(item).strip()))
+
+
+def _manual_employee_labels(employee_names):
+	if not employee_names:
+		return {}
+	rows = frappe.get_all(
+		"Employee",
+		filters={"name": ["in", list(set(employee_names))]},
+		fields=["name", "employee_name", "custom_employee_code", "designation", "grade", "department", "status"],
+	)
+	return {row.name: frappe._dict(row) for row in rows}
 
 
 def _build_manual_organization_tree(company, manual):
 	nodes_by_name = {node.name: node for node in manual["nodes"]}
+	company_employees = _get_active_employees(company)
+	company_staffing = _get_manual_company_staffing(company, company_employees)
+	employee_labels = _manual_employee_labels(
+		[node.manual_config.get("manager_employee") for node in manual["nodes"] if node.manual_config.get("manager_employee")]
+		+ [node.manual_config.get("employee") for node in manual["nodes"] if node.manual_config.get("employee")]
+		+ [_manual_primary_employee(node) for node in manual["nodes"] if _manual_primary_employee(node)]
+		+ [node.manual_config.get("proxy_employee") for node in manual["nodes"] if node.manual_config.get("proxy_employee")]
+		+ [employee for node in manual["nodes"] for employee in _normalize_manual_employee_names(node.manual_config.get("assigned_employees"))]
+	)
+	employees_by_department = defaultdict(list)
+	for employee in company_employees:
+		if employee.get("department"):
+			employees_by_department[employee.department].append(employee)
 	children_by_parent = defaultdict(list)
+	headcount_members = {}
+	active_names = {row.name for row in company_employees}
 	for node in manual["nodes"]:
 		(children_by_parent[node.parent_node] if node.parent_node in nodes_by_name else children_by_parent[None]).append(node)
 	def organization_node(node):
 		child_nodes = [organization_node(child) for child in children_by_parent[node.name]]
+		kind = _manual_node_kind(node)
+		manager = employee_labels.get(node.manual_config.get("manager_employee"))
+		primary = employee_labels.get(_manual_primary_employee(node))
+		proxy = employee_labels.get(node.manual_config.get("proxy_employee"))
+		assigned = [
+			employee_labels.get(employee)
+			for employee in _normalize_manual_employee_names(node.manual_config.get("assigned_employees"))
+			if employee_labels.get(employee)
+		]
+		person = manager if kind == "分管" else primary or employee_labels.get(node.manual_config.get("employee"))
+		node_type = {
+			"分管": "organization_supervisor", "室": "organization_office", "课": "organization_section", "组": "organization_group", "线": "organization_line",
+			"岗位": "organization_position", "员工": "organization_person",
+		}.get(kind, "organization_node")
+		name = node.display_name
+		lines = role_lines(node.manual_config, employee_labels)
+		roster_department = node.manual_config.get("roster_department") or node.manual_config.get("department")
+		matched_employees = employees_by_department.get(roster_department, [])
+		planned_headcount = cint(node.planned_headcount)
+		vacancy_count = cint(node.vacancy_count)
+		members = {person.name for person in matched_employees} if kind in {"室", "课"} else set()
+		if kind != "分管":
+			members.update(filter(None, [_manual_primary_employee(node), node.manual_config.get("employee"), *_normalize_manual_employee_names(node.manual_config.get("assigned_employees"))]))
+		for child in children_by_parent[node.name]:
+			members.update(headcount_members[child.name])
+		# Repeated chart references and proxies must not inflate roster headcount.
+		headcount_members[node.name] = members & active_names
+		current_headcount = len(headcount_members[node.name])
+		if kind == "分管":
+			planned_headcount = sum(cint(child.get("planned_headcount")) for child in child_nodes)
+		vacancy_count = max(0, planned_headcount - current_headcount)
 		return {
 			"node_id": f"organization_node:{node.name}", "id": f"organization_node:{node.name}",
-			"node_type": "organization_node", "name": node.display_name, "title": node.node_type,
-			"people": [], "planned_headcount": cint(node.planned_headcount),
-			"current_headcount": cint(node.current_headcount), "vacancy_count": cint(node.vacancy_count),
+			"node_type": node_type, "organization_node_type": kind, "name": name, "title": kind,
+			"department": node.manual_config.get("department"),
+			"roster_department": roster_department,
+			"designation": node.manual_config.get("designation"),
+			"role_title": node.manual_config.get("role_title"),
+			"grade": node.manual_config.get("grade"),
+			"employee": node.manual_config.get("manager_employee") if kind == "分管" else _manual_primary_employee(node) or node.manual_config.get("employee"),
+			"employee_route": node.manual_config.get("manager_employee") if kind == "分管" else _manual_primary_employee(node) or node.manual_config.get("employee"),
+			"employee_code": person.get("custom_employee_code") if person else "", "people": [], "lines": lines,
+			"planned_headcount": planned_headcount,
+			"current_headcount": current_headcount,
+			"vacancy_count": vacancy_count,
 			"children": child_nodes, "connections": len(child_nodes), "expandable": bool(child_nodes),
 		}
 
 	children = [organization_node(node) for node in children_by_parent[None]]
+	counts = Counter(_manual_node_kind(node) for node in manual["nodes"])
 	return {
 		"node_id": f"company:{company or 'all'}", "id": f"company:{company or 'all'}", "node_type": "company",
-		"name": _("{0}（总公司）").format(_get_company_label(company)), "title": _("人工维护组织根节点"),
-		"people": [], "lines": [], "planned_headcount": sum(cint(node.planned_headcount) for node in manual["nodes"] if not node.parent_node),
-		"current_headcount": sum(cint(node.current_headcount) for node in manual["nodes"] if not node.parent_node),
-		"vacancy_count": sum(cint(node.vacancy_count) for node in manual["nodes"] if not node.parent_node), "children": children,
+		"name": _get_company_label(company), "title": _("公司"),
+		"people": [], "lines": company_staffing["leadership_lines"],
+		"planned_headcount": company_staffing["planned_headcount"],
+		"current_headcount": company_staffing["current_headcount"],
+		"vacancy_count": company_staffing["vacancy_count"], "children": children,
 		"connections": len(children), "expandable": bool(children),
+		"source_mode": "manual",
+		"source_label": _("手工组织图谱（独立于部门、岗位和员工业务资料）"),
+		"summary": {
+			"planned_headcount": company_staffing["planned_headcount"],
+			"current_headcount": company_staffing["current_headcount"],
+			"vacancy_count": company_staffing["vacancy_count"],
+			"supervisor_count": counts["分管"], "office_count": counts["室"], "section_count": counts["课"], "group_count": counts["组"],
+			"line_count": counts["线"], "position_count": counts["岗位"], "person_count": counts["员工"],
+			"node_count": len(manual["nodes"]),
+		},
+		"version": manual.get("version"),
 	}
+
+
+def _get_manual_company_staffing(company, employees):
+	"""Return read-only company-card metrics for the standalone organization chart."""
+	staffing = _get_department_staffing(company)
+	planned_headcount = sum(cint(row.get("planned_headcount")) for row in staffing.values())
+	current_headcount = len(employees)
+	general_managers = []
+	deputy_general_managers = []
+	for employee in employees:
+		designation = cstr(employee.get("designation")).strip()
+		name = cstr(employee.get("employee_name")).strip()
+		if not name:
+			continue
+		if "副总经理" in designation:
+			deputy_general_managers.append(name)
+		elif "总经理" in designation:
+			general_managers.append(name)
+	leadership_lines = []
+	if general_managers:
+		leadership_lines.append(_("总经理：{0}").format("、".join(general_managers)))
+	if deputy_general_managers:
+		leadership_lines.append(_("副总经理：{0}").format("、".join(deputy_general_managers)))
+	return {
+		"planned_headcount": planned_headcount,
+		"current_headcount": current_headcount,
+		"vacancy_count": max(planned_headcount - current_headcount, 0),
+		"leadership_lines": leadership_lines,
+	}
+
+
+def _validate_manual_node_parent(node_kind, parent_node, version, node_name=None):
+	if node_kind not in MANUAL_ORGANIZATION_NODE_KINDS:
+		frappe.throw(_("请选择分管、室、课、组、线、岗位或员工。"))
+	if not parent_node:
+		if node_kind not in MANUAL_ORGANIZATION_CHILD_KINDS[None]:
+			frappe.throw(_("公司根节点下只能添加：{0}。 ").format("、".join(MANUAL_ORGANIZATION_CHILD_KINDS[None])))
+		return
+	parent = frappe.db.get_value(
+		"Organization Node", parent_node, ["name", "source_text", "structure_version"], as_dict=True
+	)
+	if not parent or parent.structure_version != version:
+		frappe.throw(_("请选择当前组织图谱中的上级节点。"))
+	if parent.name == node_name or _would_create_manual_node_loop(node_name, parent.name):
+		frappe.throw(_("上级节点不能是当前节点或其下级。"))
+	parent_kind = _manual_node_config(parent.source_text).get("node_kind")
+	if node_kind not in MANUAL_ORGANIZATION_CHILD_KINDS.get(parent_kind, set()):
+		frappe.throw(_("{0}下只能添加：{1}。").format(parent_kind or _("当前节点"), "、".join(MANUAL_ORGANIZATION_CHILD_KINDS.get(parent_kind, []))))
+
+
+def _would_create_manual_node_loop(node_name, parent_name):
+	if not node_name:
+		return False
+	seen = {node_name}
+	while parent_name:
+		if parent_name in seen:
+			return True
+		seen.add(parent_name)
+		parent_name = frappe.db.get_value("Organization Node", parent_name, "parent_node")
+	return False
+
+
+def _manual_parent_department(parent_node, version):
+	"""Resolve the nearest configured base department, including groups and lines."""
+	seen = set()
+	while parent_node:
+		if parent_node in seen:
+			return None
+		seen.add(parent_node)
+		parent = frappe.db.get_value(
+			"Organization Node",
+			parent_node,
+			["parent_node", "source_text", "structure_version"],
+			as_dict=True,
+		)
+		if not parent or parent.structure_version != version:
+			return None
+		config = _manual_node_config(parent.source_text)
+		department = cstr(config.get("department")).strip()
+		if department:
+			return department
+		parent_node = parent.parent_node
+	return None
+
+
+def _manual_parent_position(parent_node, version):
+	if not parent_node:
+		return {}
+	parent = frappe.db.get_value("Organization Node", parent_node, ["source_text", "structure_version"], as_dict=True)
+	if not parent or parent.structure_version != version:
+		return {}
+	config = _manual_node_config(parent.source_text)
+	return config if config.get("node_kind") == "岗位" else {}
+
+
+def _manual_employee_label(employee):
+	if not employee:
+		return frappe._dict()
+	return frappe.db.get_value(
+		"Employee", employee, ["name", "employee_name", "custom_employee_code"], as_dict=True
+	) or frappe._dict()
+
+
+@frappe.whitelist()
+def save_manual_organization_node(
+	node_kind: str,
+	display_name: str | None = None,
+	role_title: str | None = None,
+	assignment_mode: str | None = None,
+	planned_headcount: int | None = None,
+	parent_node: str | None = None,
+	manager_name: str | None = None,
+	manager_employee: str | None = None,
+	department: str | None = None,
+	designation: str | None = None,
+	grade: str | None = None,
+	employee: str | None = None,
+	primary_employee: str | None = None,
+	proxy_employee: str | None = None,
+	assigned_employees: list[str] | str | None = None,
+	responsible_person: str | None = None,
+	company: str | None = None,
+	node_name: str | None = None,
+):
+	"""Arrange existing departments, positions and employees without writing their master records."""
+	company = _normalize_yongxin_company(company) or YONGXIN_COMPANY_NAME
+	node_kind = cstr(node_kind).strip()
+	if node_kind not in MANUAL_ORGANIZATION_NODE_KINDS:
+		frappe.throw(_("请选择分管、室、课、组、线、岗位或员工。"))
+
+	if node_name:
+		doc = frappe.get_doc("Organization Node", node_name)
+		doc.check_permission("write")
+		version = _get_manual_organization_version(company)
+		if not version or doc.structure_version != version:
+			frappe.throw(_("只能编辑当前手工组织图谱中的节点。"))
+	else:
+		if not frappe.has_permission("Organization Node", "create"):
+			frappe.throw(_("您无权创建组织架构节点。"))
+		version = _ensure_manual_organization_version(company)
+		doc = frappe.new_doc("Organization Node")
+		doc.node_code = f"MANUAL-{frappe.generate_hash(length=10).upper()}"
+		doc.structure_version = version
+
+	previous_config = _manual_node_config(doc.get("source_text"))
+	display_name = cstr(display_name).strip()
+	role_title = cstr(role_title if role_title is not None else previous_config.get("role_title")).strip()
+	assignment_mode = assignment_mode or previous_config.get("assignment_mode") or "自动"
+	if assignment_mode not in {"自动", "正式", "代理"}:
+		frappe.throw(_("请选择自动、正式或代理任职方式。"))
+	department = cstr(department).strip() or None
+	manager_name = cstr(manager_name).strip() or None
+	manager_employee = cstr(manager_employee).strip() or None
+	designation = cstr(designation).strip() or None
+	grade = cstr(grade).strip() or None
+	employee = cstr(employee).strip() or None
+	primary_employee = cstr(primary_employee).strip() or None
+	proxy_employee = cstr(proxy_employee).strip() or None
+	assigned_employees = _normalize_manual_employee_names(assigned_employees if assigned_employees is not None else previous_config.get("assigned_employees"))
+	responsible_person = cstr(responsible_person).strip() or None
+	# ``responsible_person`` was the earlier single-field contract. Treat it as
+	# the actual holder so an edit does not discard existing chart data.
+	primary_employee = primary_employee or responsible_person
+	if manager_employee and not frappe.db.exists("Employee", manager_employee):
+		frappe.throw(_("所选分管人员不存在。"))
+	if manager_employee:
+		manager_name = _manual_employee_label(manager_employee).get("employee_name") or manager_employee
+	if department and not frappe.db.exists("Department", department):
+		frappe.throw(_("所选部门不存在。"))
+	department_name = frappe.db.get_value("Department", department, "department_name") if department else ""
+	if designation and not frappe.db.exists("Designation", designation):
+		frappe.throw(_("所选岗位不存在。"))
+	if employee and not frappe.db.exists("Employee", employee):
+		frappe.throw(_("所选人员不存在。"))
+	for selected_employee, role_label in ((primary_employee, _("实际任职人")), (proxy_employee, _("代理人"))):
+		if selected_employee and not frappe.db.exists("Employee", selected_employee):
+			frappe.throw(_("所选{0}不存在。").format(role_label))
+	if primary_employee and proxy_employee and primary_employee == proxy_employee:
+		frappe.throw(_("实际任职人与代理人不能选择同一员工。"))
+	if node_kind in {"分管", "员工"} and assigned_employees:
+		frappe.throw(_("请在部门或岗位节点中分配多名员工。"))
+	for assigned_employee in assigned_employees:
+		if not frappe.db.exists("Employee", assigned_employee):
+			frappe.throw(_("所选分配员工不存在。"))
+	if not display_name:
+		if node_kind == "分管":
+			display_name = _("分管：{0}").format(manager_name) if manager_name else role_title
+		elif node_kind == "员工":
+			display_name = _manual_employee_label(employee).get("employee_name") or employee
+		elif node_kind == "岗位":
+			display_name = role_title or designation
+		else:
+			display_name = department_name or department
+	if not display_name:
+		frappe.throw(_("请填写框架节点名称；可先建空节点，再安排人员。"))
+
+	parent_node = cstr(parent_node).strip() or None
+	_validate_manual_node_parent(node_kind, parent_node, version, doc.name if not doc.is_new() else None)
+	from hrms.api.organization_roster import validate_chart_selection
+	base_department = department or _manual_parent_department(parent_node, version)
+	selection = validate_chart_selection(
+		company, base_department,
+		[employee, primary_employee, proxy_employee, manager_employee, *assigned_employees], node_kind,
+		# Local role names must not exclude staff whose main HR job differs.
+		inherit_parent=node_kind != "分管",
+	)
+	config = {
+		"manual_organization": True,
+		"node_kind": node_kind,
+		"framework": True,
+		"role_title": role_title or designation or (display_name if node_kind == "岗位" else "分管" if node_kind == "分管" else ""),
+		"assignment_mode": assignment_mode,
+		"manager_name": manager_name if node_kind == "分管" else None,
+		"manager_employee": manager_employee if node_kind == "分管" else None,
+		"department": department,
+		# Keep the visible organization unit separate from the roster department.
+		# Example: QE组 is a folder below 总办室, while its members remain in
+		# 总办室 in Employee. This reference is read-only chart metadata.
+		"roster_department": selection.get("roster_department") if node_kind != "分管" else None,
+		"designation": designation if node_kind == "岗位" else None,
+		"grade": grade if node_kind == "岗位" else None,
+		"employee": employee if node_kind == "员工" else None,
+		# The actual holder is a normal Employee reference. The proxy is the only
+		# display-only substitute and never writes employee, role or workflow data.
+		"primary_employee": primary_employee if node_kind in {"室", "课", "组", "线", "岗位"} else None,
+		"proxy_employee": proxy_employee if node_kind in {"室", "课", "组", "线", "岗位"} else None,
+		"assigned_employees": assigned_employees if node_kind not in {"分管", "员工"} else [],
+	}
+	if planned_headcount is not None:
+		if cint(planned_headcount) < 0:
+			frappe.throw(_("编制人数不能小于零。"))
+		doc.planned_headcount = cint(planned_headcount)
+	doc.update(
+		{
+			# "部门" and "其他" exist in both old and new site metadata. The
+			# detailed kind and selected master records live in source_text so this
+			# page remains available before a DocType reload.
+			"node_type": "部门" if node_kind in {"室", "课", "组", "线"} else "其他",
+			"display_name": display_name,
+			"parent_node": parent_node,
+			"source_text": json.dumps(config, ensure_ascii=False, sort_keys=True),
+			"confirmation_status": "已确认",
+		}
+	)
+	if doc.is_new():
+		doc.insert(ignore_permissions=False)
+	else:
+		doc.save(ignore_permissions=False)
+	return {"name": doc.name, "node_kind": node_kind, "display_name": doc.display_name}
+
+
+@frappe.whitelist()
+def delete_manual_organization_node(node_name: str, company: str | None = None):
+	company = _normalize_yongxin_company(company) or YONGXIN_COMPANY_NAME
+	doc = frappe.get_doc("Organization Node", node_name)
+	doc.check_permission("delete")
+	version = _get_manual_organization_version(company)
+	if not version or doc.structure_version != version:
+		frappe.throw(_("只能删除当前手工组织图谱中的节点。"))
+	if frappe.db.exists("Organization Node", {"parent_node": doc.name, "confirmation_status": "已确认"}):
+		frappe.throw(_("请先删除或调整该节点的下级节点。"))
+	frappe.delete_doc("Organization Node", doc.name, ignore_permissions=False)
+	return {"name": doc.name}
 
 
 @frappe.whitelist()
@@ -1575,6 +2001,9 @@ def get_hybrid_node_detail(
 	search = (search or "").strip()
 	if cstr(source_mode).strip() == "workbook_snapshot":
 		return _get_workbook_snapshot_node_detail(node_id, node_type, company, search)
+	manual_detail = _get_manual_organization_node_detail(node_id, node_type, company, search)
+	if manual_detail:
+		return manual_detail
 	if not node_id.startswith("department:"):
 		template_detail = _get_template_node_detail(
 			node_id,
@@ -1682,21 +2111,90 @@ def get_hybrid_node_detail(
 
 
 def _get_manual_organization_node_detail(node_id, node_type, company, search):
-	"""Details for the standalone chart; it never loads Employee or Department."""
-	if node_type != "organization_node":
+	"""Details for the standalone chart; its links are display-only references."""
+	if node_type not in {
+		"organization_supervisor", "organization_office", "organization_section", "organization_group", "organization_line",
+		"organization_department", "organization_position", "organization_person", "organization_node",
+	}:
 		return None
 	manual = _get_manual_organization_records(company)
 	node_name = _node_value(node_id)
 	node = next((row for row in manual["nodes"] if row.name == node_name), None)
 	if not node:
 		return None
+	nodes_by_name = {row.name: row for row in manual["nodes"]}
+	parent = nodes_by_name.get(node.parent_node)
+	children = [row for row in manual["nodes"] if row.parent_node == node.name]
+	kind = _manual_node_kind(node)
+	employee = _manual_employee_labels([node.manual_config.get("employee")]).get(node.manual_config.get("employee"))
+	primary = _manual_employee_labels([_manual_primary_employee(node)]).get(_manual_primary_employee(node))
+	proxy = _manual_employee_labels([node.manual_config.get("proxy_employee")]).get(node.manual_config.get("proxy_employee"))
+	assigned_names = _normalize_manual_employee_names(node.manual_config.get("assigned_employees"))
+	assigned_labels = _manual_employee_labels(assigned_names)
+	assigned_rows = [_employee_row(assigned_labels[name]) for name in assigned_names if name in assigned_labels]
+	department = node.manual_config.get("department")
+	roster_department = node.manual_config.get("roster_department") or department
+	manual_people = []
+	seen_people = set()
+	for person in [primary, *[assigned_labels.get(name) for name in assigned_names]]:
+		if person and person.name not in seen_people:
+			seen_people.add(person.name)
+			manual_people.append(_employee_row(person))
+	department_employees = []
+	if kind in {"室", "课"} and roster_department:
+		from hrms.api.organization_roster import get_candidates
+		base = get_candidates(company, roster_department)
+		for person in base["employees"]:
+			assignments = [row for row in base["rows"] if row["employee"] == person.name]
+			person["department"] = roster_department
+			person["designation"] = "、".join(sorted({row["designation"] for row in assignments}))
+			person["grade"] = "、".join(sorted({row["grade"] for row in assignments}))
+			if not search or search.casefold() in " ".join(cstr(value) for value in person.values()).casefold():
+				department_employees.append(_employee_row(person))
+	person_rows = department_employees if kind in {"室", "课"} else manual_people or ([_employee_row(employee)] if employee else [])
+	current_headcount = len(department_employees) if kind in {"室", "课"} else len(manual_people) if manual_people else (1 if employee else cint(node.current_headcount))
+	# Use the card's roster-derived, deduplicated totals in the detail pane too.
+	def find_card(card):
+		if card.get("node_id") == node_id:
+			return card
+		for child in card.get("children", []):
+			found = find_card(child)
+			if found:
+				return found
+	card = find_card(_build_manual_organization_tree(company, manual)) or {}
 	return {
-		"node_type": node_type, "node_id": node_id, "title": node.display_name,
-		"subtitle": _("{0}；仅用于组织图展示。 ").format(node.node_type),
-		"metrics": {"planned_headcount": cint(node.planned_headcount), "current_headcount": cint(node.current_headcount), "vacancy_count": cint(node.vacancy_count)},
-		"employees": [], "people": [],
-		"actions": {},
+		"node_type": node_type, "node_id": node_id, "organization_node": node.name,
+		"title": employee.get("employee_name") if employee else node.display_name,
+		"subtitle": _("{0}；引用已有部门、岗位或员工，仅用于组织架构显示。").format(kind),
+		"metrics": {key: cint(card.get(key)) for key in ("planned_headcount", "current_headcount", "vacancy_count")},
+		"employees": person_rows, "people": [],
+		"employee_match_mode": "department" if kind in {"室", "课"} else "assigned" if manual_people else "display" if kind == "分管" else None,
+		"roster_department": roster_department,
+		"role_lines": role_lines(node.manual_config, _manual_employee_labels(list(filter(None, [node.manual_config.get("manager_employee"), node.manual_config.get("employee"), _manual_primary_employee(node), node.manual_config.get("proxy_employee"), *assigned_names])))),
+		"primary_employee": primary.get("employee_name") if primary else None,
+		"proxy_employee": proxy.get("employee_name") if proxy else None,
+		"relationships": {
+			"parent": {"name": parent.name, "label": parent.display_name, "node_type": _organization_node_type(_manual_node_kind(parent))} if parent else None,
+			"children": [
+				{"name": child.name, "label": child.display_name, "node_type": _organization_node_type(_manual_node_kind(child))}
+				for child in children
+			],
+		},
+		"actions": {
+			"can_add_organization_node": frappe.has_permission("Organization Node", "create"),
+			"can_edit_organization_node": frappe.has_permission("Organization Node", "write", node.name),
+			"can_delete_organization_node": frappe.has_permission("Organization Node", "delete", node.name),
+		},
 	}
+
+
+def _organization_node_type(node_type):
+	return {
+		"分管": "organization_supervisor", "室": "organization_office", "课": "organization_section", "组": "organization_group", "线": "organization_line",
+		"岗位": "organization_position", "员工": "organization_person",
+	}.get(
+		node_type, "organization_node"
+	)
 
 
 def _get_template_people_for_department(department_doc, company=None):

@@ -40,11 +40,11 @@ for (const marker of ["/assets/hrms/js/hrms_top_nav.js", "/assets/hrms/css/hrms_
 	}
 }
 
-if (!hooksSource.includes("/assets/hrms/css/hrms_top_nav.css?v=20260903b")) {
+if (!hooksSource.includes("/assets/hrms/css/hrms_top_nav.css?v=20260903f")) {
 	throw new Error("The top navigation CSS cache version must change when its desktop layout is corrected.");
 }
 
-if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260903c")) {
+if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260904a")) {
 	throw new Error("The top navigation JavaScript cache version must change when personnel-home selection is corrected.");
 }
 
@@ -64,7 +64,7 @@ for (const marker of ["@media (max-width: 767px)", "position: fixed;", "transfor
 	}
 }
 
-for (const marker of ["主页", "人事", "/desk/hrms-workbench", "/desk/personnel-home", "/desk/department", "/desk/attendance-import-center", "/desk/payroll-input-center", "aria-expanded", "bindMoreDocumentEvents", "closeMoreMenus"]) {
+for (const marker of ["主页", "人事", "/desk/hrms-workbench", "/desk/personnel-home", "/desk/organizational-chart", "/desk/attendance-import-center", "/desk/payroll-input-center", "aria-expanded", "bindMoreDocumentEvents", "closeMoreMenus"]) {
 	if (!topNavSource.includes(marker)) {
 		throw new Error(`Top navigation is missing marker: ${marker}`);
 	}
@@ -76,6 +76,10 @@ if (!topNavSource.includes('slug === "personnel-home" || slug === "personnel" ||
 
 if (!topNavSource.includes('label: "人事",') || !topNavSource.includes('route: "/desk/personnel-home",')) {
 	throw new Error("Clicking the 人事 top-navigation module must open the personnel home first.");
+}
+
+if (!topNavSource.includes('label: "部门",') || !topNavSource.includes('route: "/desk/organizational-chart",')) {
+	throw new Error("Clicking the 部门 top-navigation module must open the organization chart first.");
 }
 
 for (const marker of ["yongxin-brand-mark-red.png", "Navbar Settings", "MODULE_ICONS", "hrms-top-module-nav__brand-logo", "hrms-top-module-nav__brand-company", "loadBrandLogo", "decoratePageTitle"]) {

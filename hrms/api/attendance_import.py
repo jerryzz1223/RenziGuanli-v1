@@ -1572,7 +1572,10 @@ def _insert_leave_evidence(batch_name, row):
 
 def _person_keys(row):
 	keys = []
-	for fieldname in ("employee", "employee_code", "employee_name"):
+	# The employee code is the business identity used by attendance and payroll.
+	# A Frappe Employee name can change after an import or be absent in a source
+	# row, so it must not split one employee into multiple monthly summaries.
+	for fieldname in ("employee_code", "employee", "employee_name"):
 		value = _cell_text(getattr(row, fieldname, ""))
 		if value and value not in keys:
 			keys.append(value)
@@ -2558,8 +2561,16 @@ def generate_monthly_attendance_summary(company: str, attendance_month: str):
 		MONTHLY_SUMMARY_DOCTYPE,
 		filters=_attendance_scope_filters(company, attendance_month, attendance_lock_version),
 		fields=["name", "employee", "employee_code", "employee_name"],
+		order_by="modified desc",
 	)
-	existing_by_person = {_primary_person_key(row): row.name for row in existing_summaries if _primary_person_key(row)}
+	# A previous interrupted generation may have left duplicate draft rows.  Keep
+	# the newest one as the update target; the current-version list also guards
+	# against showing the older duplicate until the draft is regenerated.
+	existing_by_person = {}
+	for row in existing_summaries:
+		key = _primary_person_key(row)
+		if key and key not in existing_by_person:
+			existing_by_person[key] = row.name
 	created = []
 	for key, values in summaries.items():
 		source = identity[key]
@@ -3257,10 +3268,45 @@ def review_attendance_exceptions(names_json: str | list, decision: str, remarks:
 
 @frappe.whitelist()
 def list_monthly_attendance_summary(company: str, attendance_month: str = "", page_length: int = 50):
-	filters = {"company": _require_company(company)}
-	if attendance_month:
-		filters["attendance_month"] = attendance_month
-	return _list_records(MONTHLY_SUMMARY_DOCTYPE, filters=filters, page_length=page_length)
+	company = _require_company(company)
+	if not attendance_month:
+		return []
+	active_version = frappe.db.get_value(
+		MONTH_LOCK_DOCTYPE,
+		{"company": company, "attendance_month": attendance_month},
+		"active_version",
+	)
+	if active_version in (None, ""):
+		# Yongxin's newer attendance flow locks its reviewed final in the
+		# processing centre rather than creating a legacy month-lock document.
+		# Resolve that current snapshot explicitly; never fall back to every
+		# historic version for the same month.
+		try:
+			from hrms.api import attendance_processing_center
+
+			snapshot = str(
+				attendance_processing_center.get_locked_final_outputs(company, attendance_month).get("locked_snapshot_version") or ""
+			).strip()
+			if snapshot:
+				active_version = f"处理终稿:{snapshot}"
+		except Exception:
+			active_version = ""
+	if active_version in (None, ""):
+		return []
+	rows = _list_records(
+		MONTHLY_SUMMARY_DOCTYPE,
+		filters=_attendance_scope_filters(company, attendance_month, str(active_version)),
+		page_length=min(max(int(page_length or 50), 1), 5000),
+	)
+	unique_rows = []
+	seen_employee_codes = set()
+	for row in rows:
+		key = _primary_person_key(row)
+		if not key or key in seen_employee_codes:
+			continue
+		seen_employee_codes.add(key)
+		unique_rows.append(row)
+	return unique_rows
 
 
 @frappe.whitelist()

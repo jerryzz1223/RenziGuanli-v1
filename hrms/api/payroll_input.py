@@ -9,6 +9,12 @@ from io import BytesIO
 import frappe
 from frappe import _
 from frappe.utils import cint, flt, getdate, now_datetime
+from hrms.payroll.termination_settlement import (
+	INPUT_FIELDS as TERMINATION_INPUT_FIELDS,
+	RULE_VERSION as TERMINATION_RULE_VERSION,
+	TRACE_OUTPUT_FIELDS as TERMINATION_TRACE_OUTPUT_FIELDS,
+	calculate_termination_settlement,
+)
 
 from hrms.payroll.payroll_formula import (
 	FIELD_BY_NAME,
@@ -180,7 +186,7 @@ PAYROLL_IMPORT_TEMPLATES = [
 			("3倍加班", "overtime_3_hours", "对应节假日加班"),
 			("请假工时", "leave_hours", "月度请假合计"),
 			("旷工工时", "absent_hours", "对应薪资结算表 AE 列"),
-			("深夜班次数", "deep_night_shift_count", "按锁定考勤明细的深夜班时段自动匹配"),
+			("深夜班次数", "deep_night_shift_count", "仅统计班次为生产夜班且排定 20:00 至次日 08:00 的锁定考勤记录"),
 			("大夜班次数", "large_night_shift_count", "扣除深夜班后的大夜班次数，对应薪资结算表 V 列"),
 			("小夜班次数", "small_night_shift_count", "对应薪资结算表 W 列"),
 			("红绿苹果金额", "apple_reward_amount", "对应薪资结算表 AA 列"),
@@ -478,8 +484,8 @@ DEFAULT_PAYROLL_RULES = [
 		"rule_category": "薪资结算",
 		"rule_scope": "薪资结算表",
 		"formula_expression": "夜班津贴 = 深夜班次数 * 55 + 大夜班次数 * 45 + 小夜班次数 * 24",
-		"parameters_json": {"deep_night_shift": 55, "large_night_shift": 45, "small_night_shift": 24, "deep_night_shift_start": "08:00", "deep_night_shift_end": "20:00", "deep_night_shift_tolerance_minutes": 10},
-		"rule_text": "深夜班按设置的上下班时间及前后打卡容差识别；大夜班、小夜班次数始终使用钉钉考勤终稿。",
+		"parameters_json": {"deep_night_shift": 55, "large_night_shift": 45, "small_night_shift": 24},
+		"rule_text": "深夜班仅由锁定考勤中的生产夜班（20:00 至次日 08:00）识别；大夜班、小夜班次数始终使用钉钉考勤终稿。",
 		"source_file": "5.2人资考勤.xlsx",
 		"source_sheet": "薪资结算表",
 		"source_cell": "V:X",
@@ -620,14 +626,14 @@ DEFAULT_PAYROLL_RULES = [
 		"rule_code": "PAYROLL_TERMINATION_SETTLEMENT",
 		"rule_name": "离职薪资结算",
 		"rule_category": "薪资结算",
-		"rule_scope": "当月离职、异常离职或开除员工",
-		"formula_expression": "试用期未满7天按符合8小时的工作日100元/天，工作1天离职无薪；其他扣款按已批准离职申请单确认",
-		"parameters_json": {"trial_under_seven_days_daily_amount": 100, "one_day_departure_amount": 0, "approved_source_required": True},
-		"rule_text": "试用期未提前3个工作日申请、正式员工未提前30日申请、旷工或开除涉及特殊扣款，必须由离职申请单和考勤终稿共同确认。",
-		"source_file": "6.9离职.xlsx",
-		"source_sheet": "离职作业规范 / 人事组员工辞职申请单",
-		"source_cell": "离职作业规范 rows 29-31；辞职申请单 rows 9-16",
-		"missing_rule_note": "此规则涉及劳动关系和审批结论，当前仅作为离职薪资结算来源记录，不自动从员工状态推导扣款。",
+		"rule_scope": "已核对并批准离职结算输入的员工",
+		"formula_expression": "固定工资按当月标准工时折算；周末加班不抵缺勤；加班按底薪/174计算；按原表顺序汇总加扣款和税额",
+		"parameters_json": {"rule_version": TERMINATION_RULE_VERSION, "approved_source_required": True},
+		"rule_text": "在离职结算页确认原表输入后使用独立计算器，结果进入同一月度薪资记录。",
+		"source_file": "离职人员薪资计算.xlsx",
+		"source_sheet": "个人薪资结算表",
+		"source_cell": "D5:AI5",
+		"missing_rule_note": "独立计算器按原表执行；未纳税总计超过40000时，原表AF5分支异常，需财务确认税额。",
 	},
 	{
 		"rule_code": "PAYROLL_MINIMUM_WAGE_CHECK",
@@ -1695,16 +1701,6 @@ def _rule_parameter_errors(rule_code, parameters):
 					break
 	if "ranges" in parameters and not isinstance(parameters["ranges"], list):
 		errors.append("参数 ranges 必须是数组")
-	if rule_code == "PAYROLL_SETTLEMENT_NIGHT_SHIFT":
-		tolerance = parameters.get("deep_night_shift_tolerance_minutes", 10)
-		if flt(tolerance) < 0 or flt(tolerance) > 60 or flt(tolerance) != cint(tolerance):
-			errors.append("深夜班打卡容差必须是 0 到 60 的整数分钟")
-		start, end = str(parameters.get("deep_night_shift_start") or ""), str(parameters.get("deep_night_shift_end") or "")
-		pattern = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
-		if not pattern.fullmatch(start) or not pattern.fullmatch(end):
-			errors.append("深夜班需要同时设置上班和下班时间（HH:MM）")
-		elif _clock_time_minutes(start) == _clock_time_minutes(end):
-			errors.append("深夜班的上下班时间不能相同")
 	return errors
 
 
@@ -1771,9 +1767,9 @@ def _effective_rule_config(rule_code, payroll_month="", company="", allow_incomp
 		frappe.throw(_("执行规则 {0} 不在薪资月份 {1} 的生效区间内。").format(rule_code, payroll_month))
 	saved_parameters = _rule_parameters(rule.parameters_json)
 	if rule_code == "PAYROLL_SETTLEMENT_NIGHT_SHIFT":
-		# Large and small night-shift time ranges are retired.  Preserve their
-		# historical values for audit, but never let them affect classification.
-		for key in ("large_night_shift_start", "large_night_shift_end", "small_night_shift_start", "small_night_shift_end"):
+		# All local night-shift time ranges are retired. The locked attendance
+		# schedule supplies the deep-night classification instead.
+		for key in ("deep_night_shift_start", "deep_night_shift_end", "deep_night_shift_tolerance_minutes", "large_night_shift_start", "large_night_shift_end", "small_night_shift_start", "small_night_shift_end"):
 			saved_parameters.pop(key, None)
 	parameters = {**default_parameters, **{key: value for key, value in saved_parameters.items() if value not in (None, "")}}
 	errors = _rule_parameter_errors(rule_code, parameters)
@@ -2082,12 +2078,15 @@ def get_payroll_calculation_audit(company: str, payroll_month: str = "", attenda
 	if settlements:
 		expected_outputs = set(formula_positions)
 		for settlement in settlements:
+			required_outputs = expected_outputs
 			try:
 				trace = json.loads(settlement.get("source_trace_json") or "{}")
+				if trace.get("settlement_type") == "离职结算" and (trace.get("termination") or {}).get("rule_version") == TERMINATION_RULE_VERSION:
+					required_outputs = TERMINATION_TRACE_OUTPUT_FIELDS
 				actual_outputs = {item.get("output_field") for item in trace.get("formula_trace", [])}
 			except (TypeError, ValueError):
 				actual_outputs = set()
-			missing_outputs = expected_outputs - actual_outputs
+			missing_outputs = required_outputs - actual_outputs
 			if missing_outputs:
 				trace_failures.append("{0} 缺少公式追溯：{1}".format(settlement.get("name"), "、".join(sorted(missing_outputs))))
 		if trace_failures:
@@ -3278,7 +3277,23 @@ def _attendance_scope_filters(company, attendance_month, attendance_lock_version
 
 
 def _employee_identity_key(row):
-	return getattr(row, "employee", None) or getattr(row, "employee_code", None) or getattr(row, "employee_name", None)
+	# Payroll recipients are unique by employee code.  Employee is Frappe's
+	# internal link and employee_name is display data, neither is a stable
+	# business key for importing or joining monthly records.
+	return getattr(row, "employee_code", None) or getattr(row, "employee", None) or getattr(row, "employee_name", None)
+
+
+def _unique_employee_rows(rows):
+	"""Keep one visible row per employee code, preferring the newest record."""
+	unique_rows = []
+	seen = set()
+	for row in rows:
+		key = _employee_identity_key(row)
+		if not key or key in seen:
+			continue
+		seen.add(key)
+		unique_rows.append(row)
+	return unique_rows
 
 
 def _employee_population_labels(rows, allowed_keys):
@@ -3374,10 +3389,13 @@ def _payroll_run_snapshot(company, payroll_month, attendance_lock_version):
 		participation_decisions = frappe.get_all(
 			MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE,
 			filters={"company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version},
-			fields=["employee", "decision", "decision_reason", "settlement_basis", "review_status", "approved_by", "approved_on", "modified"],
+			fields=["employee", "decision", "decision_reason", "settlement_basis", "termination_inputs_json", "review_status", "approved_by", "approved_on", "modified"],
 			order_by="employee asc, modified asc",
 			limit_page_length=100000,
 		)
+	for row in participation_decisions:
+		if row.get("decision") != "离职结算":
+			row.pop("termination_inputs_json", None)
 	payload = {
 		"company": company,
 		"payroll_month": payroll_month,
@@ -3390,6 +3408,8 @@ def _payroll_run_snapshot(company, payroll_month, attendance_lock_version):
 		"calculation_rules": _payroll_calculation_rules(company, payroll_month),
 		"payroll_formulas": _effective_payroll_formulas(company, payroll_month),
 	}
+	if any(row.get("decision") == "离职结算" for row in participation_decisions):
+		payload["termination_rule_version"] = TERMINATION_RULE_VERSION
 	_trace, snapshot_hash = _source_trace_hash(payload)
 	return snapshot_hash
 
@@ -3973,6 +3993,23 @@ def _grade_context(salary_grade):
 	) or {}
 
 
+def _employee_salary_change_merge_name(company, employee, employee_code, effective_date):
+	"""Find the record a repeated salary submission is allowed to replace.
+
+	Employee code is the external/business identity.  The effective date is kept
+	in this key because a later effective date represents a distinct salary
+	change, not a duplicate submission.
+	"""
+	filters = {"company": company, "effective_date": effective_date}
+	if _text(employee_code):
+		filters["employee_code"] = _text(employee_code)
+	elif employee:
+		filters["employee"] = employee
+	else:
+		return ""
+	return frappe.db.get_value(EMPLOYEE_SALARY_CHANGE_DOCTYPE, filters, "name")
+
+
 @frappe.whitelist()
 def create_employee_salary_change(**kwargs):
 	_require_payroll_master_manager()
@@ -4001,9 +4038,7 @@ def create_employee_salary_change(**kwargs):
 	# the stored hourly-salary base from the two fixed-pay items instead of
 	# trusting a legacy full-salary column that may still include them.
 	full_salary = base_salary + function_allowance
-	doc = frappe.get_doc(
-		{
-			"doctype": EMPLOYEE_SALARY_CHANGE_DOCTYPE,
+	values = {
 			"company": company,
 			"employee": employee,
 			"employee_code": data.get("employee_code") or employee,
@@ -4028,19 +4063,40 @@ def create_employee_salary_change(**kwargs):
 			"status": status,
 			"source_file": data.get("source_file"),
 			"remarks": data.get("remarks"),
-		}
+	}
+	# A second submit of the same employee's effective salary must update the
+	# current row, rather than create another indistinguishable salary decision.
+	# The effective date remains part of the key so genuine later salary changes
+	# continue to be retained as history.
+	existing_name = _employee_salary_change_merge_name(
+		company, employee, values["employee_code"], values["effective_date"]
 	)
-	doc.insert(ignore_permissions=True)
+	if existing_name:
+		doc = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, existing_name)
+		before = {
+			field: doc.get(field)
+			for field in ("effective_date", "salary_grade", "base_salary", "function_allowance", "certificate_allowance", "multi_skill_allowance", "full_salary", "social_insurance_enabled", "housing_fund_enabled")
+		}
+		doc.update(values)
+		doc.save(ignore_permissions=True)
+		change_reason = doc.remarks or "人工重复提交员工定薪，已合并更新"
+		field_name = "员工定薪（合并更新）"
+	else:
+		doc = frappe.get_doc({"doctype": EMPLOYEE_SALARY_CHANGE_DOCTYPE, **values})
+		doc.insert(ignore_permissions=True)
+		before = {}
+		change_reason = doc.remarks or "人工新增员工定薪"
+		field_name = "__create__"
 	_record_payroll_manual_adjustment(
 		company=company,
 		payroll_month=str(doc.effective_date or "")[:7],
 		change_category="员工定薪",
 		reference_doctype=EMPLOYEE_SALARY_CHANGE_DOCTYPE,
 		reference_name=doc.name,
-		field_name="__create__",
-		original_value={},
+		field_name=field_name,
+		original_value=before,
 		new_value={field: doc.get(field) for field in ("effective_date", "salary_grade", "base_salary", "function_allowance", "certificate_allowance", "multi_skill_allowance", "full_salary", "social_insurance_enabled", "housing_fund_enabled")},
-		reason=doc.remarks or "人工新增员工定薪",
+		reason=change_reason,
 		employee=doc.employee,
 		employee_code=doc.employee_code,
 		employee_name=doc.employee_name,
@@ -4235,7 +4291,7 @@ def _monthly_payroll_participation_decision_map(company, payroll_month, attendan
 			"payroll_month": payroll_month,
 			"attendance_lock_version": attendance_lock_version,
 		},
-		fields=["name", "employee", "employee_code", "employee_name", "decision", "decision_reason", "settlement_basis", "review_status", "approved_by", "approved_on", "approval_note", "modified"],
+		fields=["name", "employee", "employee_code", "employee_name", "decision", "decision_reason", "settlement_basis", "termination_inputs_json", "review_status", "approved_by", "approved_on", "approval_note", "modified"],
 		order_by="modified desc, name desc",
 		limit_page_length=100000,
 	)
@@ -4272,6 +4328,84 @@ def _participation_decision_excludes(decision):
 	)
 
 
+def _termination_source(company, payroll_month, attendance_lock_version, employee):
+	"""Read pre-offset facts only from the selected immutable final."""
+	attendance = frappe.db.get_value(MONTHLY_ATTENDANCE_DOCTYPE,
+		{**_attendance_scope_filters(company, payroll_month, attendance_lock_version), "employee": employee},
+		"*", as_dict=True)
+	if not attendance:
+		frappe.throw(_("该员工不在当前锁定考勤终稿中。"))
+	context = _employee_context(employee)
+	if context.get("company") != company:
+		frappe.throw(_("员工公司与结算公司不一致。"))
+	salary = get_active_salary_change_for_employee(employee=employee, payroll_month=payroll_month, company=company) or {}
+	inputs = {field: 0 for field, _label, _cell in TERMINATION_INPUT_FIELDS}
+	inputs.update(base_salary=salary.get("base_salary"), function_allowance=salary.get("function_allowance", 0),
+		standard_hours=attendance.get("standard_hours"), basic_attendance_hours=None,
+		raw_weekend_overtime_hours=None, weekday_overtime_hours=None,
+		holiday_overtime_hours=attendance.get("overtime_3_hours"))
+	source_row = None
+	if attendance_lock_version.startswith(PROCESSING_ATTENDANCE_LOCK_PREFIX):
+		from hrms.api.attendance_processing_center import get_monthly_final_preview
+		preview = get_monthly_final_preview(company, payroll_month, "finance")
+		if str(preview.get("locked_snapshot_version") or "") != attendance_lock_version.removeprefix(PROCESSING_ATTENDANCE_LOCK_PREFIX):
+			frappe.throw(_("考勤锁定版本已变化，请重新打开离职结算。"))
+		matches = [row for row in preview.get("rows", []) if row.get("employee_code") == attendance.employee_code]
+		if len(matches) != 1:
+			frappe.throw(_("无法唯一匹配离职员工的原始考勤终稿。"))
+		source_row = matches[0]
+		inputs.update(basic_attendance_hours=source_row.get("actual_attendance_hours"),
+			raw_weekend_overtime_hours=flt(source_row.get("restday_overtime_hours")) + flt(source_row.get("special_restday_hours")),
+			weekday_overtime_hours=flt(source_row.get("workday_overtime_hours")) + flt(source_row.get("special_workday_hours")),
+			holiday_overtime_hours=flt(source_row.get("holiday_overtime_hours")) + flt(source_row.get("special_holiday_hours")),
+			large_night_shift_count=flt(source_row.get("large_night_shifts")),
+			small_night_shift_count=flt(source_row.get("small_night_shifts")),
+			green_apple_amount=flt(source_row.get("green_apple_amount")), red_apple_amount=flt(source_row.get("red_apple_amount")))
+	# Legacy summaries may already have offset overtime. Leave those three input
+	# cells blank instead of guessing the original facts; the reviewer supplies them.
+	variables, _identities, _sources = _variable_totals(company, payroll_month, attendance_lock_version)
+	amounts = variables.get(_employee_identity_key(attendance), {})
+	inputs.update(social_security_personal=flt(amounts.get("社保个人")),
+		housing_fund_personal=flt(amounts.get("公积金个人")),
+		utilities_deduction=flt(amounts.get("水电费及扣款")) + flt(amounts.get("宿舍扣款")),
+		attendance_housing_allowance=flt(amounts.get("全勤奖")) + flt(amounts.get("住房补贴")))
+	evidence = {"employee": employee, "company": company, "payroll_month": payroll_month,
+		"attendance_lock_version": attendance_lock_version, "attendance_summary": attendance.name,
+		"source_checksum": attendance.get("source_checksum"), "source_row": source_row,
+		"salary_change": salary.get("name"), "salary_modified": salary.get("modified"),
+		"relieving_date": str(context.get("relieving_date") or ""), "inputs": inputs,
+		"rule_version": TERMINATION_RULE_VERSION}
+	_trace, source_hash = _source_trace_hash(evidence)
+	return {"inputs": inputs, "source": evidence, "source_hash": source_hash,
+		"employee": employee, "employee_code": attendance.employee_code,
+		"employee_name": attendance.employee_name, "department": attendance.department,
+		"date_of_joining": str(context.get("date_of_joining") or ""),
+		"relieving_date": str(context.get("relieving_date") or ""),
+		"fields": [{"fieldname": field, "label": label, "cell": cell} for field, label, cell in TERMINATION_INPUT_FIELDS]}
+
+
+@frappe.whitelist()
+def get_termination_settlement_context(company: str, payroll_month: str, attendance_lock_version: str, employee: str):
+	_require_payroll_master_manager()
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	context = _termination_source(company, payroll_month, attendance_lock_version, employee)
+	decision = _monthly_payroll_participation_decision_map(company, payroll_month, attendance_lock_version).get(employee) or {}
+	context["saved"] = json.loads(decision.get("termination_inputs_json") or "{}")
+	context["decision"] = decision
+	return context
+
+
+@frappe.whitelist()
+def preview_termination_settlement(company: str, payroll_month: str, attendance_lock_version: str, employee: str, inputs_json: str):
+	_require_payroll_master_manager()
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	_termination_source(company, payroll_month, attendance_lock_version, employee)
+	try:
+		return calculate_termination_settlement(json.loads(inputs_json))
+	except (ValueError, TypeError) as exc:
+		frappe.throw(str(exc))
+
+
 def _employee_left_in_payroll_month(employee_row, payroll_month):
 	"""Use the exit date when available so historical closed months stay calculable."""
 	if not employee_row or _text(employee_row.get("status")) not in {"Left", "离职"}:
@@ -4302,6 +4436,7 @@ def save_monthly_payroll_participation_decision(
 	settlement_basis: str = "",
 	approval_note: str = "",
 	approved: int = 0,
+	termination_inputs_json: str = "",
 ):
 	"""Record an auditable monthly handling decision for one locked-attendance employee."""
 	_require_payroll_master_manager()
@@ -4333,6 +4468,24 @@ def save_monthly_payroll_participation_decision(
 			frappe.throw(_("离职结算必须填写结算依据，例如离职审批单或已批准结算标准。"))
 		if not cint(approved):
 			frappe.throw(_("离职结算需勾选审核通过后才能参与计算。"))
+		if not termination_inputs_json:
+			frappe.throw(_("请进入离职结算核对原表输入并试算，不能直接沿用在职公式。"))
+		try:
+			payload = json.loads(termination_inputs_json)
+			result = calculate_termination_settlement(payload.get("inputs"))
+		except (ValueError, TypeError, AttributeError) as exc:
+			frappe.throw(str(exc))
+		current = _termination_source(company, payroll_month, attendance_lock_version, employee)
+		if payload.get("source_hash") != current["source_hash"]:
+			frappe.throw(_("离职结算来源已变化，请重新打开核对页面。"))
+		settlement_date = _date_or_none(payload.get("settlement_date"))
+		if not settlement_date:
+			frappe.throw(_("请填写有效结算日期。"))
+		termination_inputs_json = json.dumps({"inputs": result["inputs"], "source": current["source"],
+			"source_hash": current["source_hash"], "rule_version": TERMINATION_RULE_VERSION,
+			"settlement_date": str(settlement_date)}, ensure_ascii=False, default=str)
+	else:
+		termination_inputs_json = ""
 	if decision == "不参与计算" and not cint(approved):
 		frappe.throw(_("不参与计算需勾选审核通过后才能生效。"))
 
@@ -4345,7 +4498,7 @@ def save_monthly_payroll_participation_decision(
 	}
 	existing_name = frappe.db.get_value(MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE, filters, "name")
 	doc = frappe.get_doc(MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE, existing_name) if existing_name else frappe.get_doc({"doctype": MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE})
-	before = {field: doc.get(field) for field in ("decision", "decision_reason", "settlement_basis", "review_status", "approval_note", "approved_by", "approved_on")} if existing_name else {}
+	before = {field: doc.get(field) for field in ("decision", "decision_reason", "settlement_basis", "termination_inputs_json", "review_status", "approval_note", "approved_by", "approved_on")} if existing_name else {}
 	review_status = "待审核" if decision == "异常待审核" else (PAYROLL_PARTICIPATION_APPROVED_STATUS if cint(approved) else "无需审核")
 	doc.update({
 		**filters,
@@ -4357,6 +4510,7 @@ def save_monthly_payroll_participation_decision(
 		"decision": decision,
 		"decision_reason": decision_reason,
 		"settlement_basis": settlement_basis,
+		"termination_inputs_json": termination_inputs_json,
 		"review_status": review_status,
 		"approval_note": approval_note,
 		"approved_by": frappe.session.user if review_status == PAYROLL_PARTICIPATION_APPROVED_STATUS else "",
@@ -4394,7 +4548,7 @@ def save_monthly_payroll_participation_decision(
 		reference_name=doc.name,
 		field_name="本月处理方式",
 		original_value=before,
-		new_value={field: doc.get(field) for field in before} if before else {field: doc.get(field) for field in ("decision", "decision_reason", "settlement_basis", "review_status", "approval_note", "approved_by", "approved_on")},
+		new_value={field: doc.get(field) for field in before} if before else {field: doc.get(field) for field in ("decision", "decision_reason", "settlement_basis", "termination_inputs_json", "review_status", "approval_note", "approved_by", "approved_on")},
 		reason=decision_reason or approval_note or "人工维护本月人员范围",
 		employee=doc.employee,
 		employee_code=doc.employee_code,
@@ -4646,6 +4800,23 @@ def list_payroll_welfare_source_rules():
 	return WELFARE_SOURCE_RULES
 
 
+def _payroll_welfare_source_merge_name(company, payroll_month, attendance_lock_version, source_type, employee, employee_code):
+	"""Find one employee's current row for one monthly welfare source type."""
+	filters = {
+		"company": company,
+		"payroll_month": payroll_month,
+		"attendance_lock_version": attendance_lock_version,
+		"source_type": source_type,
+	}
+	if _text(employee_code):
+		filters["employee_code"] = _text(employee_code)
+	elif employee:
+		filters["employee"] = employee
+	else:
+		return ""
+	return frappe.db.get_value(WELFARE_SOURCE_DOCTYPE, filters, "name")
+
+
 @frappe.whitelist()
 def upsert_payroll_welfare_source_record(**kwargs):
 	data = dict(kwargs)
@@ -4661,6 +4832,7 @@ def upsert_payroll_welfare_source_record(**kwargs):
 	employee_name = data.get("employee_name")
 	employee = data.get("employee") or _payroll_employee_lookup(employee_code, employee_name)
 	employee_context = _employee_context(employee)
+	resolved_employee_code = _text(employee_code) or _text(employee_context.get("employee_code"))
 	if employee_context.get("company") and employee_context.get("company") != company:
 		frappe.throw(_("福利扣款来源员工 {0} 不属于公司 {1}").format(employee_code or employee_name or employee, company))
 	rule = _welfare_rule(source_type)
@@ -4690,7 +4862,7 @@ def upsert_payroll_welfare_source_record(**kwargs):
 		"variable_type": variable_type,
 		"direction": direction,
 		"employee": employee,
-		"employee_code": employee_code,
+		"employee_code": resolved_employee_code,
 		"employee_name": employee_name or employee_context.get("employee_name"),
 		"department": department,
 		"amount": flt(data.get("amount")),
@@ -4709,7 +4881,17 @@ def upsert_payroll_welfare_source_record(**kwargs):
 	if values["confirmation_status"] == "已确认":
 		values["confirmed_by"] = frappe.session.user
 		values["confirmed_on"] = now_datetime()
-	record_name = data.get("name")
+	# A re-upload or repeated form submit updates the same employee/source row.
+	# Source type remains in the key so, for example, personal social insurance
+	# and housing-fund amounts can coexist for one employee in the same month.
+	record_name = data.get("name") or _payroll_welfare_source_merge_name(
+		company,
+		payroll_month,
+		attendance_lock_version,
+		source_type,
+		employee,
+		resolved_employee_code,
+	)
 	before = {}
 	if record_name and frappe.db.exists(WELFARE_SOURCE_DOCTYPE, record_name):
 		doc = frappe.get_doc(WELFARE_SOURCE_DOCTYPE, record_name)
@@ -5192,11 +5374,7 @@ def _employee_salary_change_name_from_row(row, payroll_month, company):
 	effective_date = _date_or_none(_first(row, "生效日期")) or (f"{payroll_month}-01" if payroll_month else None)
 	if not employee or not effective_date:
 		return ""
-	return frappe.db.get_value(
-		EMPLOYEE_SALARY_CHANGE_DOCTYPE,
-		{"company": company, "employee_code": _text(employee_code) or employee, "effective_date": effective_date},
-		"name",
-	)
+	return _employee_salary_change_merge_name(company, employee, employee_code, effective_date)
 
 
 def _salary_change_import_batch(company, file_url, payroll_month, total_rows, valid_rows, failed_rows=0, error_summary=""):
@@ -5643,8 +5821,12 @@ def _upsert_by_employee_month(doctype, month_field, payroll_month, employee_code
 	if attendance_lock_version:
 		filters["attendance_lock_version"] = attendance_lock_version
 	if employee_code:
+		# 工号是月度薪酬行的唯一业务身份。姓名只是展示字段，改名或
+		# Excel 的姓名格式变化不能让同一工号生成第二条薪酬输入/结算行。
 		filters["employee_code"] = employee_code
-	if values.get("employee_name"):
+	elif values.get("employee"):
+		filters["employee"] = values["employee"]
+	elif values.get("employee_name"):
 		filters["employee_name"] = values.get("employee_name")
 	name = frappe.db.get_value(doctype, filters, "name")
 	if name:
@@ -7705,14 +7887,14 @@ def save_attendance_pay_rule(company: str, payroll_month: str, rule_code: str, s
 	default = _default_rule(rule_code)
 	parameters = dict((_effective_rule_config(rule_code, payroll_month, company, allow_incomplete_night_times=True).get("parameters") or {}))
 	if rule_code == "PAYROLL_SETTLEMENT_NIGHT_SHIFT":
-		for key in ("large_night_shift_start", "large_night_shift_end", "small_night_shift_start", "small_night_shift_end"):
+		for key in ("deep_night_shift_start", "deep_night_shift_end", "deep_night_shift_tolerance_minutes", "large_night_shift_start", "large_night_shift_end", "small_night_shift_start", "small_night_shift_end"):
 			parameters.pop(key, None)
 	allowed = {
 		"ATTENDANCE_FULL_ATTENDANCE_BONUS": {"thresholds", "late_deduction"},
 		"PAYROLL_SETTLEMENT_ABSENCE_DEDUCTION": {"standard_hours_divisor", "absenteeism_multiplier"},
 		"ATTENDANCE_MISSED_PUNCH": {"red_apples_per_record", "amount_per_apple"},
 		"PAYROLL_SETTLEMENT_OVERTIME_PAY": {"standard_hours_divisor", "weekday", "weekend", "holiday"},
-		"PAYROLL_SETTLEMENT_NIGHT_SHIFT": {"deep_night_shift", "large_night_shift", "small_night_shift", "deep_night_shift_start", "deep_night_shift_end", "deep_night_shift_tolerance_minutes"},
+		"PAYROLL_SETTLEMENT_NIGHT_SHIFT": {"deep_night_shift", "large_night_shift", "small_night_shift"},
 	}[rule_code]
 	for key in allowed:
 		if key in settings:
@@ -7835,88 +8017,6 @@ def _assert_workflow_locked_for_generation(company, payroll_month, attendance_lo
 		frappe.throw(_("薪资试算前请处理：{0}").format("；".join(blockers)))
 
 
-def _clock_time_minutes(value):
-	"""Extract an HH:MM clock value from a DingTalk detail cell."""
-	match = re.search(r"(?<!\d)((?:[01]\d|2[0-3]):[0-5]\d)(?!\d)", str(value or ""))
-	if not match:
-		return None
-	clock = match.group(1)
-	hour, minute = clock.split(":")
-	return int(hour) * 60 + int(minute)
-
-
-def _night_shift_range_segments(start, end):
-	"""Split a same-day or cross-midnight range into comparable day segments."""
-	return [(start, end)] if start < end else [(start, 24 * 60), (0, end)]
-
-
-def _night_shift_ranges_overlap(start, end, other_start, other_end):
-	return any(
-		max(segment_start, other_segment_start) < min(segment_end, other_segment_end)
-		for segment_start, segment_end in _night_shift_range_segments(start, end)
-		for other_segment_start, other_segment_end in _night_shift_range_segments(other_start, other_end)
-	)
-
-
-def _attendance_detail_matches_night_shift(detail, start, end, tolerance_minutes=0):
-	"""Return whether one complete clock-in/out record fits one configured tier."""
-	clock_in = _clock_time_minutes((detail or {}).get("clock_in"))
-	clock_out = _clock_time_minutes((detail or {}).get("clock_out"))
-	start_minutes, end_minutes = _clock_time_minutes(start), _clock_time_minutes(end)
-	if None in {clock_in, clock_out, start_minutes, end_minutes} or start_minutes == end_minutes:
-		return False
-	tolerance_minutes = max(cint(tolerance_minutes), 0)
-	if start_minutes < end_minutes:
-		return (
-			start_minutes - tolerance_minutes <= clock_in
-			and clock_out <= end_minutes + tolerance_minutes
-			and clock_in <= clock_out
-		)
-	# Cross-midnight shift: clock-in belongs to the evening and clock-out to the
-	# following morning. Requiring both values makes incomplete punches ineligible.
-	return clock_in >= start_minutes - tolerance_minutes and clock_out <= end_minutes + tolerance_minutes
-
-
-def _locked_night_shift_matches(company, payroll_month, parameters):
-	"""Classify complete locked attendance rows into the three configured tiers."""
-	from hrms.api import attendance_processing_center
-
-	batch = attendance_processing_center._latest_batch(company, payroll_month, "attendance_draft")
-	if not batch:
-		return {}
-	records = frappe.get_all(
-		attendance_processing_center.PROCESSING_RECORD_DOCTYPE,
-		filters={"import_batch": batch.name},
-		fields=["employee_code", "employee_name", "confirmed_value_json", "processed_value_json"],
-		limit_page_length=5000,
-	)
-	tiers = (("deep_night_shift_count", "deep_night_shift_start", "deep_night_shift_end"),)
-	matches = {}
-	for record in records:
-		try:
-			values = json.loads(record.confirmed_value_json or record.processed_value_json or "{}")
-		except (TypeError, ValueError):
-			continue
-		if not isinstance(values, dict):
-			continue
-		counts = {fieldname: 0 for fieldname, _start, _end in tiers}
-		for detail in values.get("attendance_details") or []:
-			for fieldname, start_key, end_key in tiers:
-				if _attendance_detail_matches_night_shift(
-					detail,
-					parameters.get(start_key),
-					parameters.get(end_key),
-					parameters.get("deep_night_shift_tolerance_minutes", 10),
-				):
-					counts[fieldname] += 1
-					break
-		if any(counts.values()):
-			for key in (str(record.employee_code or "").strip(), f"name:{str(record.employee_name or '').strip()}"):
-				if key:
-					matches[key] = counts
-	return matches
-
-
 @frappe.whitelist()
 def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, attendance_lock_version: str):
 	"""Copy a *locked* processing-centre final into payroll's immutable input scope.
@@ -7941,9 +8041,7 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 	rows = preview.get("rows") or []
 	if not rows:
 		frappe.throw(_("锁定考勤终稿没有可参与薪资计算的员工。"))
-	night_parameters = _effective_rule_config("PAYROLL_SETTLEMENT_NIGHT_SHIFT", payroll_month, company)["parameters"]
 	full_attendance_rule = _effective_rule_config("ATTENDANCE_FULL_ATTENDANCE_BONUS", payroll_month, company)
-	night_shift_matches = _locked_night_shift_matches(company, payroll_month, night_parameters)
 	scope = _attendance_scope_filters(company, payroll_month, attendance_lock_version)
 	existing = {
 		_employee_identity_key(row): row.name
@@ -7965,11 +8063,10 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 		employee_context = _employee_context(employee)
 		if employee_context.get("company") and employee_context.get("company") != company:
 			frappe.throw(_("锁定考勤终稿存在跨公司员工：{0}").format(employee_code or employee_name))
-		key = employee or employee_code or f"name:{employee_name}"
-		night_counts = night_shift_matches.get(employee_code) or night_shift_matches.get(f"name:{employee_name}")
-		# 深夜班由完整的钉钉打卡详情自动识别。大夜班与小夜班始终按钉钉
-		# 终稿的统计次数取数，不允许旧的本地时段配置重新覆盖该来源。
-		deep_night_shift_count = flt((night_counts or {}).get("deep_night_shift_count"))
+		key = employee_code or employee or f"name:{employee_name}"
+		# 深夜班是考勤终稿已锁定的排班事实：仅生产夜班 20:00 至次日
+		# 08:00 计入。薪资同步不再依据实际打卡时段重新分类。
+		deep_night_shift_count = flt(row.get("deep_night_shifts"))
 		large_night_shift_count = max(flt(row.get("large_night_shifts")) - deep_night_shift_count, 0)
 		small_night_shift_count = flt(row.get("small_night_shifts"))
 		values = {
@@ -8180,6 +8277,7 @@ def generate_payroll_input_records(company: str, payroll_month: str, attendance_
 	trial_salary_profiles = []
 	pending_participation_decisions = []
 	excluded_salary_keys = set()
+	departure_inputs_by_key = {}
 	for key, attendance in attendance_by_key.items():
 		profile = (
 			active_salary_changes.get(getattr(attendance, "employee", None))
@@ -8194,6 +8292,15 @@ def generate_payroll_input_records(company: str, payroll_month: str, attendance_
 		if _participation_decision_excludes(decision):
 			excluded_salary_keys.add(key)
 			continue
+		if decision and decision.get("decision") == "离职结算":
+			try:
+				payload = json.loads(decision.get("termination_inputs_json") or "{}")
+				current = _termination_source(company, payroll_month, attendance_lock_version, attendance.employee)
+				if payload.get("source_hash") != current["source_hash"] or payload.get("rule_version") != TERMINATION_RULE_VERSION:
+					raise ValueError("离职结算来源或规则已变化，请重新核对并确认。")
+				departure_inputs_by_key[key] = calculate_termination_settlement(payload.get("inputs"))
+			except (ValueError, TypeError) as exc:
+				frappe.throw(_("员工 {0}：{1}").format(label, str(exc)))
 		if not decision and _employee_left_in_payroll_month(employee_contexts.get(getattr(attendance, "employee", None)), payroll_month):
 			pending_participation_decisions.append(label)
 			continue
@@ -8289,6 +8396,32 @@ def generate_payroll_input_records(company: str, payroll_month: str, attendance_
 				"source_hash": source_hash,
 			}
 		)
+		if key in departure_inputs_by_key:
+			departure = departure_inputs_by_key[key]
+			confirmed = departure["inputs"]
+			doc.update({
+				"standard_hours": confirmed["standard_hours"],
+				"actual_attendance_hours": confirmed["basic_attendance_hours"],
+				"adjusted_working_hours": confirmed["basic_attendance_hours"],
+				"overtime_1_5_hours": confirmed["weekday_overtime_hours"],
+				"overtime_2_hours": confirmed["raw_weekend_overtime_hours"],
+				"overtime_3_hours": confirmed["holiday_overtime_hours"],
+				"absent_hours": confirmed["absenteeism_hours"], "deep_night_shift_count": 0,
+				"large_night_shift_count": confirmed["large_night_shift_count"],
+				"small_night_shift_count": confirmed["small_night_shift_count"],
+				"apple_reward_amount": confirmed["green_apple_amount"] - confirmed["red_apple_amount"],
+				"full_attendance_bonus": 0, "housing_subsidy": 0, "education_subsidy": 0,
+				"other_bonus": confirmed["attendance_housing_allowance"],
+				"attendance_full_deduction": 0, "other_deduction": confirmed["insurance_deduction"],
+				"dormitory_deduction": confirmed["utilities_deduction"],
+				"social_security_personal": confirmed["social_security_personal"],
+				"housing_fund_personal": confirmed["housing_fund_personal"],
+				"preliminary_earning_total": confirmed["green_apple_amount"] + confirmed["attendance_housing_allowance"],
+				"preliminary_deduction_total": confirmed["red_apple_amount"] + confirmed["social_security_personal"] + confirmed["housing_fund_personal"] + confirmed["utilities_deduction"] + confirmed["insurance_deduction"],
+			})
+			input_trace = json.loads(trace)
+			input_trace.update(settlement_type="离职结算", termination=departure)
+			doc.source_trace_json, doc.source_hash = _source_trace_hash(input_trace)
 		doc.insert(ignore_permissions=True)
 		created.append(doc.name)
 
@@ -8365,9 +8498,15 @@ def list_payroll_input_records(company: str, payroll_month: str = "", attendance
 	filters = {"company": company}
 	if payroll_month:
 		filters["payroll_month"] = payroll_month
+		if not attendance_lock_version:
+			current_lock = _current_payroll_attendance_lock(company, payroll_month)
+			attendance_lock_version = str((current_lock or {}).get("attendance_lock_version") or "")
+		if not attendance_lock_version:
+			return []
 	if attendance_lock_version:
 		filters["attendance_lock_version"] = attendance_lock_version
-	return frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters=filters, fields=["*"], order_by="modified desc", limit_page_length=int(page_length or 50))
+	rows = frappe.get_all(PAYROLL_INPUT_DOCTYPE, filters=filters, fields=["*"], order_by="modified desc", limit_page_length=int(page_length or 50))
+	return _unique_employee_rows(rows)
 
 
 def _rate(amount, divisor=PAYROLL_STANDARD_HOURS_DIVISOR):
@@ -8397,7 +8536,11 @@ def _company_social_security(personal_amount, rule=None):
 
 @frappe.whitelist()
 def generate_payroll_settlement_records(company: str, payroll_month: str, attendance_lock_version: str):
+	_require_payroll_master_manager()
 	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	# Serialize writers for this company so concurrent requests cannot create
+	# both a normal and departure result for the same employee/month.
+	frappe.db.sql("select name from tabCompany where name=%s for update", (company,))
 	_assert_workflow_locked_for_generation(company, payroll_month, attendance_lock_version)
 	payroll_run_snapshot_hash = _payroll_run_snapshot(company, payroll_month, attendance_lock_version)
 	calculation_rules = _payroll_calculation_rules(company, payroll_month)
@@ -8466,6 +8609,30 @@ def generate_payroll_settlement_records(company: str, payroll_month: str, attend
 			)
 		)
 
+	termination_results = {}
+	decisions = _monthly_payroll_participation_decision_map(company, payroll_month, attendance_lock_version)
+	for key, input_row in input_by_key.items():
+		other_lock = frappe.db.exists(PAYROLL_SETTLEMENT_DOCTYPE, {
+			"company": company, "payroll_month": payroll_month, "employee": input_row.employee,
+			"attendance_lock_version": ["!=", attendance_lock_version],
+			"calculation_status": ["in", ["已确认", "已生成工资单"]]})
+		if other_lock:
+			frappe.throw(_("该员工本月已有已确认工资，不能再次生成应付；请通过薪资补差处理。"))
+		decision = decisions.get(input_row.employee) or {}
+		if decision.get("decision") != "离职结算":
+			continue
+		if decision.get("review_status") != PAYROLL_PARTICIPATION_APPROVED_STATUS:
+			frappe.throw(_("离职结算尚未审核通过。"))
+		try:
+			payload = json.loads(decision.get("termination_inputs_json") or "{}")
+			current = _termination_source(company, payroll_month, attendance_lock_version, input_row.employee)
+			if payload.get("source_hash") != current["source_hash"] or payload.get("rule_version") != TERMINATION_RULE_VERSION:
+				raise ValueError("离职结算来源或规则已变化，请重新核对并确认。")
+			termination_results[key] = {**calculate_termination_settlement(payload.get("inputs")),
+				"approved_source": payload, "participation_record": decision.get("name")}
+		except (ValueError, TypeError) as exc:
+			frappe.throw(_("员工 {0}：{1}").format(input_row.employee_name, str(exc)))
+
 	for name in frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters=settlement_filters, pluck="name"):
 		frappe.delete_doc(PAYROLL_SETTLEMENT_DOCTYPE, name, ignore_permissions=True, force=True)
 
@@ -8521,8 +8688,31 @@ def generate_payroll_settlement_records(company: str, payroll_month: str, attend
 			"manual_social_security_company": values["社保公司"],
 			"manual_housing_fund_company": values["公积金公司"],
 		}
+		termination = termination_results.get(key)
 		try:
-			calculated, formula_trace = evaluate_formula_set(payroll_formulas, formula_context)
+			if termination:
+				departure_inputs = termination["inputs"]
+				formula_context.update(departure_inputs)
+				base_salary = departure_inputs["base_salary"]
+				function_allowance = departure_inputs["function_allowance"]
+				certificate_skill_allowance = 0
+				# Only the columns in the departure worksheet enter its net pay.
+				formula_context.update(proposal_improvement_bonus=0, production_bonus=0,
+					apple_reward_amount=departure_inputs["green_apple_amount"],
+					late_full_attendance_deduction=0, paid_proposal_birthday_welfare=0,
+					continuing_service_bonus=0, year_end_bonus_tax=0, deep_night_shift_count=0)
+				calculated = {item["output_field"]: 0 for item in FORMULA_TEMPLATES}
+				calculated.update(termination["calculated"])
+				calculated["social_security_company"] = flt(values["社保公司"])
+				calculated["housing_fund_company"] = flt(values["公积金公司"])
+				calculated["company_cost_total"] = _money(calculated["gross_pay"] + calculated["social_security_company"] + calculated["housing_fund_company"])
+				formula_context["income_tax"] = calculated["income_tax"]
+				# Common exports have one post-tax deduction column; preserve AH5
+				# separately in the immutable trace and the departure detail page.
+				formula_context["utilities_deduction"] = departure_inputs["utilities_deduction"] + departure_inputs["insurance_deduction"]
+				formula_trace = termination["formula_trace"]
+			else:
+				calculated, formula_trace = evaluate_formula_set(payroll_formulas, formula_context)
 		except FormulaError as exc:
 			frappe.throw(_("员工 {0} 薪资公式执行失败：{1}").format(getattr(source, "employee_name", key), exc))
 		# Explicit local names keep the settlement document construction readable.
@@ -8580,6 +8770,8 @@ def generate_payroll_settlement_records(company: str, payroll_month: str, attend
 			"salary_change": salary_change.get("name") if salary_change else "",
 			"calculation_rules": calculation_rules,
 			"formula_trace": formula_trace,
+			"settlement_type": "离职结算" if termination else "正常计薪",
+			"termination": termination,
 			"salary_subtotal_source": "公司公式：底薪、职能津贴、证书及多能工津贴",
 		})
 
@@ -8658,9 +8850,37 @@ def list_payroll_settlement_records(company: str, payroll_month: str = "", atten
 	filters = {"company": company}
 	if payroll_month:
 		filters["payroll_month"] = payroll_month
+		if not attendance_lock_version:
+			current_lock = _current_payroll_attendance_lock(company, payroll_month)
+			attendance_lock_version = str((current_lock or {}).get("attendance_lock_version") or "")
+		if not attendance_lock_version:
+			return []
 	if attendance_lock_version:
 		filters["attendance_lock_version"] = attendance_lock_version
-	return frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters=filters, fields=["*"], order_by="modified desc", limit_page_length=int(page_length or 50))
+	rows = frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters=filters, fields=["*"], order_by="modified desc", limit_page_length=int(page_length or 50))
+	for row in rows:
+		trace = json.loads(row.get("source_trace_json") or "{}")
+		row["settlement_type"] = trace.get("settlement_type") or "正常计薪"
+	return _unique_employee_rows(rows)
+
+
+@frappe.whitelist()
+def get_termination_settlement_workbench(company: str, payroll_month: str, attendance_lock_version: str):
+	_require_payroll_master_manager()
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	participation = get_payroll_participation_preview(company, payroll_month, attendance_lock_version)
+	settlements = list_payroll_settlement_records(company, payroll_month, attendance_lock_version, 100000)
+	by_employee = {row.employee: row for row in settlements}
+	rows = []
+	for row in participation.get("rows", []):
+		if row.get("decision") != "离职结算" and not (
+			row.get("employee_status") in {"Left", "离职"} or
+			(row.get("relieving_date") and str(row["relieving_date"]) <= str(_month_end(payroll_month)))):
+			continue
+		settlement = by_employee.get(row.get("employee"))
+		row["settlement"] = settlement
+		rows.append(row)
+	return {"rows": rows, "candidates": participation.get("rows", []), "rule_version": TERMINATION_RULE_VERSION}
 
 
 def _previous_payroll_month(payroll_month):
@@ -9607,6 +9827,7 @@ def confirm_payroll_settlement_records(company: str, payroll_month: str, attenda
 	if not _can_manage_payroll_rules():
 		frappe.throw(_("您没有确认薪资结算的权限"))
 	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	frappe.db.sql("select name from tabCompany where name=%s for update", (company,))
 	_assert_workflow_locked_for_generation(company, payroll_month, attendance_lock_version)
 	calculation_validation = _validate_calculation_step(company, payroll_month, attendance_lock_version)
 	if calculation_validation.get("blockers"):
@@ -9624,6 +9845,15 @@ def confirm_payroll_settlement_records(company: str, payroll_month: str, attenda
 		frappe.throw(_("仍有 {0} 条福利/扣款来源待确认，不能确认薪资结算。").format(pending_welfare_count))
 	for name in frappe.get_all(PAYROLL_SETTLEMENT_DOCTYPE, filters=scope_filters, pluck="name"):
 		doc = frappe.get_doc(PAYROLL_SETTLEMENT_DOCTYPE, name)
+		if frappe.db.exists(PAYROLL_SETTLEMENT_DOCTYPE, {"company": company, "payroll_month": payroll_month,
+			"employee": doc.employee, "attendance_lock_version": ["!=", attendance_lock_version],
+			"calculation_status": ["in", ["已确认", "已生成工资单"]]}):
+			frappe.throw(_("员工本月已有其他版本的已确认工资，请先处理重复结算。"))
+		trace = json.loads(doc.source_trace_json or "{}")
+		if trace.get("termination"):
+			current = _termination_source(company, payroll_month, attendance_lock_version, doc.employee)
+			if trace["termination"]["approved_source"].get("source_hash") != current["source_hash"]:
+				frappe.throw(_("离职结算来源已变化，请重新核对并试算。"))
 		if doc.calculation_status not in ("已确认", "已生成工资单"):
 			doc.calculation_status = "已确认"
 			doc.save(ignore_permissions=True)

@@ -315,6 +315,36 @@
 	min-width: 132px;
 }
 
+.hrms-org-node--organization_department {
+	border-color: #2f855a;
+}
+
+.hrms-org-node--organization_supervisor {
+	border-color: #4f668a;
+}
+
+.hrms-org-node--organization_office,
+.hrms-org-node--organization_section {
+	border-color: #2f855a;
+}
+
+.hrms-org-node--organization_group {
+	border-color: #1c7a9d;
+}
+
+.hrms-org-node--organization_line {
+	border-color: #6c63b5;
+}
+
+.hrms-org-node--organization_position {
+	border-color: #c47a14;
+}
+
+.hrms-org-node--organization_person {
+	border-color: #5277aa;
+	min-width: 132px;
+}
+
 .hrms-org-node.active {
 	box-shadow: 0 0 0 2px rgba(201, 79, 36, 0.28);
 }
@@ -356,6 +386,67 @@
 
 .hrms-org-node--department .hrms-org-node-bar {
 	background: #33b889;
+}
+
+.hrms-org-node--organization_department .hrms-org-node-bar {
+	background: #d8f1e4;
+}
+
+.hrms-org-node--organization_supervisor .hrms-org-node-bar {
+	background: #dce6f5;
+}
+
+.hrms-org-node--organization_office .hrms-org-node-bar,
+.hrms-org-node--organization_section .hrms-org-node-bar {
+	background: #d8f1e4;
+}
+
+.hrms-org-node--organization_group .hrms-org-node-bar {
+	background: #d6eef5;
+}
+
+.hrms-org-node--organization_line .hrms-org-node-bar {
+	background: #e5e1fb;
+}
+
+.hrms-org-node--organization_position .hrms-org-node-bar {
+	background: #ffe5bc;
+}
+
+.hrms-org-node--organization_person .hrms-org-node-bar {
+	background: #dce9fa;
+}
+
+.hrms-org-node-add {
+	align-items: center;
+	background: #fff;
+	border: 1px solid #b9c4d0;
+	border-radius: 50%;
+	color: #1877b8;
+	display: inline-flex;
+	font-size: 21px;
+	height: 28px;
+	justify-content: center;
+	line-height: 1;
+	margin: 10px 0 0;
+	padding: 0;
+	position: relative;
+	width: 28px;
+	z-index: 2;
+}
+
+.hrms-org-node-add::before {
+	border-left: 1px solid #1f2933;
+	content: "";
+	height: 10px;
+	left: 50%;
+	position: absolute;
+	top: -11px;
+}
+
+.hrms-org-node-add:hover {
+	background: #edf7ff;
+	border-color: #1877b8;
 }
 
 .hrms-org-node--employee_group .hrms-org-node-bar {

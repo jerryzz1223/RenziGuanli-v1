@@ -134,6 +134,7 @@ PROCESSING_FIELD_LABELS = {
 	"workday_overtime_hours": "工作日加班工时",
 	"restday_overtime_hours": "休息日加班工时",
 	"holiday_overtime_hours": "节假日加班工时",
+	"deep_night_shifts": "深夜班次数",
 	"large_night_shifts": "大夜班次数",
 	"small_night_shifts": "小夜班次数",
 	"personal_leave_hours": "事假工时",
@@ -179,6 +180,7 @@ ATTENDANCE_DRAFT_RESULT_COLUMNS = (
 	("workday_overtime_hours", "工作日加班（小时）"),
 	("restday_overtime_hours", "休息日加班（小时）"),
 	("holiday_overtime_hours", "节假日加班（小时）"),
+	("deep_night_shifts", "深夜班"),
 	("large_night_shifts", "大夜班"),
 	("small_night_shifts", "小夜班"),
 	("personal_leave_hours", "事假（小时）"),
@@ -1194,18 +1196,129 @@ def _record_payload(batch, row: dict[str, Any]) -> dict[str, Any]:
 	}
 
 
+def _business_merge_key(source_type: str, row: dict[str, Any]) -> str:
+	"""Return the stable business key used when a later import supplements a source.
+
+	Employee-centred sources are one row per employee/month.  Approval-centred
+	sources can legitimately contain several rows for the same employee, so they
+	use the source/approval identifier instead.  If a source does not contain a
+	stable key, retaining it as a new row is safer than guessing that two facts
+	are the same thing.
+	"""
+	code = str(_row_value(row, "employee_code", "工号") or "").strip()
+	if source_type in {"attendance_draft", *MONTHLY_SUPPORT_SOURCE_TYPES}:
+		return f"employee:{code}" if code else ""
+	if source_type in {"apple_tree", "missing_card"}:
+		source_id = str(row.get("source_id") or "").strip()
+		approval_no = str(row.get("approval_no") or _row_value(row.get("processed_value") or {}, "approval_no", "审批编号") or "").strip()
+		if source_id:
+			return f"source:{source_id}"
+		if approval_no:
+			return f"approval:{approval_no}"
+	return ""
+
+
+def _existing_record_as_processed_row(row: dict[str, Any]) -> dict[str, Any]:
+	"""Clone a prior persisted record into a new merged import version."""
+	return {
+		"employee_code": row.get("employee_code") or "",
+		"employee_name": row.get("employee_name") or "",
+		"department": row.get("department") or "",
+		"source_file": row.get("source_file") or "",
+		"source_sheet": row.get("source_sheet") or "",
+		"source_row": row.get("source_row") or 0,
+		"source_id": row.get("source_id") or "",
+		"approval_no": row.get("approval_no") or "",
+		"original_data": row.get("original_value") or {},
+		"processed_value": row.get("processed_value") or {},
+		"proposed_value": row.get("proposed_value") or {},
+		"confirmed_value": row.get("confirmed_value"),
+		"exception_codes": row.get("exception_codes") or [],
+		"exception_message": row.get("exception_message") or "",
+		"review_status": row.get("review_status") or "无需审核",
+		"reviewer": row.get("reviewer") or "",
+		"reviewed_on": row.get("reviewed_on") or "",
+		"review_note": row.get("review_note") or "",
+		"review_history": row.get("review_history") or [],
+		"eligible_for_downstream": bool(row.get("eligible_for_downstream")),
+	}
+
+
+def _merge_processed_rows(batch, result: dict[str, Any]) -> dict[str, Any]:
+	"""Merge a new import into the immediately preceding source version.
+
+	Each upload remains its own source batch for audit.  Its *effective* rows,
+	however, are an upsert view: a matching business key is replaced by the new
+	row, while distinct or unkeyed rows are retained without manufacturing a
+	duplicate match.  Existing manual-review history survives for rows not
+	replaced by the new submission.
+	"""
+	meta = _processing_meta(batch)
+	parent_name = str(meta.get("merge_parent_batch") or "").strip()
+	if not parent_name or not frappe.db.exists(IMPORT_BATCH_DOCTYPE, parent_name):
+		result["merge"] = {"mode": "business_unique_key", "inserted_rows": len(result.get("processed_rows") or []), "merged_rows": 0}
+		return result
+
+	parent = frappe.get_doc(IMPORT_BATCH_DOCTYPE, parent_name)
+	if parent.company != batch.company or parent.attendance_month != batch.attendance_month or parent.source_type != batch.source_type:
+		result["merge"] = {"mode": "business_unique_key", "inserted_rows": len(result.get("processed_rows") or []), "merged_rows": 0}
+		return result
+
+	existing_rows = [_existing_record_as_processed_row(row) for row in _result_rows(parent, 5000)]
+	incoming_rows = list(result.get("processed_rows") or [])
+	existing_by_key = {}
+	for row in existing_rows:
+		key = _business_merge_key(batch.source_type, row)
+		if key:
+			existing_by_key[key] = row
+
+	incoming_by_key = {}
+	incoming_unkeyed = []
+	for row in incoming_rows:
+		key = _business_merge_key(batch.source_type, row)
+		if key:
+			incoming_by_key[key] = row
+		else:
+			incoming_unkeyed.append(row)
+	merged_rows = sum(1 for key in incoming_by_key if key in existing_by_key)
+	merged = [row for row in existing_rows if not (key := _business_merge_key(batch.source_type, row)) or key not in incoming_by_key]
+	merged.extend(incoming_by_key.values())
+	merged.extend(incoming_unkeyed)
+
+	result["processed_rows"] = merged
+	metrics = dict(result.get("metrics") or {})
+	metrics["processed_rows"] = len(merged)
+	metrics["exception_rows"] = sum(1 for row in merged if row.get("exception_codes"))
+	metrics["merged_rows"] = merged_rows
+	metrics["inserted_rows"] = len(incoming_rows) - merged_rows
+	result["metrics"] = metrics
+	result["merge"] = {
+		"mode": "business_unique_key",
+		"parent_batch": parent.name,
+		"merged_rows": merged_rows,
+		"inserted_rows": len(incoming_rows) - merged_rows,
+		"effective_rows": len(merged),
+	}
+	return result
+
+
 def _persist_processed_rows(batch, result):
 	if frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": batch.name}):
-		return
+		return result
+	result = _merge_processed_rows(batch, result)
 	for row in result["processed_rows"]:
 		frappe.get_doc(_record_payload(batch, row)).insert(ignore_permissions=True)
+	return result
 
 
-def _result_rows(batch, page_length: int = 5000):
+def _result_rows(batch, page_length: int = 5000, employee_code: str = ""):
+	filters = {"import_batch": batch.name}
+	if employee_code:
+		filters["employee_code"] = employee_code
 	records = frappe.get_all(
 		PROCESSING_RECORD_DOCTYPE,
-		filters={"import_batch": batch.name},
-		fields=["name", "attendance_month", "employee_code", "employee_name", "department", "source_type", "processed_value_json", "original_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "reviewer", "reviewed_on", "review_note", "eligible_for_downstream", "source_file", "source_sheet", "source_row", "source_id", "approval_no"],
+		filters=filters,
+		fields=["name", "attendance_month", "employee_code", "employee_name", "department", "source_type", "processed_value_json", "original_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "reviewer", "reviewed_on", "review_note", "review_history_json", "eligible_for_downstream", "source_file", "source_sheet", "source_row", "source_id", "approval_no"],
 		order_by="employee_code asc, source_row asc",
 		limit_page_length=page_length,
 	)
@@ -1257,6 +1370,7 @@ def _serialize_record(record):
 	result["exception_codes"] = _loads(result["exception_codes"], [])
 	result["proposed_value"] = _loads(result.pop("proposed_value_json", ""), {})
 	result["confirmed_value"] = _loads(result.pop("confirmed_value_json", ""), None)
+	result["review_history"] = _loads(result.pop("review_history_json", ""), [])
 	result["department"] = _display_department(result.get("department"))
 	for values in (result["processed_value"], result["proposed_value"], result["confirmed_value"]):
 		if isinstance(values, dict):
@@ -1685,6 +1799,7 @@ def _slot_payload(batch):
 		"precheck": meta.get("precheck"),
 		"data_quality": meta.get("data_quality", {}),
 		"processed_result": meta.get("processed_result"),
+		"merge": meta.get("merge", {}),
 	}
 
 
@@ -1699,6 +1814,22 @@ def _refresh_batch_review_status(batch):
 	batch.status = "待处理异常" if pending_rows else "待确认"
 	batch.save(ignore_permissions=True)
 	return batch.status
+
+
+def _invalidate_monthly_final_after_source_change(batch, reason: str):
+	"""Require a fresh signed/finance final after an editable source changes."""
+	anchor = _latest_batch(batch.company, batch.attendance_month, "attendance_draft")
+	if not anchor or not _processing_meta(anchor).get("monthly_final_outputs"):
+		return
+	_save_batch_notes(anchor, {
+		"monthly_final_outputs": {},
+		"source_data_change": {
+			"source_type": batch.source_type,
+			"reason": reason,
+			"changed_by": frappe.session.user,
+			"changed_on": now_datetime().isoformat(),
+		},
+	})
 
 
 def _monthly_final_employee_recognition(company: str, attendance_month: str) -> dict[str, int]:
@@ -1775,6 +1906,7 @@ def register_source_file(company: str, attendance_month: str, source_type: str, 
 	if not file_url.lower().split("?", 1)[0].endswith(".xlsx"):
 		frappe.throw(_("当前考勤处理仅接受 .xlsx 文件，以保证结构预检和加工结果可追溯。"))
 	checksum = _file_checksum(file_url)
+	parent = _latest_batch(company, attendance_month, source_type)
 	batch = frappe.get_doc({
 		"doctype": IMPORT_BATCH_DOCTYPE,
 		"company": company,
@@ -1785,7 +1917,12 @@ def register_source_file(company: str, attendance_month: str, source_type: str, 
 		"status": "待加工",
 		"imported_by": frappe.session.user,
 		"imported_on": now_datetime(),
-		"notes": _json({"attendance_processing_center": {"source_version": now_datetime().isoformat(), "registered_by": frappe.session.user}}),
+		"notes": _json({"attendance_processing_center": {
+			"source_version": now_datetime().isoformat(),
+			"registered_by": frappe.session.user,
+			"merge_parent_batch": parent.name if parent else "",
+			"merge_mode": "business_unique_key",
+		}}),
 	}).insert(ignore_permissions=True)
 	return {"batch": batch.name, "source_type": source_type, "status": batch.status, "file_url": file_url}
 
@@ -1804,6 +1941,7 @@ def register_monthly_support_file(company: str, attendance_month: str, source_ty
 		frappe.throw(_("请先上传来源文件。"))
 	if not file_url.lower().split("?", 1)[0].endswith(".xlsx"):
 		frappe.throw(_("月度补充来源仅接受 .xlsx 文件。"))
+	parent = _latest_batch(company, attendance_month, source_type)
 	batch = frappe.get_doc({
 		"doctype": IMPORT_BATCH_DOCTYPE,
 		"company": company,
@@ -1818,6 +1956,8 @@ def register_monthly_support_file(company: str, attendance_month: str, source_ty
 			"source_version": now_datetime().isoformat(),
 			"registered_by": frappe.session.user,
 			"monthly_support": True,
+			"merge_parent_batch": parent.name if parent else "",
+			"merge_mode": "business_unique_key",
 		}}),
 	}).insert(ignore_permissions=True)
 	return {"batch": batch.name, "source_type": source_type, "status": batch.status, "file_url": file_url}
@@ -1988,20 +2128,21 @@ def process_monthly_support_file(company: str, attendance_month: str, source_typ
 		batch.status = "结构异常"
 		batch.save(ignore_permissions=True)
 		frappe.throw(precheck.get("message") or _("来源文件结构不符合要求。"))
-	result = _process_monthly_support_rows(batch)
-	_persist_processed_rows(batch, result)
+	result = _persist_processed_rows(batch, _process_monthly_support_rows(batch))
 	batch.status = result["status"]
 	batch.daily_sheet_rows = cint(result["metrics"]["source_rows"])
 	batch.save(ignore_permissions=True)
+	_invalidate_monthly_final_after_source_change(batch, "source_import_merge")
 	processed_result = _export_processed_result(batch)
 	_save_batch_notes(batch, {
 		"metrics": result["metrics"],
 		"processed_result": processed_result,
 		"processed_on": now_datetime().isoformat(),
 		"monthly_support_processing_version": 2,
-		"monthly_support_import_mode": "one_time_import",
+		"monthly_support_import_mode": "business_unique_key_merge",
+		"merge": result.get("merge", {}),
 	})
-	return {"batch": batch.name, "source_type": source_type, "status": batch.status, "metrics": result["metrics"], "processed_result": processed_result}
+	return {"batch": batch.name, "source_type": source_type, "status": batch.status, "metrics": result["metrics"], "processed_result": processed_result, "merge": result.get("merge", {})}
 
 
 @frappe.whitelist()
@@ -2052,8 +2193,7 @@ def process_source_slot(company: str, attendance_month: str, source_type: str):
 		frappe.throw(_("请先上传该来源文件。"))
 	if frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": batch.name}):
 		return {"batch": batch.name, "status": batch.status, "processed_result": _processing_meta(batch).get("processed_result"), "message": _("该来源版本已加工；如需重新处理，请重新上传形成新版本。")}
-	result = _process_batch(batch)
-	_persist_processed_rows(batch, result)
+	result = _persist_processed_rows(batch, _process_batch(batch))
 	structure_precheck = result.get("structure_precheck") or {}
 	if structure_precheck and not structure_precheck.get("is_valid", True):
 		batch.status = "结构异常"
@@ -2063,6 +2203,8 @@ def process_source_slot(company: str, attendance_month: str, source_type: str):
 		# wait for a second source-confirmation or approval action.
 		batch.status = "已确认"
 	result["status"] = batch.status
+	batch.save(ignore_permissions=True)
+	_invalidate_monthly_final_after_source_change(batch, "source_import_merge")
 	processed_result = _export_processed_result(batch)
 	_save_batch_notes(batch, {
 		"precheck": result.get("structure_precheck"),
@@ -2070,8 +2212,9 @@ def process_source_slot(company: str, attendance_month: str, source_type: str):
 		"data_quality": result.get("data_quality", {}),
 		"processed_result": processed_result,
 		"processed_on": now_datetime().isoformat(),
+		"merge": result.get("merge", {}),
 	})
-	return {"batch": batch.name, "source_type": source_type, "status": batch.status, "processed_result": processed_result, "metrics": result.get("metrics", {})}
+	return {"batch": batch.name, "source_type": source_type, "status": batch.status, "processed_result": processed_result, "metrics": result.get("metrics", {}), "merge": result.get("merge", {})}
 
 
 @frappe.whitelist()
@@ -2277,9 +2420,22 @@ def update_processing_record(company: str, attendance_month: str, source_type: s
 	doc.review_note = reason
 	doc.review_history_json = _json(history)
 	doc.eligible_for_downstream = 1 if review_status == "已通过" and _confirmed_downstream_eligible(confirmed) else 0
+	# Monthly-support rows have no exception queue.  An explicit, approved manual
+	# correction is therefore the auditable decision that the row's import-level
+	# validation issue has been resolved.
+	if source_type in MONTHLY_SUPPORT_SOURCE_TYPES and review_status == "已通过":
+		doc.exception_codes = _json([])
+		doc.exception_message = ""
 	doc.save(ignore_permissions=True)
 	batch = frappe.get_doc(IMPORT_BATCH_DOCTYPE, doc.import_batch)
-	batch_status = _refresh_batch_review_status(batch)
+	if source_type in MONTHLY_SUPPORT_SOURCE_TYPES:
+		remaining_errors = frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": batch.name, "exception_codes": ["!=", "[]"]})
+		batch.status = "导入异常" if remaining_errors else "已确认"
+		batch.save(ignore_permissions=True)
+		batch_status = batch.status
+	else:
+		batch_status = _refresh_batch_review_status(batch)
+	_invalidate_monthly_final_after_source_change(batch, "manual_source_update")
 	# The stored file URL must always reflect the current persistent record, not
 	# the original processing-time snapshot. Historical files remain untouched;
 	# the batch points only at the newest auditable export.
@@ -2422,6 +2578,7 @@ def update_special_hours_manual_entry(
 	doc.eligible_for_downstream = 1
 	doc.save(ignore_permissions=True)
 	processed_result = _export_processed_result(batch)
+	_invalidate_monthly_final_after_source_change(batch, "special_hours_manual_update")
 	_save_batch_notes(batch, {
 		"processed_result": processed_result,
 		"processed_result_refreshed_on": now_datetime().isoformat(),
@@ -2536,6 +2693,7 @@ def update_attendance_draft_daily_row(
 	doc.save(ignore_permissions=True)
 	batch_status = _refresh_batch_review_status(batch)
 	processed_result = _export_processed_result(batch)
+	_invalidate_monthly_final_after_source_change(batch, "daily_source_row_manual_update")
 	_save_batch_notes(batch, {
 		"processed_result": processed_result,
 		"processed_result_refreshed_on": now_datetime().isoformat(),
@@ -3235,7 +3393,7 @@ FINAL_SIGNED_COLUMNS = (
 	("special_workday_hours", "平日特殊工时"), ("workday_overtime_hours", "工作日加班"),
 	("special_restday_hours", "周末特殊工时"), ("restday_overtime_hours", "休息日加班"),
 	("special_holiday_hours", "节假日特殊工时"), ("holiday_overtime_hours", "节假日加班"),
-	("large_night_shifts", "大夜班"), ("small_night_shifts", "小夜班"),
+	("deep_night_shifts", "深夜班"), ("large_night_shifts", "大夜班"), ("small_night_shifts", "小夜班"),
 	("personal_leave_hours", "事假"), ("sick_leave_hours", "病假"), ("annual_leave_hours", "特休"),
 	("work_injury_hours", "工伤"), ("rest_arrangement_hours", "排休"), ("absence_hours", "旷工"),
 	("clock_in_missing_count", "上班漏打卡"), ("clock_out_missing_count", "下班漏打卡"),
@@ -3247,7 +3405,7 @@ FINAL_FINANCE_COLUMNS = (
 	("employee_code", "工号"), ("employee_name", "姓名"), ("department", "部门"),
 	("actual_attendance_hours", "实际出勤"), ("workday_overtime_hours", "工作日加班（含特殊工时）"),
 	("restday_overtime_hours", "休息日加班（含特殊工时）"), ("holiday_overtime_hours", "节假日加班（含特殊工时）"),
-	("large_night_shifts", "大夜班"), ("small_night_shifts", "小夜班"),
+	("deep_night_shifts", "深夜班"), ("large_night_shifts", "大夜班"), ("small_night_shifts", "小夜班"),
 	("absence_hours", "旷工"), ("green_apple_amount", "绿苹果金额"), ("red_apple_amount", "红苹果金额"), ("housing_allowance", "住房补贴"),
 	("full_attendance_award", "全勤奖"),
 )
@@ -3257,10 +3415,11 @@ FINAL_FINANCE_COLUMNS = (
 # weekday/rest-day/holiday multiplier evidence used by both finance and payroll.
 MONTHLY_FINAL_IDENTITY_FIELDS = frozenset({"employee_code", "employee_name", "department"})
 MONTHLY_FINAL_SPECIAL_HOURS_FIELDS = frozenset({"special_workday_hours", "special_restday_hours", "special_holiday_hours"})
+MONTHLY_FINAL_SCHEDULED_FIELDS = frozenset({"deep_night_shifts"})
 MONTHLY_FINAL_WEB_EDITABLE_FIELDS = tuple(
 	field
 	for field, _label in FINAL_SIGNED_COLUMNS
-	if field not in MONTHLY_FINAL_IDENTITY_FIELDS | MONTHLY_FINAL_SPECIAL_HOURS_FIELDS
+	if field not in MONTHLY_FINAL_IDENTITY_FIELDS | MONTHLY_FINAL_SPECIAL_HOURS_FIELDS | MONTHLY_FINAL_SCHEDULED_FIELDS
 )
 
 # The settings table stores visible Excel headings, while field keys remain
@@ -3314,6 +3473,7 @@ SIGNED_FINAL_FIELD_LAYOUT = (
 	("settlement_20", "调整后工时", "2倍结算工时=周特+休息日加班", "计算字段"),
 	("standard_hours_check", "调整后工时", "（验算用）标准工时=1倍结算工时+1.5倍缺勤工时+2倍缺勤工时", "计算字段"),
 	("settlement_30_check", "调整后工时", "3倍节假日加班\n工时", "计算字段"),
+	("deep_night_shifts", "深\n夜\n班", "", "计算字段"),
 	("large_night_shifts", "大\n夜\n班", "", "来源字段"),
 	("small_night_shifts", "小\n夜\n班", "", "来源字段"),
 	("absence_deduction", "旷工(小时)工时扣3倍", "", "计算字段"),
@@ -3395,9 +3555,9 @@ def _attendance_final_excel_config_hash() -> str:
 	return hashlib.sha256(_json(payload).encode()).hexdigest()
 
 
-# Version nine invalidates previous files and also fingerprints heading changes,
+# Version ten invalidates previous files and also fingerprints heading changes,
 # so an edited Settings table cannot accidentally keep an old export.
-MONTHLY_FINAL_LAYOUT_VERSION = 9
+MONTHLY_FINAL_LAYOUT_VERSION = 10
 
 
 # The employee-facing file deliberately follows the paper confirmation form
@@ -3602,14 +3762,15 @@ def _monthly_snapshot_version(batches: dict[str, Any]) -> str:
 	return hashlib.sha256(_json(material).encode()).hexdigest()[:16]
 
 
-def _monthly_final_rows(batches: dict[str, Any]):
+def _monthly_final_rows(batches: dict[str, Any], employee_code: str = ""):
 	"""Aggregate confirmed processing rows without recalculating their source facts."""
 	rows_by_employee = defaultdict(dict)
 	attendance_population = set()
 	for source_type, batch in sorted(batches.items(), key=lambda item: item[0] != "attendance_draft"):
 		if not batch:
 			continue
-		for record in _result_rows(batch, 5000):
+		records = _result_rows(batch, 5000, employee_code=employee_code) if employee_code else _result_rows(batch, 5000)
+		for record in records:
 			if not record.get("eligible_for_downstream"):
 				continue
 			values = _effective_result_values(record)
@@ -3828,9 +3989,10 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 	# stable, while visible Excel wording can evolve with HR's monthly form.
 	excel_fields = _attendance_final_excel_fields()
 	# Preserve column A as the same blank margin used by HR's original file.
-	# The visible form is B:BH, which also keeps every formula letter identical
-	# to the audited manual confirmation workbook.
-	form_start, form_end = 2, 60
+	# The visible form grows with the configured fields. Formula columns precede
+	# the deep/large/small-night fields, so adding the deep-night source column
+	# does not change any audited calculation references.
+	form_start, form_end = 2, 1 + len(excel_fields)
 	for offset, field in enumerate(excel_fields):
 		column = form_start + offset
 		sheet.cell(row=2, column=column, value=field["main_header"])
@@ -3850,7 +4012,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 			sheet.merge_cells(start_row=2, start_column=form_start + start, end_row=3, end_column=form_start + start)
 		start = end
 
-	field_codes = [1, 2, "", 4, "", 5, 6, "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", 7, 8, 9, 10, "", 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, "", ""]
+	field_codes = [1, 2, "", 4, "", 5, 6, "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", 7, 8, 9, 10, "", 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, "", "", ""]
 	for column, code in enumerate(field_codes, start=form_start):
 		sheet.cell(row=4, column=column, value=code)
 
@@ -3877,7 +4039,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 		for row in (2, 3): sheet.cell(row=row, column=column).fill = yellow
 	for column in range(2, 10): sheet.cell(row=4, column=column).fill = gold
 
-	sheet.merge_cells("D1:BH1")
+	sheet.merge_cells(f"D1:{get_column_letter(form_end)}1")
 	month_label = f"{int(attendance_month.split('-')[1])}月" if "-" in attendance_month else attendance_month
 	sheet["D1"] = f"{month_label}工时奖惩确认表"
 	sheet["D1"].font = Font(name="宋体", size=20)
@@ -3888,7 +4050,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 	sheet.row_dimensions[4].height = 30
 	sheet.column_dimensions["A"].width = 2
 	for column in range(form_start, form_end + 1): sheet.column_dimensions[get_column_letter(column)].width = 9
-	for column in (3, 5, 59, 60): sheet.column_dimensions[get_column_letter(column)].width = 13
+	for column in (3, 5, form_end - 1, form_end): sheet.column_dimensions[get_column_letter(column)].width = 13
 	for column in (4, 7, 8, 9, 47): sheet.column_dimensions[get_column_letter(column)].width = 11
 
 	for excel_row, row in enumerate(rows, start=5):
@@ -3903,13 +4065,13 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 			f"=Q{excel_row}*0.5", f"=R{excel_row}", f"=S{excel_row}", f"=V{excel_row}", f"=W{excel_row}", f"=Q{excel_row}*0.5", f"=P{excel_row}", f"=T{excel_row}",
 			f"=I{excel_row}+Z{excel_row}+AA{excel_row}+AB{excel_row}+AC{excel_row}+AD{excel_row}", f"=J{excel_row}+K{excel_row}", f"=L{excel_row}+M{excel_row}", f"=N{excel_row}+O{excel_row}", f"=AG{excel_row}", f"=AE{excel_row}+AF{excel_row}", 0,
 			f"=IF(AL{excel_row}-AI{excel_row}>0,AL{excel_row}-AI{excel_row},0)", f"=IF(AM{excel_row}-AJ{excel_row}>0,AM{excel_row}-AJ{excel_row},0)", f"=AH{excel_row}+AL{excel_row}+AM{excel_row}-AO{excel_row}-AP{excel_row}", f"=G{excel_row}-AQ{excel_row}", f"=IF(AI{excel_row}-AL{excel_row}>0,AI{excel_row}-AL{excel_row},0)", f"=IF(AJ{excel_row}-AM{excel_row}>0,AJ{excel_row}-AM{excel_row},0)", f"=AQ{excel_row}+AN{excel_row}+AO{excel_row}", f"=AK{excel_row}",
-			_as_number(row.get("large_night_shifts")), _as_number(row.get("small_night_shifts")), absence, 0, 0, 0, _as_number(row.get("green_apple_amount")), _as_number(row.get("red_apple_amount")), _as_number(row.get("housing_allowance")), _as_number(row.get("full_attendance_award")), row.get("employee_signature") or "", row.get("review_note") or ""]
+			_as_number(row.get("deep_night_shifts")), _as_number(row.get("large_night_shifts")), _as_number(row.get("small_night_shifts")), absence, 0, 0, 0, _as_number(row.get("green_apple_amount")), _as_number(row.get("red_apple_amount")), _as_number(row.get("housing_allowance")), _as_number(row.get("full_attendance_award")), row.get("employee_signature") or "", row.get("review_note") or ""]
 		for column, value in enumerate(values, start=form_start):
 			cell = sheet.cell(row=excel_row, column=column, value=value)
 			cell.border = border
-			cell.alignment = Alignment(horizontal="center" if column not in {3, 5, 59, 60} else "left", vertical="center", wrap_text=True)
+			cell.alignment = Alignment(horizontal="center" if column not in {3, 5, form_end - 1, form_end} else "left", vertical="center", wrap_text=True)
 			cell.font = Font(name="宋体", size=10)
-			if 7 <= column <= 58: cell.number_format = "0.0"
+			if 7 <= column <= form_end - 2: cell.number_format = "0.0"
 		sheet.row_dimensions[excel_row].height = 26
 
 	for row in sheet.iter_rows(min_row=1, max_row=max(4, len(rows) + 4), min_col=form_start, max_col=form_end):
@@ -3963,15 +4125,22 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 	return {"blocked": False, "readiness": readiness, "final_outputs": final_outputs, "snapshot_version": locked_snapshot_version}
 
 
+def get_locked_final_outputs(company: str, attendance_month: str):
+	"""Read the canonical lock metadata without constructing the processing workbench."""
+	_require_processing_manager()
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	anchor = _latest_batch(company, attendance_month, "attendance_draft")
+	return _processing_meta(anchor).get("monthly_final_outputs", {}) if anchor else {}
+
+
 @frappe.whitelist()
-def get_monthly_final_preview(company: str, attendance_month: str, kind: str = "signed"):
+def get_monthly_final_preview(company: str, attendance_month: str, kind: str = "signed", employee_code: str = ""):
 	"""Return the exact current locked-final table for in-system review."""
 	_require_processing_manager()
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
 	if kind not in {"signed", "finance"}:
 		frappe.throw(_("终稿预览类型不正确。"))
-	state = get_processing_batch(company, attendance_month)
-	outputs = state.get("final_outputs") or {}
+	outputs = get_locked_final_outputs(company, attendance_month)
 	if not outputs.get("locked_snapshot_version"):
 		return {"available": False, "reason": _("请先锁定并生成月度终稿。")}
 	batches = _final_snapshot_batches(company, attendance_month)
@@ -3986,7 +4155,7 @@ def get_monthly_final_preview(company: str, attendance_month: str, kind: str = "
 		if not legacy_matches:
 			return {"available": False, "stale": True, "reason": _("来源或人工处理已变化，请重新锁定并生成终稿后再查看。")}
 		preview_batches = legacy_batches
-	rows = _monthly_final_rows(preview_batches)
+	rows = _monthly_final_rows(preview_batches, employee_code=employee_code) if employee_code else _monthly_final_rows(preview_batches)
 	columns = FINAL_SIGNED_COLUMNS if kind == "signed" else FINAL_FINANCE_COLUMNS
 	return {
 		"available": True,

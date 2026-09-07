@@ -2,6 +2,8 @@
 # MIT License. See license.txt
 
 
+from collections import deque
+
 import frappe
 from frappe import _
 
@@ -22,7 +24,7 @@ def get_all_nodes(method: str, company: str):
 
 	root_nodes = method(company=company) or []
 	result = []
-	nodes_to_expand = []
+	nodes_to_expand = deque()
 	queued_ids = set()
 	expanded_ids = set()
 
@@ -47,7 +49,7 @@ def get_all_nodes(method: str, company: str):
 		queue_expandable_nodes(data)
 
 	while nodes_to_expand:
-		parent = nodes_to_expand.pop(0)
+		parent = nodes_to_expand.popleft()
 		queued_ids.discard(parent.get("id"))
 		if parent.get("id") in expanded_ids:
 			continue

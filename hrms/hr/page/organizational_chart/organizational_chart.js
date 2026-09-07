@@ -42,9 +42,9 @@ class HybridOrganizationChart {
 		this.report_data = null;
 		this.report_loading = false;
 		this.multiple_position_draft = null;
-		// The workbook owns the chart structure. Department fields only provide
-		// explicit presentation overrides for source-cell-mapped cards.
-		this.source_mode = "workbook_snapshot";
+		// This is a standalone display graph. It never derives or persists
+		// Department / Designation / Employee business relationships.
+		this.source_mode = "manual";
 		this.fullscreen_bound = false;
 	}
 
@@ -87,11 +87,9 @@ class HybridOrganizationChart {
 			return;
 		}
 
-		this.page.set_title(__("部门架构图"));
+		this.page.set_title(__("组织架构图"));
 		this.setup_actions();
 		this.render_shell();
-		this.load_field_map();
-		this.load_multiple_position_draft_status();
 		this.load_tree();
 	}
 
@@ -108,15 +106,11 @@ class HybridOrganizationChart {
 
 	setup_actions() {
 		this.page.clear_inner_toolbar();
-		this.page.add_inner_button(__("原表架构"), () => this.set_source_mode("workbook_snapshot"));
-		this.page.add_inner_button(__("实时组织"), () => this.set_source_mode("live"));
 		this.page.add_inner_button(__("一览全局"), () => this.fit_to_view());
 		this.page.add_inner_button(__("全屏查看"), () => this.toggle_fullscreen());
 		this.page.add_inner_button(__("展开全部"), () => this.expand_all());
 		this.page.add_inner_button(__("收起全部"), () => this.collapse_all());
-		this.page.add_inner_button(__("同步2026Q3架构"), () => this.import_yongxin_q3_department_hierarchy());
-		this.page.add_inner_button(__("导出 Excel"), () => this.export_chart());
-		this.page.set_primary_action(__("新增部门"), () => this.add_department());
+		this.page.set_primary_action(__("新增组织节点"), () => this.show_manual_node_dialog());
 	}
 
 	setup_report_actions() {
@@ -131,9 +125,9 @@ class HybridOrganizationChart {
 				<section class="hrms-org-main">
 					<div class="hrms-org-toolbar">
 						<div>
-							<strong class="hrms-org-toolbar-title">${__("部门层级与人员归属")}</strong>
-							<small class="hrms-org-source" data-source-label>${__("正在读取组织架构来源...")}</small>
-							<small class="hrms-org-builder-hint">${__("实时组织与部门管理共用同一上下级关系；Q3 同步仅在输入确认文字后才会写入部门层级。")}</small>
+							<strong class="hrms-org-toolbar-title">${__("部门、岗位与人员图谱")}</strong>
+							<small class="hrms-org-source" data-source-label>${__("正在读取手工组织图谱...")}</small>
+							<small class="hrms-org-builder-hint">${__("图谱仅供展示；不会修改部门、岗位、员工、权限、审批、考勤或薪资关系。")}</small>
 						</div>
 						<div class="hrms-org-search">
 							<input class="form-control" data-search placeholder="${__("搜索部门、员工、岗位")}" />
@@ -331,10 +325,10 @@ class HybridOrganizationChart {
 		if (action === "refresh") this.load_tree();
 		if (action === "toggle-node") this.toggle_node(element?.dataset.toggleNode);
 		if (action === "select-node") this.select_node(element?.dataset.nodeId, element?.dataset.nodeType);
-		if (action === "add-department") this.add_department();
-		if (action === "edit-department") this.edit_department();
-		if (action === "quick-edit-node") this.quick_edit_node(element);
-		if (action === "delete-department") this.delete_department();
+		if (action === "add-organization-node") this.show_manual_node_dialog(null, element?.dataset.parentNodeId);
+		if (action === "edit-organization-node") this.edit_manual_node(element?.dataset.nodeId);
+		if (action === "delete-organization-node") this.delete_manual_node(element?.dataset.nodeId);
+		if (action === "quick-edit-node") this.edit_manual_node(element?.dataset.nodeId);
 		if (action === "open-employee") {
 			this.open_employee(
 				element?.dataset.employeeCode,
@@ -504,6 +498,31 @@ class HybridOrganizationChart {
 
 	render_summary() {
 		const summary = this.tree?.summary || {};
+		if (this.tree?.source_mode === "manual") {
+			const cards = [
+				["编制", summary.planned_headcount || 0],
+				["实际", summary.current_headcount || 0],
+				["空缺", summary.vacancy_count || 0],
+				["分管", summary.supervisor_count || 0],
+				["室", summary.office_count || 0],
+				["课", summary.section_count || 0],
+				["组", summary.group_count || 0],
+				["线", summary.line_count || 0],
+				["岗位", summary.position_count || 0],
+				["员工", summary.person_count || 0],
+				["节点总数", summary.node_count || 0],
+			];
+			this.wrapper.querySelector("[data-summary]").innerHTML = cards
+				.map(
+					([label, value]) => `
+						<div class="hrms-org-summary-card">
+							<strong>${frappe.utils.escape_html(String(value))}</strong>
+							<span>${frappe.utils.escape_html(__(label))}</span>
+						</div>`,
+				)
+				.join("");
+			return;
+		}
 		const draft = this.multiple_position_draft;
 		const cards = [
 			["编制人数", summary.planned_headcount || 0],
@@ -536,7 +555,7 @@ class HybridOrganizationChart {
 	render_source_label() {
 		const label = this.wrapper.querySelector("[data-source-label]");
 		if (!label) return;
-		label.textContent = this.tree?.source_label || (this.source_mode === "live" ? __("部门管理文件夹树") : __("原表组织架构（只读对照）"));
+		label.textContent = this.tree?.source_label || __("手工组织图谱（独立展示）");
 	}
 
 	set_source_mode(source_mode) {
@@ -554,10 +573,6 @@ class HybridOrganizationChart {
 			return;
 		}
 		const roots = [root];
-		if (!roots.length) {
-			tree.innerHTML = `<div class="hrms-org-empty">${__("暂无部门，请先在部门管理中新增一级部门。")}</div>`;
-			return;
-		}
 		tree.innerHTML = `<ul class="hrms-org-tree hrms-org-tree--forest">${roots.map((node) => this.render_tree_node(node)).join("")}</ul>`;
 		if (this.layout_frame) window.cancelAnimationFrame(this.layout_frame);
 		this.layout_frame = window.requestAnimationFrame(() => {
@@ -574,10 +589,7 @@ class HybridOrganizationChart {
 		const collapsed = !this.search_term && this.collapsed_nodes.has(node.node_id);
 		const children = node.children || [];
 		const has_children = children.length > 0;
-		const department = this.get_node_department(node);
-		const editable =
-			["department", "work_level", "position_group"].includes(node.node_type) ||
-			(this.source_mode === "workbook_snapshot" && Boolean(node.department));
+		const editable = String(node.node_type || "").startsWith("organization_");
 		const movable = false;
 		return `
 			<li class="${collapsed ? "is-collapsed" : ""}">
@@ -598,7 +610,6 @@ class HybridOrganizationChart {
 								data-action="quick-edit-node"
 								data-node-id="${frappe.utils.escape_html(node.node_id)}"
 								data-node-type="${frappe.utils.escape_html(node.node_type || "")}"
-								data-department="${frappe.utils.escape_html(department)}"
 								title="${__("快速编辑此卡片")}"
 								aria-label="${__("快速编辑此卡片")}"
 							>${frappe.utils.icon("edit", "xs")}</button>`
@@ -611,13 +622,14 @@ class HybridOrganizationChart {
 						${node.card_content ? `<p class="hrms-org-node-note">${frappe.utils.escape_html(node.card_content)}</p>` : ""}
 						${this.render_vacancy_marker(node)}
 						${
-							node.node_type === "employee"
-								? `<small>${frappe.utils.escape_html([node.work_level, node.department].filter(Boolean).join(" · "))}</small>`
-								: `<small>${__("编制")} ${frappe.utils.escape_html(String(node.planned_headcount || 0))} · ${__("现有")} ${frappe.utils.escape_html(String(node.current_headcount || 0))} · ${__("空缺")} ${frappe.utils.escape_html(String(node.vacancy_count || 0))}</small>`
+				node.node_type === "organization_person"
+								? `<small>${__("员工节点")}</small>`
+								: `<small>${__("编制")} ${frappe.utils.escape_html(String(node.planned_headcount || 0))} · ${__("实际")} ${frappe.utils.escape_html(String(node.current_headcount || 0))} · ${__("空缺")} ${frappe.utils.escape_html(String(node.vacancy_count || 0))}</small>`
 						}
 					</div>
 					${has_children ? `<button class="hrms-org-node-toggle" data-action="toggle-node" data-toggle-node="${frappe.utils.escape_html(node.node_id)}">${collapsed ? "+" : "-"}</button>` : ""}
 				</div>
+				${this.can_add_manual_child(node) ? `<button class="hrms-org-node-add" data-action="add-organization-node" data-parent-node-id="${frappe.utils.escape_html(node.node_id)}" title="${__("添加下级节点")}">+</button>` : ""}
 				${
 					has_children && !collapsed
 						? `<ul>${children.map((child) => this.render_tree_node(child)).join("")}</ul>`
@@ -625,6 +637,10 @@ class HybridOrganizationChart {
 				}
 			</li>
 		`;
+	}
+
+	can_add_manual_child(node) {
+		return this.tree?.source_mode === "manual" && node?.node_type !== "organization_person";
 	}
 
 	render_node_heading(node) {
@@ -816,47 +832,39 @@ class HybridOrganizationChart {
 					${detail.subtitle ? `<p>${frappe.utils.escape_html(detail.subtitle)}</p>` : ""}
 				</div>
 				<div class="hrms-org-detail-actions">
-					<button class="btn btn-xs btn-default" data-action="add-department">${__("新增部门")}</button>
-					${
-						actions.can_edit_department
-							? `<button class="btn btn-xs btn-default" data-action="edit-department">${__("编辑部门")}</button>`
-							: ""
-					}
-					${
-						actions.can_delete_department
-							? `<button class="btn btn-xs btn-danger" data-action="delete-department">${__("删除部门")}</button>`
-							: ""
-					}
+					${actions.can_add_organization_node ? `<button class="btn btn-xs btn-default" data-action="add-organization-node">${__("新增节点")}</button>` : ""}
+					${actions.can_edit_organization_node ? `<button class="btn btn-xs btn-default" data-action="edit-organization-node" data-node-id="${frappe.utils.escape_html(detail.node_id || "")}">${__("编辑节点")}</button>` : ""}
+					${actions.can_delete_organization_node ? `<button class="btn btn-xs btn-danger" data-action="delete-organization-node" data-node-id="${frappe.utils.escape_html(detail.node_id || "")}">${__("删除节点")}</button>` : ""}
 				</div>
 			</div>
+			${(detail.role_lines || []).map(line => `<div class="hrms-org-detail-note">${frappe.utils.escape_html(line)}</div>`).join("")}
 			${detail.card_content ? `<div class="hrms-org-detail-note">${frappe.utils.escape_html(detail.card_content)}</div>` : ""}
 			${this.render_department_relationships(detail.relationships || {})}
-			${this.render_employee_list(detail.employees || [])}
+			${this.render_employee_list(detail.employees || [], detail.employee_match_mode)}
 		`;
 	}
 
 	render_department_relationships(relationships) {
 		const parent = relationships.parent;
 		const children = relationships.children || [];
-		const is_snapshot = this.source_mode === "workbook_snapshot";
-		const node_button = (department) => `
+		const node_button = (node) => `
 			<button
 				type="button"
 				class="hrms-org-relation-button"
 				data-action="select-node"
-				data-node-id="${frappe.utils.escape_html(is_snapshot ? department.name || "" : `department:${department.name || ""}`)}"
-				data-node-type="${frappe.utils.escape_html(is_snapshot ? department.node_type || "snapshot" : "department")}"
-			>${frappe.utils.escape_html(department.label || department.name || "")}</button>`;
+				data-node-id="${frappe.utils.escape_html(`organization_node:${node.name || ""}`)}"
+				data-node-type="${frappe.utils.escape_html(node.node_type || "organization_node")}"
+			>${frappe.utils.escape_html(node.label || node.name || "")}</button>`;
 		return `
 			<div class="hrms-org-relations">
 				<section>
-					<strong>${__("上级部门")}</strong>
-					${parent ? node_button(parent) : `<span>${__("无上级部门（一级部门）")}</span>`}
+					<strong>${__("上级节点")}</strong>
+					${parent ? node_button(parent) : `<span>${__("无上级节点（一级部门）")}</span>`}
 				</section>
 				<section>
-					<strong>${__("下级部门")}</strong>
+					<strong>${__("下级节点")}</strong>
 					<div class="hrms-org-relation-list">
-						${children.length ? children.map(node_button).join("") : `<span>${__("暂无下级部门")}</span>`}
+						${children.length ? children.map(node_button).join("") : `<span>${__("暂无下级节点")}</span>`}
 					</div>
 				</section>
 			</div>`;
@@ -883,13 +891,13 @@ class HybridOrganizationChart {
 		`;
 	}
 
-	render_employee_list(employees) {
+	render_employee_list(employees, employee_match_mode = null) {
 		if (!employees.length) {
-			return `<div class="hrms-org-empty">${__("当前节点没有匹配员工。")}</div>`;
+			return `<div class="hrms-org-empty">${employee_match_mode === "department" ? __("员工档案中暂未找到属于该部门的在职员工。") : employee_match_mode === "display" ? __("分管为展示层级，人员由下级部门自动匹配。") : __("当前节点没有匹配员工。")}</div>`;
 		}
 		return `
 			<div class="hrms-org-employees">
-				<div class="hrms-org-section-title">${this.source_mode === "workbook_snapshot" ? __("原表人员（含下级）") : __("当前部门员工")}</div>
+				<div class="hrms-org-section-title">${this.source_mode === "workbook_snapshot" ? __("原表人员（含下级）") : employee_match_mode === "assigned" ? __("图中已选用员工") : employee_match_mode === "department" ? __("按花名册部门统计") : __("当前部门员工")}</div>
 				${employees
 					.map(
 						(employee) => {
@@ -1053,6 +1061,276 @@ class HybridOrganizationChart {
 				link.click();
 				link.remove();
 			},
+		});
+	}
+
+	manual_node_name(node_id) {
+		const value = String(node_id || "");
+		return value.startsWith("organization_node:") ? value.replace(/^organization_node:/, "") : "";
+	}
+
+	manual_node_config(doc) {
+		try {
+			const config = JSON.parse(doc?.source_text || "{}");
+			return config?.manual_organization ? config : {};
+		} catch (error) {
+			return {};
+		}
+	}
+
+	manual_child_kinds(parent_node_id) {
+		return this.find_node(parent_node_id)?.organization_node_type === "员工" ? [] : ["分管", "室", "课", "组", "线", "岗位", "员工"];
+	}
+
+	manual_parent_options(node_kind, excluded_name = "") {
+		const options = [{ label: __("公司（根节点）"), value: "" }];
+		const visit = (node) => {
+			if (!node) return;
+			if (excluded_name && this.manual_node_name(node.node_id) === excluded_name) return;
+			const kind = node.organization_node_type || (node.node_type === "company" ? "root" : "");
+			if (kind && kind !== "root" && kind !== "员工") {
+				options.push({ label: `${node.name} [${this.manual_node_name(node.node_id)}]`, value: this.manual_node_name(node.node_id) });
+			}
+			(node.children || []).forEach(visit);
+		};
+		visit(this.tree?.root);
+		return options;
+	}
+
+	manual_department_for_node(node_id, node = this.tree?.root, inherited_department = "") {
+		if (!node) return "";
+		const department = node.department || inherited_department;
+		if (node.node_id === node_id) return department;
+		for (const child of node.children || []) {
+			const match = this.manual_department_for_node(node_id, child, department);
+			if (match) return match;
+		}
+		return "";
+	}
+
+	show_manual_node_dialog(doc = null, parent_node_id = "") {
+		const company = this.company !== "All Companies" ? this.company : "";
+		const is_edit = Boolean(doc?.name);
+		const parent_context_id = is_edit
+			? doc?.parent_node
+				? `organization_node:${doc.parent_node}`
+				: "company:root"
+			: parent_node_id || this.selected_node?.node_id || "company:root";
+		const selected_parent = is_edit ? doc?.parent_node || "" : this.manual_node_name(parent_context_id);
+		const parent_node = this.find_node(parent_context_id);
+		const config = this.manual_node_config(doc);
+		const allowed_kinds = is_edit ? [config.node_kind] : this.manual_child_kinds(parent_context_id);
+		if (!allowed_kinds.length) { frappe.msgprint(__("员工节点不能添加下级，请选择部门或岗位节点。")); return; }
+		const parent_options = this.manual_parent_options(config.node_kind || allowed_kinds[0], doc?.name);
+		const parent_by_label = new Map(parent_options.map((option) => [option.label, option.value]));
+		const roster_department = this.manual_department_for_node(parent_context_id);
+		let dialog;
+		let pool = { rows: [], employees: [] };
+		let poolRequest = 0;
+		const selected_base_department = () => dialog?.get_value("department") || this.manual_department_for_node(dialog?.get_value("parent_node") ? `organization_node:${dialog.get_value("parent_node")}` : "company:root");
+		const inherits_parent_roster = () => dialog?.get_value("node_kind") !== "分管";
+		const eligible_rows = () => pool.rows;
+		const employee_filters = () => ({
+			...(company ? { company } : {}),
+			status: "Active",
+			name: ["in", [...new Set(eligible_rows().map(row => row.employee)), ""]],
+		});
+		const clear_people = () => {
+			if (!dialog) return;
+			["employee", "primary_employee", "proxy_employee", "manager_employee"].forEach(field => dialog.set_value(field, ""));
+			dialog.set_value("assigned_employees", []);
+		};
+		const load_pool = async (reset = true) => {
+			if (!dialog) return;
+			const request = ++poolRequest;
+			pool = { rows: [], employees: [] };
+			if (reset) clear_people();
+			const department = selected_base_department();
+			dialog.fields_dict.roster_department_hint.$wrapper.html('<p class="text-muted">正在读取花名册…</p>');
+			try {
+				const result = await frappe.call({ method: "hrms.api.organization_roster.get_candidates", args: { company, department, allow_company: dialog.get_value("node_kind") === "分管", inherit_parent: inherits_parent_roster() } });
+				if (request !== poolRequest) return;
+				pool = result.message || { rows: [], employees: [] };
+				const rosterDepartment = pool.roster_department || department;
+				const sourceLabel = department && rosterDepartment && department !== rosterDepartment
+					? `图谱结构部门：${department} · 花名册人员来源：${rosterDepartment}`
+					: `花名册部门：${rosterDepartment || "公司各部门"}`;
+				const hint = pool.employees.length ? `${sourceLabel} · 在职 ${pool.employees.length} 人，可按姓名或工号搜索。图中职位独立设置，不改变花名册主职。` : `${sourceLabel}中暂无在职员工。可先保存空框架，关联人员来源部门后再选人。`;
+				dialog.fields_dict.roster_department_hint.$wrapper.html(`<p class="text-muted">${frappe.utils.escape_html(hint)}</p><button type="button" class="btn btn-default btn-xs" data-open-base>查看部门花名册统计</button>`);
+				dialog.fields_dict.roster_department_hint.$wrapper.find("[data-open-base]").on("click", () => { dialog.hide(); rosterDepartment ? frappe.set_route("Form", "Department", rosterDepartment) : frappe.set_route("List", "Department"); });
+			} catch (error) {
+				if (request === poolRequest) dialog.fields_dict.roster_department_hint.$wrapper.html('<p class="text-danger">花名册读取失败，请重新打开窗口。</p>');
+			}
+		};
+		dialog = new frappe.ui.Dialog({
+			title: is_edit ? __("编辑组织节点") : __("新增组织节点"),
+			fields: [
+				{ fieldname: "display_name", fieldtype: "Data", label: __("框架节点名称"), default: doc?.display_name || "", description: __("可先填写名称创建空框架；留空时采用关联部门或岗位名称。") },
+				{
+					fieldname: "node_kind",
+					fieldtype: "Select",
+					label: __("节点类型"),
+					options: allowed_kinds.join("\n"),
+					reqd: 1,
+					read_only: is_edit,
+					default: config.node_kind || allowed_kinds[0],
+					onchange: () => { if (dialog) { dialog.set_value("department", ""); dialog.set_value("designation", ""); dialog.set_value("grade", ""); load_pool(); } },
+				},
+				{
+					fieldname: "manager_employee",
+					fieldtype: "Link",
+					options: "Employee",
+					label: __("分管人"),
+					description: __("输入员工姓名或工号后选择匹配员工；仅用于组织图展示，不修改员工档案。"),
+					default: config.manager_employee || "",
+					depends_on: "eval:doc.node_kind=='分管'",
+					get_query: () => ({ filters: employee_filters() }),
+				},
+				{
+					fieldname: "department",
+					fieldtype: "Link",
+					options: "Department",
+					label: __("花名册人员来源部门（可选）"),
+					description: __("不填写则沿用图中上级的来源部门；框架名称与花名册部门可以不同。不会调整员工的部门归属。"),
+					default: config.department || "",
+					onchange: () => load_pool(),
+					get_query: () => {
+						const kind = dialog?.get_value("node_kind");
+						const filters = company ? { company, disabled: 0 } : { disabled: 0 };
+						return { filters };
+					},
+				},
+				{
+					fieldname: "designation",
+					fieldtype: "Link",
+					options: "Designation",
+					label: __("参考花名册岗位（可选）"),
+					description: __("仅作为参考；未创建的岗位可直接填写图中职位名称。"),
+					default: config.designation || "",
+					depends_on: "eval:doc.node_kind=='岗位'",
+					get_query: () => ({ filters: { name: ["in", [...new Set(pool.rows.map(row => row.designation)), ""]] } }),
+					onchange: () => { if (dialog) { dialog.set_value("grade", ""); clear_people(); } },
+				},
+				{ fieldname: "grade", fieldtype: "Link", options: "Employee Grade", label: __("职级（可选）"), default: config.grade || "", depends_on: "eval:doc.node_kind=='岗位'", get_query: () => ({ filters: { name: ["in", [...new Set(pool.rows.filter(row => !dialog.get_value("designation") || row.designation === dialog.get_value("designation")).map(row => row.grade)), ""]] } }), onchange: clear_people },
+				{ fieldname: "role_title", fieldtype: "Data", label: __("图中职位名称"), default: config.role_title || config.designation || "", description: __("例如：技术总监、课长、组长。即使未安排人员或为代理任职，仍保留这个名称。") },
+				{ fieldname: "assignment_mode", fieldtype: "Select", label: __("任职方式"), options: "自动\n正式\n代理", default: config.assignment_mode || (is_edit ? "正式" : "自动"), description: __("自动：图中职位与花名册主职不同则标记代理；可手动指定正式或代理。代理关系仅图谱展示，不参与权限、审批、考勤、薪资或汇报关系。") },
+				{ fieldname: "planned_headcount", fieldtype: "Int", label: __("编制人数"), default: doc?.planned_headcount || 0, description: __("空缺按编制减实际自动计算；分管节点汇总下级。"), depends_on: "eval:doc.node_kind!='分管'" },
+				{
+					fieldname: "roster_department_hint",
+					fieldtype: "HTML",
+					options: '<div class="text-muted small">人员、职位与职级取自花名册。</div>',
+				},
+				{
+					fieldname: "employee",
+					fieldtype: "Link",
+					options: "Employee",
+					label: roster_department ? __("选择员工（{0}）", [roster_department]) : __("选择员工"),
+					description: __("从来源部门的在职花名册选择；不会因主职不同而隐藏员工。"),
+					default: config.employee || "",
+					depends_on: "eval:doc.node_kind=='员工'",
+					get_query: () => ({ filters: employee_filters() }),
+				},
+				{
+					fieldname: "primary_employee",
+					fieldtype: "Link",
+					options: "Employee",
+					label: __("任职人／负责人（可选）"),
+					description: __("选择该部门对应岗位的实际任职员工；只读取其现有花名册部门和岗位，不修改员工档案。"),
+					default: config.primary_employee || config.responsible_person || "",
+					depends_on: "eval:doc.node_kind!='分管'&&doc.node_kind!='员工'",
+					get_query: () => ({ filters: employee_filters() }),
+				},
+				{
+					fieldname: "assigned_employees",
+					fieldtype: "MultiSelectList",
+					options: "Employee",
+					label: __("从花名册选用员工（可多选）"),
+					description: __("按花名册名单逐项选入当前视图节点。"),
+					default: config.assigned_employees || [],
+					depends_on: "eval:doc.node_kind!='分管'&&doc.node_kind!='员工'",
+					get_data: (txt) => frappe.db.get_link_options("Employee", txt, employee_filters()),
+				},
+				{
+					fieldname: "proxy_employee",
+					fieldtype: "Link",
+					options: "Employee",
+					label: __("代理人（可选）"),
+					description: __("代理人仅用于图谱展示，不参与权限、审批、考勤、薪资或汇报关系。"),
+					default: config.proxy_employee || "",
+					depends_on: "eval:doc.node_kind!='分管'&&doc.node_kind!='员工'",
+					get_query: () => ({ filters: employee_filters() }),
+				},
+				{
+					fieldname: "parent_node_label",
+					fieldtype: "Autocomplete",
+					label: __("图中上级部门／节点"),
+					default: parent_options.find(option => option.value === selected_parent)?.label || parent_options[0].label,
+					options: parent_options.map((option) => option.label),
+					description: __("新增或编辑时均可调整；在节点上点击＋可创建下级。只改变此图的框架，不修改花名册部门树。"),
+					onchange: () => { if (dialog && parent_by_label.has(dialog.get_value("parent_node_label"))) dialog.set_value("parent_node", parent_by_label.get(dialog.get_value("parent_node_label"))); },
+				},
+				{
+					fieldname: "parent_node",
+					fieldtype: "Data",
+					default: selected_parent,
+					hidden: 1,
+					onchange: () => load_pool(),
+				},
+			],
+			primary_action_label: __("保存"),
+			primary_action: (values) => {
+				if (!parent_by_label.has(values.parent_node_label)) { frappe.msgprint(__("请从候选项选择有效上级节点。")); return; }
+				values.parent_node = parent_by_label.get(values.parent_node_label);
+				delete values.parent_node_label;
+				frappe
+					.call({
+						method: "hrms.hr.page.organizational_chart.organizational_chart.save_manual_organization_node",
+						args: { ...values, company: this.company, node_name: doc?.name || "" },
+						freeze: true,
+						freeze_message: __("正在保存组织节点..."),
+					})
+					.then((response) => {
+						dialog.hide();
+						frappe.show_alert({ message: __("组织节点已保存"), indicator: "green" });
+						this.load_tree();
+						const saved = response.message || {};
+						if (saved.name) this.selected_node = { node_id: `organization_node:${saved.name}`, node_type: this.manual_node_type(saved.node_kind) };
+					});
+			},
+		});
+		dialog.show();
+		load_pool(false);
+	}
+
+	manual_node_type(node_kind) {
+		return { 分管: "organization_supervisor", 室: "organization_office", 课: "organization_section", 组: "organization_group", 线: "organization_line", 岗位: "organization_position", 员工: "organization_person" }[node_kind] || "organization_node";
+	}
+
+	edit_manual_node(node_id = this.selected_node?.node_id) {
+		const name = this.manual_node_name(node_id);
+		if (!name) {
+			frappe.msgprint(__("请先选择要编辑的组织节点。"));
+			return;
+		}
+		frappe.db.get_doc("Organization Node", name).then((doc) => this.show_manual_node_dialog(doc));
+	}
+
+	delete_manual_node(node_id = this.selected_node?.node_id) {
+		const name = this.manual_node_name(node_id);
+		if (!name) return;
+		frappe.confirm(__("删除此节点不会修改员工、部门或岗位资料。确认删除吗？"), () => {
+			frappe
+				.call({
+					method: "hrms.hr.page.organizational_chart.organizational_chart.delete_manual_organization_node",
+					args: { node_name: name, company: this.company },
+					freeze: true,
+					freeze_message: __("正在删除组织节点..."),
+				})
+				.then(() => {
+					this.selected_node = null;
+					frappe.show_alert({ message: __("组织节点已删除"), indicator: "green" });
+					this.load_tree();
+				});
 		});
 	}
 

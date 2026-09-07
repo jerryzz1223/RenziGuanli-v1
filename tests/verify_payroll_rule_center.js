@@ -96,10 +96,7 @@ for (const marker of [
 	"open_attendance_rule_editor",
 	"data-attendance-rule-editor-area",
 	"深夜班每次津贴",
-	"深夜班上班时间",
-	"deep_night_shift_start",
-	"深夜班打卡容差",
-	"deep_night_shift_tolerance_minutes",
+	"生产夜班”且排定 20:00 至次日 08:00",
 	"钉钉考勤终稿次数",
 	"点击设置",
 ]) {

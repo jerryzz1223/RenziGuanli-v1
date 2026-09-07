@@ -95,10 +95,10 @@ def _add_image_relationship(content: bytes) -> tuple[bytes, str]:
 	return content.replace(b"</Relationships>", relationship + b"</Relationships>", 1), relationship_id
 
 
-def _relationship_ids(content: bytes) -> list[str]:
+def _relationship_ids(content: bytes) -> list[bytes]:
 	import re
 
-	return re.findall(rb'Id="(rId\d+)"', content).copy()  # type: ignore[return-value]
+	return re.findall(rb"Id=['\"](rId\d+)['\"]", content)
 
 
 def _add_background_picture(content: bytes, relationship_id: str) -> bytes:

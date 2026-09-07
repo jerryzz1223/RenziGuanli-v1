@@ -27,6 +27,8 @@ class EmployeeDetailPage {
 		this.cache_ttl = 30_000;
 		this.active_tab = "概览";
 		this.expanded_related = {};
+		this.apple_tree_summary = null;
+		this.apple_tree_request_id = 0;
 		this.tabs = ["概览", "在职信息", "个人信息", "联系信息", "工资社保", "合同信息", "材料附件", "背景调查"];
 		this.section_alias = {
 			在职信息: "在职信息",
@@ -61,6 +63,7 @@ class EmployeeDetailPage {
 			this.last_loaded_at = 0;
 			this.active_tab = "概览";
 			this.expanded_related = {};
+			this.apple_tree_summary = null;
 		}
 
 		// on_page_load and on_page_show can run back-to-back. Reuse the active
@@ -115,6 +118,7 @@ class EmployeeDetailPage {
 				this.navigation = navigation_response.message || {};
 				this.last_loaded_at = Date.now();
 				this.render();
+				this.load_apple_tree_summary(employee, this.detail?.header?.company || "", request_id);
 			})
 			.catch(() => {
 				if (!this.is_current_request(request_id, employee)) return;
@@ -131,6 +135,22 @@ class EmployeeDetailPage {
 			});
 
 		return this.load_promise;
+	}
+
+	load_apple_tree_summary(employee, company, detail_request_id) {
+		const apple_tree_request_id = ++this.apple_tree_request_id;
+		return frappe.call({
+			method: "hrms.hr.page.apple_tree_center.apple_tree_center.get_employee_summary",
+			args: { employee, year: String(new Date().getFullYear()), company },
+		}).then((response) => {
+			if (!this.is_current_request(detail_request_id, employee) || apple_tree_request_id !== this.apple_tree_request_id) return;
+			this.apple_tree_summary = response.message || { available: false, reason: __("苹果树汇总暂时无法读取。") };
+			this.render();
+		}).catch(() => {
+			if (!this.is_current_request(detail_request_id, employee) || apple_tree_request_id !== this.apple_tree_request_id) return;
+			this.apple_tree_summary = { available: false, reason: __("苹果树汇总暂时无法读取。") };
+			this.render();
+		});
 	}
 
 	is_current_request(request_id, employee) {
@@ -504,6 +524,18 @@ class EmployeeDetailPage {
 					background: #fff;
 					color: #2563eb;
 				}
+				.hrms-employee-material-file__preview {
+					display: inline-flex;
+					min-width: 0;
+					align-items: center;
+					gap: 7px;
+					padding: 0;
+					border: 0;
+					background: transparent;
+					color: inherit;
+					text-align: left;
+					cursor: zoom-in;
+				}
 				.hrms-employee-material-file__image,
 				.hrms-employee-material-file__placeholder {
 					width: 30px;
@@ -514,6 +546,55 @@ class EmployeeDetailPage {
 				}
 				.hrms-employee-material-file__placeholder { display: inline-flex; align-items: center; justify-content: center; color: #667085; font-size: 10px; font-weight: 600; }
 				.hrms-employee-material-file__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+				.hrms-employee-material-file__delete {
+					padding: 0 0 0 2px;
+					border: 0;
+					background: transparent;
+					color: #b42318;
+					font-size: 12px;
+					cursor: pointer;
+				}
+				.hrms-employee-material-preview img {
+					display: block;
+					max-width: 100%;
+					max-height: calc(100vh - 164px);
+					margin: 0 auto;
+					object-fit: contain;
+				}
+				.hrms-employee-material-preview-dialog .modal-dialog {
+					width: calc(100vw - 48px);
+					max-width: none;
+					margin: 24px auto;
+				}
+				.hrms-employee-material-preview-dialog .modal-content {
+					height: calc(100vh - 48px);
+					display: flex;
+					flex-direction: column;
+				}
+				.hrms-employee-material-preview-dialog .modal-body {
+					flex: 1;
+					overflow: hidden;
+				}
+				.hrms-employee-material-preview-dialog .hrms-employee-material-preview {
+					width: 100%;
+				}
+				.hrms-employee-material-preview__toolbar {
+					display: flex;
+					justify-content: center;
+					align-items: center;
+					gap: 8px;
+					padding: 0 0 12px;
+				}
+				.hrms-employee-material-preview__zoom-level { min-width: 42px; text-align: center; color: #667085; }
+				.hrms-employee-material-preview__canvas {
+					height: calc(100vh - 220px);
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					overflow: auto;
+				}
+				.hrms-employee-material-preview__canvas img { cursor: zoom-in; }
+				.hrms-employee-material-preview__canvas img.is-zoomed { max-width: none; max-height: none; cursor: zoom-out; }
 				@media (max-width: 767px) {
 					.hrms-employee-material-type { grid-template-columns: 1fr; gap: 8px; }
 				}
@@ -865,9 +946,26 @@ class EmployeeDetailPage {
 						: `<div class="hrms-employee-detail-empty">${__("当前区块没有已启用字段")}</div>`
 				}
 				${this.render_related_blocks(tab_label)}
+				${tab_label === "在职信息" ? this.render_apple_tree_summary() : ""}
 				${tab_label === "工资社保" ? "" : this.render_add_field_hint()}
 			</div>
 		`;
+	}
+
+	render_apple_tree_summary() {
+		const data = this.apple_tree_summary;
+		const year = data?.year || new Date().getFullYear();
+		const person_key = data?.person_key || "";
+		const key = "在职信息-苹果树汇总";
+		const expanded = Boolean(this.expanded_related[key]);
+		const person = data?.person || {};
+		const count = data?.available ? Number(person.record_count || 0) : 0;
+		const detail_button = person_key ? `<button class="btn btn-default btn-xs" data-action="open-apple-tree-detail" data-apple-person="${frappe.utils.escape_html(person_key)}" data-apple-year="${frappe.utils.escape_html(String(year))}">${__("查看详细信息")}</button>` : "";
+		const fields = [["统计年度", `${year}${__("年")}`], ["绿苹果", person.green_apples], ["红苹果", person.red_apples], ["净苹果", person.net_apples], ["记录数", person.record_count], ["苹果金额", person.reward_amount]];
+		const detail = data?.available
+			? `<div class="hrms-employee-detail-related-detail">${this.render_related_items([{ fields: fields.map(([label, value]) => ({ label, value })) }])}<div class="hrms-employee-detail-related-footer"><span class="text-muted">${__("办理入口")}</span>${detail_button}</div></div>`
+			: `<div class="hrms-employee-detail-related-detail"><div class="text-muted">${frappe.utils.escape_html(data ? (data.reason || __("暂无苹果树记录。")) : __("正在读取..."))}</div></div>`;
+		return `<div class="hrms-employee-detail-related-row hrms-employee-detail-collapse-row" data-related-key="${key}"><div class="hrms-employee-detail-related-title"><strong>${__("苹果树汇总")}</strong><span class="text-muted">（${__("已有{0}条记录", [count])}）</span></div><div class="hrms-employee-detail-related-actions"><span>${count ? __("查看更多") : __("暂无数据")}</span><span>${expanded ? "⌃" : "⌄"}</span></div></div>${expanded ? detail : ""}`;
 	}
 
 	render_readonly_field(field) {
@@ -931,7 +1029,10 @@ class EmployeeDetailPage {
 		const name = frappe.utils.escape_html(file.file_name || __("未命名材料"));
 		const url = frappe.utils.escape_html(file.file_url || "");
 		const image = /\.(?:jpe?g|png|webp)(?:\?.*)?$/i.test(file.file_url || "");
-		return `<a class="hrms-employee-material-file" href="${url}" target="_blank" rel="noopener" title="${name}">${image ? `<img class="hrms-employee-material-file__image" src="${url}" alt="">` : `<span class="hrms-employee-material-file__placeholder">PDF</span>`}<span class="hrms-employee-material-file__name">${name}</span></a>`;
+		if (!image) {
+			return `<a class="hrms-employee-material-file" href="${url}" target="_blank" rel="noopener" title="${name}"><span class="hrms-employee-material-file__placeholder">PDF</span><span class="hrms-employee-material-file__name">${name}</span></a>`;
+		}
+		return `<div class="hrms-employee-material-file"><button class="hrms-employee-material-file__preview" type="button" data-action="preview-material-image" data-file-url="${url}" data-file-name="${name}" title="${__("点击放大查看")}"><img class="hrms-employee-material-file__image" src="${url}" alt=""><span class="hrms-employee-material-file__name">${name}</span></button>${this.can_edit_employee_detail() ? `<button class="hrms-employee-material-file__delete" type="button" data-action="delete-material" data-file-name="${frappe.utils.escape_html(file.name || "")}" data-display-name="${name}">${__("删除")}</button>` : ""}</div>`;
 	}
 
 	render_related_blocks(tab_label) {
@@ -1104,6 +1205,18 @@ class EmployeeDetailPage {
 				this.upload_employee_material(button.dataset.materialType);
 			});
 		});
+		this.wrapper.querySelectorAll("[data-action='preview-material-image']").forEach((button) => {
+			button.addEventListener("click", (event) => {
+				event.preventDefault();
+				this.preview_employee_material_image(button.dataset.fileUrl, button.dataset.fileName);
+			});
+		});
+		this.wrapper.querySelectorAll("[data-action='delete-material']").forEach((button) => {
+			button.addEventListener("click", (event) => {
+				event.preventDefault();
+				this.delete_employee_material(button.dataset.fileName, button.dataset.displayName);
+			});
+		});
 		this.wrapper.querySelectorAll("[data-action='promotion']").forEach((button) => {
 			button.addEventListener("click", () => {
 				if (!this.is_probation_work_nature(this.detail?.header)) return;
@@ -1145,6 +1258,9 @@ class EmployeeDetailPage {
 				this.active_tab = "合同信息";
 				this.render();
 			});
+		});
+		this.wrapper.querySelectorAll("[data-action='open-apple-tree-detail']").forEach((button) => {
+			button.addEventListener("click", () => frappe.set_route("apple-tree-center", "person", button.dataset.applePerson, button.dataset.appleYear));
 		});
 		const compare_button = this.wrapper.querySelector("[data-action='compare']");
 		if (compare_button) {
@@ -1216,6 +1332,64 @@ class EmployeeDetailPage {
 				});
 			},
 		});
+	}
+
+	preview_employee_material_image(file_url, file_name) {
+		if (!file_url) return;
+		const dialog = new frappe.ui.Dialog({
+			title: file_name || __("材料图片"),
+			fields: [
+				{
+					fieldtype: "HTML",
+					fieldname: "image_preview",
+					options: `<div class="hrms-employee-material-preview"><div class="hrms-employee-material-preview__toolbar"><button class="btn btn-default btn-xs" type="button" data-action="material-image-zoom-out">${__("缩小")}</button><span class="hrms-employee-material-preview__zoom-level" data-role="material-image-zoom-level">${__("适应")}</span><button class="btn btn-default btn-xs" type="button" data-action="material-image-zoom-in">${__("放大")}</button><button class="btn btn-default btn-xs" type="button" data-action="material-image-zoom-reset">${__("适应窗口")}</button></div><div class="hrms-employee-material-preview__canvas"><img src="${frappe.utils.escape_html(file_url)}" alt="${frappe.utils.escape_html(file_name || "")}"></div></div>`,
+				},
+			],
+			primary_action_label: __("关闭"),
+			primary_action: () => dialog.hide(),
+		});
+		dialog.show();
+		dialog.$wrapper.addClass("hrms-employee-material-preview-dialog");
+		const image = dialog.$wrapper.find(".hrms-employee-material-preview__canvas img")[0];
+		const zoom_level = dialog.$wrapper.find("[data-role='material-image-zoom-level']");
+		let zoom = 1;
+		const set_zoom = (next_zoom) => {
+			zoom = Math.max(0.5, Math.min(4, next_zoom));
+			if (zoom === 1 || !image?.naturalWidth) {
+				image.style.width = "";
+				image.style.height = "";
+				image.classList.remove("is-zoomed");
+				zoom_level.text(__("适应"));
+				return;
+			}
+			image.style.width = `${Math.round(image.naturalWidth * zoom)}px`;
+			image.style.height = `${Math.round(image.naturalHeight * zoom)}px`;
+			image.classList.add("is-zoomed");
+			zoom_level.text(`${Math.round(zoom * 100)}%`);
+		};
+		dialog.$wrapper.find("[data-action='material-image-zoom-in']").on("click", () => set_zoom(zoom + 0.25));
+		dialog.$wrapper.find("[data-action='material-image-zoom-out']").on("click", () => set_zoom(zoom - 0.25));
+		dialog.$wrapper.find("[data-action='material-image-zoom-reset']").on("click", () => set_zoom(1));
+		image?.addEventListener("dblclick", () => set_zoom(zoom === 1 ? 2 : 1));
+	}
+
+	delete_employee_material(file_name, display_name) {
+		if (!this.can_edit_employee_detail() || !file_name) return;
+		frappe.confirm(
+			__("确定删除“{0}”吗？删除后无法恢复。", [display_name || __("这份材料")]),
+			() => {
+				frappe.call({
+					method: "hrms.api.employee_field_template.delete_employee_material",
+					args: { employee: this.employee, file_name },
+					freeze: true,
+					freeze_message: __("正在删除员工材料…"),
+				}).then((result) => {
+					if (this.detail) this.detail.materials = result.message?.materials || this.detail.materials;
+					this.render();
+					frappe.show_alert({ message: __("员工材料已删除"), indicator: "green" });
+				});
+			},
+		);
 	}
 
 	toggle_related_block(key) {

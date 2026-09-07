@@ -1,0 +1,80 @@
+.apple-tree-center { box-sizing: border-box; color: #1f2937; margin: 0; max-width: none; min-width: 0; padding: 20px 24px; width: 100%; }
+.apple-tree-center--state { align-items: center; display: flex; justify-content: center; min-height: 320px; }
+.apple-tree-center__header, .apple-tree-center__filters, .apple-tree-center__metric, .apple-tree-center__card, .apple-tree-center__detail { background: #fff; border: 1px solid #e5eaf1; border-radius: 12px; }
+.apple-tree-center__header { align-items: center; display: flex; gap: 16px; justify-content: space-between; margin-bottom: 14px; padding: 18px 20px; }.apple-tree-center__header p, .apple-tree-center__header span, .apple-tree-center__card header p, .apple-tree-center__detail header p, .apple-tree-center__metric small { color: #748096; font-size: 13px; margin: 0; }.apple-tree-center__header h2, .apple-tree-center__card h3, .apple-tree-center__detail h3 { margin: 4px 0; }.apple-tree-center__header-actions, .apple-tree-center__view-tabs { align-items: center; display: flex; gap: 8px; }.apple-tree-center__view-tabs { flex-wrap: wrap; }
+.apple-tree-center__filters { display: grid; gap: 12px; grid-template-columns: 160px 160px minmax(220px, 1fr); margin-bottom: 14px; padding: 14px; }.apple-tree-center__filters label { color: #566274; font-size: 12px; font-weight: 600; margin: 0; }.apple-tree-center__filters .form-control { margin-top: 5px; }
+.apple-tree-center__metrics { display: grid; gap: 14px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 14px; }.apple-tree-center__metric { display: flex; flex-direction: column; gap: 5px; min-height: 108px; padding: 16px; }.apple-tree-center__metric > span { color: #566274; font-size: 14px; }.apple-tree-center__metric b { color: #26364e; font-size: 27px; line-height: 1; }
+.apple-tree-center__layout { display: grid; gap: 14px; grid-template-columns: minmax(0, 1.4fr) minmax(330px, .8fr); }.apple-tree-center__card, .apple-tree-center__detail { min-width: 0; padding: 17px; }.apple-tree-center__primary-table { margin-top: 14px; }.apple-tree-center__card header, .apple-tree-center__detail header { align-items: flex-start; display: flex; gap: 12px; justify-content: space-between; }.apple-tree-center__detail { margin-top: 14px; }.apple-tree-center__detail header > div:last-child { display: flex; flex-wrap: wrap; gap: 8px; }
+.apple-tree-center__table-wrap { border: 1px solid #e7ecf2; border-radius: 8px; overflow-x: auto; }.apple-tree-center table { margin: 0; min-width: 980px; }.apple-tree-center table th { background: #f7f9fc; color: #66748a; font-size: 12px; font-weight: 600; white-space: nowrap; }.apple-tree-center table td { vertical-align: middle; }.apple-tree-center table td small { color: #8a95a6; display: block; }.apple-tree-center table tr.is-selected td { background: #f1f7ff; }.apple-tree-center__empty { color: #748096; margin: 18px 0 4px; text-align: center; }.apple-tree-center__sort { align-items: center; background: transparent; border: 0; color: inherit; display: inline-flex; font: inherit; gap: 5px; padding: 0; width: 100%; }.apple-tree-center__sort span { color: #a0acbc; font-size: 14px; }.apple-tree-center__filter-row th { background: #f7f9fc; padding-top: 4px !important; }.apple-tree-center__filter-row .form-control { font-size: 12px; height: 28px; min-width: 82px; padding: 4px 7px; }.apple-tree-center__table-footer { align-items: center; color: #6d798c; display: flex; font-size: 12px; justify-content: space-between; padding-top: 12px; }.apple-tree-center__table-footer > div { display: flex; gap: 5px; }.apple-tree-center__empty-cell { color: #748096; padding: 26px !important; text-align: center; }
+@media (max-width: 980px) { .apple-tree-center__layout { grid-template-columns: 1fr; }.apple-tree-center__metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 680px) { .apple-tree-center { padding: 12px; }.apple-tree-center__header, .apple-tree-center__header-actions { align-items: flex-start; flex-direction: column; }.apple-tree-center__filters { grid-template-columns: 1fr; }.apple-tree-center__metrics { grid-template-columns: 1fr 1fr; }.apple-tree-center__detail header { align-items: flex-start; flex-direction: column; } }
+
+/* Keep this page inside the available content width, including the HRMS drawer. */
+.page-container:has(.apple-tree-center) .page-body,
+.page-container:has(.apple-tree-center) .page-content,
+.page-container:has(.apple-tree-center) .layout-main-section-wrapper,
+.page-container:has(.apple-tree-center) .layout-main-section {
+	max-width: none;
+	min-width: 0;
+	width: 100%;
+}
+.apple-tree-center__card > header { align-items: center; margin-bottom: 16px; }
+.apple-tree-center table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 13px; }
+.apple-tree-center table th, .apple-tree-center table td {
+	border-top: 0; border-bottom: 1px solid #e7ecf0; border-right: 1px solid #edf0f4;
+	padding: 11px 14px; line-height: 1.5; white-space: nowrap;
+}
+.apple-tree-center table th:last-child, .apple-tree-center table td:last-child { border-right: 0; }
+.apple-tree-center table tbody tr:last-child td { border-bottom: 0; }
+.apple-tree-center table tbody tr:nth-child(even) td { background-color: #fafbfc; }
+.apple-tree-center table tbody tr:hover td { background-color: #edf7f2; }
+.apple-tree-center__data-table { table-layout: fixed; }
+.apple-tree-center__data-table th:first-child { width: 64px; }
+.apple-tree-center__data-table th:last-child { width: 142px; }
+.apple-tree-center__data-table td:nth-child(n+5):nth-child(-n+8) { font-variant-numeric: tabular-nums; text-align: right; }
+.apple-tree-center__data-table .btn { white-space: nowrap; }
+.apple-tree-center__data-table .form-control { min-width: 0; width: 100%; border: 1px solid transparent; background: #fff; }
+.apple-tree-center__data-table .form-control:focus { border-color: #5ea886; }
+.apple-tree-center__sort { justify-content: space-between; }
+.apple-tree-center__name-link { padding: 0; border: 0; background: transparent; color: #207554; font: inherit; font-weight: 600; cursor: pointer; }
+.apple-tree-center__name-link:hover { text-decoration: underline; }
+.apple-tree-center__name-link:focus-visible { outline: 2px solid #298461; outline-offset: 4px; border-radius: 2px; }
+.apple-tree-center__table-footer .btn-primary { background: #207554; border-color: #207554; color: #fff; }
+.apple-tree-center--person .apple-tree-center__header h2 { margin-top: 16px; }
+.apple-tree-center--person .apple-tree-center__header-actions label { margin: 0; color: #697588; font-size: 12px; }
+.apple-tree-center--person .apple-tree-center__header-actions select { margin-top: 4px; min-width: 116px; }
+.apple-tree-center__coverage { border-radius: 16px; padding: 5px 12px; background: #edf6f1; color: #207554; font-size: 12px; white-space: nowrap; }
+.apple-tree-center__person-scroll { max-height: none; overflow: auto; border-color: #aeb8bf; border-radius: 2px; }
+.apple-tree-center__person-table { min-width: 2200px !important; }
+.apple-tree-center__person-table thead th { position: sticky; top: 0; z-index: 2; background: #f2f5f8; }
+.apple-tree-center__person-table .is-month { position: sticky; left: 0; z-index: 1; background: #fff; box-shadow: 1px 0 0 #dde5e9; }
+.apple-tree-center__person-table thead .is-month { z-index: 3; background: #f2f5f8; }
+.apple-tree-center__person-table .is-numeric { text-align: right; font-variant-numeric: tabular-nums; }
+.apple-tree-center__person-table .is-absence { background: #eef7ef; color: #2f6744; }
+.apple-tree-center__person-table .is-green { color: #207554; }
+.apple-tree-center__person-table .is-red { color: #b94e4e; }
+.apple-tree-center__person-table .is-note { min-width: 210px; max-width: 340px; white-space: normal; }
+.apple-tree-center__person-table tfoot td { background: #e7eff8; font-weight: 600; border-top: 1px solid #d4dfeb; border-bottom: 0; }
+.apple-tree-center__person-table tfoot .is-month { background: #e7eff8; }
+.apple-tree-center__unavailable { color: #9ba6b3; }
+.apple-tree-center__footnote { color: #7b8795; font-size: 12px; margin: 12px 0 0; }
+@media (max-width: 680px) {
+	.apple-tree-center__table-footer { align-items: flex-start; gap: 10px; flex-direction: column; }
+	.apple-tree-center__person-scroll { max-height: 65vh; }
+}
+
+/* Annual detail mirrors the workbook: twelve month rows, December and totals. */
+.apple-tree-center .apple-tree-center__person-table th,
+.apple-tree-center .apple-tree-center__person-table td {
+	border-right: 1px solid #b6c0c8; border-bottom: 1px solid #b6c0c8;
+	padding: 10px 12px; height: 42px;
+}
+.apple-tree-center .apple-tree-center__person-table th { background: #f8fafb; color: #33404c; }
+.apple-tree-center .apple-tree-center__person-table tbody tr:nth-child(even) td { background: #fff; }
+.apple-tree-center .apple-tree-center__person-table tbody tr td.is-absence { background: #e5f1df; }
+.apple-tree-center .apple-tree-center__person-table tbody tr.is-year-end td { background: #cde2b9; color: #2e4934; }
+.apple-tree-center .apple-tree-center__person-table tfoot td { background: #deebf7; border-bottom: 0; font-weight: 600; }
+.apple-tree-center__person-table .apple-tree-center__sort { cursor: pointer; gap: 12px; min-height: 24px; }
+.apple-tree-center__person-table .apple-tree-center__sort span:first-child { color: inherit; font-size: inherit; }
+.apple-tree-center__person-table .apple-tree-center__sort.is-sorted { color: #207554; }
+.apple-tree-center__person-table .apple-tree-center__sort:focus-visible { outline: 2px solid #548c60; outline-offset: 3px; }

@@ -9,6 +9,20 @@ const source = fs.readFileSync(
 	"utf8",
 );
 
+for (const marker of [
+	"get_employee_summary",
+	"load_apple_tree_summary",
+	"render_apple_tree_summary",
+	"苹果树汇总",
+	"在职信息-苹果树汇总",
+	"hrms-employee-detail-collapse-row",
+	"data-action=\"open-apple-tree-detail\"",
+	'frappe.set_route("apple-tree-center", "person", button.dataset.applePerson, button.dataset.appleYear)',
+]) {
+	assert(source.includes(marker), `Employee detail must provide Apple-tree summary and precise drilldown: ${marker}`);
+}
+assert(!source.includes("hrms-employee-apple-tree"), "Apple-tree summary must reuse related-record collapse styling, not a separate card.");
+
 let route = ["employee-detail", "EMP-A"];
 const requests = [];
 const main = { innerHTML: "" };
@@ -58,7 +72,7 @@ context.EmployeeDetailPageForTest.prototype.render = function () {
 };
 
 function resolveEmployee(employee, displayName) {
-	const matching = requests.filter((request) => request.options.args.employee === employee && !request.resolved);
+	const matching = requests.filter((request) => request.options.args.employee === employee && !request.resolved && !request.options.method.endsWith("get_employee_summary"));
 	assert.strictEqual(matching.length, 2, `${employee} should have one detail and one navigation request.`);
 	matching.forEach((request) => {
 		request.resolved = true;
@@ -95,14 +109,15 @@ async function run() {
 	assert.strictEqual(main.rendered_employee, "Employee B", "A stale response must not replace the current employee.");
 
 	context.frappe.pages["employee-detail"].on_page_show(wrapper);
-	assert.strictEqual(requests.length, 4, "Showing a fresh cached page must not repeat its detail requests.");
+	assert.strictEqual(requests.length, 5, "Showing a fresh cached page must not repeat its detail or Apple-tree requests.");
 
 	wrapper.employee_detail.last_loaded_at -= wrapper.employee_detail.cache_ttl + 1;
 	context.frappe.pages["employee-detail"].on_page_show(wrapper);
-	assert.strictEqual(requests.length, 6, "An expired cached page must refresh the current employee.");
+	assert.strictEqual(requests.length, 7, "An expired cached page must refresh the current employee.");
 	resolveEmployee("EMP-B", "Employee B refreshed");
 	await flushPromises();
 	assert.strictEqual(main.rendered_employee, "Employee B refreshed");
+	assert.strictEqual(requests.length, 8, "A refreshed employee page must reload its Apple-tree summary.");
 
 	console.log("Employee detail follows the current route and ignores stale responses.");
 }

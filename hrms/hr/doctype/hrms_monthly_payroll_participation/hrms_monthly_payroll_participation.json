@@ -7,7 +7,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "company", "payroll_month", "attendance_lock_version", "employee", "employee_code", "employee_name", "department", "employee_status", "relieving_date", "decision", "decision_reason", "settlement_basis", "review_status", "approval_note", "approved_by", "approved_on"
+  "company", "payroll_month", "attendance_lock_version", "employee", "employee_code", "employee_name", "department", "employee_status", "relieving_date", "decision", "decision_reason", "settlement_basis", "termination_inputs_json", "review_status", "approval_note", "approved_by", "approved_on"
  ],
  "fields": [
   {"fieldname": "company", "fieldtype": "Link", "label": "公司", "options": "Company", "reqd": 1, "in_list_view": 1},
@@ -22,6 +22,7 @@
   {"fieldname": "decision", "fieldtype": "Select", "label": "本月处理方式", "options": "正常计薪\n离职结算\n不参与计算\n异常待审核", "reqd": 1, "in_list_view": 1},
   {"fieldname": "decision_reason", "fieldtype": "Small Text", "label": "处理或异常说明"},
   {"fieldname": "settlement_basis", "fieldtype": "Small Text", "label": "离职结算依据"},
+  {"fieldname": "termination_inputs_json", "fieldtype": "Long Text", "label": "离职结算已确认输入及来源", "read_only": 1},
   {"fieldname": "review_status", "fieldtype": "Select", "label": "审核状态", "options": "无需审核\n待审核\n审核通过\n已驳回", "in_list_view": 1, "read_only": 1},
   {"fieldname": "approval_note", "fieldtype": "Small Text", "label": "审核意见"},
   {"fieldname": "approved_by", "fieldtype": "Link", "label": "审核人", "options": "User", "read_only": 1},

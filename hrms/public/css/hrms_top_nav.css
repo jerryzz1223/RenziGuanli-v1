@@ -1788,7 +1788,7 @@ body.hrms-employee-roster-view .hrms-roster-status-date-column-hidden {
 	display: none !important;
 }
 
-/* 头像嵌在姓名文字前，不单独占用花名册列；尺寸与行首勾选框接近。 */
+/* 头像嵌在姓名文字前，不单独占用花名册列。 */
 body.hrms-employee-roster-view .hrms-roster-employee-name-cell {
 	align-items: center;
 	display: flex !important;
@@ -1802,11 +1802,11 @@ body.hrms-employee-roster-view .hrms-roster-photo-frame {
 	border: 1px solid #e2e8f0;
 	border-radius: 50%;
 	display: inline-flex;
-	flex: 0 0 18px;
-	height: 18px;
+	flex: 0 0 28px;
+	height: 28px;
 	justify-content: center;
 	overflow: hidden;
-	width: 18px;
+	width: 28px;
 }
 
 body.hrms-employee-roster-view .hrms-roster-photo-frame img {
@@ -2418,6 +2418,16 @@ body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-r
 body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-employee-name-link,
 body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-identity-cell small {
 	display: block;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-identity-cell {
+	align-items: center;
+	display: flex;
+	gap: 9px;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-identity-text {
+	min-width: 0;
 }
 
 body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-employee-name-link {

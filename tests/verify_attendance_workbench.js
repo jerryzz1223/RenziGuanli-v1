@@ -358,11 +358,14 @@ if (attendancePageJs.includes("${this.render_workflow_tabs()}")) {
 const processingResultsStart = attendancePageJs.indexOf("render_processing_results(rows");
 const processingResultsEnd = attendancePageJs.indexOf("\n\trender_processing_selection_cell", processingResultsStart);
 const processingResults = attendancePageJs.slice(processingResultsStart, processingResultsEnd);
-for (const queueControl of ["data-bulk-process", "data-processing-record-select", "data-edit-processing-record", "data-exception-only"]) {
+for (const queueControl of ["data-bulk-process", "data-processing-record-select", "data-exception-only"]) {
 	if (processingResults.includes(queueControl)) {
-		throw new Error(`Processing results must remain read-only; move ${queueControl} to the exception queue.`);
+		throw new Error(`Processing results must not expose exception-queue bulk controls: ${queueControl}.`);
 	}
 }
+mustInclude(processingResults, "data-edit-processing-record", "Every processing-result row must provide an audited manual-edit action.");
+mustInclude(attendancePageJs, "data-slot-manual", "Every primary attendance source card must open its manual-edit view.");
+mustInclude(attendancePageJs, "data-monthly-support-manual", "Every monthly support source card must open its manual-edit view.");
 if (processingResults.includes("data-confirm-source") || processingResults.includes("确认本类结果")) {
 	throw new Error("Source confirmation must be performed on the monthly summary cards, not in processing results.");
 }

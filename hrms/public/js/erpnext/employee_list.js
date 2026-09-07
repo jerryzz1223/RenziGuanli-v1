@@ -37,6 +37,9 @@
 		{ fieldname: "department", label: "部门" },
 		{ fieldname: "designation", label: "岗位" },
 		{ fieldname: "custom_work_nature", label: "工作性质" },
+		// Kept as the same Employee field that payroll_input reads when it
+		// decides whether to apply the employee's social-insurance amounts.
+		{ fieldname: "custom_social_insurance_status", label: "社保参保状态" },
 		{ fieldname: "date_of_joining", label: "入职日期" },
 		{ fieldname: "relieving_date", label: "离职日期" },
 		{ fieldname: "custom_id_type", label: "证件类型" },
@@ -62,6 +65,7 @@
 			"department",
 			"designation",
 			"custom_work_nature",
+			"custom_social_insurance_status",
 			"custom_is_confirmed",
 			"final_confirmation_date",
 			"status",
@@ -692,6 +696,9 @@
 	function render_roster_table_cell(employee, column) {
 		const cell = document.createElement("td");
 		if (column.fieldname === "employee_identity") {
+			const photo = create_roster_employee_photo(employee.image, employee.employee_name);
+			const identity = document.createElement("div");
+			identity.className = "hrms-roster-identity-text";
 			const name = document.createElement("button");
 			name.type = "button";
 			name.className = "hrms-roster-employee-name-link";
@@ -701,7 +708,10 @@
 			const code = document.createElement("small");
 			code.textContent = get_employee_business_code(employee) || "-";
 			cell.className = "hrms-roster-identity-cell";
-			cell.append(name, code);
+			cell.style.cssText = "align-items:center;display:flex;gap:8px;white-space:normal;";
+			identity.style.cssText = "min-width:0;";
+			identity.append(name, code);
+			cell.append(photo, identity);
 			return cell;
 		}
 		if (column.fieldname === "actions") {
@@ -1423,7 +1433,10 @@ function hide_native_filter_controls() {
 			}
 		});
 
-		Array.from(wrapper.querySelectorAll(".list-row")).forEach((row, row_index) => {
+		const data_rows = Array.from(wrapper.querySelectorAll(".list-row")).filter(
+			(row) => !row.classList.contains("list-row-head") && !row.closest(".list-row-head"),
+		);
+		data_rows.forEach((row, row_index) => {
 			row.querySelectorAll(".list-row-activity").forEach((activity) => activity.remove());
 			const cells = Array.from(row.querySelectorAll(".list-row-col"));
 			const doc = listview?.data?.[row_index];
@@ -1448,22 +1461,38 @@ function hide_native_filter_controls() {
 		const by_fieldname = cells.find(
 			(cell) =>
 				cell.dataset.fieldname === "employee_name" ||
-				Boolean(cell.querySelector('[data-fieldname="employee_name"]')),
+				cell.dataset.fieldname === "name" ||
+				Boolean(cell.querySelector('[data-fieldname="employee_name"], [data-fieldname="name"]')),
 		);
 		if (by_fieldname) return by_fieldname;
 
 		const employee_name = String(doc.employee_name || "").trim();
-		return cells.find((cell) => (cell.textContent || "").trim() === employee_name) || null;
+		return cells.find((cell) => employee_name && (cell.textContent || "").includes(employee_name)) || null;
 	}
 
 	function prepend_roster_employee_photo(cell, image_url, employee_name) {
 		cell.querySelector(".hrms-roster-photo-frame")?.remove();
 
+		const photo = create_roster_employee_photo(image_url, employee_name);
+		const checkbox_container = cell.querySelector(".list-row-checkbox")?.closest(".level-item");
+		const employee_name_container = checkbox_container?.parentElement;
+		if (employee_name_container) {
+			employee_name_container.classList.add("hrms-roster-employee-name-cell");
+			employee_name_container.style.cssText += "display:flex;align-items:center;gap:7px;min-width:0;";
+			checkbox_container.insertAdjacentElement("afterend", photo);
+			return;
+		}
+
+		cell.classList.add("hrms-roster-employee-name-cell");
+		cell.prepend(photo);
+	}
+
+	function create_roster_employee_photo(image_url, employee_name) {
 		const photo = document.createElement("span");
 		photo.className = "hrms-roster-photo-frame";
 		photo.title = employee_name || __("员工照片");
 		photo.style.cssText =
-			"align-items:center;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:50%;box-sizing:border-box;display:inline-flex;flex:0 0 18px;height:18px;justify-content:center;max-height:18px;max-width:18px;min-height:18px;min-width:18px;overflow:hidden;width:18px;";
+			"align-items:center;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:50%;box-sizing:border-box;display:inline-flex;flex:0 0 28px;height:28px;justify-content:center;max-height:28px;max-width:28px;min-height:28px;min-width:28px;overflow:hidden;width:28px;";
 		const url = String(image_url || "").trim();
 		if (url) {
 			const image = document.createElement("img");
@@ -1478,17 +1507,7 @@ function hide_native_filter_controls() {
 		} else {
 			append_roster_default_avatar(photo);
 		}
-		const checkbox_container = cell.querySelector(".list-row-checkbox")?.closest(".level-item");
-		const employee_name_container = checkbox_container?.parentElement;
-		if (employee_name_container) {
-			employee_name_container.classList.add("hrms-roster-employee-name-cell");
-			employee_name_container.style.cssText += "display:flex;align-items:center;gap:7px;min-width:0;";
-			checkbox_container.insertAdjacentElement("afterend", photo);
-			return;
-		}
-
-		cell.classList.add("hrms-roster-employee-name-cell");
-		cell.prepend(photo);
+		return photo;
 	}
 
 	function append_roster_default_avatar(photo) {

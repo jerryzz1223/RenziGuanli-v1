@@ -32,6 +32,7 @@ frappe.ui.form.on("Employee Separation", {
 		window.hrmsEmployeeBusinessCodeSelector.refresh(frm);
 		[
 			"employee",
+			"company",
 			"employee_separation_template",
 			"project",
 			"table_for_activity",

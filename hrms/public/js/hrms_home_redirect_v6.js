@@ -388,13 +388,34 @@
 			],
 		},
 		{
+			label: "苹果树统计",
+			route: "/desk/apple-tree-center",
+			icon: "苹",
+			keys: ["apple-tree-center"],
+			items: [
+				{
+					type: "link",
+					label: "个人年度汇总",
+					route: "/desk/apple-tree-center",
+					slug: "apple-tree-center",
+					active_slugs: ["apple-tree-center/annual-summary", "apple-tree-center/person"],
+				},
+				{
+					type: "link",
+					label: "每月明细",
+					route: "/desk/apple-tree-center/monthly-detail",
+					slug: "apple-tree-center/monthly-detail",
+				},
+			],
+		},
+		{
 			label: "部门",
-			route: "/desk/department",
+			route: "/desk/organizational-chart",
 			icon: "O",
 			keys: ["department", "organizational-chart", "organization-report"],
 			items: [
-				{ type: "link", label: "部门管理", route: "/desk/department", slug: "department" },
-				{ type: "link", label: "架构图", route: "/desk/organizational-chart", slug: "organizational-chart" },
+				{ type: "link", label: "部门管理", route: "/desk/organizational-chart", slug: "organizational-chart" },
+				{ type: "link", label: "部门列表", route: "/desk/department", slug: "department" },
 				{ type: "link", label: "部门报表", route: "/desk/organizational-chart/report", slug: "organization-report" },
 			],
 		},
@@ -521,6 +542,7 @@
 						{ label: "月度增减项", route: "/desk/payroll-input-center/variables", slug: "variables" },
 						{ label: "薪资试算", route: "/desk/payroll-input-center/monthly-workbench", slug: "monthly-workbench" },
 						{ label: "确认与发放", route: "/desk/payroll-input-center/payroll-reports", slug: "payroll-reports" },
+						{ label: "离职结算", route: "/desk/payroll-input-center/termination-settlement", slug: "termination-settlement" },
 						{ label: "薪酬修改记录", route: "/desk/payroll-input-center/payroll-adjustments", slug: "payroll-adjustments" },
 					],
 				},
@@ -743,7 +765,7 @@
 				if (route[0] === "organizational-chart" && route[1] === "report") {
 					return "organization-report";
 				}
-				if ((route[0] === "attendance-import-center" || route[0] === "payroll-input-center") && route[1]) {
+		if ((route[0] === "attendance-import-center" || route[0] === "payroll-input-center" || route[0] === "apple-tree-center") && route[1]) {
 					return normalize_slug(route[0] + "/" + route[1]);
 				}
 				return normalize_slug(route[0]);
@@ -764,7 +786,7 @@
 		if (parts[0].toLowerCase() === "organizational-chart" && parts[1] && parts[1].toLowerCase() === "report") {
 			return "organization-report";
 		}
-		if ((parts[0].toLowerCase() === "attendance-import-center" || parts[0].toLowerCase() === "payroll-input-center") && parts[1]) {
+		if ((parts[0].toLowerCase() === "attendance-import-center" || parts[0].toLowerCase() === "payroll-input-center" || parts[0].toLowerCase() === "apple-tree-center") && parts[1]) {
 			return normalize_slug(parts[0] + "/" + parts[1]);
 		}
 		return normalize_slug(parts[0]);
@@ -780,7 +802,7 @@
 		if (normalized === "organizational-chart/report") {
 			return "organization-report";
 		}
-		if (normalized.indexOf("attendance-import-center/") === 0 || normalized.indexOf("payroll-input-center/") === 0) {
+		if (normalized.indexOf("attendance-import-center/") === 0 || normalized.indexOf("payroll-input-center/") === 0 || normalized.indexOf("apple-tree-center/") === 0) {
 			return normalized;
 		}
 		return normalize_slug(normalized.split("/")[0]);

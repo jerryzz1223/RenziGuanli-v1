@@ -98,6 +98,9 @@ for marker in (
 	"MONTHLY_SUPPORT_SOURCE_CONFIG",
 	"monthly_support_precheck",
 	"_process_monthly_support_rows",
+	"_business_merge_key",
+	"_merge_processed_rows",
+	"business_unique_key",
 	"SPECIAL_HOURS_INVALID",
 	"DUPLICATE_EMPLOYEE_RECORD",
 	"单日工时汇总",
@@ -258,6 +261,12 @@ for marker in (
 	require(monthly_body, marker, f"One-time monthly-import contract missing: {marker}")
 if '"review_status": "待审核" if exception_codes else "无需审核"' in monthly_body:
 	raise AssertionError("Monthly support validation errors must not enter the manual-review queue.")
+
+merge_start = api.find("def _merge_processed_rows(")
+merge_end = api.find("\n\ndef _persist_processed_rows", merge_start)
+merge_body = api[merge_start:] if merge_end == -1 else api[merge_start:merge_end]
+for marker in ("merge_parent_batch", "_business_merge_key", "merged_rows", "inserted_rows", "existing_rows"):
+	require(merge_body, marker, f"Repeated source submissions must preserve an auditable unique-key merge: {marker}")
 
 manual_special_start = api.find("def update_special_hours_manual_entry(")
 manual_special_end = api.find("\n\n@frappe.whitelist()", manual_special_start + 1)

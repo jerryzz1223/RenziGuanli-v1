@@ -19,12 +19,18 @@ assert "def _social_insurance_payroll_policy" in PAYROLL
 assert "This intentionally does not infer non-participation from\n\tprobation status." in PAYROLL
 assert "SOCIAL_INSURANCE_VARIABLE_TYPES" in PAYROLL
 assert '"social_insurance_policy": social_insurance_policy' in PAYROLL
+# 花名册维护的状态必须就是薪资规则读取的 Employee 字段，而不是另一份名单副本。
+assert '"custom_social_insurance_status": "社保参保状态"' in EMPLOYEE_FIELDS
+assert '"custom_social_insurance_status",' in EMPLOYEE_FIELDS
 assert 'this.get_employment_type_display(header)' in DETAIL
 assert 'field.fieldname === "employment_type"' in DETAIL
 assert "PAYROLL_WELFARE_SOURCE_DOCTYPE" in EMPLOYEE_FIELDS
+assert "PAYROLL_SETTLEMENT_DOCTYPE" in EMPLOYEE_FIELDS
 assert "PAYROLL_SOCIAL_INSURANCE_SOURCE_TYPES" in EMPLOYEE_FIELDS
 assert "_get_employee_payroll_social_insurance_items(doc)" in EMPLOYEE_FIELDS
 assert '"社保个人"' in EMPLOYEE_FIELDS
+assert '"social_security_company", "社保公司"' in EMPLOYEE_FIELDS
+assert 'filters={"employee_code": doc.custom_employee_code}' in EMPLOYEE_FIELDS
 assert "compact=True" in EMPLOYEE_FIELDS
 assert "if (row.compact)" in DETAIL
 assert 'tab_label === "工资社保" ? "" : this.render_add_field_hint()' in DETAIL

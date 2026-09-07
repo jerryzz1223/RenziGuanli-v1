@@ -37,6 +37,9 @@ def get_country(fields: list[str] | tuple[str, ...] | str | None = None) -> dict
 	ip = _get_request_ip()
 	if not ip:
 		return {}
+	api_key = frappe.conf.get("ip-api-key")
+	if not isinstance(api_key, str) or not api_key.strip():
+		return {}
 
 	requested_fields = _normalize_country_fields(fields)
 	cache_key = (ip, requested_fields)
@@ -45,7 +48,7 @@ def get_country(fields: list[str] | tuple[str, ...] | str | None = None) -> dict
 		try:
 			res = requests.get(
 				"https://pro.ip-api.com/json/{ip}?key={key}&fields={fields}".format(
-					ip=ip, key=frappe.conf.get("ip-api-key"), fields=",".join(requested_fields)
+					ip=ip, key=api_key.strip(), fields=",".join(requested_fields)
 				),
 				timeout=IP_API_TIMEOUT_IN_SECONDS,
 			)

@@ -37,6 +37,7 @@ CHINA_ETHNICITY_VALUES = (
 # value such as "汉" after the field becomes a Select.
 LEGACY_ETHNICITY_VALUE_MAP = {value.removesuffix("族"): value for value in CHINA_ETHNICITY_VALUES}
 PAYROLL_WELFARE_SOURCE_DOCTYPE = "HRMS Payroll Welfare Source Record"
+PAYROLL_SETTLEMENT_DOCTYPE = "HRMS Payroll Settlement Record"
 PAYROLL_SOCIAL_INSURANCE_SOURCE_TYPES = (
 	"社保个人",
 	"社保公司",
@@ -678,6 +679,10 @@ EMPLOYEE_ROSTER_REQUIRED_COLUMNS = {
 	"department": "部门",
 	"designation": "岗位",
 	"custom_work_nature": "工作性质",
+	# This is the employee-level switch consumed by payroll_input's social
+	# insurance policy.  Keeping it on the roster makes an import/edit and the
+	# later payroll calculation operate on the same Employee value.
+	"custom_social_insurance_status": "社保参保状态",
 	"date_of_joining": "入职日期",
 	"custom_id_type": "证件类型",
 	"passport_number": "证件号码",
@@ -3041,6 +3046,7 @@ EMPLOYEE_ROSTER_QUICK_EDIT_FIELDS = {
 	"reports_to",
 	"grade",
 	"custom_work_nature",
+	"custom_social_insurance_status",
 	"status",
 	"date_of_joining",
 	"cell_number",
@@ -3176,6 +3182,7 @@ def _build_employee_roster_filters(filters=None):
 		"status",
 		"employment_type",
 		"custom_work_nature",
+		"custom_social_insurance_status",
 		"custom_is_confirmed",
 		"department",
 		"designation",
@@ -3511,20 +3518,23 @@ def _get_employee_payroll_social_insurance_items(doc):
 	amounts belong to the monthly payroll source records.  Keeping this lookup
 	separate prevents an employee profile from showing a stale or inferred amount.
 	"""
-	if not frappe.db.exists("DocType", PAYROLL_WELFARE_SOURCE_DOCTYPE):
-		return []
-
-	rows = frappe.get_all(
-		PAYROLL_WELFARE_SOURCE_DOCTYPE,
-		filters={
-			"employee": doc.name,
-			"source_type": ["in", PAYROLL_SOCIAL_INSURANCE_SOURCE_TYPES],
-			"confirmation_status": ["!=", "已驳回"],
-		},
-		fields=["payroll_month", "attendance_lock_version", "source_type", "amount", "confirmation_status"],
-		order_by="payroll_month desc, modified desc",
-		limit_page_length=1000,
-	)
+	# Welfare-source rows are preferred because they retain their import/audit
+	# status.  A historical settlement import, however, can have already created
+	# the final salary row without creating (or linking) those source rows.  The
+	# employee profile must still show its actual settled contributions.
+	rows = []
+	if frappe.db.exists("DocType", PAYROLL_WELFARE_SOURCE_DOCTYPE):
+		rows = frappe.get_all(
+			PAYROLL_WELFARE_SOURCE_DOCTYPE,
+			filters={
+				"employee": doc.name,
+				"source_type": ["in", PAYROLL_SOCIAL_INSURANCE_SOURCE_TYPES],
+				"confirmation_status": ["!=", "已驳回"],
+			},
+			fields=["payroll_month", "attendance_lock_version", "source_type", "amount", "confirmation_status"],
+			order_by="payroll_month desc, modified desc",
+			limit_page_length=1000,
+		)
 	grouped = {}
 	for row in rows:
 		month = row.payroll_month or "未设置月份"
@@ -3541,6 +3551,58 @@ def _get_employee_payroll_social_insurance_items(doc):
 		group["entered_types"].add(row.source_type)
 		if row.confirmation_status:
 			group["statuses"].add(row.confirmation_status)
+
+	if frappe.db.exists("DocType", PAYROLL_SETTLEMENT_DOCTYPE):
+		settlement_fields = [
+			"name", "payroll_month", "attendance_lock_version", "social_security_personal",
+			"social_security_company", "housing_fund_personal", "housing_fund_company",
+			"calculation_status",
+		]
+		settlements = frappe.get_all(
+			PAYROLL_SETTLEMENT_DOCTYPE,
+			filters={"employee": doc.name},
+			fields=settlement_fields,
+			order_by="payroll_month desc, modified desc",
+			limit_page_length=1000,
+		)
+		# Some older workbook imports persisted only the business work number.
+		# Include those rows as a compatibility lookup, then de-duplicate on name.
+		if doc.get("custom_employee_code"):
+			by_code = frappe.get_all(
+				PAYROLL_SETTLEMENT_DOCTYPE,
+				filters={"employee_code": doc.custom_employee_code},
+				fields=settlement_fields,
+				order_by="payroll_month desc, modified desc",
+				limit_page_length=1000,
+			)
+			known_names = {row.get("name") for row in settlements}
+			settlements.extend(row for row in by_code if row.get("name") not in known_names)
+
+		settlement_field_types = (
+			("social_security_personal", "社保个人"),
+			("social_security_company", "社保公司"),
+			("housing_fund_personal", "公积金个人"),
+			("housing_fund_company", "公积金公司"),
+		)
+		for row in settlements:
+			month = row.payroll_month or "未设置月份"
+			key = (month, row.attendance_lock_version or "")
+			group = grouped.setdefault(
+				key,
+				{
+					"amounts": {source_type: 0 for source_type in PAYROLL_SOCIAL_INSURANCE_SOURCE_TYPES},
+					"entered_types": set(),
+					"statuses": set(),
+				},
+			)
+			for fieldname, source_type in settlement_field_types:
+				# A source record for this type remains the primary audit source; the
+				# locked settlement fills only the missing type.
+				if source_type not in group["entered_types"]:
+					group["amounts"][source_type] = flt(row.get(fieldname))
+					group["entered_types"].add(source_type)
+			if row.calculation_status:
+				group["statuses"].add(row.calculation_status)
 
 	items = []
 	for (month, _lock_version), group in grouped.items():
@@ -3980,6 +4042,36 @@ def upload_employee_material(employee: str, material_type: str, file_url: str):
 	file_doc.db_set("attached_to_doctype", EMPLOYEE_DOCTYPE)
 	file_doc.db_set("attached_to_name", doc.name)
 	file_doc.db_set("attached_to_field", material["fieldname"])
+	return {"materials": _get_employee_materials(doc)}
+
+
+@frappe.whitelist()
+def delete_employee_material(employee: str, file_name: str):
+	"""Permanently remove one image material that belongs to the current employee."""
+	if not _can_edit_employee_detail():
+		frappe.throw(_("只有管理员可以删除员工档案材料"), frappe.PermissionError)
+	if not employee or not file_name:
+		frappe.throw(_("请选择要删除的员工材料"))
+
+	doc = frappe.get_doc(EMPLOYEE_DOCTYPE, employee)
+	doc.check_permission("write")
+	file_doc = frappe.get_doc("File", file_name)
+	file_doc.check_permission("delete")
+	material_fieldnames = {
+		material["fieldname"] for material in _get_employee_material_type_map().values()
+	}
+	if (
+		file_doc.attached_to_doctype != EMPLOYEE_DOCTYPE
+		or file_doc.attached_to_name != doc.name
+		or file_doc.attached_to_field not in material_fieldnames
+	):
+		frappe.throw(_("只能删除当前员工名下的材料"), frappe.PermissionError)
+
+	extension = os.path.splitext((file_doc.file_name or "").split("?", 1)[0])[1].lower()
+	if extension not in {".jpg", ".jpeg", ".png", ".webp"}:
+		frappe.throw(_("当前仅支持删除员工材料中的图片"))
+
+	frappe.delete_doc("File", file_doc.name)
 	return {"materials": _get_employee_materials(doc)}
 
 

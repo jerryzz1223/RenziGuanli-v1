@@ -57,3 +57,11 @@ class TestExportWatermark(unittest.TestCase):
 		twice = _add_logo_watermark(once)
 		with ZipFile(BytesIO(twice)) as workbook:
 			self.assertEqual(workbook.read("xl/worksheets/sheet1.xml").count(b"<picture r:id="), 1)
+
+	def test_export_watermark_uses_next_available_single_quoted_relationship_id(self):
+		relationships, relationship_id = WATERMARK._add_image_relationship(
+			b"<Relationships><Relationship Id='rId12'/></Relationships>"
+		)
+
+		self.assertEqual(relationship_id, "rId13")
+		self.assertIn(b'Id="rId13"', relationships)

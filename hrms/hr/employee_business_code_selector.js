@@ -14,7 +14,7 @@
 		frm.set_df_property(
 			"employee_code_display",
 			"description",
-			identity ? __("已匹配员工：{0}", [identity]) : __("输入公司工号后自动匹配员工"),
+			identity ? __("已匹配员工：{0}", [identity]) : __("输入员工工号后自动匹配员工"),
 		);
 	}
 
@@ -44,7 +44,7 @@
 	}
 
 	function setup(frm) {
-		frm.set_df_property("employee_code_display", "label", __("公司员工号"));
+		frm.set_df_property("employee_code_display", "label", __("员工工号"));
 		set_employee_identity_hint(frm);
 		frm.toggle_display("employee", false);
 		frm.toggle_display("employee_code_display", true);

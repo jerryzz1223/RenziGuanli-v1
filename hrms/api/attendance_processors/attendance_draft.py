@@ -64,6 +64,14 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "审批单", "approval"),
 }
 
+# 深夜班是排班口径，不以实际打卡早到、迟到或跨夜来反推。只有生产夜班
+# 明确排为 20:00 至次日 08:00 的每日记录才计一次，避免把其他跨夜班次
+# 或白天的加长工时误发为深夜班。
+_PRODUCTION_DEEP_NIGHT_SHIFT = "生产夜班"
+_PRODUCTION_DEEP_NIGHT_START_MINUTES = 20 * 60
+_PRODUCTION_DEEP_NIGHT_END_MINUTES = 8 * 60
+_SHIFT_CLOCK_RE = re.compile(r"(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?!\d)")
+
 EXCEPTION_MESSAGES = {
 	"ATTENDANCE_DATE_MISSING": "考勤日期为空。",
 	"ATTENDANCE_DATE_DUPLICATE": "同一工号存在重复考勤日期。",
@@ -215,6 +223,27 @@ def _shift_start_minutes(row: Mapping[str, Any]) -> int | None:
 		return None
 	hour, minute = matches[0]
 	return int(hour) * 60 + int(minute)
+
+
+def is_production_deep_night_shift(shift: Any) -> bool:
+	"""Return whether a scheduled shift is the fixed production deep-night tier.
+
+	The source's ``班次`` field is the authoritative scheduling fact. Actual
+	punches remain evidence for attendance exceptions, but never decide whether
+	the employee was assigned this allowance tier.
+	"""
+	shift_text = _text(shift)
+	if _PRODUCTION_DEEP_NIGHT_SHIFT not in shift_text:
+		return False
+	clocks = _SHIFT_CLOCK_RE.findall(shift_text)
+	if len(clocks) < 2:
+		return False
+	start_hour, start_minute = clocks[0]
+	end_hour, end_minute = clocks[1]
+	return (
+		int(start_hour) * 60 + int(start_minute) == _PRODUCTION_DEEP_NIGHT_START_MINUTES
+		and int(end_hour) * 60 + int(end_minute) == _PRODUCTION_DEEP_NIGHT_END_MINUTES
+	)
 
 
 def _is_late_without_leave(row: Mapping[str, Any], *, standard_hours: Decimal, leave_hours: Decimal) -> bool:
@@ -476,6 +505,7 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 	department = next(iter(departments), "")
 	resolved_code, resolved_name, resolved_department, employee = _resolve_employee(raw_code, name, department, employee_index, codes)
 	totals = {field: Decimal("0") for field in NUMERIC_FIELDS}
+	deep_night_shifts = 0
 	source_rows = []
 	attendance_details = []
 	exception_events = []
@@ -493,6 +523,8 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		elif raw_code and date_counts[(raw_code, parsed_date)] > 1:
 			_add_code(codes, "ATTENDANCE_DATE_DUPLICATE")
 		shift = _value(row, IDENTITY_FIELDS["shift"])
+		is_deep_night_shift = is_production_deep_night_shift(shift)
+		deep_night_shifts += int(is_deep_night_shift)
 		if not shift:
 			if _is_outside_employment_period(parsed_date, employee):
 				data_quality_events.append(_data_quality_event("BLANK_SHIFT_OUTSIDE_EMPLOYMENT", parsed_date, row_number))
@@ -620,6 +652,8 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			"absence_hours": _display_number(row_absence_hours),
 			"source_row": row_number,
 		}
+		if is_deep_night_shift:
+			attendance_detail["is_production_deep_night_shift"] = True
 		if row_restday_clock_without_overtime:
 			attendance_detail.update({
 				"date_type": _text(_value(row, ("日期类型", "date_type"))),
@@ -637,9 +671,11 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		"employee_name": resolved_name or name,
 		"department": resolved_department or department,
 		**{field: _display_number(value) for field, value in totals.items()},
+		"deep_night_shifts": deep_night_shifts,
 		"night_shift_matching": {
 			"mode": "source_only",
 			"matched_large_night_shifts": 0,
+			"deep_night_shift_rule": "生产夜班 20:00-次日08:00",
 		},
 		"attendance_details": attendance_details,
 		"exception_lines": exception_lines,

@@ -46,8 +46,10 @@ const field = (fieldname) => separationJson.fields.find((item) => item.fieldname
 
 assert(separationJson.quick_entry === 0, "离职申请必须进入完整表单，不能在快速录入中暴露内部 Employee 编号。");
 assert(field("employee")?.hidden === 1, "内部 Employee Link 必须隐藏。" );
-assert(field("employee_code_display")?.reqd === 1, "离职单必须以公司工号作为必填业务身份。" );
-assert(field("employee_code_display")?.in_list_view === 1, "离职管理列表必须展示公司工号。" );
+assert(field("employee_code_display")?.reqd === 1, "离职单必须以员工工号作为必填业务身份。" );
+assert(field("employee_code_display")?.in_list_view === 1, "离职管理列表必须展示员工工号。" );
+assert(field("company")?.hidden === 1, "离职单不应展示公司选择。" );
+assert(!field("company")?.reqd, "离职单不应要求选择公司。" );
 
 for (const fieldname of [
 	"employee_separation_template",
@@ -73,6 +75,7 @@ for (const marker of [
 	"employee_business_code_selector.js",
 	"employee_code_display",
 	"employee_name",
+	'"company",',
 	'.find(".form-footer, .new-timeline")',
 	'.css("display", "none")',
 	".form-sidebar .form-name-container",

@@ -2,6 +2,8 @@
 	const YONGXIN_COMPANY = "永新";
 
 	frappe.listview_settings["Department"] = {
+		add_fields: ["hrms_org_level"],
+		order_by: "hrms_org_level asc, department_name asc",
 		formatters: {
 			parent_department(value, df, doc) {
 				return frappe.utils.escape_html(format_department_parent_display(value, doc));
@@ -30,6 +32,11 @@
 		if (!listview || !listview.page || listview.page.__hrms_department_actions_ready) return;
 		listview.page.__hrms_department_actions_ready = true;
 		attach_department_import_action(listview);
+		listview.page.add_inner_button(__("花名册职位与人员"), () => {
+			const selected = get_selected_departments(listview);
+			if (selected.length !== 1) { frappe.msgprint(__("请勾选一个部门，查看按花名册统计的职级、职位和员工。")); return; }
+			frappe.require("/assets/hrms/js/organization_roster.js?v=20260907b", () => window.hrmsOrganizationRoster.open(selected[0]));
+		});
 		const roles = frappe.user_roles || [];
 		const isSystemManager = roles.includes("System Manager") || frappe.session.user === "Administrator";
 

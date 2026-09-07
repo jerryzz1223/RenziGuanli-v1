@@ -269,9 +269,9 @@ for (const marker of [
 	"允许花名册归属（仅末级）",
 	"enforce_roster_leaf_rule",
 	"下级部门",
-	"当前部门员工",
+	"花名册归属员工",
 	"frappe.db.get_list(\"Department\"",
-	"frappe.db.get_list(\"Employee\"",
+	"hrms.api.organization_roster.get_base",
 ]) {
 	mustInclude(departmentFormJs, marker, `Department form localization missing marker: ${marker}`);
 }
@@ -314,13 +314,23 @@ for (const marker of [
 	"get_hybrid_node_detail",
 	"get_employee_roster_field_map",
 	"set_company",
-	"同步2026Q3架构",
-	"新增部门",
-	"编辑部门",
-	"删除部门",
-	"data-action=\"add-department\"",
-	"data-action=\"edit-department\"",
-	"data-action=\"delete-department\"",
+	"新增组织节点",
+	"show_manual_node_dialog",
+	"edit_manual_node",
+	"delete_manual_node",
+	"manual_child_kinds",
+	"manual_parent_options",
+	"manual_node_config",
+	"data-parent-node-id",
+	"hrms-org-node-add",
+	"花名册人员来源部门（可选）",
+	"参考花名册岗位（可选）",
+	"选择员工",
+	"parent_node_label",
+	"公司（根节点）",
+	"data-action=\"add-organization-node\"",
+	"data-action=\"edit-organization-node\"",
+	"data-action=\"delete-organization-node\"",
 	"get_yongxin_q2_org_template_preview",
 	"import_yongxin_q2_org_structure",
 	"import_yongxin_q3_department_hierarchy",
@@ -403,7 +413,25 @@ for (const marker of [
 }
 
 for (const marker of [
-	'this.source_mode = "workbook_snapshot"',
+	'this.source_mode = "manual"',
+	"图谱仅供展示；不会修改部门、岗位、员工、权限、审批、考勤或薪资关系。",
+	"任职人／负责人（可选）",
+	"代理人（可选）",
+	"从花名册选用员工（可多选）",
+	"MultiSelectList",
+	"按花名册名单逐项选入当前视图节点",
+	"代理人仅用于图谱展示，不参与权限、审批、考勤、薪资或汇报关系。",
+	"manager_employee",
+	"输入员工姓名或工号后选择匹配员工",
+	"manual_department_for_node",
+	"selected_base_department",
+	"inherits_parent_roster",
+	"图谱结构部门：${department} · 花名册人员来源：${rosterDepartment}",
+	'employee_match_mode === "assigned"',
+	"hrms.api.organization_roster.get_candidates",
+	"从来源部门的在职花名册选择；不会因主职不同而隐藏员工。",
+	"save_manual_organization_node",
+	"delete_manual_organization_node",
 	"卡片说明",
 	"set_source_mode",
 	"move_organization_node",
@@ -508,9 +536,91 @@ mustMatch(
 
 mustMatch(
 	py,
-	/if source_mode == \"quarterly_template\":\s*return _get_yongxin_template_tree\(company\)/,
-	"The quarterly workbook must be an explicit reference view; the default chart must use live Department relationships",
+	/manual = _get_manual_organization_records\(company\)[\s\S]*?\"source_mode\": \"manual\"[\s\S]*?\"root\": root/,
+	"The default chart must use the standalone manual graph instead of Department relationships",
 );
+
+for (const marker of [
+	"MANUAL_ORGANIZATION_NODE_KINDS",
+	"MANUAL_ORGANIZATION_CHILD_KINDS",
+	'"分管"',
+	'"manager_name": manager_name if node_kind == "分管" else None',
+	'"manager_employee": manager_employee if node_kind == "分管" else None',
+	'if manager_employee and not frappe.db.exists("Employee", manager_employee)',
+	"def _manual_parent_department",
+	'"roster_department": selection.get("roster_department")',
+	"inherit_parent=node_kind != \"分管\"",
+	'"department": node.manual_config.get("department")',
+	'from hrms.api.organization_roster import validate_chart_selection',
+	"def _manual_primary_employee",
+	"def _normalize_manual_employee_names",
+	'"primary_employee": primary_employee if node_kind in {"室", "课", "组", "线", "岗位"} else None',
+	'"proxy_employee": proxy_employee if node_kind in {"室", "课", "组", "线", "岗位"} else None',
+	'"assigned_employees": assigned_employees if node_kind not in {"分管", "员工"} else []',
+	'validate_chart_selection(',
+	"实际任职人与代理人不能选择同一员工。",
+	'[employee, primary_employee, proxy_employee, manager_employee, *assigned_employees]',
+	"def save_manual_organization_node",
+	"def delete_manual_organization_node",
+	"without writing their master records",
+	'"node_kind": node_kind',
+	'"department": department',
+	'"designation": designation if node_kind == "岗位" else None',
+	'"employee": employee if node_kind == "员工" else None',
+	"不关联部门、岗位或员工档案的业务字段",
+	"employees_by_department",
+	'get_candidates(company, roster_department)',
+	'"employee_match_mode": "department" if kind in {"室", "课"} else "assigned" if manual_people else "display" if kind == "分管" else None',
+	"def _get_manual_company_staffing",
+	'if "副总经理" in designation',
+	'elif "总经理" in designation',
+	'"vacancy_count": max(planned_headcount - current_headcount, 0)',
+	'"leadership_lines": leadership_lines',
+]) {
+	mustInclude(py, marker, `Standalone manual organization graph missing marker: ${marker}`);
+}
+
+for (const marker of [
+	'["编制", summary.planned_headcount || 0]',
+	'["实际", summary.current_headcount || 0]',
+	'["空缺", summary.vacancy_count || 0]',
+	'${__("实际")}',
+]) {
+	mustInclude(js, marker, `Company organization card must show automatic staffing metrics: ${marker}`);
+}
+
+for (const field of ["employee", "responsible_person"]) {
+	if (organizationNode.fields.some((definition) => definition.fieldname === field)) {
+		throw new Error(`Organization Node must not require an unreloaded database column: ${field}`);
+	}
+}
+
+const manualNodeSave = py.match(
+	/def save_manual_organization_node\([\s\S]*?\n\n@frappe\.whitelist\(\)\ndef delete_manual_organization_node/,
+);
+if (!manualNodeSave) throw new Error("Manual organization node save boundary is missing.");
+for (const forbiddenWrite of [
+	'frappe.get_doc("Employee"',
+	'frappe.get_doc("Department"',
+	'frappe.db.set_value("Employee"',
+	'frappe.db.set_value("Department"',
+	'frappe.delete_doc("Employee"',
+	'frappe.delete_doc("Department"',
+]) {
+	if (manualNodeSave[0].includes(forbiddenWrite)) {
+		throw new Error(`Manual organization node save must not write HR master data: ${forbiddenWrite}`);
+	}
+}
+
+const manualNodeRead = py.match(
+	/def _get_manual_organization_records\([\s\S]*?\n\ndef _manual_node_config/,
+);
+if (!manualNodeRead) throw new Error("Manual organization node read boundary is missing.");
+for (const missingColumn of ['"employee"', '"responsible_person"']) {
+	if (manualNodeRead[0].includes(missingColumn)) {
+		throw new Error(`Manual organization graph must not query an unreloaded Organization Node column: ${missingColumn}`);
+	}
+}
 
 mustMatch(
 	py,
@@ -525,14 +635,15 @@ mustMatch(
 );
 
 for (const marker of [
-	'{ type: "link", label: "部门管理", route: "/desk/department", slug: "department" }',
-	'{ type: "link", label: "架构图", route: "/desk/organizational-chart", slug: "organizational-chart" }',
+	'{ type: "link", label: "部门管理", route: "/desk/organizational-chart", slug: "organizational-chart" }',
+	'{ type: "link", label: "部门列表", route: "/desk/department", slug: "department" }',
 	'{ type: "link", label: "部门报表", route: "/desk/organizational-chart/report", slug: "organization-report" }',
 ]) {
 	mustInclude(nav, marker, `Organization shell nav missing marker: ${marker}`);
 }
 
 mustInclude(topNav, '"organizational-chart"', "Top nav must keep organizational chart as an organization route key.");
+mustInclude(topNav, 'route: "/desk/organizational-chart"', "Top navigation Department entry must open the organization chart.");
 
 for (const forbidden of ["render_sidebar()", "hrms-org-sidebar", "data-route="]) {
 	if (js.includes(forbidden) || css.includes(forbidden)) {

@@ -1,0 +1,1 @@
+"""Apple-tree statistics page."""

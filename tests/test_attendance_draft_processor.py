@@ -349,6 +349,29 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(row["processed_value"]["large_night_shifts"], 10)
 		self.assertEqual(row["processed_value"]["night_shift_matching"]["mode"], "source_only")
 
+	def test_deep_night_shift_uses_the_production_shift_schedule_not_actual_punches(self):
+		rows = [
+			{
+				"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课", "班次": "生产夜班 20:00-次日08:00", "标准工时": 8,
+				"上班时间": "20:18", "下班时间": "07:40", "source_file": "sample.xlsx", "source_sheet": "每日明细（钉钉导出）", "source_row": 3,
+			},
+			{
+				"姓名": "张三", "工号": "E-001", "日期": "26-06-02", "实际部门": "工程课", "班次": "生产夜班 20:00-07:59", "标准工时": 8,
+				"上班时间": "20:00", "下班时间": "08:00", "source_file": "sample.xlsx", "source_sheet": "每日明细（钉钉导出）", "source_row": 4,
+			},
+			{
+				"姓名": "张三", "工号": "E-001", "日期": "26-06-03", "实际部门": "工程课", "班次": "夜班 20:00-次日08:00", "标准工时": 8,
+				"上班时间": "20:00", "下班时间": "08:00", "source_file": "sample.xlsx", "source_sheet": "每日明细（钉钉导出）", "source_row": 5,
+			},
+		]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")["processed_rows"][0]
+
+		self.assertEqual(row["processed_value"]["deep_night_shifts"], 1)
+		self.assertEqual(
+			[detail.get("is_production_deep_night_shift", False) for detail in row["processed_value"]["attendance_details"]],
+			[True, False, False],
+		)
+
 	def test_department_group_and_section_suffixes_are_the_same_department(self):
 		rows = [{
 			"姓名": "朱耀辉", "工号": "164", "日期": "26-06-01", "实际部门": "设备组", "班次": "白班", "标准工时": 8,

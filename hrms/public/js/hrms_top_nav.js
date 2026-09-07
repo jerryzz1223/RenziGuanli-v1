@@ -104,7 +104,7 @@
 		{
 			label: "部门",
 			icon: "building",
-			route: "/desk/department",
+			route: "/desk/organizational-chart",
 			keys: ["department", "organizational-chart"],
 		},
 	{
@@ -168,6 +168,12 @@
 	// More is reserved for low-frequency, cross-module HR services. Settings
 	// and system administration live in the account menu instead.
 	const moreItems = [
+		{
+			label: "苹果树统计",
+			description: "按员工、月份和年份查看苹果树数量与明细",
+			route: "/desk/apple-tree-center",
+			roles: HR_SETTINGS_MANAGER_ROLES,
+		},
 		{
 			label: "钉钉集成",
 			description: "钉钉考勤、员工映射与同步记录",

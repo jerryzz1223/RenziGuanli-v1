@@ -36,6 +36,11 @@ frappe.ui.form.on("Department", {
 		sync_company_root_parent_display(frm);
 		hide_department_sidebar(frm);
 		render_department_relationships(frm);
+		if (!frm.is_new()) {
+			frm.add_custom_button(__("花名册职位与人员"), () => {
+				frappe.require("/assets/hrms/js/organization_roster.js?v=20260907b", () => window.hrmsOrganizationRoster.open(frm.doc.name));
+			});
+		}
 
 		frm.add_custom_button(__("调整层级"), () => {
 			frappe.set_route("List", "Department");
@@ -212,16 +217,20 @@ function render_department_relationships(frm) {
 			order_by: "department_name asc",
 			limit: 500,
 		}),
-		frappe.db.get_list("Employee", {
-			filters: { department: frm.doc.name, status: "Active" },
-			fields: ["name", "employee_name", "designation", "grade"],
-			order_by: "employee_name asc",
-			limit: 500,
-		}),
+		frappe.call({ method: "hrms.api.organization_roster.get_base", args: { department: frm.doc.name } }),
 	])
-		.then(([children, employees]) => {
+		.then(([children, allocation]) => {
 			if (!frm.__hrms_relationship_wrapper?.is(":visible")) return;
-			frm.__hrms_relationship_wrapper.html(render_relationship_sections(frm, children || [], employees || []));
+			const base = allocation.message || {};
+			frm.__hrms_relationship_wrapper.html(render_relationship_sections(frm, children || [], base.rows || []));
+			const groups = new Map();
+			(base.rows || []).forEach((row) => {
+				const key = `${row.grade || "未设置职级"} · ${row.designation || "未设置职位"}`;
+				if (!groups.has(key)) groups.set(key, []);
+				groups.get(key).push(row);
+			});
+			const content = [...groups].sort(([a], [b]) => a.localeCompare(b, "zh")).map(([label, rows]) => `<tr><td>${escape_html(label)}</td><td>${rows.length}</td><td>${rows.map(row => `${escape_html(row.employee_name || row.employee)} (${escape_html(row.custom_employee_code || row.employee)})`).join("、")}</td></tr>`).join("");
+			frm.__hrms_relationship_wrapper.prepend(`<section class="hrms-department-relation" style="margin-bottom:16px"><h4>花名册职位与人员 · ${base.employee_count || 0} 人</h4><p class="text-muted">按花名册部门、职级和职位统计，组织图从此名单中选用人员。</p>${content ? `<table class="table"><thead><tr><th>职级 · 职位</th><th>人数</th><th>员工</th></tr></thead><tbody>${content}</tbody></table>` : '<p class="text-muted">花名册中暂无归属该部门的在职员工。</p>'}</section>`);
 		})
 		.catch(() => {
 			frm.__hrms_relationship_wrapper.html(`<div class="text-muted">${__("部门关系读取失败，请刷新后重试。")}</div>`);
@@ -271,7 +280,7 @@ function render_relationship_sections(frm, children, employees) {
 				<div class="hrms-department-relation-list">${children.length ? children.map(render_child_department).join("") : `<span class="text-muted">${__("暂无下级部门")}</span>`}</div>
 			</section>
 			<section class="hrms-department-relation">
-				<h4>${__("当前部门员工")} (${employees.length})</h4>
+				<h4>${__("花名册归属员工")} (${employees.length})</h4>
 				<div class="hrms-department-relation-list">${employees.length ? employees.map(render_department_employee).join("") : `<span class="text-muted">${__("暂无在职员工")}</span>`}</div>
 			</section>
 		</div>
