@@ -389,6 +389,10 @@ def _resolve_employee(
 
 	if has_directory:
 		candidates = by_code.get(raw_code, []) if raw_code else by_name.get(raw_name, [])
+		if not raw_code and len(candidates) > 1 and event_datetime:
+			dated_candidates = [candidate for candidate in candidates if _within_employment(candidate, event_datetime)]
+			if dated_candidates:
+				candidates = dated_candidates
 		if not raw_code and len(candidates) > 1 and mapped_department:
 			department_candidates = [candidate for candidate in candidates if department_match_key(candidate["department"]) == department_match_key(mapped_department)]
 			if len(department_candidates) == 1:
@@ -412,16 +416,13 @@ def _resolve_employee(
 			_append_code(exception_codes, "EMPLOYEE_NAME_CONFLICT")
 		if mapped_department and department and department_match_key(mapped_department) != department_match_key(department):
 			_append_code(exception_codes, "DEPARTMENT_CONFLICT")
-		if _normalized_status(employment_status) in FORMER_EMPLOYEE_STATUSES:
-			joining = _parse_datetime(matched.get("date_of_joining"))
-			relieving = _parse_datetime(matched.get("relieving_date"))
-			outside_employment = bool(
-				(event_datetime and joining and event_datetime.date() < joining.date())
-				or (event_datetime and relieving and event_datetime.date() > relieving.date())
-			)
-			former_without_dated_proof = not relieving
-			if rules.former_employee_policy == "exception" and (outside_employment or former_without_dated_proof):
-				_append_code(exception_codes, "FORMER_EMPLOYEE_REQUIRES_CONFIRMATION")
+		outside_employment = not _within_employment(matched, event_datetime)
+		former_without_dated_proof = (
+			_normalized_status(employment_status) in FORMER_EMPLOYEE_STATUSES
+			and not _parse_datetime(matched.get("relieving_date"))
+		)
+		if rules.former_employee_policy == "exception" and (outside_employment or former_without_dated_proof):
+			_append_code(exception_codes, "FORMER_EMPLOYEE_REQUIRES_CONFIRMATION")
 	else:
 		employee_code = raw_code
 		employee_name = raw_name
@@ -438,6 +439,15 @@ def _resolve_employee(
 		"exception_codes": exception_codes,
 		"rule_codes": rule_codes,
 	}
+
+
+def _within_employment(employee, event_datetime):
+	joining = _parse_datetime(employee.get("date_of_joining"))
+	relieving = _parse_datetime(employee.get("relieving_date"))
+	return not event_datetime or not (
+		(joining and event_datetime.date() < joining.date())
+		or (relieving and event_datetime.date() > relieving.date())
+	)
 
 
 def _employee_indexes(employee_directory):

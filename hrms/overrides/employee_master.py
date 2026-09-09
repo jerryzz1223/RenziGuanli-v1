@@ -7,12 +7,15 @@ from frappe.utils import add_years, cint, cstr, get_link_to_form, getdate
 
 from erpnext.setup.doctype.employee.employee import Employee
 
+from hrms.utils.employee_profile import normalise_employee_profile
+
 
 WORK_NATURE_OPTIONS = ("在职·正式", "在职·试用期", "退休返聘", "待离职", "离职")
 
 
 class EmployeeMaster(Employee):
 	def validate(self):
+		normalise_employee_profile(self)
 		self._apply_company_employee_code()
 		apply_employee_work_nature(self)
 		return super().validate()

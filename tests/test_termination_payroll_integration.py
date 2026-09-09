@@ -23,6 +23,7 @@ departure = load("departure", ROOT / "hrms/payroll/termination_settlement.py")
 
 
 class Row(dict):
+    __setattr__ = dict.__setitem__
     def __getattr__(self, field):
         return self.get(field)
 
@@ -44,6 +45,8 @@ class TerminationPayrollIntegrationTest(unittest.TestCase):
         self.decisions = {"leaver": Row(name="decision-1", decision="离职结算", review_status="审核通过",
                                         termination_inputs_json=json.dumps(self.payload))}
         def get_all(doctype, **kwargs):
+            if kwargs.get("pluck"):
+                return []
             if doctype == "input":
                 return self.rows
             if doctype == "attendance":
@@ -84,9 +87,18 @@ class TerminationPayrollIntegrationTest(unittest.TestCase):
             _money=lambda value: round(value, 2),
             _source_trace_hash=lambda trace: (json.dumps(trace), "result-hash"))
         source = ast.parse((ROOT / "hrms/api/payroll_input.py").read_text())
-        fn = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "generate_payroll_settlement_records")
-        fn.decorator_list = []
-        exec(compile(ast.Module(body=[fn], type_ignores=[]), "payroll_input.py", "exec"), self.ns)
+        self.ns.update(sync_locked_attendance_final_to_payroll=lambda *args: None,
+            _attendance_employee_context_map=lambda rows: {},
+            _participation_decision_for_row=lambda decisions, row: decisions.get(row.employee),
+            _participation_decision_blocks_calculation=lambda decision: False,
+            _participation_decision_excludes=lambda decision: False,
+            _employee_left_in_payroll_month=lambda *args: False,
+            _is_salary_excluded=lambda profile: False,
+            _full_attendance_bonus=lambda *args: (200, 0))
+        for name in ("generate_payroll_settlement_records", "generate_payroll_input_records"):
+            fn = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == name)
+            fn.decorator_list = []
+            exec(compile(ast.Module(body=[fn], type_ignores=[]), "payroll_input.py", "exec"), self.ns)
 
     def run_generation(self):
         return self.ns["generate_payroll_settlement_records"]("ACME", "2026-07", "lock-v1")
@@ -123,6 +135,18 @@ class TerminationPayrollIntegrationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "重新核对"):
             self.run_generation()
         self.assertEqual(self.saved, [])
+
+    def test_input_table_uses_reviewed_hours_without_normal_full_attendance_bonus(self):
+        self.ns["_payroll_calculation_rules"] = lambda *args: {"ATTENDANCE_FULL_ATTENDANCE_BONUS": {}}
+        result = self.ns["generate_payroll_input_records"]("ACME", "2026-07", "lock-v1")
+        self.assertEqual(result["created"], 2)
+        by_employee = {row.employee: row for row in self.saved}
+        self.assertEqual(by_employee["leaver"].overtime_2_hours, 11)
+        self.assertEqual(by_employee["leaver"].overtime_1_5_hours, 6)
+        self.assertEqual(by_employee["leaver"].full_attendance_bonus, 0)
+        self.assertEqual(by_employee["normal"].full_attendance_bonus, 200)
+        self.assertEqual(by_employee["leaver"].dormitory_deduction, 67.65)
+        self.assertEqual(json.loads(by_employee["leaver"].source_trace_json)["termination"]["calculated"]["net_pay"], 868.87)
 
 
 if __name__ == "__main__":

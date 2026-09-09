@@ -20,7 +20,7 @@ const sourceCells = new Set(nodes.map((node) => node.source_cell));
 
 check(hierarchy.version === "2026Q3", "Q3 hierarchy must declare its source version.");
 check(nodes.length === 57, "Q3 workbook hierarchy must preserve all 57 folder and leaf nodes.");
-check(nodes.filter((node) => node.roster_assignable === 1).length === 37, "Only the 37 source team leaves may receive roster employees.");
+check(nodes.filter((node) => node.roster_assignable === 1).length === 37, "Q3 source records its original team-level roster flags; the Yongxin runtime rule makes every node assignable.");
 check(nodes.filter((node) => node.is_group === 1).length === 20, "Management, division, and course cards must remain folders.");
 check(nodes.every((node) => !node.parent_source_cell || sourceCells.has(node.parent_source_cell)), "Every Q3 node must have a valid parent source identity.");
 check(new Set(nodes.map((node) => node.source_cell)).size === nodes.length, "Source cells must keep duplicate display labels distinct.");
@@ -47,6 +47,7 @@ for (const marker of [
 }
 
 check(api.includes("legacy_employee_assignments"), "Q3 preview must report employees still assigned to folders.");
+check(api.includes('node["roster_assignable"] = 1'), "Q3 runtime must allow roster assignment to folder nodes.");
 const q3Import = api.slice(api.indexOf("def import_yongxin_q3_department_hierarchy("), api.indexOf("def import_yongxin_q2_org_structure("));
 check(!q3Import.includes('frappe.get_doc("Employee"'), "Q3 hierarchy sync must not automatically change employee assignments.");
 
@@ -54,4 +55,4 @@ check(setup.includes('"fieldname": "hrms_roster_assignable"'), "Department must 
 check(page.includes("import_yongxin_q3_department_hierarchy"), "Organization page must expose Q3 folder synchronization.");
 check(page.includes("同步2026Q3架构"), "Q3 synchronization must be a visible department-management action.");
 
-console.log("Q3 department hierarchy, roster leaf boundary, and import safeguards are wired.");
+console.log("Q3 department hierarchy, roster policy, and import safeguards are wired.");

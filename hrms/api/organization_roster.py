@@ -87,7 +87,7 @@ def get_base(department: str):
 
 
 def validate_chart_selection(company, department, selected, kind, designation=None, grade=None, inherit_parent=False):
-	if kind != "分管" and not department:
+	if kind not in {"管理层", "分管"} and not department:
 		if not any(selected):
 			return {"rows": [], "employees": [], "roster_department": ""}
 		frappe.throw(_("请先关联花名册对应的部门。"))
@@ -96,7 +96,7 @@ def validate_chart_selection(company, department, selected, kind, designation=No
 		department or "",
 		designation or "",
 		grade or "",
-		kind == "分管",
+		kind in {"管理层", "分管"},
 		inherit_parent=inherit_parent,
 	)
 	allowed = {row.name for row in result["employees"]}

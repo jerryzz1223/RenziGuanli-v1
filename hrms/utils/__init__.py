@@ -56,7 +56,8 @@ def get_country(fields: list[str] | tuple[str, ...] | str | None = None) -> dict
 			country_info[cache_key] = res.json()
 
 		except (requests.RequestException, ValueError):
-			country_info[cache_key] = {}
+			# Let a later call recover from a temporary HTTP or JSON failure.
+			return {}
 
 	return country_info[cache_key]
 

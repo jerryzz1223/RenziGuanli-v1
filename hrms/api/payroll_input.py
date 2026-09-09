@@ -4441,6 +4441,7 @@ def save_monthly_payroll_participation_decision(
 	"""Record an auditable monthly handling decision for one locked-attendance employee."""
 	_require_payroll_master_manager()
 	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	frappe.db.sql("select name from tabCompany where name=%s for update", (company,))
 	if not _doctype_exists(MONTHLY_PAYROLL_PARTICIPATION_DOCTYPE):
 		frappe.throw(_("月度薪资参与决策数据表尚未安装，请先执行站点迁移。"))
 	decision = _text(decision).strip()
@@ -8246,6 +8247,10 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 def generate_payroll_input_records(company: str, payroll_month: str, attendance_lock_version: str):
 	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
 	sync_locked_attendance_final_to_payroll(company, payroll_month, attendance_lock_version)
+	frappe.db.sql("select name from tabCompany where name=%s for update", (company,))
+	if frappe.db.exists(PAYROLL_SETTLEMENT_DOCTYPE, {"company": company, "payroll_month": payroll_month,
+		"calculation_status": ["in", ["已确认", "已生成工资单"]]}):
+		frappe.throw(_("本月已有已确认工资，不能覆盖薪资输入；请通过薪资补差处理。"))
 	_assert_workflow_locked_for_generation(company, payroll_month, attendance_lock_version)
 	calculation_rules = _payroll_calculation_rules(company, payroll_month)
 	payroll_run_snapshot_hash = _payroll_run_snapshot(company, payroll_month, attendance_lock_version)

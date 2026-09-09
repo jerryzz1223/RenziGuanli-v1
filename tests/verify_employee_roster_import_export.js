@@ -31,14 +31,8 @@ const exportJson = JSON.parse(read(exportJsonPath));
 const exportJs = read(exportJsPath);
 const css = read(cssPath);
 
-for (const marker of [
-	"Frappe renders request blockers and dialog backdrops",
-	"body:has(#hrms-top-module-nav) .freeze",
-	"body:has(#hrms-top-module-nav) .modal-backdrop",
-	"height: 117.6470588235vh !important;",
-	"width: 117.6470588235vw !important;",
-]) {
-	mustInclude(css, marker, `Desktop zoom must keep every edit/import blocker viewport-sized: ${marker}`);
+if (/\bzoom\s*:/.test(css) || css.includes("117.6470588235")) {
+	throw new Error("花名册不得通过全局缩放或反向视口补偿改变加载后的页面比例。");
 }
 
 if (importJson.name !== "employee-roster-import" || importJson.title !== "智能花名册导入") {
@@ -115,7 +109,18 @@ for (const marker of [
 	mustInclude(api, marker, `Employee roster API missing marker: ${marker}`);
 }
 
-mustInclude(api, 'values.pop("department", None)', "花名册导入必须忽略独立组织图部门，不创建或写入系统部门。");
+for (const marker of [
+	"def _resolve_roster_department(value, company):",
+	'frappe.db.get_value("Department", {"department_name": department_name, "company": company}, "name")',
+	'values["department"] = department',
+	'部门“{0}”不存在；请先在部门管理中建立并同步组织层级。',
+]) {
+	mustInclude(api, marker, `花名册导入必须直接匹配既有可归属部门，且不能自动创建：${marker}`);
+}
+
+if (api.includes('values.pop("department", None)')) {
+	throw new Error("花名册导入不能在匹配前丢弃 Excel 中的部门列。");
+}
 
 for (const marker of [
 	'if fieldname == "department":',
@@ -220,6 +225,8 @@ for (const marker of [
 	"仅显示需要人工校正的数据",
 	"暂不填写时可输入“-”",
 	'fieldtype: "Data"',
+	"失败行可直接点击“编辑本行”修正",
+	"state.step === 4 ? state.import_result : state.preview_result",
 	"继续导入其他花名册",
 	"当前内容",
 	"仅显示需要人工校正的数据",
@@ -250,6 +257,41 @@ mustInclude(api, '"employee_code": _get_employee_roster_preview_code(values, exi
 
 for (const marker of ["_excel_cell_reference", "_employee_import_fix_suggestion", "_is_employee_import_deferred_placeholder", "EMPLOYEE_IMPORT_NON_DEFERRABLE_FIELDS", '"suggestion"', '"excel_cell"', "row_overrides"]) {
 	mustInclude(api, marker, `错误行必须提供定位与修改建议：${marker}`);
+}
+
+for (const marker of ["matched_fieldnames", "离职员工必须填写离职日期", "was not present in the"]) {
+	mustInclude(api, marker, `结果页修正失败行缺少服务端支持：${marker}`);
+}
+
+for (const marker of [
+	"EMPLOYEE_RESIGNATION_IMPORT_COLUMNS",
+	'"relieving_date": "离职日期"',
+	'"reason_for_leaving": "离职原因"',
+	"ensure_resignation_import_columns(doc)",
+	'for flag in ("enabled", "import_enabled", "export_enabled", "form_visible", "detail_visible")',
+]) {
+	mustInclude(api, marker, `离职表导入字段必须保持可用：${marker}`);
+}
+
+for (const marker of ["EMPLOYEE_IMPORT_SKIP_MAPPING", 'manual_value in {"", EMPLOYEE_IMPORT_SKIP_MAPPING}', 'this.value || "__skip__"']) {
+	mustInclude(api + importJs, marker, `手动选择“不导入该列”必须覆盖自动映射：${marker}`);
+}
+
+for (const marker of [
+	'if mode == "update":',
+	"批量修改信息至少要匹配当前选择的更新依据",
+	'and (mode != "update" or fieldname in update_match_fields)',
+	"mode=mode, match_by=match_by",
+]) {
+	mustInclude(api, marker, `按工号更新时必须允许只修改选定字段：${marker}`);
+}
+
+for (const marker of [
+	"只更新离职信息",
+	"function use_departure_update_fields()",
+	'new Set(["custom_employee_code", "custom_work_nature", "relieving_date", "reason_for_leaving"])',
+]) {
+	mustInclude(importJs, marker, `离职更新必须能只保留必要字段：${marker}`);
 }
 
 for (const marker of [

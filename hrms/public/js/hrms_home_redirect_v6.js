@@ -412,10 +412,11 @@
 			label: "部门",
 			route: "/desk/organizational-chart",
 			icon: "O",
-			keys: ["department", "organizational-chart", "organization-report"],
+			keys: ["department", "organizational-chart", "organization-list", "organization-report"],
 			items: [
-				{ type: "link", label: "部门管理", route: "/desk/organizational-chart", slug: "organizational-chart" },
-				{ type: "link", label: "部门列表", route: "/desk/department", slug: "department" },
+				{ type: "link", label: "组织架构图", route: "/desk/organizational-chart", slug: "organizational-chart" },
+				{ type: "link", label: "部门列表", route: "/desk/organizational-chart/list", slug: "organization-list" },
+				{ type: "link", label: "部门基础资料", route: "/desk/department", slug: "department" },
 				{ type: "link", label: "部门报表", route: "/desk/organizational-chart/report", slug: "organization-report" },
 			],
 		},
@@ -762,6 +763,7 @@
 				if (route[0] === "query-report") {
 					return normalize_slug(route[1] || route[0]);
 				}
+				if (route[0] === "organizational-chart" && route[1] === "list") return "organization-list";
 				if (route[0] === "organizational-chart" && route[1] === "report") {
 					return "organization-report";
 				}
@@ -783,6 +785,7 @@
 		if (parts[0].toLowerCase() === "query-report") {
 			return normalize_slug(parts[1] || parts[0]);
 		}
+		if (parts[0].toLowerCase() === "organizational-chart" && parts[1]?.toLowerCase() === "list") return "organization-list";
 		if (parts[0].toLowerCase() === "organizational-chart" && parts[1] && parts[1].toLowerCase() === "report") {
 			return "organization-report";
 		}
@@ -799,6 +802,7 @@
 		if (normalized.indexOf("query-report/") === 0) {
 			return normalize_slug(normalized.split("/")[1]);
 		}
+		if (normalized === "organizational-chart/list") return "organization-list";
 		if (normalized === "organizational-chart/report") {
 			return "organization-report";
 		}
@@ -976,12 +980,25 @@
 		document.body.classList.toggle("hrms-unified-sidebar-collapsed", collapsed);
 		document.body.classList.toggle("hrms-top-drawer-open", !collapsed);
 		document.body.classList.toggle("hrms-custom-drawer-open", !collapsed);
+		document.documentElement.classList.toggle("hrms-sidebar-open-preload", !collapsed);
 		try {
 			window.localStorage.setItem("hrms-top-drawer:collapsed", collapsed ? "1" : "0");
 		} catch (error) {
 			// A restricted browser must still be able to open its navigation.
 		}
 		window.dispatchEvent(new CustomEvent("hrms:sidebar-state-change", { detail: { collapsed: collapsed } }));
+	}
+
+	function prepare_hrms_sidebar_geometry() {
+		// The custom drawer reads its persisted state while it is rendered. When
+		// the drawer was left open, reserve its lane before Frappe paints the list
+		// so the main section does not visibly shrink a moment later.
+		if (!active_sidebar_module(stable_route_slug())) {
+			document.documentElement.classList.remove("hrms-sidebar-open-preload");
+			return;
+		}
+		var saved_sidebar_state = window.localStorage.getItem("hrms-top-drawer:collapsed");
+		document.documentElement.classList.toggle("hrms-sidebar-open-preload", saved_sidebar_state === "0");
 	}
 
 	function bind_hrms_sidebar_toggle_event() {
@@ -1627,6 +1644,7 @@
 		});
 	}
 
+	prepare_hrms_sidebar_geometry();
 	run_hrms_shell_step("redirecting the Desk home", redirect_to_hrms_home);
 	apply_hrms_ui_rules();
 	run_hrms_shell_step("binding route events", bind_hrms_shell_route_events);

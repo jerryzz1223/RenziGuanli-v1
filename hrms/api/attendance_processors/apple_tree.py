@@ -28,6 +28,7 @@ ANOMALY_MESSAGES = {
 	"AMOUNT_MISSING": "项目对应的苹果数量为空。",
 	"AMOUNT_INVALID": "项目对应的苹果数量不是有效的非负数字。",
 	"AMOUNT_TEXT_CONFLICT": "苹果数字段与项目文字中的颗数不一致。",
+	"AMOUNT_CALCULATION_REQUIRED": "项目是按时长、天数或工作量计奖的标准，累计数量或折算依据需人工确认。",
 	"APPLE_TYPE_UNRECOGNIZED": "无法从奖惩项目识别绿苹果或红苹果。",
 	"APPROVAL_NOT_FINISHED": "审批状态不是已结束。",
 	"APPROVAL_NOT_PASSED": "审批结果不是审批通过。",
@@ -348,14 +349,11 @@ def _normalize_row(
 			amount = None
 		if _text(inactive_value) not in {_text(value) for value in rules.placeholder_values}:
 			_add_code(codes, "INACTIVE_APPLE_VALUE_CONFLICT")
-	project_amounts = _project_amounts(project)
-	# In HR's monthly register the project text is the unit standard (for example
-	# 2 apples per day) while the numeric column is the reviewed monthly result.
-	# Comparing those two values created dozens of false exceptions.
-	if not is_monthly_summary and amount is not None and len(project_amounts) == 1 and amount not in project_amounts:
-		_add_code(codes, "AMOUNT_TEXT_CONFLICT")
-	elif not is_monthly_summary and len(project_amounts) > 1:
-		_add_code(codes, "PROJECT_AMOUNT_AMBIGUOUS")
+	amount_validation = {} if is_monthly_summary else _validate_project_amount(
+		project, _text(_first(raw, _SOURCE_ALIASES["remark"])), amount
+	)
+	if amount_validation.get("exception_code"):
+		_add_code(codes, amount_validation["exception_code"])
 
 	approval_result = _text(_first(raw, _SOURCE_ALIASES["approval_result"]))
 	approval_status = _text(_first(raw, _SOURCE_ALIASES["approval_status"]))
@@ -404,6 +402,7 @@ def _normalize_row(
 		"审批结果": approval_result,
 		"审批状态": approval_status,
 	}
+	processed_value["数量校验"] = amount_validation
 	review_status = REVIEW_PENDING if codes else REVIEW_NOT_REQUIRED
 	return {
 		"数据ID": source_id,
@@ -602,6 +601,12 @@ def _resolve_employee(raw_code, employee_name, department, event_date, index, em
 	if not employee_name:
 		return ""
 	matches = index.by_name.get(_name_key(employee_name), [])
+	# Resolve the historical event before using today's department. Keep unknown
+	# dates as candidates: missing evidence must never select a different person.
+	if len(matches) > 1 and _valid_date(event_date):
+		dated_matches = [item for item in matches if _within_employment(item, event_date)]
+		if dated_matches:
+			matches = dated_matches
 	if len(matches) > 1 and department:
 		department_matches = [item for item in matches if department_match_key(item.department) == department_match_key(department)]
 		if len(department_matches) == 1:
@@ -615,6 +620,19 @@ def _resolve_employee(raw_code, employee_name, department, event_date, index, em
 	return ""
 
 
+def _valid_date(value):
+	try:
+		return date.fromisoformat(value) if value else None
+	except (TypeError, ValueError):
+		return None
+
+
+def _within_employment(employee, event_date):
+	event = _valid_date(event_date)
+	joining, relieving = _valid_date(employee.date_of_joining), _valid_date(employee.relieving_date)
+	return not event or not ((joining and event < joining) or (relieving and event > relieving))
+
+
 def _validate_employee_context(employee, employee_name, department, event_date, codes):
 	if employee_name and _name_key(employee.name) != _name_key(employee_name):
 		_add_code(codes, "EMPLOYEE_NAME_MISMATCH")
@@ -623,12 +641,9 @@ def _validate_employee_context(employee, employee_name, department, event_date, 
 	# Current status alone cannot invalidate a historical July record.  A person
 	# who left in August was still eligible in July.  Only flag an event outside
 	# the actual employment interval (or a former employee without dated proof).
-	outside_employment = bool(
-		(event_date and employee.date_of_joining and event_date < employee.date_of_joining)
-		or (event_date and employee.relieving_date and event_date > employee.relieving_date)
-	)
+	outside_employment = not _within_employment(employee, event_date)
 	former_without_dated_proof = bool(
-		employee.status and employee.status.casefold() not in {"在职", "active"} and not employee.relieving_date
+		employee.status and employee.status.casefold() not in {"在职", "active"} and not _valid_date(employee.relieving_date)
 	)
 	if outside_employment or former_without_dated_proof:
 		_add_code(codes, "FORMER_EMPLOYEE_REQUIRES_CONFIRMATION")
@@ -729,6 +744,52 @@ def _apple_type(project):
 
 def _project_amounts(project):
 	return {Decimal(match) for match in _PROJECT_AMOUNT_RE.findall(project)}
+
+
+def _validate_project_amount(project, remark, amount):
+	"""Check explicit totals, without inventing proration or rounding rules."""
+	units = _project_amounts(project)
+	if len(units) > 1:
+		return {"exception_code": "PROJECT_AMOUNT_AMBIGUOUS"}
+	if amount is None or not units:
+		return {}
+	unit = next(iter(units))
+	quantity = None
+	divisor = Decimal(1)
+	basis = "fixed"
+	requires_confirmation = False
+	# Only these explicit remark forms provide enough evidence to calculate a
+	# total. Multi-day schedules, clock end times and mixed tasks stay reviewable.
+	if re.search(r"(?:每天|每日)[^。；]*?\d+(?:\.\d+)?\s*颗", project):
+		basis = "days"
+		match = re.fullmatch(r"带(?:教|新员工)[^0-9天，,；;。\n]*?(\d+(?:\.\d+)?)天[。！!]?", remark)
+		if match:
+			quantity = Decimal(match[1])
+			cap = re.search(r"不超过(\d+)天", project)
+			if cap and quantity > Decimal(cap[1]):
+				quantity = None
+				requires_confirmation = True
+	else:
+		rate = re.search(r"每\s*(\d+(?:\.\d+)?)\s*(?:小时|[hH])[^。；]*?\d+(?:\.\d+)?\s*(?:颗|苹果)", project)
+		if not rate:
+			rate = re.search(r"(\d+(?:\.\d+)?)\s*[hH]\s*\d+(?:\.\d+)?\s*颗累加", project)
+		if rate:
+			basis, divisor = "hours", Decimal(rate[1])
+			match = re.fullmatch(r"延班(?:了)?([0-9]+(?:\.[0-9]+)?|[一二两三四五六七八九十])(?:个)?小时[^0-9一二两三四五六七八九十\n]*", remark)
+			if match:
+				chinese = dict(zip("一二两三四五六七八九十", [1, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10]))
+				quantity = Decimal(chinese[match[1]]) if match[1] in chinese else Decimal(match[1])
+		elif re.search(r"\d+(?:\.\d+)?\s*(?:小时|[hH])", project):
+			basis = "conditional_duration"
+	result = {"basis": basis, "unit_amount": _display_number(unit), "source_amount": _display_number(amount)}
+	if quantity is not None and divisor > 0:
+		expected = unit * quantity / divisor
+		result.update({"quantity": _display_number(quantity), "unit_quantity": _display_number(divisor), "expected_amount": _display_number(expected)})
+		if amount != expected:
+			result["exception_code"] = "AMOUNT_TEXT_CONFLICT"
+	elif requires_confirmation or amount != unit:
+		result["exception_code"] = "AMOUNT_CALCULATION_REQUIRED" if basis != "fixed" else "AMOUNT_TEXT_CONFLICT"
+	return result
 
 
 def _number(value):

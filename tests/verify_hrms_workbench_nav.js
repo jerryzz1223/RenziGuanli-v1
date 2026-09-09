@@ -40,12 +40,13 @@ for (const marker of ["/assets/hrms/js/hrms_top_nav.js", "/assets/hrms/css/hrms_
 	}
 }
 
-if (!hooksSource.includes("/assets/hrms/css/hrms_top_nav.css?v=20260903f")) {
+const topNavCssVersion = hooksSource.match(/hrms_top_nav\.css\?v=(\d{8}[^"\s]*)/)?.[1];
+if (!topNavCssVersion || topNavCssVersion < "20260903f") {
 	throw new Error("The top navigation CSS cache version must change when its desktop layout is corrected.");
 }
 
-if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260904a")) {
-	throw new Error("The top navigation JavaScript cache version must change when personnel-home selection is corrected.");
+if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260909-roster-column-search")) {
+	throw new Error("The top navigation JavaScript cache version must change when roster layout loading is corrected.");
 }
 
 for (const marker of [".navbar .search-wrapper", ".navbar .awesomebar", ".navbar .btn-new", ".navbar .btn-primary", "path === \"/app\"", "input.closest(\"form, .input-group, .form-group, .search, .search-bar, .search-wrapper, .search-container, .search-box, .awesomebar\")"]) {
@@ -126,7 +127,7 @@ for (const marker of [
 	'label: "部门"',
 	'label: "考勤假期"',
 	'label: "薪酬"',
-	'keys: ["department", "organizational-chart", "organization-report"]',
+	'keys: ["department", "organizational-chart", "organization-list", "organization-report"]',
 	'route[0] === "organizational-chart" && route[1] === "report"',
 	'normalized === "organizational-chart/report"',
 	"var item_slug = item.slug || route_to_slug(item.route);",
@@ -183,8 +184,8 @@ for (const marker of ["position: fixed", "width: 100vw", "body:has(#hrms-top-mod
 	}
 }
 
-if (!topNavCssSource.includes("width: 117.6470588235vw !important")) {
-	throw new Error("Desktop-density mode must compensate the fixed top nav width so company and account controls stay at the top-right edge.");
+if (/\bzoom\s*:/.test(topNavCssSource) || topNavCssSource.includes("117.6470588235")) {
+	throw new Error("Top navigation must keep the browser's native scale without inverse viewport compensation.");
 }
 
 if (homePage.title !== "系统主页") {
@@ -212,6 +213,10 @@ if (!topNavSource.includes("nav.appendChild(renderSidebarToggle())")) {
 
 if (!topNavCssSource.includes(".hrms-top-drawer") || !topNavCssSource.includes("body.hrms-custom-drawer-active > .body-sidebar-container") || !topNavCssSource.includes("body.hrms-custom-drawer-active.hrms-custom-drawer-open > .main-section") || !topNavCssSource.includes("width: calc(100vw - 238px) !important")) {
 	throw new Error("The custom drawer must hide the native sidebar and reserve space instead of covering the current page.");
+}
+
+if (!redirectSource.includes("prepare_hrms_sidebar_geometry") || !redirectSource.includes("hrms-sidebar-open-preload") || !topNavCssSource.includes("html.hrms-sidebar-open-preload body > .main-section")) {
+	throw new Error("A saved open drawer must reserve its main-content lane before Frappe paints the page.");
 }
 
 if (!topNavCssSource.includes("body.hrms-custom-drawer-active:not(.hrms-custom-drawer-open) > .main-section") || !topNavCssSource.includes("margin-left: 16px !important")) {

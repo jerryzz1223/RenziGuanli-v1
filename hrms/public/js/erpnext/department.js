@@ -63,11 +63,11 @@ frappe.ui.form.on("Department", {
 	},
 
 	is_group(frm) {
-		enforce_roster_leaf_rule(frm);
+		enforce_yongxin_roster_assignment(frm);
 	},
 
 	hrms_roster_assignable(frm) {
-		enforce_roster_leaf_rule(frm);
+		enforce_yongxin_roster_assignment(frm);
 	},
 
 	after_save(frm) {
@@ -89,7 +89,7 @@ function localize_department_form_labels(frm) {
 		hrms_org_role: "组织角色",
 		hrms_org_manager: "负责人",
 		hrms_org_card_content: "架构图卡片说明",
-		hrms_roster_assignable: "允许花名册归属（仅末级）",
+		hrms_roster_assignable: "允许花名册归属",
 	};
 	Object.entries(labels).forEach(([fieldname, label]) => {
 		if (frm.fields_dict[fieldname]) frm.set_df_property(fieldname, "label", __(label));
@@ -109,7 +109,15 @@ function configure_focused_department_form(frm) {
 		frm.set_df_property("is_group", "description", __("勾选后可作为其他部门的上级；未勾选即为末级部门。"));
 	}
 	if (frm.fields_dict.hrms_roster_assignable) {
-		frm.set_df_property("hrms_roster_assignable", "description", __("只为实际填入员工花名册的末级部门勾选。"));
+		const isYongxin = frm.doc.company === "永新";
+		frm.set_df_property(
+			"hrms_roster_assignable",
+			"description",
+			isYongxin
+				? __("永新公司的所有部门节点都允许花名册归属，包括文件夹部门。")
+				: __("勾选后可作为花名册的部门归属。")
+		);
+		frm.set_df_property("hrms_roster_assignable", "read_only", isYongxin);
 	}
 	if (frm.fields_dict.hrms_org_manager) {
 		frm.set_df_property("hrms_org_manager", "description", __("可填写多位负责人，用顿号、逗号或换行分隔。"));
@@ -172,10 +180,9 @@ function set_parent_department_query(frm) {
 	}));
 }
 
-function enforce_roster_leaf_rule(frm) {
-	if (!frm.doc.is_group || !frm.doc.hrms_roster_assignable) return;
-	frm.set_value("hrms_roster_assignable", 0);
-	frappe.show_alert({ message: __("文件夹部门不能用于花名册归属，已自动取消勾选。"), indicator: "orange" });
+function enforce_yongxin_roster_assignment(frm) {
+	if (frm.doc.company !== "永新") return;
+	if (!frm.doc.hrms_roster_assignable) frm.set_value("hrms_roster_assignable", 1);
 }
 
 function hide_department_sidebar(frm) {
@@ -240,7 +247,9 @@ function render_department_relationships(frm) {
 function render_relationship_sections(frm, children, employees) {
 	const has_business_parent = Boolean(frm.doc.parent_department) && !is_technical_department_root(frm.doc.parent_department);
 	const structure_state = frm.doc.is_group
-		? __("文件夹部门：可承载下级部门，不直接作为花名册归属。")
+		? frm.doc.hrms_roster_assignable
+			? __("文件夹部门：可承载下级部门，也可作为花名册归属。")
+			: __("文件夹部门：如需将员工归入此部门，请启用“允许花名册归属”。")
 		: frm.doc.hrms_roster_assignable
 			? __("末级部门：可作为花名册归属。")
 			: __("末级部门：如需将员工归入此部门，请启用“允许花名册归属”。");

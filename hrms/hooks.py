@@ -27,22 +27,28 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260907c",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260904a",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260909-sidebar-preload",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260909-roster-column-search",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
 	"/assets/hrms/js/hrms_file_uploader.js?v=20260827a",
+	"/assets/hrms/js/hrms_entry.js?v=20260909-minimal-e",
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260903f",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260909-black-loader",
 	"/assets/hrms/css/hrms_training_learning.css?v=20260827a",
+	"/assets/hrms/css/hrms_entry.css?v=20260909-minimal-d",
+	"/assets/hrms/css/hrms_loading.css?v=20260909-black-loader",
 ]
 
 # website
 
 # include js, css files in header of web template
-web_include_css = "/assets/hrms/css/hrms_login.css?v=20260805a"
-web_include_js = "/assets/hrms/js/hrms_login.js?v=20260805a"
+web_include_css = [
+	"/assets/hrms/css/hrms_login.css?v=20260909-minimal-d",
+	"/assets/hrms/css/hrms_loading.css?v=20260909-black-loader",
+]
+web_include_js = "/assets/hrms/js/hrms_login.js?v=20260909-minimal-d"
 
 # include custom scss in every website theme (without file extension ".scss")
 # website_theme_scss = "hrms/public/scss/website"
@@ -238,10 +244,11 @@ doc_events = {
 		"on_update": [
 			"hrms.overrides.employee_master.update_approver_role",
 			"hrms.overrides.employee_master.publish_update",
+			"hrms.api.organization_roster_sync.roster_changed",
 		],
 		"after_insert": "hrms.overrides.employee_master.update_job_applicant_and_offer",
 		"on_trash": "hrms.overrides.employee_master.update_employee_transfer",
-		"after_delete": "hrms.overrides.employee_master.publish_update",
+		"after_delete": ["hrms.overrides.employee_master.publish_update", "hrms.api.organization_roster_sync.roster_changed"],
 	},
 	"Project": {"validate": "hrms.controllers.employee_boarding_controller.update_employee_boarding_status"},
 	"Task": {"on_update": "hrms.controllers.employee_boarding_controller.update_task"},
@@ -252,6 +259,7 @@ doc_events = {
 
 scheduler_events = {
 	"cron": {
+		"*/5 * * * *": ["hrms.api.organization_roster_sync.scheduled_sync"],
 		"30 2 * * *": ["hrms.api.dingtalk_integration.run_scheduled_dingtalk_attendance_sync"],
 	},
 	"all": [

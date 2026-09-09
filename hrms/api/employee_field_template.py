@@ -13,6 +13,8 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_field
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 from frappe.utils import cint, flt
 
+from hrms.utils.employee_profile import normalise_profile_value
+
 
 TEMPLATE_DOCTYPE = "HRMS Employee Field Template"
 TEMPLATE_CHILD_TABLE = "HRMS Employee Field Template Item"
@@ -632,7 +634,50 @@ COMPANY_ROSTER_FIELD_ORDER = [
 	"status",
 ]
 
+# Fixed header contract from the supplied 员工花名册.xlsx. Keep this separate
+# from the configurable import/export field list so new fields cannot expand it.
+EMPLOYEE_BASIC_TEMPLATE_COLUMNS = (
+	("custom_roster_sequence", "序号"),
+	("custom_employee_code", "工号 *"),
+	("first_name", "姓名 *"),
+	("department", "部门 *"),
+	("date_of_joining", "入职日期 *"),
+	("cell_number", "手机号码 *"),
+	("custom_id_type", "证件类型"),
+	("passport_number", "证件号码"),
+	("permanent_address", "户籍地址"),
+	("custom_native_place", "籍贯"),
+	("designation", "岗位 *"),
+	("custom_work_nature", "工作性质"),
+	("custom_direct_indirect", "直间接"),
+	("custom_ethnicity", "民族"),
+	("custom_marital_status_text", "婚姻状况"),
+	("date_of_birth", "出生年月"),
+	("custom_age", "年龄"),
+	("gender", "性别"),
+	("custom_education_category", "学历类别"),
+	("custom_study_mode", "学习形式"),
+	("custom_education_level", "学历"),
+	("custom_graduation_school", "毕业院校"),
+	("custom_major", "科系"),
+	("current_address", "当前地址"),
+	("custom_transport", "交通工具"),
+	("person_to_be_contacted", "紧急联系"),
+	("emergency_phone_number", "紧急联系人电话"),
+	("custom_probation_months", "试用期"),
+	("final_confirmation_date", "转正日期"),
+	("custom_is_confirmed", "是否转正"),
+	("custom_contract_sign_date", "合同-签订日期"),
+	("custom_contract_no", "合同-合同编号"),
+	("custom_contract_sign_count", "合同-签订次数"),
+	("contract_end_date", "合同-结束月份"),
+	("custom_social_insurance", "保险-社保"),
+	("custom_medical_insurance", "保险-医保"),
+	("custom_housing_fund", "保险-公积金"),
+)
+
 HEADER_FIELD_ALIASES = {
+	**{header.removesuffix(" *"): fieldname for fieldname, header in EMPLOYEE_BASIC_TEMPLATE_COLUMNS},
 	"员工编号": "custom_employee_code",
 	"出生日期": "date_of_birth",
 	"出生年月": "date_of_birth",
@@ -696,6 +741,12 @@ EMPLOYEE_MINIMUM_IMPORT_REQUIRED_COLUMNS = {
 	"date_of_joining": "入职日期",
 	"cell_number": "手机号码",
 }
+
+EMPLOYEE_RESIGNATION_IMPORT_COLUMNS = {
+	"relieving_date": "离职日期",
+	"reason_for_leaving": "离职原因",
+}
+EMPLOYEE_IMPORT_SKIP_MAPPING = "__skip__"
 
 EMPLOYEE_IMPORT_REQUIRED_ALTERNATIVES = {
 	"first_name": ("first_name", "employee_name"),
@@ -987,6 +1038,7 @@ def _get_template_doc():
 	_apply_employee_required_defaults(doc)
 	_apply_employee_internal_field_policy(doc)
 	ensure_required_roster_columns(doc)
+	ensure_resignation_import_columns(doc)
 	_retire_personnel_status_field(doc)
 
 	return doc
@@ -1865,9 +1917,26 @@ def _make_employee_workbook(fields):
 	return output.getvalue()
 
 
+def _get_employee_basic_template_fields(fields):
+	fields_by_name = {field["fieldname"]: field for field in fields}
+	missing = [header for fieldname, header in EMPLOYEE_BASIC_TEMPLATE_COLUMNS if fieldname not in fields_by_name]
+	if missing:
+		frappe.throw(_("基础模板字段未启用导入或不存在：{0}").format("、".join(missing)))
+	# Header stars reproduce the reference workbook; row validation continues
+	# to use EMPLOYEE_MINIMUM_IMPORT_REQUIRED_COLUMNS and the selected mode.
+	return [
+		{
+			**fields_by_name[fieldname],
+			"field_label": header.removesuffix(" *"),
+			"required": int(header.endswith(" *")),
+		}
+		for fieldname, header in EMPLOYEE_BASIC_TEMPLATE_COLUMNS
+	]
+
+
 def build_employee_import_template():
 	doc = _get_template_doc()
-	fields = _get_employee_import_fields(doc)
+	fields = _get_employee_basic_template_fields(_get_employee_import_fields(doc))
 	return _make_employee_workbook(fields)
 
 
@@ -2044,7 +2113,13 @@ def _apply_manual_header_mappings(context, manual_mappings=None):
 	matched_fieldnames = set()
 	for match in context["matches"]:
 		column_key = str(match.get("column_index"))
-		fieldname = manual_mappings.get(column_key) or manual_mappings.get(match.get("header"))
+		manual_value = manual_mappings.get(column_key, manual_mappings.get(match.get("header")))
+		if manual_value in {"", EMPLOYEE_IMPORT_SKIP_MAPPING}:
+			match["field_label"] = ""
+			match["fieldname"] = ""
+			match["matched"] = False
+			continue
+		fieldname = manual_value or match.get("fieldname")
 		field = fields_by_name.get(fieldname)
 		if field:
 			match["field_label"] = field["field_label"]
@@ -3074,6 +3149,28 @@ def ensure_required_roster_columns(doc):
 	return doc
 
 
+def ensure_resignation_import_columns(doc):
+	"""Keep fields required for a valid departure import enabled and mappable."""
+	changed = False
+	rows_by_fieldname = {row.fieldname: row for row in doc.template_items}
+
+	for fieldname, field_label in EMPLOYEE_RESIGNATION_IMPORT_COLUMNS.items():
+		row = rows_by_fieldname.get(fieldname)
+		if not row:
+			continue
+		if row.get("field_label") != field_label:
+			row.field_label = field_label
+			changed = True
+		for flag in ("enabled", "import_enabled", "export_enabled", "form_visible", "detail_visible"):
+			if _template_item_supports_field(flag) and _template_row_int(row, flag) != 1:
+				row.set(flag, 1)
+				changed = True
+
+	if changed:
+		doc.save(ignore_permissions=True)
+	return doc
+
+
 def _retire_personnel_status_field(doc):
 	"""Remove the superseded public field from the template and Employee schema."""
 	changed = False
@@ -3419,18 +3516,32 @@ def get_employee_roster(
 
 
 @frappe.whitelist()
-def get_employee_roster_summary(filters: str = "{}"):
+def get_employee_roster_summary(filters: str = "{}", include_all: int = 0):
 	employee_filters = _build_employee_roster_filters(filters)
-	summary = []
-	for card in EMPLOYEE_ROSTER_STATUS_CARDS:
-		card_filters = dict(employee_filters)
-		card_filters.update(_build_employee_roster_filters(card["filters"]))
-		summary.append(
+	# Each card replaces the selected work nature, while retaining company and
+	# permission filters. One grouped query replaces six independent counts.
+	employee_filters.pop("custom_work_nature", None)
+	rows = frappe.get_list(
+		EMPLOYEE_DOCTYPE,
+		filters=employee_filters,
+		fields=["custom_work_nature", {"COUNT": "*", "as": "count"}],
+		group_by="custom_work_nature",
+		order_by="custom_work_nature asc",
+		limit_page_length=0,
+	)
+	counts = {row.get("custom_work_nature"): frappe.utils.cint(row.get("count")) for row in rows}
+	summary = [
+		{**card, "count": counts.get(card["filters"]["custom_work_nature"], 0)}
+		for card in EMPLOYEE_ROSTER_STATUS_CARDS
+	]
+	if frappe.utils.cint(include_all):
+		summary.insert(
+			0,
 			{
-				"label": card["label"],
-				"filters": card["filters"],
-				"count": _count_employee_rows(card_filters),
-			}
+				"label": "全部",
+				"filters": {"custom_work_nature": ["!=", "离职"]},
+				"count": sum(count for nature, count in counts.items() if nature != "离职"),
+			},
 		)
 	return summary
 
@@ -4368,12 +4479,11 @@ def _normalise_gender_value(value):
 
 
 def _normalise_ethnicity_value(value):
-	"""Persist short Han ethnicity labels as the selector's canonical value."""
+	"""Expand ethnicity names that omit the selector's suffix."""
 	value = _clean_import_value(value)
 	if value is None:
 		return None
-	text = str(value).strip()
-	return ETHNICITY_VALUE_ALIASES.get(text, text)
+	return normalise_profile_value("custom_ethnicity", value, CHINA_ETHNICITY_VALUES)
 
 
 def _derive_identity_card_values(identity_card_number, today=None):
@@ -4439,6 +4549,9 @@ def _normalise_import_value(fieldname, value, field):
 	if fieldname == "custom_ethnicity":
 		return _normalise_ethnicity_value(value)
 
+	if fieldname == "custom_native_place":
+		return normalise_profile_value(fieldname, value, field.get("options"))
+
 	if fieldname in PHONE_FIELDNAMES:
 		return _normalise_phone_value(value)
 
@@ -4472,6 +4585,35 @@ def _resolve_company(value, default_company, warnings):
 			return company
 		warnings.append(_("公司“{0}”不存在，已使用默认公司“{1}”。").format(text, default_company or ""))
 	return default_company
+
+
+def _resolve_roster_department(value, company):
+	"""Match a roster department to an existing assignable Department record.
+
+	The organization chart is still an independent display layer.  This only
+	uses the Department master already maintained for roster assignment and
+	never creates a department from an uploaded cell.
+	"""
+	value = _clean_import_value(value)
+	if not value:
+		return None, ""
+	department_name = _strip_department_company_suffix(value)
+	existing = (
+		frappe.db.get_value("Department", {"department_name": department_name, "company": company}, "name")
+		or frappe.db.get_value("Department", {"department_name": department_name}, "name")
+		or frappe.db.exists("Department", str(value).strip())
+	)
+	if not existing:
+		return None, _("部门“{0}”不存在；请先在部门管理中建立并同步组织层级。").format(department_name)
+
+	department = frappe.get_cached_doc("Department", existing)
+	if company and department.company and department.company != company:
+		return None, _("部门“{0}”不属于当前公司。").format(department_name)
+	if frappe.get_meta("Department").has_field("hrms_roster_assignable") and not cint(
+		department.get("hrms_roster_assignable")
+	):
+		return None, _("部门“{0}”尚未启用花名册归属。").format(department_name)
+	return department.name, ""
 
 
 def _find_or_create_designation(value, base_records):
@@ -4608,6 +4750,7 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 	values = {}
 	errors = []
 	row_overrides = row_overrides if isinstance(row_overrides, dict) else {}
+	matched_fieldnames = set()
 	for match in matches:
 		fieldname = match.get("fieldname")
 		column_index = match.get("column_index")
@@ -4616,6 +4759,7 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 		field = fields_by_name.get(fieldname)
 		if not field:
 			continue
+		matched_fieldnames.add(fieldname)
 		raw_value = row_overrides[fieldname] if fieldname in row_overrides else row[column_index]
 		if _is_employee_import_deferred_placeholder(raw_value) and _can_defer_employee_import_field(fieldname):
 			values.setdefault("_employee_import_deferred_fields", set()).add(fieldname)
@@ -4670,6 +4814,17 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 		if value is not None:
 			values[fieldname] = value
 
+	# A result-page correction may target a field that was not present in the
+	# uploaded headers. Apply it as a one-time override so the user can repair
+	# the row in place instead of preparing and uploading another workbook.
+	for fieldname, raw_value in row_overrides.items():
+		if fieldname in matched_fieldnames or fieldname not in fields_by_name:
+			continue
+		field = fields_by_name[fieldname]
+		value = _normalise_import_value(fieldname, raw_value, field)
+		if value is not None:
+			values[fieldname] = value
+
 	if values.get("first_name") and not values.get("employee_name"):
 		values["employee_name"] = values["first_name"]
 	if values.get("employee_name") and not values.get("first_name"):
@@ -4711,22 +4866,38 @@ def _normalise_work_nature_import_value(value, is_confirmed=None):
 	return str(value).strip()
 
 
-def _validate_employee_import_row(values, fields_by_name, meta_fields, row_index, parse_errors=None):
+def _validate_employee_import_row(
+	values, fields_by_name, meta_fields, row_index, parse_errors=None, mode="insert", match_by="employee_code"
+):
 	errors = []
-	# The organization-chart department is display-only for now.  It must never
-	# create or select an Employee department, nor affect attendance or payroll.
-	values.pop("department", None)
 	deferred_fields = values.get("_employee_import_deferred_fields") or set()
 	parse_error_fields = {error.get("fieldname") for error in parse_errors or []}
+	update_match_fields = set(EMPLOYEE_DUPLICATE_MATCH_FIELDS.get(match_by, ()))
 	for fieldname, field in fields_by_name.items():
 		if (
 			_is_employee_import_required_field(fieldname, field)
 			and fieldname in meta_fields
+			and (mode != "update" or fieldname in update_match_fields)
 			and fieldname not in deferred_fields
 			and fieldname not in parse_error_fields
 			and _is_blank_value(values.get(fieldname))
 		):
 			errors.append(_field_error(row_index, field, _("必填字段为空")))
+
+	if values.get("custom_work_nature") == "离职" and _is_blank_value(values.get("relieving_date")):
+		field = fields_by_name.get("relieving_date") or {
+			"fieldname": "relieving_date",
+			"field_label": _("离职日期"),
+			"fieldtype": "Date",
+		}
+		errors.append(
+			_field_error(
+				row_index,
+				field,
+				_("离职员工必须填写离职日期"),
+				_("请填写实际离职日期；可直接点击“编辑本行”修正，无需重新上传文件。"),
+			)
+		)
 
 	if not values.get("first_name") and "first_name" not in fields_by_name:
 		name_field = fields_by_name.get("first_name") or fields_by_name.get("employee_name") or {
@@ -4734,6 +4905,17 @@ def _validate_employee_import_row(values, fields_by_name, meta_fields, row_index
 			"field_label": _("姓名"),
 		}
 		errors.append(_field_error(row_index, name_field, _("缺少员工姓名")))
+
+	if values.get("department") and "department" not in deferred_fields:
+		department, error = _resolve_roster_department(values.get("department"), values.get("company"))
+		if error:
+			department_field = fields_by_name.get("department") or {
+				"fieldname": "department",
+				"field_label": _("部门"),
+			}
+			errors.append(_field_error(row_index, department_field, error))
+		else:
+			values["department"] = department
 
 	return errors
 
@@ -4827,7 +5009,11 @@ def _build_employee_roster_import_plan(
 		frappe.throw(_("重复员工匹配策略不正确"))
 
 	context = _apply_manual_header_mappings(_get_uploaded_roster_context(file_url), manual_mappings)
-	if context["missing_required"]:
+	if mode == "update":
+		matched_fields = {match.get("fieldname") for match in context["matches"] if match.get("fieldname")}
+		if not matched_fields.intersection(EMPLOYEE_DUPLICATE_MATCH_FIELDS[match_by]):
+			frappe.throw(_("批量修改信息至少要匹配当前选择的更新依据：{0}").format(match_by))
+	elif context["missing_required"]:
 		frappe.throw(
 			_("必填字段尚未匹配：{0}").format(
 				"、".join(field["field_label"] for field in context["missing_required"])
@@ -4876,7 +5062,10 @@ def _build_employee_roster_import_plan(
 		# cross-company search of an administrator's entire employee table.
 		values["company"] = _resolve_company(values.get("company"), _get_default_company(), result["warnings"])
 		row_errors = _dedupe_import_errors(
-			parse_errors + _validate_employee_import_row(values, fields_by_name, meta_fields, row_index, parse_errors)
+			parse_errors
+			+ _validate_employee_import_row(
+				values, fields_by_name, meta_fields, row_index, parse_errors, mode=mode, match_by=match_by
+			)
 		)
 		action, existing = _preview_employee_action(values, meta_fields, mode, match_by)
 

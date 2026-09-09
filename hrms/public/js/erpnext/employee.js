@@ -142,6 +142,7 @@ function sync_employee_work_nature_dependent_fields(frm, work_nature = frm.doc.c
 
 	frm.toggle_display("relieving_date", is_leaving);
 	frm.set_df_property("relieving_date", "reqd", is_leaving);
+	frm.fields_dict.relieving_date.$wrapper?.prev(".hrms-employee-group-title").toggle(is_leaving);
 }
 
 function get_employee_work_nature_display(employee = {}) {
@@ -227,6 +228,7 @@ function apply_employee_field_template(frm) {
 
 function show_employee_form_as_one_page(frm) {
 	$(frm.wrapper).addClass("hrms-employee-one-page");
+	setup_employee_roster_layout(frm);
 
 	// Tab Breaks are the source of Frappe's original per-tab column layout.
 	// Do not reparent their controls or replace the layout.  Giving each
@@ -237,6 +239,85 @@ function show_employee_form_as_one_page(frm) {
 			if (!tab.hidden) tab.wrapper.addClass("show active");
 		});
 	});
+}
+
+// Keep Frappe's controls, columns and dependency handling in place. Only add
+// headings and style the existing column forms as compact rows of fields.
+function setup_employee_roster_layout(frm) {
+	(frm.layout?.sections || []).forEach((section) => section.wrapper.addClass("hrms-roster-field-section"));
+	// Frappe restores the section's collapsed default on every form refresh.
+	// Address is part of the roster and should be visible whenever it is opened.
+	frm.layout?.sections_dict?.address_section?.collapse(false);
+	const groups = [
+		["custom_employee_code", "员工基本信息"],
+		["gender", "个人资料"],
+		["custom_education_category", "教育信息"],
+		["date_of_joining", "入职信息"],
+		["cell_number", "联系方式"],
+		["final_confirmation_date", "转正信息"],
+		["contract_end_date", "劳动合同"],
+		["custom_social_insurance", "保险与公积金"],
+		["relieving_date", "离职信息"],
+	];
+	for (const [fieldname, label] of groups) {
+		const field = frm.fields_dict[fieldname];
+		if (!field?.$wrapper) continue;
+		let heading = field.$wrapper.prev(`.hrms-employee-group-title[data-group="${fieldname}"]`);
+		if (!heading.length) {
+			heading = $("<h3 class='hrms-employee-group-title'>")
+				.attr("data-group", fieldname).text(__(label)).insertBefore(field.$wrapper);
+		}
+		heading.toggle(!field.df.hidden && !field.df.hidden_due_to_dependency);
+	}
+
+	const identity = frm.fields_dict.employee_name;
+	const editable_name = frm.fields_dict.first_name;
+	// The computed full name duplicates the editable name in this roster.
+	identity?.$wrapper.toggleClass("hrms-employee-redundant-name",
+		Boolean(identity.df.read_only && editable_name && !editable_name.df.hidden));
+	for (const fieldname of ["pan_number", "ifsc_code", "micr_code", "provident_fund_account"]) {
+		const field = frm.fields_dict[fieldname];
+		field?.$wrapper.toggleClass("hrms-employee-unused-field", !frm.doc[fieldname] && !field.df.reqd);
+	}
+	const section_labels = {
+		company_details_section: "任职信息",
+		address_section: "居住与户籍地址",
+		emergency_contact_details: "紧急联系人",
+		passport_details_section: "证件与户籍资料",
+	};
+	for (const [fieldname, label] of Object.entries(section_labels)) {
+		const section = frm.layout?.sections_dict?.[fieldname];
+		if (section?.head) section.head.contents().first().replaceWith(document.createTextNode(__(label)));
+	}
+
+	if (!frm.__hrms_roster_navigation) {
+		const nav = $("<nav class='hrms-employee-roster-navigation' aria-label='员工档案导航'>")
+			.prependTo(frm.layout.wrapper);
+		$("<span class='hrms-employee-roster-caption'>").text(__("员工档案")).appendTo(nav);
+		$("<button type='button' class='btn btn-default btn-sm'>").text(__("返回花名册"))
+			.appendTo(nav).on("click", () => frappe.set_route("List", "Employee"));
+		const records = $("<button type='button' class='btn btn-default btn-sm'>")
+			.text(__("材料与业务记录")).appendTo(nav)
+			.on("click", () => {
+				if (frm.is_dirty()) {
+					frappe.msgprint(__("请先保存员工资料，再查看材料与业务记录。"));
+					return;
+				}
+				frappe.set_route("employee-detail", frm.doc.name);
+			});
+		const advanced = $("<button type='button' class='btn btn-default btn-sm' aria-expanded='false'>")
+			.text(__("其他关联单据")).appendTo(nav)
+			.on("click", () => {
+				const expanded = !$(frm.wrapper).hasClass("hrms-employee-show-connections");
+				$(frm.wrapper).toggleClass("hrms-employee-show-connections", expanded);
+				advanced.attr("aria-expanded", String(expanded));
+				advanced.text(__(expanded ? "收起关联单据" : "其他关联单据"));
+				if (expanded) frm.dashboard?.links_area?.wrapper?.[0]?.scrollIntoView({ behavior: "smooth", block: "start" });
+			});
+		frm.__hrms_roster_navigation = { records, advanced };
+	}
+	frm.__hrms_roster_navigation.records.toggle(!frm.is_new());
+	frm.__hrms_roster_navigation.advanced.toggle(!frm.is_new());
 }
 
 function apply_configured_field_label(frm, field, configured_field) {

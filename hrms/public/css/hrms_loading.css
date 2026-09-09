@@ -1,0 +1,20 @@
+/* Shared by Desk boot, page reloads and the post-login splash. The content
+ * fallback also covers HTML that still names the old blue/framework image. */
+.splash img {
+	content: url("/assets/hrms/images/yongxin-brand-mark-red.png");
+	width: 64px !important;
+	max-width: 64px !important;
+	height: 64px;
+	object-fit: contain;
+	filter: none !important;
+	opacity: 1 !important;
+	animation: hrms-splash-brand-spin 1.2s linear infinite;
+}
+
+@keyframes hrms-splash-brand-spin {
+	to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.splash img { animation: none; }
+}

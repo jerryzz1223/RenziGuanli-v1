@@ -52,6 +52,12 @@ def validate_department_name_available(department_name: str, company: str = "", 
 class DepartmentIdentity(Department):
 	"""Keep both the visible label and Link value free from company suffixes."""
 
+	def validate(self):
+		# 永新的花名册可使用任意部门节点；其他公司的既有设置不在这里改动。
+		if self.meta.has_field("hrms_roster_assignable") and self.company == "永新":
+			self.hrms_roster_assignable = 1
+		return super().validate()
+
 	def autoname(self):
 		target_name = validate_department_name_available(
 			self.department_name,

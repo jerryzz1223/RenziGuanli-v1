@@ -106,8 +106,12 @@
 			setup_roster_page(listview);
 		},
 		refresh(listview) {
+			const state = get_roster_table_state(listview);
+			// The first native response belongs to the same initial load. Later
+			// refreshes (including returning from an edited archive) revalidate it.
+			if (state.native_refreshed && !state.loading) state.source_key = "";
+			state.native_refreshed = true;
 			setup_roster_page(listview);
-			update_roster_counts(listview);
 		},
 	};
 
@@ -134,11 +138,13 @@
 		remove_native_roster_list_header(listview);
 		hide_unused_roster_toolbar_controls(listview);
 		hide_roster_page_length_controls();
-	setup_roster_actions(listview);
+		setup_roster_actions(listview);
 		setup_roster_summary(listview);
+		update_roster_counts(listview);
 		ensure_roster_empty_result_header(listview);
 		sync_active_roster_card(listview);
-		setTimeout(function () {
+		window.clearTimeout(listview.__hrmsRosterLayoutTimer);
+		listview.__hrmsRosterLayoutTimer = setTimeout(function () {
 			expand_roster_layout(listview);
 			stretch_roster_result_area(listview);
 			hide_native_filter_controls();
@@ -157,9 +163,8 @@
 	}
 
 	function ensure_roster_records_loaded(listview) {
-		// The custom table owns pagination. Keep ListView at the same page size so
-		// every page click fetches the next server-side slice instead of stopping
-		// after the first native 20-row response.
+		// The custom table owns pagination. Keep the hidden native ListView's
+		// initial request small; its rows are not used as a second data source.
 		listview.page_length = ROSTER_TABLE_PAGE_LENGTH;
 		listview.selected_page_count = ROSTER_TABLE_PAGE_LENGTH;
 	}
@@ -384,9 +389,8 @@
 		const header_host = result_container?.parentElement;
 		if (!result_container || !header_host) return;
 
-		// Render the roster as one real table, like the payroll workbench.  The
-		// ListView remains the data source (including its status-card filters), but
-		// it no longer contributes a second subject/name column beside the table.
+		// Render one table from the dedicated roster request. ListView retains
+		// the framework toolbar and route filters, but contributes no data rows.
 		result_container.querySelectorAll(":scope > .hrms-roster-table-header").forEach((header) => header.remove());
 		let table_wrap = header_host.querySelector(":scope > .hrms-roster-table-wrap");
 		if (!table_wrap) {
@@ -397,18 +401,20 @@
 		}
 
 		const state = get_roster_table_state(listview);
-		if (state.records === null && !state.loading && !state.load_scheduled) {
-			// Frappe begins its native ListView refresh in the same turn as the
-			// card navigation. Defer our roster request until that refresh has
-			// settled; otherwise a card can show a correct count with an empty table.
-			state.load_scheduled = true;
-			window.setTimeout(() => {
-				state.load_scheduled = false;
-				if (state.records === null && !state.loading) load_roster_table_records(listview, state);
-			}, 250);
-		}
+		load_roster_table_records(listview, state);
 		const columns = get_roster_table_columns();
+		const render_key = JSON.stringify([
+			state.request_id, state.loading, state.error, state.page, state.filters,
+			state.sort_field, state.sort_order, columns.map((column) => column.fieldname),
+		]);
+		if (table_wrap.__hrmsRenderKey === render_key) return;
+		table_wrap.__hrmsRenderKey = render_key;
+		const focused_input = table_wrap.contains(document.activeElement) ? document.activeElement : null;
+		const focused_label = focused_input?.getAttribute("aria-label");
+		const old_scroll = table_wrap.querySelector(".hrms-roster-table-scroll");
+		const scroll_left = old_scroll?.scrollLeft || 0;
 		table_wrap.replaceChildren();
+		table_wrap.setAttribute("aria-busy", state.loading ? "true" : "false");
 		const scroll = document.createElement("div");
 		scroll.className = "hrms-payroll-table-scroll hrms-roster-table-scroll";
 		const table = document.createElement("table");
@@ -444,7 +450,10 @@
 			if (column.filterable) {
 				const input = document.createElement("input");
 				input.type = "search";
-				input.className = "form-control input-xs";
+				// This is a persistent table-column search, not Frappe's generic
+				// toolbar search. Keep a dedicated class so toolbar cleanup never
+				// hides the visible search row after the table has rendered.
+				input.className = "form-control input-xs hrms-roster-table-filter-input";
 				input.placeholder = __("搜索");
 				input.autocomplete = "off";
 				input.setAttribute("aria-label", __("搜索{0}", [column.label]));
@@ -483,24 +492,24 @@
 			const cell = document.createElement("td");
 			cell.colSpan = columns.length;
 			cell.className = "text-muted";
-			cell.textContent = __("暂无符合条件的员工");
+			cell.textContent = state.loading ? __("正在加载员工…") : state.error ? __("加载失败，请重试") : __("暂无符合条件的员工");
+			if (state.error) {
+				const retry = document.createElement("button");
+				retry.className = "btn btn-default btn-xs";
+				retry.textContent = __("重试");
+				retry.addEventListener("click", () => {
+					state.error = false;
+					state.source_key = "";
+					ensure_roster_empty_result_header(listview);
+				});
+				cell.appendChild(retry);
+			}
 			row.appendChild(cell);
 			tbody.appendChild(row);
 		}
 		rows.forEach((employee) => {
 			const row = document.createElement("tr");
 			row.className = "hrms-roster-table-row";
-			row.tabIndex = 0;
-			row.addEventListener("click", (event) => {
-				if (is_roster_table_control(event.target)) return;
-				open_roster_employee_detail(employee.name);
-			});
-			row.addEventListener("keydown", (event) => {
-				if (event.key !== "Enter" && event.key !== " ") return;
-				if (is_roster_table_control(event.target)) return;
-				event.preventDefault();
-				open_roster_employee_detail(employee.name);
-			});
 			columns.forEach((column) => row.appendChild(render_roster_table_cell(employee, column)));
 			tbody.appendChild(row);
 		});
@@ -508,6 +517,12 @@
 		scroll.appendChild(table);
 		table_wrap.appendChild(scroll);
 		if (total > page_size) table_wrap.appendChild(render_roster_table_pagination(listview, state, total, page_count));
+		scroll.scrollLeft = scroll_left;
+		if (focused_label) {
+			Array.from(table_wrap.querySelectorAll("input[aria-label]")).find(
+				(input) => input.getAttribute("aria-label") === focused_label,
+			)?.focus({ preventScroll: true });
+		}
 	}
 
 	function get_roster_table_columns() {
@@ -538,7 +553,6 @@
 		}
 		const state = listview.__hrmsRosterTableState;
 		state.filters ||= {};
-		state.load_scheduled ||= false;
 		state.page ||= 1;
 		state.page_size ||= 20;
 		return state;
@@ -565,15 +579,15 @@
 
 	function load_roster_table_records(listview, state) {
 		const card = get_active_roster_card();
-		const filters = { ...(card.filters || {}) };
-		const company = get_current_roster_company();
-		if (company) filters.company = company;
+		const filters = build_roster_route_options(card.filters, get_stored_roster_column_filter());
 		const source_key = JSON.stringify(filters);
-		if ((state.loading && state.source_key === source_key) || (state.source_key === source_key && Array.isArray(state.records))) return;
+		if (state.source_key === source_key && (state.loading || state.error || Array.isArray(state.records))) return;
 
 		const request_id = state.request_id + 1;
 		state.request_id = request_id;
 		state.loading = true;
+		state.error = false;
+		state.records = null;
 		state.source_key = source_key;
 		frappe.call({
 			method: "hrms.api.employee_field_template.get_employee_roster",
@@ -587,8 +601,11 @@
 				state.page = 1;
 				ensure_roster_empty_result_header(listview);
 			},
-			always() {
-				if (state.request_id === request_id) state.loading = false;
+			error() {
+				if (state.request_id !== request_id) return;
+				state.loading = false;
+				state.error = true;
+				ensure_roster_empty_result_header(listview);
 			},
 		});
 	}
@@ -640,15 +657,9 @@
 		// serialising mutable company defaults into a browser cache key.
 		const custom_records = Array.isArray(state.records) ? state.records : [];
 		if (state.records_card_label !== active_card.label && custom_records.length) return [];
-		// On a fresh route Frappe can complete the native ListView request after
-		// (or cancel) the parallel custom request. Its rows are a safe fallback:
-		// the address already contains the simple card filters and the business
-		// predicate below still enforces every card condition before rendering.
-		const source_records = custom_records.length
-			? custom_records
-			: Array.isArray(listview.data)
-				? listview.data
-				: [];
+		// Native ListView rows are only one page and may belong to an earlier
+		// company/filter request. Only the current custom response is authoritative.
+		const source_records = custom_records;
 
 		const matches_card_filter = (employee, [fieldname, expected]) => {
 			const actual = employee?.[fieldname];
@@ -725,10 +736,6 @@
 		}
 		cell.textContent = get_roster_table_cell_value(employee, column);
 		return cell;
-	}
-
-	function is_roster_table_control(target) {
-		return Boolean(target?.closest?.("button, input, select, textarea, a, [data-action]"));
 	}
 
 	function open_roster_employee_detail(employee) {
@@ -869,52 +876,21 @@
 		const main_section = get_list_wrapper(listview);
 		if (!main_section) return;
 
-		// ListView's desktop shell reserves 20% for the optional side section.
-		// Employee has no side controls, so use Frappe's own no-list-sidebar mode
-		// on the actual page node instead of hiding or duplicating list content.
+		// Preserve Frappe's semantic no-sidebar marker for integrations. The
+		// route-level stylesheet already owns the initial width and height, so do
+		// not mutate them after the page has painted.
 		const page_container = main_section.closest(".page-container");
 		page_container?.classList.add("no-list-sidebar", "hrms-employee-roster-page");
-
-		const layout_wrapper = main_section.closest(".layout-main-section-wrapper");
-		const layout_main = main_section.closest(".layout-main");
-		[layout_main, layout_wrapper, main_section].filter(Boolean).forEach((element) => {
-			element.style.setProperty("width", "100%", "important");
-			element.style.setProperty("max-width", "none", "important");
-		});
-		if (layout_wrapper) layout_wrapper.style.setProperty("flex", "1 1 100%", "important");
-		stretch_roster_result_area(listview);
 	}
 
 	function bind_roster_result_height(listview) {
 		if (listview.__hrmsRosterResultHeightBound) return;
 		listview.__hrmsRosterResultHeightBound = true;
-		window.addEventListener("resize", () => stretch_roster_result_area(listview));
 	}
 
 	function stretch_roster_result_area(listview) {
-		const wrapper = get_list_wrapper(listview);
-		const result_container = wrapper?.querySelector(".result-container");
-		const table_wrap = wrapper?.querySelector(".hrms-roster-table-wrap");
-		const roster_surface = table_wrap || result_container;
-		if (!roster_surface) return;
-
-		window.requestAnimationFrame(() => {
-			// Frappe's ListView height is normally content-driven.  On the compact
-			// Desk shell that can make the parent stop above the browser bottom,
-			// leaving a blank document canvas beneath the employee rows.  Size the
-			// actual ListView section from its live viewport position first; this
-			// keeps the normal table and its native scrolling behaviour intact.
-			const desktop_zoom = Number.parseFloat(window.getComputedStyle(document.documentElement).zoom) || 1;
-			const main_top = wrapper.getBoundingClientRect().top;
-			const main_height = Math.max(320, Math.floor((window.innerHeight - main_top - 8) / desktop_zoom));
-			wrapper.style.setProperty("height", `${main_height}px`, "important");
-			wrapper.style.setProperty("min-height", `${main_height}px`, "important");
-
-			const top = roster_surface.getBoundingClientRect().top;
-			const available_height = Math.max(320, Math.floor((window.innerHeight - top - 12) / desktop_zoom));
-			roster_surface.style.setProperty("height", `${available_height}px`, "important");
-			roster_surface.style.setProperty("min-height", `${available_height}px`, "important");
-		});
+		// Kept as a lifecycle hook for callers. CSS has a fixed flex layout from
+		// route creation, which avoids delayed requestAnimationFrame resizing.
 	}
 
 	function enhance_roster_column_headers(listview) {
@@ -1141,41 +1117,31 @@
 	function update_roster_counts(listview) {
 		const wrapper = get_list_wrapper(listview);
 		if (!wrapper) return;
-
-		roster_cards.forEach((card) => {
+		const company = get_current_roster_company();
+		const previous = listview.__hrmsRosterSummary;
+		if (previous?.company === company && (previous.loading || Date.now() - previous.loaded_at < 3000)) return;
+		const request = { company, loading: true, loaded_at: 0 };
+		listview.__hrmsRosterSummary = request;
+		const paint = (counts) => roster_cards.forEach((card) => {
 			const value = wrapper.querySelector(`.hrms-roster-card[data-label="${card.label}"] .hrms-roster-card__value`);
-			if (!value) return;
-
-			count_with_available_fields(card.filters)
-				.then((count) => {
-					value.textContent = count;
-					// The custom table gets its page total from the active card when
-					// ListView has only loaded the current server-side slice.
-					if (card.label === get_active_roster_card().label) ensure_roster_empty_result_header(listview);
-				})
-				.catch(() => {
-					value.textContent = "0";
-				});
+			if (value) value.textContent = counts?.get(card.label) ?? "—";
 		});
-	}
-
-	function count_with_available_fields(filters) {
-		const available_filters = {};
-		Object.keys(filters || {}).forEach((fieldname) => {
-			if (has_employee_field(fieldname)) {
-				available_filters[fieldname] = filters[fieldname];
-			}
+		if (previous?.company !== company) paint(null);
+		frappe.call({
+			method: "hrms.api.employee_field_template.get_employee_roster_summary",
+			args: { filters: JSON.stringify(company ? { company } : {}), include_all: 1 },
+			callback(response) {
+				if (listview.__hrmsRosterSummary !== request || get_current_roster_company() !== company) return;
+				request.loading = false;
+				request.loaded_at = Date.now();
+				paint(new Map((response.message || []).map((card) => [card.label, card.count])));
+			},
+			error() {
+				if (listview.__hrmsRosterSummary !== request) return;
+				request.loading = false;
+				paint(null);
+			},
 		});
-		// The cleanup action is deliberately scoped to the selected company.  Keep
-		// the status cards in that same scope; otherwise an Administrator can see
-		// counts from a fixture or another company after this company's roster has
-		// been successfully cleared.
-		const current_company = get_current_roster_company();
-		if (current_company && has_employee_field("company")) {
-			available_filters.company = current_company;
-		}
-
-		return frappe.db.count(EMPLOYEE_DOCTYPE, { filters: available_filters });
 	}
 
 	function get_current_roster_company() {
@@ -1190,18 +1156,15 @@
 		// send the card through Frappe's in-place router instead of the fresh route.
 		const listview = current_listview || get_active_employee_roster_listview();
 
-		// A status-card click can happen while the Employee List is already the
-		// current route.  Frappe then keeps its old ListView instance and can abort
-		// the custom-table RPC during filter refresh.  Navigate to the canonical
-		// route instead: it rebuilds the ListView and cannot reuse prior-card rows.
 		if (listview) {
-			const target_url = new URL(window.location.href);
-			target_url.search = build_roster_query(card.filters, search);
-			target_url.hash = "";
-			// Use a browser navigation rather than Frappe's in-place router. Its
-			// pending ListView refresh otherwise can overwrite the address before
-			// reload and leave the departure card with an empty native result.
-			window.location.assign(target_url.toString());
+			// The custom table owns its request and cannot reuse prior-card rows.
+			// Switch immediately; synchronize Frappe filters without reloading Desk.
+			const state = get_roster_table_state(listview);
+			state.page = 1;
+			sync_active_roster_card(listview);
+			apply_roster_status_date_columns(listview);
+			ensure_roster_empty_result_header(listview);
+			apply_roster_filters_to_live_listview(listview, route_options);
 			return;
 		}
 
@@ -1215,26 +1178,33 @@
 	}
 
 	function apply_roster_filters_to_live_listview(listview, route_options) {
-		const filter_area = listview.filter_area;
-		if (!filter_area?.clear_filters || !filter_area?.add) {
-			frappe.route_options = route_options;
+		// Serialize asynchronous filter writes; a rapid second click must finish
+		// with the latest filters, even when the first clear is still pending.
+		const revision = (listview.__hrmsRosterFilterRevision || 0) + 1;
+		listview.__hrmsRosterFilterRevision = revision;
+		const sync = async () => {
+			if (revision !== listview.__hrmsRosterFilterRevision) return;
+			const filter_area = listview.filter_area;
+			if (!filter_area?.clear_filters || !filter_area?.set) {
+				frappe.route_options = route_options;
+				return frappe.set_route("List", EMPLOYEE_DOCTYPE);
+			}
+			await filter_area.clear_filters();
+			if (revision !== listview.__hrmsRosterFilterRevision) return;
+			const filters = Object.entries(route_options).map(([fieldname, value]) =>
+				Array.isArray(value) ? [EMPLOYEE_DOCTYPE, fieldname, value[0], value[1]] : [EMPLOYEE_DOCTYPE, fieldname, "=", value],
+			);
+			await filter_area.set(filters);
+			if (revision !== listview.__hrmsRosterFilterRevision) return;
+			listview.search_term = "";
+			clear_roster_native_search_input(listview);
 			listview.start = 0;
-			listview.refresh();
-			return;
-		}
-
-		filter_area.clear_filters();
-		const filters = Object.entries(route_options).map(([fieldname, value]) => {
-			if (Array.isArray(value)) return [EMPLOYEE_DOCTYPE, fieldname, value[0], value[1]];
-			return [EMPLOYEE_DOCTYPE, fieldname, "=", value];
-		});
-		if (filters.length) filter_area.add(filters);
-
-		listview.search_term = "";
-		clear_roster_native_search_input(listview);
-		listview.start = 0;
-		listview.refresh();
-		update_roster_filter_status(listview);
+			listview.update_url_with_filters?.();
+			// Card data is already loading; native rows are hidden and need no
+			// duplicate refresh. A normal ListView refresh still revalidates data.
+		};
+		listview.__hrmsRosterFilterSync = (listview.__hrmsRosterFilterSync || Promise.resolve()).then(sync, sync);
+		return listview.__hrmsRosterFilterSync;
 	}
 
 	function bind_roster_row_decorations(listview) {
@@ -1377,9 +1347,9 @@ function hide_native_filter_controls() {
 		});
 
 		page_wrapper.querySelectorAll(".list-search-form, .list-search, .list-search-input, input[type='search'], input[placeholder*='搜索']").forEach((control) => {
-			// The roster's column inputs are search fields too.  Only hide Frappe's
-			// generic top search, never the purpose-built inputs inside the header.
-			if (control.matches(".hrms-roster-column-filter-input, .hrms-roster-empty-result-header__input, .hrms-roster-table-header__input")) return;
+			// The roster's column inputs are search fields too. Only hide Frappe's
+			// generic top search, never the purpose-built inputs inside the table.
+			if (control.matches(".hrms-roster-column-filter-input, .hrms-roster-empty-result-header__input, .hrms-roster-table-header__input, .hrms-roster-table-filter-input")) return;
 			const container = control.closest(".list-search-form, .list-search, .search-bar, .form-group, .input-group") || control;
 			container.classList.add("hrms-roster-toolbar-control-hidden");
 			container.setAttribute("aria-hidden", "true");
@@ -1528,10 +1498,9 @@ function hide_native_filter_controls() {
 		photo.append(svg);
 	}
 
-	// Frappe's default ListView opens the native Employee form when a row is
-	// selected. Employee records are read through the dedicated archive page;
-	// intercept the row action before ListView handles it so the first click
-	// reaches the archive page instead of requiring a browser refresh.
+	// Frappe's native ListView opens an Employee form for any row click. Keep the
+	// archive-page shortcut, but only on the employee-name link so cells remain
+	// selectable and copyable.
 	function bind_roster_employee_detail_navigation(listview) {
 		const wrapper = get_list_wrapper(listview);
 		if (!wrapper || wrapper.__hrmsRosterEmployeeDetailNavigationBound) return;
@@ -1551,10 +1520,9 @@ function hide_native_filter_controls() {
 					return;
 				}
 
-				const interactive = event.target.closest(
-					"button, input, select, textarea, .btn, .dropdown-menu, .list-row-checkbox, [data-action]",
-				);
-				if (interactive) return;
+				const link = event.target.closest("a[href]");
+				const href = link?.getAttribute("href") || "";
+				if (!/(?:employee|Employee)\//.test(href)) return;
 
 				const employee = resolve_roster_employee_name(listview, event.target);
 				if (!employee) return;

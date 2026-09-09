@@ -1,13 +1,56 @@
-/* System login page: keep the entry focused on username and password. */
-body.hrms-login-page .page-card-head > .app-logo {
-	display: none !important;
-}
-
-body.hrms-login-page .page-card-head {
-	gap: 0 !important;
-}
-
+/* Login and recovery share one restrained, single-logo form. */
+body.hrms-login-page { background: #fff; color: #202124; }
+body.hrms-login-page .page-card-head > .app-logo,
 body.hrms-login-page .btn-login-with-email-link,
-body.hrms-login-page section.for-login-with-email-link {
-	display: none !important;
+body.hrms-login-page section.for-login-with-email-link { display: none !important; }
+body.hrms-login-page .page-content-wrapper {
+	min-height: 100svh; padding: 48px 20px;
+	display: flex; align-items: center; justify-content: center;
+}
+body.hrms-login-page .page_content { width: 100%; }
+body.hrms-login-page .login-content.page-card {
+	width: 100%; max-width: 392px; min-height: auto;
+	margin: 0 auto; padding: 24px 16px 64px; gap: 32px;
+	background: #fff; border: 0; border-radius: 0; box-shadow: none;
+}
+.hrms-login-brand { display: flex; flex-direction: column; align-items: center; gap: 20px; text-align: center; }
+.hrms-login-brand img { width: 40px; height: 40px; object-fit: contain; }
+.hrms-login-brand strong { display: block; font-size: 28px; line-height: 1.4; font-weight: 600; color: #202124; letter-spacing: -.5px; }
+.hrms-login-brand span { display: block; font-size: 12px; line-height: 1.7; color: #9498a0; margin-top: 10px; }
+body.hrms-login-page .page-card-head { gap: 0 !important; }
+body.hrms-login-page .for-login .page-card-head,
+body.hrms-login-page .for-email-login .page-card-head { display: none; }
+body.hrms-login-page .page-card-head h4 { color: #202124; font-size: 20px; line-height: 1.5; font-weight: 500; margin: 0 0 10px; }
+body.hrms-login-page .page-card-head .page-card-subtitle { color: #858a92; font-size: 13px; line-height: 1.8; }
+body.hrms-login-page .page-card-body { display: flex; flex-direction: column; gap: 22px; }
+body.hrms-login-page .page-card .form-label { color: #555a62; font-size: 13px; margin-bottom: 4px; font-weight: 400; }
+body.hrms-login-page .login-content.page-card .page-card-body .form-control {
+	height: 48px; font-size: 15px; border: 1px solid #dfe1e5; border-radius: 8px;
+	background: #fff; color: #202124; padding-left: 14px; padding-right: 40px;
+	transition: border-color .15s, box-shadow .15s;
+}
+body.hrms-login-page .login-content.page-card .page-card-body .form-control:focus {
+	border-color: #858a92; outline: 0; box-shadow: 0 0 0 3px #25272b08;
+}
+body.hrms-login-page .page-card .field-icon { display: none; }
+body.hrms-login-page .page-card .toggle-password { top: 50%; }
+body.hrms-login-page .page-card .forgot-password-message { margin-top: 4px; }
+body.hrms-login-page .page-card a { color: #666c75; }
+body.hrms-login-page .page-card a:hover { color: #202124; }
+body.hrms-login-page .page-card .page-card-actions .btn-login,
+body.hrms-login-page .page-card .page-card-actions .btn-forgot {
+	min-height: 48px; border-radius: 8px; background: #25272b; color: #fff;
+	font-size: 14px; font-weight: 500; border: 0;
+}
+body.hrms-login-page .page-card .page-card-actions :is(.btn-login,.btn-forgot):hover { background: #41444a; }
+body.hrms-login-page .page-card .page-card-actions :is(.btn-login,.btn-forgot):disabled { background: #e8e9ec; color: #9297a0; opacity: 1; }
+body.hrms-login-page .page-card :is(a, button, [role="button"]):focus-visible { outline: 3px solid #aeb2b9; outline-offset: 3px; }
+body.hrms-login-page .page-card .login-error-banner { border-radius: 8px; font-size: 13px; }
+body.hrms-login-page .login-content.page-card .page-card-body .form-group.invalid .form-control { border-color: #bc5151; }
+@media (max-width: 480px) {
+	body.hrms-login-page .page-content-wrapper { padding: 28px 8px; }
+	body.hrms-login-page .login-content.page-card { padding: 24px 8px 48px; gap: 30px; }
+}
+@media (prefers-reduced-motion: reduce) {
+	body.hrms-login-page .page-card .form-control { transition: none; }
 }

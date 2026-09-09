@@ -111,7 +111,7 @@ for (const marker of [
 	"quick_update_employee_roster",
 	"get_employee_roster",
 	"get_employee_roster_summary",
-	"frappe.db.count",
+	"include_all: 1",
 	"get_user_default(\"Company\")",
 	"frappe.set_route",
 	"frappe.set_route(\"employee-detail\"",
@@ -142,10 +142,6 @@ for (const marker of [
 	"remove_native_roster_list_header",
 	"expand_roster_layout",
 	"stretch_roster_result_area",
-	"getBoundingClientRect().top",
-	"main_top",
-	"window.innerHeight - main_top - 8",
-	"window.innerHeight - top - 12",
 	"no-list-sidebar",
 	"hrms-employee-roster-page",
 	"hrms-roster-table-header",
@@ -179,6 +175,15 @@ for (const obsoleteMarker of ["hrms-roster-search-control", "hrms-roster-search-
 	}
 }
 
+const rosterTableRows = employeeList.slice(
+	employeeList.indexOf("rows.forEach((employee) => {"),
+	employeeList.indexOf("table.appendChild(tbody);"),
+);
+if (rosterTableRows.includes('row.addEventListener("click"') || rosterTableRows.includes('row.addEventListener("keydown"')) {
+	throw new Error("Employee roster rows must stay selectable for copying; only the employee name may open the detail page.");
+}
+mustInclude(employeeList, 'const link = event.target.closest("a[href]");', "Native roster navigation must start from the employee-name link.");
+
 const bootstrapMetaIndex = employeeList.indexOf("apply_roster_meta_columns();");
 const listSettingsIndex = employeeList.indexOf("frappe.listview_settings[EMPLOYEE_DOCTYPE] = {");
 if (bootstrapMetaIndex < 0 || bootstrapMetaIndex > listSettingsIndex) {
@@ -195,6 +200,13 @@ mustInclude(topNavCss, ".hrms-roster-page-length-hidden", "Employee roster must 
 mustInclude(topNavCss, ".hrms-roster-native-filters-hidden", "Employee roster must remove its redundant top field filters.");
 mustInclude(topNavCss, ".page-container.hrms-employee-roster-page .layout-main-section-wrapper", "Employee roster must target the actual ListView layout wrapper.");
 mustInclude(topNavCss, "flex: 1 1 100% !important;", "Employee roster must release Frappe's 80% list-shell width.");
+mustInclude(topNavCss, '.page-container[data-page-route^="List/Employee"]', "Employee roster must reserve its full-width layout before ListView runs.");
+
+for (const marker of ["window.innerHeight - main_top - 8", "window.innerHeight - top - 12", 'style.setProperty("height"', 'style.setProperty("width"']) {
+	if (employeeList.includes(marker)) {
+		throw new Error(`Employee roster must not resize the visible ListView after its first paint: ${marker}`);
+	}
+}
 mustInclude(topNavCss, ".page-container[data-page-route=\"Workspaces\"] .layout-main", "Workspaces must remove Frappe's reading-column width cap.");
 mustInclude(topNavCss, ".page-container[data-page-route=\"Workspaces\"] .layout-main-section-wrapper", "Workspaces must use the available desktop width.");
 mustInclude(topNavCss, "body.hrms-module-shell .page-container > .page-body", "Module pages must share a full-height content shell.");
@@ -232,9 +244,14 @@ for (const marker of [
 	"redirect_existing_employee_form_to_detail",
 	"bind_employee_detail_route_redirect",
 	"EMPLOYEE_FORM_EDIT_ACCESS_KEY",
-	"frappe.set_route(\"employee-detail\", frm.doc.name)",
 ]) {
 	if (employeeForm.includes(marker)) throw new Error(`Employee edit form must not be redirected to the detail page: ${marker}`);
+}
+
+// An explicit records button may open the detail page; refresh must never redirect editing.
+const employeeRefresh = employeeForm.slice(employeeForm.indexOf("refresh: function"), employeeForm.indexOf("date_of_birth(frm)"));
+if (employeeRefresh.includes('frappe.set_route("employee-detail"')) {
+	throw new Error("Employee refresh must not redirect away from its native edit form.");
 }
 
 if (personnel.is_hidden !== 1 || personnel.content !== "[]") {

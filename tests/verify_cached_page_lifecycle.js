@@ -58,7 +58,8 @@ assert(shell.includes("schedule_hrms_dynamic_localization(changed_nodes)"), "Mut
 assert(shell.includes("compact_localization_roots"), "Localization must avoid walking nested DOM roots more than once");
 assert(shell.includes("requestIdleCallback"), "Dynamic localization must yield to user interactions");
 assert(shell.includes("localized_value !== original_value"), "Localization must not write unchanged text and retrigger its observer");
-assert(hooks.includes("hrms_home_redirect_v6.js?v=20260811b"), "The optimized Desk shell must use a fresh browser cache key");
+const shellVersion = hooks.match(/hrms_home_redirect_v6\.js\?v=(\d{8}[a-z]+)/)?.[1];
+assert(shellVersion >= "20260811b", "The optimized Desk shell must use a fresh browser cache key");
 
 const employeeDetail = read("hrms/hr/page/employee_detail/employee_detail.js");
 assert(employeeDetail.includes("invalid_route_employee"), "Employee detail must reject literal undefined/null route values");

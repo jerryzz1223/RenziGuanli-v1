@@ -1049,6 +1049,18 @@
 		}
 
 		const active = activeLabel();
+		loadCurrentUser();
+		const navKey = JSON.stringify([
+			active, isDingtalkIntegrationRoute(), routeSlug() === "hrms-workbench",
+			currentUserId(), displayName(), renderAvatar(), currentUserRoles(),
+			getCurrentCompany(), brandLogoUrl,
+		]);
+		if (nav.dataset.renderKey === navKey) {
+			decoratePageTitle();
+			renderContextualAdminBar();
+			return;
+		}
+		nav.dataset.renderKey = navKey;
 		bindMoreDocumentEvents();
 		nav.replaceChildren();
 
@@ -1133,16 +1145,27 @@
 		});
 	}
 
-	new MutationObserver(() => {
-		if (!isDeskPage()) return;
-		// Frappe recreates its toolbar asynchronously on some native list and form
-		// routes.  Removing these controls on every toolbar mutation keeps the
-		// custom HRMS navigation consistent across every module page.
-		removeRedundantFrameworkControls();
-		decoratePageTitle();
-		if (!document.getElementById(NAV_ID) || (contextualPageKey() && !document.getElementById("hrms-contextual-admin-bar"))) {
-			scheduleRender();
-		}
+	let shellMaintenanceFrame = null;
+	const shellSelector = `.navbar, .page-head, #${NAV_ID}, #hrms-contextual-admin-bar, ${REDUNDANT_FRAMEWORK_CONTROL_SELECTOR}`;
+	function affectsNavigationShell(mutation) {
+		const target = mutation.target;
+		if (target.nodeType === 1 && target.closest?.(".navbar, .page-head")) return true;
+		return [...mutation.addedNodes, ...mutation.removedNodes].some((node) =>
+			node.nodeType === 1 && (node.matches?.(shellSelector) || node.querySelector?.(shellSelector)),
+		);
+	}
+	new MutationObserver((mutations) => {
+		if (!isDeskPage() || shellMaintenanceFrame || !mutations.some(affectsNavigationShell)) return;
+		// Table rows, text edits and loading placeholders do not change the
+		// navigation shell. Batch relevant toolbar changes once per frame.
+		shellMaintenanceFrame = window.requestAnimationFrame(() => {
+			shellMaintenanceFrame = null;
+			removeRedundantFrameworkControls();
+			decoratePageTitle();
+			if (!document.getElementById(NAV_ID) || (contextualPageKey() && !document.getElementById("hrms-contextual-admin-bar"))) {
+				scheduleRender();
+			}
+		});
 	}).observe(document.documentElement, { childList: true, subtree: true });
 
 	loadCompanyContext().then(() => {

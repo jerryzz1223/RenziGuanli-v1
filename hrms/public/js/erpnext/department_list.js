@@ -32,6 +32,7 @@
 		if (!listview || !listview.page || listview.page.__hrms_department_actions_ready) return;
 		listview.page.__hrms_department_actions_ready = true;
 		attach_department_import_action(listview);
+		listview.page.add_inner_button(__("层级列表"), () => frappe.set_route("organizational-chart", "list"));
 		listview.page.add_inner_button(__("花名册职位与人员"), () => {
 			const selected = get_selected_departments(listview);
 			if (selected.length !== 1) { frappe.msgprint(__("请勾选一个部门，查看按花名册统计的职级、职位和员工。")); return; }
@@ -55,8 +56,7 @@
 		});
 
 		listview.page.add_inner_button(__("树状拼图"), function () {
-			// The builder writes Department.parent_department directly, so the
-			// Department list always reflects the same tree after a refresh.
+			// The organizational list and chart share Organization Node.parent_node.
 			frappe.set_route("organizational-chart");
 		});
 
@@ -366,7 +366,7 @@
 					{
 						fieldname: "structure_hint",
 						fieldtype: "HTML",
-						options: `<div class="text-muted small mb-3">${__("先将承担上级职责的节点勾选为文件夹部门，再为下级选择上级部门；人员只归属到末级部门。")}</div>`,
+						options: `<div class="text-muted small mb-3">${__("承担上级职责的节点可勾选为文件夹部门；已启用的任一部门节点都可归属员工。")}</div>`,
 					},
 					{
 						fieldname: "department_name",
@@ -431,7 +431,7 @@
 					{
 						fieldname: "hrms_roster_assignable",
 						fieldtype: "Check",
-						label: __("允许花名册归属（仅末级）"),
+						label: __("允许花名册归属"),
 						default: doc.hrms_roster_assignable,
 					},
 					],

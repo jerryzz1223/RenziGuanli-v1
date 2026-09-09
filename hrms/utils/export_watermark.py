@@ -102,11 +102,10 @@ def _relationship_ids(content: bytes) -> list[bytes]:
 
 
 def _add_background_picture(content: bytes, relationship_id: str) -> bytes:
-	if b"xmlns:r=" not in content:
-		content = content.replace(
-			b"<worksheet ",
-			f'<worksheet xmlns:r="{_DOCUMENT_RELATIONSHIPS_NAMESPACE}" '.encode(),
-			1,
-		)
-	picture = f'<picture r:id="{relationship_id}"/>'.encode()
+	# A comment's legacyDrawing may declare xmlns:r only on that element.
+	# Declare it on the picture itself so sibling-local namespaces cannot leave
+	# the background relationship unbound and make the downloaded XLSX invalid.
+	picture = (
+		f'<picture r:id="{relationship_id}" xmlns:r="{_DOCUMENT_RELATIONSHIPS_NAMESPACE}"/>'
+	).encode()
 	return content.replace(b"</worksheet>", picture + b"</worksheet>", 1)

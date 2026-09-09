@@ -18,13 +18,14 @@ from collections import defaultdict
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime
 
-from hrms.api.attendance_processors.apple_tree import AppleTreeRules, is_auto_excluded_apple_tree_row, preflight_apple_tree_rows, process_apple_tree_rows
+from hrms.api.attendance_processors.apple_tree import AppleTreeRules, preflight_apple_tree_rows, process_apple_tree_rows
 from hrms.api.attendance_processors.attendance_draft import (
 	dingtalk_daily_header_location,
 	exception_lines_from_attendance_details,
@@ -338,6 +339,7 @@ EXCEPTION_LABELS = {
 	"AMOUNT_MISSING": "苹果数量缺失",
 	"AMOUNT_INVALID": "苹果数量无效",
 	"AMOUNT_TEXT_CONFLICT": "苹果数量与项目说明不一致",
+	"AMOUNT_CALCULATION_REQUIRED": "累计苹果数量待确认",
 	"APPLE_TYPE_UNRECOGNIZED": "无法识别红苹果或绿苹果",
 	"APPROVAL_NOT_FINISHED": "审批未结束",
 	"APPROVAL_NOT_PASSED": "审批未通过",
@@ -372,6 +374,8 @@ def _review_guidance(exception_codes: list[str], source_type: str) -> list[str]:
 		guidance.append("线下补录须补齐原因和确认人；不能作为钉钉自动记录直接计入。")
 	if {"APPROVAL_NOT_APPROVED", "APPROVAL_NOT_ENDED", "APPROVAL_NOT_FINISHED", "APPROVAL_NOT_PASSED"} & codes:
 		guidance.append("等待审批“已通过且已结束”后重新上传该来源；当前记录不能自动计入。")
+	if "AMOUNT_CALCULATION_REQUIRED" in codes:
+		guidance.append("核对实际天数、时长、工作量及折算/取整规则后确认累计苹果数；不要把累计数改成项目中的单次标准。")
 	if not guidance:
 		guidance.append("核对来源追溯信息后，选择通过、驳回或保留待审核；原始导入行会继续保留。")
 	return guidance
@@ -1078,6 +1082,68 @@ def _missed_punch_rules(company: str, attendance_month: str) -> MissedPunchRules
 		return MissedPunchRules()
 
 
+def _approval_source_exclusion(source_type, attendance_month, row) -> str:
+	"""Exclude definite closed/out-of-period facts; retain uncertain dates for review."""
+	if source_type not in {"apple_tree", "missing_card"}:
+		return ""
+	result = str(_row_value(row, "审批结果", "approval_result") or "").strip()
+	status = str(_row_value(row, "审批状态", "approval_status") or "").strip()
+	if result in {"审批未通过", "审批不通过", "未通过", "已拒绝", "拒绝", "驳回", "已驳回"}:
+		return "审批未通过"
+	if status in {"终止", "已终止", "审批终止", "已撤销", "撤销"}:
+		return "审批终止或撤销"
+	fields = ("奖/惩日期", "奖惩日期", "award_date") if source_type == "apple_tree" else ("补卡时间", "打卡时间", "punch_time")
+	value = _row_value(row, *fields)
+	match = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:$|[ T])", str(value or "").strip())
+	if match:
+		try:
+			business_date = date(*(int(part) for part in match.groups()))
+		except ValueError:
+			pass
+		else:
+			if business_date.strftime("%Y-%m") != attendance_month:
+				return "不属于处理月份"
+	if str(_row_value(row, "补卡类型", "打卡类型", "punch_type") or "").strip() in {"因公补卡", "因公打卡"}:
+		return "因公补卡不计忘打卡"
+	return ""
+
+
+def _filter_approval_source_rows(batch, rows):
+	kept, excluded = [], []
+	for row in rows:
+		reason = _approval_source_exclusion(batch.source_type, batch.attendance_month, row)
+		if not reason:
+			kept.append(row)
+			continue
+		excluded.append({
+			"source_id": _row_value(row, "source_id", "数据id", "数据ID", "数据Id"),
+			"approval_no": _row_value(row, "approval_no", "审批编号", "审批单号"),
+			"source_file": row.get("source_file") or batch.source_file,
+			"source_sheet": row.get("source_sheet") or "",
+			"source_row": row.get("source_row") or row.get("_source_row") or 0,
+			"reason": reason,
+		})
+	return kept, excluded
+
+
+def _save_exclusion_audit(batch, result):
+	"""Keep unbounded row evidence in a private attachment, not a TEXT column."""
+	from frappe.utils.file_manager import save_file
+
+	source = result.get("excluded_source_records", [])
+	previous = result.get("excluded_previous_records", [])
+	if not source and not previous:
+		return {}
+	evidence = {"company": batch.company, "attendance_month": batch.attendance_month,
+		"source_type": batch.source_type, "excluded_source_records": source, "excluded_previous_records": previous}
+	file = save_file(f"{batch.attendance_month}_{batch.source_type}_{batch.name}_剔除明细.json",
+		_json(evidence).encode("utf-8"), IMPORT_BATCH_DOCTYPE, batch.name, is_private=1)
+	counts = {}
+	for row in source:
+		counts[row["reason"]] = counts.get(row["reason"], 0) + 1
+	return {"file_url": file.file_url, "source_rows": len(source), "previous_rows": len(previous), "source_reasons": counts}
+
+
 def _process_batch(batch) -> dict[str, Any]:
 	rows, sheet_name = _read_source_rows(batch)
 	employees = _employee_directory(batch.company)
@@ -1091,8 +1157,10 @@ def _process_batch(batch) -> dict[str, Any]:
 			employee_directory=employees or None,
 			exception_policy=exception_policy,
 		)
+	source_rows = rows
+	rows, excluded = _filter_approval_source_rows(batch, rows)
 	if batch.source_type == "apple_tree":
-		excluded_source_rows = sum(1 for row in rows if is_auto_excluded_apple_tree_row(row))
+		excluded_source_rows = len(excluded)
 		processed_rows = process_apple_tree_rows(
 			rows,
 			rules=AppleTreeRules(target_month=batch.attendance_month),
@@ -1103,12 +1171,13 @@ def _process_batch(batch) -> dict[str, Any]:
 		)
 		exception_rows = sum(1 for row in processed_rows if row.get("review_status") == "待审核")
 		return {
-			"status": "已确认" if rows and not processed_rows and excluded_source_rows == len(rows) else "待处理异常" if exception_rows else "待确认",
-			"structure_precheck": preflight_apple_tree_rows(rows),
+			"status": "已确认" if source_rows and not processed_rows and excluded_source_rows == len(source_rows) else "待处理异常" if exception_rows else "待确认",
+			"structure_precheck": preflight_apple_tree_rows(source_rows),
 			"processed_rows": processed_rows,
-			"metrics": {"source_rows": len(rows), "processed_rows": len(processed_rows), "excluded_source_rows": excluded_source_rows, "exception_rows": exception_rows},
+			"excluded_source_records": excluded,
+			"metrics": {"source_rows": len(source_rows), "processed_rows": len(processed_rows), "excluded_source_rows": excluded_source_rows, "exception_rows": exception_rows},
 		}
-	return process_missed_punch_rows(
+	result = process_missed_punch_rows(
 		rows,
 		attendance_month=batch.attendance_month,
 		source_file=batch.source_file,
@@ -1117,6 +1186,11 @@ def _process_batch(batch) -> dict[str, Any]:
 		department_mapping=_department_mapping_for(batch.company, "missing_card"),
 		rules=_missed_punch_rules(batch.company, batch.attendance_month),
 	)
+	result["structure_precheck"] = precheck_missed_punch_structure(list(source_rows[0]) if source_rows else [])
+	result["excluded_source_records"] = excluded
+	result["metrics"]["source_rows"] = len(source_rows)
+	result["metrics"]["excluded_source_rows"] += len(excluded)
+	return result
 
 
 def _row_value(row: dict[str, Any], *keys: str):
@@ -1265,6 +1339,25 @@ def _merge_processed_rows(batch, result: dict[str, Any]) -> dict[str, Any]:
 		return result
 
 	existing_rows = [_existing_record_as_processed_row(row) for row in _result_rows(parent, 5000)]
+	# Recheck inherited facts too: otherwise the merge resurrects a rejected
+	# approval or carries an old month into the new filtered secondary form.
+	retained_rows = []
+	removed_rows = []
+	excluded_keys = {
+		_business_merge_key(batch.source_type, row)
+		for row in result.get("excluded_source_records", [])
+	} - {""}
+	for row in existing_rows:
+		raw = dict(row.get("processed_value") or {})
+		raw.update(row.get("original_data") or {})
+		reason = _approval_source_exclusion(batch.source_type, batch.attendance_month, raw)
+		if _business_merge_key(batch.source_type, row) in excluded_keys:
+			reason = "本次原始审批已剔除"
+		if reason:
+			removed_rows.append({key: row.get(key) for key in ("source_id", "approval_no", "source_file", "source_sheet", "source_row")} | {"reason": reason})
+		else:
+			retained_rows.append(row)
+	existing_rows = retained_rows
 	incoming_rows = list(result.get("processed_rows") or [])
 	existing_by_key = {}
 	for row in existing_rows:
@@ -1292,12 +1385,14 @@ def _merge_processed_rows(batch, result: dict[str, Any]) -> dict[str, Any]:
 	metrics["merged_rows"] = merged_rows
 	metrics["inserted_rows"] = len(incoming_rows) - merged_rows
 	result["metrics"] = metrics
+	result["excluded_previous_records"] = removed_rows
 	result["merge"] = {
 		"mode": "business_unique_key",
 		"parent_batch": parent.name,
 		"merged_rows": merged_rows,
 		"inserted_rows": len(incoming_rows) - merged_rows,
 		"effective_rows": len(merged),
+		"excluded_previous_rows": len(removed_rows),
 	}
 	return result
 
@@ -1547,7 +1642,10 @@ def _apple_tree_result_values(row: dict[str, Any], raw: dict[str, Any] | None = 
 	"""Project current and legacy Apple-tree records into one visible layout."""
 	raw = raw or row.get("original_value") or {}
 	current = _effective_result_values(row)
-	value = lambda *keys: _row_value(raw, *keys) or _row_value(current, *keys)
+	# A retained full source row also owns its empty fields.  Falling back to
+	# an older display projection can resurrect values from a different file.
+	has_source_details = any(key in raw for key in ("奖/惩日期", "奖惩日期", "award_date", "创建时间", "created_at"))
+	value = lambda *keys: _row_value(raw, *keys) if has_source_details else _row_value(raw, *keys) or _row_value(current, *keys)
 	return {
 		"创建时间": value("创建时间", "created_at"),
 		"奖惩日期": value("奖/惩日期", "奖惩日期", "award_date"),
@@ -1613,16 +1711,18 @@ def _hydrate_apple_tree_result_rows(batch, rows: list[dict[str, Any]]) -> list[d
 	file by source-row makes both their grid and their new download usable without
 	changing the audit record.
 	"""
-	raw_by_source_row = {}
-	try:
-		source_rows, _sheet_name = _read_source_rows(batch)
-		raw_by_source_row = {str(raw.get("source_row")): raw for raw in source_rows}
-	except Exception:
-		# A missing historical attachment must not stop users viewing/exporting the
-		# fields that were already persisted.
-		pass
+	raw_by_source = {}
 	for row in rows:
-		raw = raw_by_source_row.get(str(row.get("source_row")))
+		source_file = row.get("source_file") or batch.source_file
+		if source_file not in raw_by_source:
+			try:
+				source_rows, sheet_name = _read_source_rows(SimpleNamespace(source_file=source_file, source_type=batch.source_type))
+				raw_by_source[source_file] = {(raw.get("source_sheet") or sheet_name, str(raw.get("source_row"))): raw for raw in source_rows}
+			except Exception:
+				# Missing historical files fall back to the retained record, never
+				# to a different file's coincidentally identical row number.
+				raw_by_source[source_file] = {}
+		raw = raw_by_source[source_file].get((row.get("source_sheet"), str(row.get("source_row"))))
 		row["processed_value"] = _apple_tree_result_values(row, raw)
 	return rows
 
@@ -2208,6 +2308,7 @@ def process_source_slot(company: str, attendance_month: str, source_type: str):
 	processed_result = _export_processed_result(batch)
 	_save_batch_notes(batch, {
 		"precheck": result.get("structure_precheck"),
+		"exclusion_audit": _save_exclusion_audit(batch, result),
 		"metrics": result.get("metrics", {}),
 		"data_quality": result.get("data_quality", {}),
 		"processed_result": processed_result,
@@ -2218,7 +2319,7 @@ def process_source_slot(company: str, attendance_month: str, source_type: str):
 
 
 @frappe.whitelist()
-def list_processing_results(company: str, attendance_month: str, source_type: str, exception_only: int = 0, page_length: int = 500):
+def list_processing_results(company: str, attendance_month: str, source_type: str, exception_only: int = 0, page_length: int = 5000):
 	_require_processing_manager()
 	company, attendance_month, source_type = _require_company(company), _require_month(attendance_month), _require_processing_source_type(source_type)
 	batch = _latest_batch(company, attendance_month, source_type)

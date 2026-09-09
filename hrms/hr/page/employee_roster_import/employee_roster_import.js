@@ -136,6 +136,11 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 							<option value="auto" ${state.match_by === "auto" ? "selected" : ""}>${__("工号/身份证/手机号自动匹配")}</option>
 						</select>
 					</div>
+					${
+						state.mode === "update"
+							? `<div class="alert alert-info"><button class="btn btn-default btn-sm" data-action="use-departure-update-fields">${__("只更新离职信息")}</button> <span class="text-muted">${__("保留工号、工作性质、离职日期和离职原因，其余列不写入员工档案。")}</span></div>`
+							: ""
+					}
 					<table class="table table-bordered">
 						<thead><tr><th>${__("Excel 表头")}</th><th>${__("匹配员工字段")}</th><th>${__("状态")}</th></tr></thead>
 						<tbody>
@@ -181,11 +186,20 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		$(page.body)
 			.find("[data-manual-mapping]")
 			.each(function () {
-				if (this.value) {
-					mappings[this.dataset.manualMapping] = this.value;
-				}
+				mappings[this.dataset.manualMapping] = this.value || "__skip__";
 			});
 		return mappings;
+	}
+
+	function use_departure_update_fields() {
+		const permitted = new Set(["custom_employee_code", "custom_work_nature", "relieving_date", "reason_for_leaving"]);
+		state.manual_mappings = Object.fromEntries(
+			(state.parse_result?.headers || []).map((item) => [
+				String(item.column_index),
+				permitted.has(item.fieldname) ? item.fieldname : "__skip__",
+			]),
+		);
+		render_match();
 	}
 
 	function current_missing_required() {
@@ -336,8 +350,8 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		);
 	}
 
-	function open_error_row_editor(row_index) {
-		const row_errors = (state.preview_result?.errors || []).filter(
+	function open_error_row_editor(row_index, source = state.preview_result) {
+		const row_errors = (source?.errors || []).filter(
 			(error) => Number(error.row) === Number(row_index) && error.fieldname,
 		);
 		const unique_errors = [...new Map(row_errors.map((error) => [error.fieldname, error])).values()];
@@ -354,7 +368,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 				fieldtype: "Data",
 				default: existing_values[error.fieldname] ?? error.current_value ?? "",
 				description: `${error.suggestion || ""}${_can_defer_field(error.fieldname) ? `<br>${__("暂不填写时可输入“-”，系统将保留为空，之后可在员工档案补充。")}` : ""}`,
-				reqd: error.message === __("必填字段为空"),
+				reqd: [__("必填字段为空"), __("离职员工必须填写离职日期")].includes(error.message),
 			})),
 			primary_action_label: __("保存并重新校验"),
 			primary_action(values) {
@@ -399,7 +413,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 					${render_warnings(warnings)}
 					${
 						errors.length
-							? render_errors(errors, __("导入完成，没有发现行级错误。"))
+							? `<div class="alert alert-info">${__("失败行可直接点击“编辑本行”修正；无需重新上传文件。保存后会返回预览，确认导入即可补入修正后的记录，已成功新增的员工不会重复创建。")}</div>${render_errors(errors, __("导入完成，没有发现行级错误。"), true)}`
 							: `<div class="alert alert-success">${__("导入完成，没有发现行级错误。")}</div>`
 					}
 					<div class="hrms-import-actions">
@@ -507,8 +521,12 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			state.step = 2;
 			render_match();
 		}
+		if (action === "use-departure-update-fields") use_departure_update_fields();
 		if (action === "confirm-import") confirm_import();
-		if (action === "edit-error-row") open_error_row_editor(this.dataset.rowIndex);
+		if (action === "edit-error-row") open_error_row_editor(
+			this.dataset.rowIndex,
+			state.step === 4 ? state.import_result : state.preview_result,
+		);
 		if (action === "download-preview-failed") download_failed_rows(state.preview_result);
 		if (action === "download-failed") download_failed_rows();
 		if (action === "restart") {

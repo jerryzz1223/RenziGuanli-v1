@@ -22,14 +22,18 @@ class OrganizationNode(Document):
 	def _validate_manual_node_type(self):
 		config = _manual_node_config(self.get("source_text"))
 		node_kind = config.get("node_kind")
-		if node_kind and node_kind not in {"分管", "室", "课", "组", "线", "岗位", "员工"}:
-			frappe.throw(_("组织节点类型只能是分管、室、课、组、线、岗位或员工。"))
+		if node_kind and node_kind not in {"管理层", "分管", "室", "课", "组", "线", "岗位", "员工"}:
+			frappe.throw(_("组织节点类型只能是管理层、分管、室、课、组、线、岗位或员工。"))
 		if not self.display_name:
 			frappe.throw(_("请填写显示名称。"))
-		if node_kind == "员工" and not config.get("employee") and not config.get("framework"):
+		if node_kind == "员工" and not config.get("employee"):
 			frappe.throw(_("员工节点必须选择员工档案。"))
 		if node_kind == "分管" and not config.get("manager_name") and not config.get("framework"):
 			frappe.throw(_("请填写分管人的显示名称。"))
+		if node_kind in {"室", "课", "组", "线", "岗位"} and not config.get("department"):
+			frappe.throw(_("室、课、组、线和岗位节点必须关联部门。"))
+		if node_kind == "岗位" and not config.get("designation") and not config.get("roster_subset"):
+			frappe.throw(_("岗位节点必须关联岗位。"))
 
 	def _validate_parent_type(self):
 		parent = frappe.db.get_value("Organization Node", self.parent_node, ["node_type", "source_text"], as_dict=True)

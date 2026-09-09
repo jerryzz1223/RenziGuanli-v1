@@ -259,6 +259,43 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertIn('"奖/惩日期"', page_source)
 		self.assertIn('download_processing_file', page_source)
 
+	def test_merged_apple_rows_use_their_own_file_and_sheet(self):
+		center, _, _ = processing_center_module()
+		batch = SimpleNamespace(source_file="august.xlsx", source_type="apple_tree")
+		rows = [
+			{"source_file": file, "source_sheet": "Sheet1", "source_row": 2,
+			 "original_value": {}, "exception_codes": ["MONTH_MISMATCH"] if file == "july.xlsx" else [],
+			 "eligible_for_downstream": file == "august.xlsx"}
+			for file in ("july.xlsx", "august.xlsx", "july.xlsx")
+		]
+		def read_source(source):
+			july = source.source_file == "july.xlsx"
+			return [{"source_row": 2, "source_sheet": "Sheet1", "奖/惩日期": "2026-07-01" if july else "2026-08-18",
+			         "受奖/惩人": "旧员工" if july else "新员工", "审批编号": "JUL" if july else "AUG"}], "Sheet1"
+		with patch.object(center, "_read_source_rows", side_effect=read_source) as reader:
+			result = center._hydrate_apple_tree_result_rows(batch, rows)
+		self.assertEqual(reader.call_count, 2)
+		self.assertEqual([r["processed_value"]["奖惩日期"] for r in result], ["2026-07-01", "2026-08-18", "2026-07-01"])
+		self.assertEqual([r["processed_value"]["审批编号"] for r in result], ["JUL", "AUG", "JUL"])
+		self.assertEqual(result[0]["exception_codes"], ["MONTH_MISMATCH"])
+		self.assertFalse(result[0]["eligible_for_downstream"])
+
+	def test_missing_source_or_different_sheet_never_borrows_another_row(self):
+		center, _, _ = processing_center_module()
+		batch = SimpleNamespace(source_file="august.xlsx", source_type="apple_tree")
+		for unavailable in (True, False):
+			with self.subTest(unavailable=unavailable):
+				row = {"source_file": "july.xlsx", "source_sheet": "OldSheet", "source_row": 2,
+				       "original_value": {"奖/惩日期": "2026-07-01", "受奖/惩人": "旧员工", "备注": ""},
+				       "processed_value": {"奖惩日期": "2026-08-18", "姓名": "串行姓名", "审批编号": "WRONG", "备注": "串行备注"}}
+				with patch.object(center, "_read_source_rows", side_effect=FileNotFoundError if unavailable else None,
+				                  return_value=([{"source_row": 2, "奖/惩日期": "2026-08-18"}], "OtherSheet")):
+					result = center._hydrate_apple_tree_result_rows(batch, [row])[0]["processed_value"]
+				self.assertEqual(result["奖惩日期"], "2026-07-01")
+				self.assertEqual(result["姓名"], "旧员工")
+				self.assertEqual(result["审批编号"], "")
+				self.assertEqual(result["备注"], "")
+
 	def test_apple_tree_export_is_only_the_printable_signoff_list(self):
 		if load_workbook is None:
 			self.skipTest("openpyxl is unavailable")

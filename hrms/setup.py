@@ -205,7 +205,7 @@ def get_custom_fields():
 				"fieldname": "hrms_roster_assignable",
 				"fieldtype": "Check",
 				"label": _("Roster Assignable"),
-				"description": _("Only checked leaf organizations may be selected in the employee roster."),
+				"description": _("Whether this leaf organization may be selected in the employee roster."),
 				"default": "0",
 				"insert_after": "hrms_org_source_cell",
 			},
@@ -872,10 +872,32 @@ def after_migrate():
 	ensure_personnel_pages()
 	ensure_personnel_sidebar_links()
 	ensure_employee_work_nature_setup()
+	ensure_yongxin_departments_roster_assignable()
 	ensure_dingtalk_company_scope()
 	ensure_default_reward_punishment_rules(ignore_permissions=True)
 	apply_hrms_zh_translations()
 	apply_login_page_customizations()
+
+
+def ensure_yongxin_departments_roster_assignable():
+	"""Keep every current Yongxin department node available to the employee roster."""
+	if not frappe.get_meta("Department").has_field("hrms_roster_assignable"):
+		return 0
+
+	departments = frappe.get_all(
+		"Department",
+		filters={"company": "永新"},
+		fields=["name", "hrms_roster_assignable"],
+		limit_page_length=0,
+	)
+	updated = 0
+	for department in departments:
+		if frappe.utils.cint(department.hrms_roster_assignable):
+			continue
+		frappe.db.set_value("Department", department.name, "hrms_roster_assignable", 1, update_modified=False)
+		updated += 1
+	frappe.clear_cache(doctype="Department")
+	return updated
 
 
 def delete_custom_fields(custom_fields: dict):

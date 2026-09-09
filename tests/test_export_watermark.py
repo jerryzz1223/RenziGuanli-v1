@@ -4,6 +4,7 @@ import importlib.util
 from io import BytesIO
 from pathlib import Path
 import unittest
+from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile
 
 
@@ -34,6 +35,17 @@ def _minimal_workbook():
 
 
 class TestExportWatermark(unittest.TestCase):
+	def test_background_relationship_is_valid_with_header_comments(self):
+		namespace = WATERMARK._DOCUMENT_RELATIONSHIPS_NAMESPACE
+		content = (
+			f'<worksheet xmlns="{WATERMARK._SPREADSHEET_NAMESPACE}"><sheetData/>'
+			f'<legacyDrawing xmlns:r="{namespace}" r:id="rId1"/></worksheet>'
+		).encode()
+		root = ElementTree.fromstring(WATERMARK._add_background_picture(content, "rId2"))
+		picture = root.find(f"{{{WATERMARK._SPREADSHEET_NAMESPACE}}}picture")
+		self.assertEqual(picture.attrib[f"{{{namespace}}}id"], "rId2")
+		self.assertEqual(root.find(f"{{{WATERMARK._SPREADSHEET_NAMESPACE}}}legacyDrawing").attrib[f"{{{namespace}}}id"], "rId1")
+
 	def test_export_uses_the_pale_watermark_asset(self):
 		asset_path = Path(WATERMARK.__file__).resolve().parents[1] / "public" / "images" / "yongxin-brand-watermark.png"
 		self.assertTrue(asset_path.is_file())

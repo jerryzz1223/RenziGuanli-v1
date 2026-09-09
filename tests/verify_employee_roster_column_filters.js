@@ -22,12 +22,19 @@ for (const marker of [
 	"ROSTER_TABLE_FILTER_DELAY_MS",
 	"schedule_roster_table_filter",
 	"apply_roster_table_filter",
+	"hrms-roster-table-filter-input",
 	'input.addEventListener("compositionend"',
 	"event.stopPropagation();",
 	"search.exact ? search.value",
 ]) {
 	mustInclude(employeeList, marker, `花名册缺少表头筛选逻辑：${marker}`);
 }
+
+mustInclude(
+	employeeList,
+	".hrms-roster-table-header__input, .hrms-roster-table-filter-input",
+	"花名册表头搜索框不能被通用工具栏清理逻辑隐藏。",
+);
 
 for (const marker of [
 	".hrms-roster-native-filters-hidden",

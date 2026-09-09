@@ -24,7 +24,7 @@ for (const marker of [
 	if (!source.includes(marker)) throw new Error(`Homepage analytics data contract missing: ${marker}`);
 }
 
-for (const marker of ["PROVINCE_LABELS", "人员籍贯分布", "学历结构", "部门人员分布", "decode_geojson(geojson)", "render_province_map()", "select_province(province, event)", "province_ratio(count)", "占人员", "data-province", "data-employee", "employee-detail", "/assets/hrms/data/china-provinces.geojson", "人事首页", "frappe.utils.escape_html"]) {
+for (const marker of ["PROVINCE_LABELS", "PROVINCE_DISPLAY_LABELS", '"台湾省": "台湾"', "province_display_name(place)", "人员籍贯分布", "学历结构", "部门人员分布", "decode_geojson(geojson)", "render_province_map()", "select_province(province, event)", "province_ratio(count)", "占人员", "data-province", "data-employee", "employee-detail", "/assets/hrms/data/china-provinces.geojson", "人事首页", "frappe.utils.escape_html"]) {
 	if (!script.includes(marker)) throw new Error(`Homepage analytics UI missing: ${marker}`);
 }
 
@@ -40,7 +40,11 @@ if (!styles.includes("grid-template-columns: repeat(3, minmax(0, 1fr))")) {
 	throw new Error("The remaining personnel-home metrics must use three equal desktop columns.");
 }
 
-for (const marker of [".personnel-home__analytics", ".personnel-home__province", ".is-selected", ".personnel-home__map-tooltip", "translateY(-4px)", ".personnel-home__member-detail", ".personnel-home__member-link", ".personnel-home__member-ratio", ".personnel-home__donut", ".personnel-home__bars"]) {
+if (!styles.includes(".personnel-home { color: #1f2937; margin: 0 auto; max-width: 1720px;")) {
+	throw new Error("The personnel-home canvas must use the available desktop space.");
+}
+
+for (const marker of [".personnel-home__analytics", ".personnel-home__province", ".personnel-home__province:focus { outline: 0; }", ".is-selected", ".personnel-home__map-tooltip", "translateY(-4px)", ".personnel-home__member-detail", ".personnel-home__member-link", ".personnel-home__member-ratio", ".personnel-home__donut", ".personnel-home__bars"]) {
 	if (!styles.includes(marker)) throw new Error(`Homepage analytics style missing: ${marker}`);
 }
 

@@ -38,7 +38,7 @@ mustInclude(api, '_backfill_employee_work_nature()', "上线前必须为历史�
 mustInclude(api, "EMPLOYEE_ROSTER_STATUS_CARDS", "花名册必须提供五类工作性质卡片。");
 mustInclude(list, "format_roster_work_nature", "花名册必须显示表单保存的工作性质。");
 mustInclude(list, "custom_work_nature", "花名册必须按工作性质字段筛选。");
-mustInclude(list, "Frappe begins its native ListView refresh", "工作性质卡片的数据请求必须避开原生列表的切换时序。");
+mustInclude(list, "state.request_id !== request_id", "工作性质卡片的数据请求必须避开原生列表的切换时序。");
 mustInclude(list, "frappe.route_options", "花名册卡片必须使用 Frappe 路由筛选。");
 mustInclude(list, "build_roster_route_options", "花名册卡片必须统一构建路由筛选条件。");
 mustInclude(detail, "header.custom_work_nature", "员工详情必须读取工作性质字段。");

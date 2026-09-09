@@ -6,7 +6,7 @@ from werkzeug.wrappers import Response
 BLANK_BRAND_ASSET = "/assets/hrms/images/blank-brand.svg"
 DEFAULT_DESK_BRAND_ASSET = "/assets/hrms/images/yongxin-brand-mark-red.png"
 LEGACY_DESK_BRAND_ASSET = "/assets/hrms/images/yongxin-brand-mark.png"
-DEFAULT_SPLASH_BRAND_ASSET = "/assets/hrms/images/yongxin-brand-mark.png"
+DEFAULT_SPLASH_BRAND_ASSET = "/assets/hrms/images/yongxin-brand-mark-red.png"
 
 
 def serve_blank_for_undefined_image():

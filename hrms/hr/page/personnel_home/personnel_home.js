@@ -7,6 +7,7 @@ const PROVINCE_LABELS = {
 	"北京": "北京市", "天津": "天津市", "上海": "上海市", "重庆": "重庆市", "香港": "香港特别行政区", "澳门": "澳门特别行政区", "台湾": "台湾省",
 	"内蒙古": "内蒙古自治区", "广西": "广西壮族自治区", "西藏": "西藏自治区", "宁夏": "宁夏回族自治区", "新疆": "新疆维吾尔自治区",
 };
+const PROVINCE_DISPLAY_LABELS = { "台湾省": "台湾" };
 
 const PERSONNEL_CHART_COLORS = ["#4b75cc", "#78a2ed", "#89b89f", "#e8b15d", "#d98272", "#9d83cb"];
 
@@ -71,6 +72,10 @@ class PersonnelHome {
 
 	province_label(name) {
 		return PROVINCE_LABELS[name] || `${name}省`;
+	}
+
+	province_display_name(place) {
+		return PROVINCE_DISPLAY_LABELS[place] || place;
 	}
 
 	decode_geojson(geojson) {
@@ -144,6 +149,9 @@ class PersonnelHome {
 			}).join("");
 			host.innerHTML = `<svg class="personnel-home__province-svg" viewBox="0 0 1000 660" aria-label="中国省级员工籍贯分布图">${paths}</svg><div class="personnel-home__map-tooltip" data-map-tooltip role="status"></div>`;
 			host.querySelectorAll("[data-province]").forEach((province) => {
+				const place = province.dataset.province || "";
+				const count = Number(province.dataset.count) || 0;
+				province.setAttribute("aria-label", `${this.province_display_name(place)}，${count} 名在职员工`);
 				province.addEventListener("mouseenter", (event) => this.preview_province(province, event));
 				province.addEventListener("focus", (event) => this.preview_province(province, event));
 				province.addEventListener("click", (event) => this.select_province(province, event));
@@ -184,7 +192,7 @@ class PersonnelHome {
 		const count = Number(province.dataset.count) || 0;
 		const ratio = this.province_ratio(count);
 		const preview = members.slice(0, 12).map((member) => frappe.utils.escape_html(this.member_name(member))).join("、");
-		tooltip.innerHTML = `<strong>${frappe.utils.escape_html(place)}</strong><span>${count} 人 · 占人员 ${ratio}${preview ? ` · ${preview}${members.length > 12 ? "等" : ""}` : ""}</span>`;
+		tooltip.innerHTML = `<strong>${frappe.utils.escape_html(this.province_display_name(place))}</strong><span>${count} 人 · 占人员 ${ratio}${preview ? ` · ${preview}${members.length > 12 ? "等" : ""}` : ""}</span>`;
 		tooltip.classList.add("is-visible");
 		const box = host.getBoundingClientRect();
 		const x = event?.clientX ? event.clientX - box.left : box.width / 2;
@@ -240,12 +248,13 @@ class PersonnelHome {
 		const members = this.members[place] || [];
 		const count = this.nativePlaceCounts.get(place) || 0;
 		if (!detail || !place) return;
+		const displayPlace = this.province_display_name(place);
 		const ratio = this.province_ratio(count);
-		detail.innerHTML = members.length ? `<strong>${frappe.utils.escape_html(place)} · ${count} 人 <span class="personnel-home__member-ratio">占人员 ${ratio}</span></strong><div>${members.map((member) => {
+		detail.innerHTML = members.length ? `<strong>${frappe.utils.escape_html(displayPlace)} · ${count} 人 <span class="personnel-home__member-ratio">占人员 ${ratio}</span></strong><div>${members.map((member) => {
 			const employee = this.employee_name(member);
 			const name = frappe.utils.escape_html(this.member_name(member));
 			return employee ? `<button type="button" class="personnel-home__member-link" data-employee="${frappe.utils.escape_html(employee)}">${name}</button>` : `<span>${name}</span>`;
-		}).join("")}</div>` : `<strong>${frappe.utils.escape_html(place)}</strong><p>当前账号没有可显示的员工姓名。</p>`;
+		}).join("")}</div>` : `<strong>${frappe.utils.escape_html(displayPlace)}</strong><p>当前账号没有可显示的员工姓名。</p>`;
 		detail.querySelectorAll("[data-employee]").forEach((member) => member.addEventListener("click", () => frappe.set_route("employee-detail", member.dataset.employee)));
 	}
 }

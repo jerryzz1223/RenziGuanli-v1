@@ -1,74 +1,12 @@
-/*
- * Desktop density baseline
- *
- * The target desktop density is 85% while the browser itself remains at 100%.
- * Frappe sizes the Desk shell with viewport units, so compensate the shell
- * height by the inverse scale. Without that compensation list views end early
- * and leave an empty strip at the bottom of the screen.
- */
-
-/* Frappe's Desk boot screen reads Website Settings.splash_image.  Use the
- * existing Yongxin mark there rather than its framework logo, then soften it
- * into a lightweight progress cue.  This is a compositor-friendly transform
- * only: no JavaScript, timers, or additional network resource are introduced.
- */
-.splash img[src*="/assets/hrms/images/yongxin-brand-mark.png"] {
-	animation: hrms-splash-brand-spin 1.2s linear infinite;
-	filter: grayscale(1);
-	max-width: 52px !important;
-	opacity: 0.42;
-	width: 52px !important;
-}
-
-@keyframes hrms-splash-brand-spin {
-	to {
-		transform: rotate(360deg);
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.splash img[src*="/assets/hrms/images/yongxin-brand-mark.png"] {
-		animation: none;
-	}
-}
-
 @media screen and (min-width: 1280px) {
-	html:has(#hrms-top-module-nav) {
-		zoom: 0.85;
-	}
-
-	/* `zoom` scales a fixed element's `100vw` too.  Expand the navigation by
-	 * the inverse ratio so the company selector and account menu remain flush
-	 * with the physical top-right edge of a wide screen. */
-	.hrms-top-module-nav {
-		width: 117.6470588235vw !important;
-	}
-
-	body:has(#hrms-top-module-nav) > .body-sidebar-container,
-	body:has(#hrms-top-module-nav) > .main-section {
-		height: calc(117.6470588235vh - 46px);
-	}
-
-	/* Frappe renders request blockers and dialog backdrops as viewport-sized
-	 * fixed layers.  `html { zoom: .85 }` scales their 100vw/100vh dimensions
-	 * as well, leaving the lower and right portions of the Desk interactive
-	 * during saves, imports, uploads and confirmation dialogs.  Make those
-	 * layers use the inverse viewport dimensions, so their painted size remains
-	 * exactly one physical viewport while the application UI stays compact. */
-	body:has(#hrms-top-module-nav) .freeze,
-	body:has(#hrms-top-module-nav) .modal-backdrop {
-		height: 117.6470588235vh !important;
-		width: 117.6470588235vw !important;
-	}
-
-	/* Prevent the compacted navigation rail from exposing a redundant
-	 * horizontal scrollbar at the bottom. Vertical navigation remains
-	 * scrollable through the framework's normal sidebar container. */
-	body:has(#hrms-top-module-nav) > .body-sidebar-container,
-	body:has(#hrms-top-module-nav) .body-sidebar-container,
-	body:has(#hrms-top-module-nav) .desk-sidebar,
-	body:has(#hrms-top-module-nav) .standard-sidebar,
-	body:has(#hrms-top-module-nav) .sidebar-menu {
+	/* Prevent the navigation rail from exposing a redundant horizontal
+	 * scrollbar at the bottom. Vertical navigation remains scrollable through
+	 * the framework's normal sidebar container. */
+	body > .body-sidebar-container,
+	body .body-sidebar-container,
+	body .desk-sidebar,
+	body .standard-sidebar,
+	body .sidebar-menu {
 		overflow-x: hidden !important;
 	}
 }
@@ -254,20 +192,12 @@ body:has(#hrms-top-module-nav) .navbar .btn-primary {
 	}
 }
 
+body > .body-sidebar-container,
+body > .main-section,
 body:has(#hrms-top-module-nav) > .body-sidebar-container,
 body:has(#hrms-top-module-nav) > .main-section {
 	height: calc(100vh - 46px);
 	margin-top: 46px;
-}
-
-/* `html { zoom: .85 }` also reduces the painted height of the Desk shell.
- * Keep the workspace at the inverse CSS height so its scaled bottom aligns
- * with the viewport, rather than exposing the document canvas below it. */
-@media screen and (min-width: 1280px) {
-	body:has(#hrms-top-module-nav) > .body-sidebar-container,
-	body:has(#hrms-top-module-nav) > .main-section {
-		height: calc(117.6470588235vh - 46px) !important;
-	}
 }
 
 .hrms-contextual-admin-bar {
@@ -1656,6 +1586,7 @@ body.hrms-custom-drawer-active > .main-section {
 
 	/* While the user has the custom drawer open, reserve its visual lane rather
 	 * than covering the current page. Closing it restores the full page width. */
+	html.hrms-sidebar-open-preload body > .main-section,
 	body.hrms-custom-drawer-active.hrms-custom-drawer-open > .main-section {
 		margin-left: 238px !important;
 		width: calc(100vw - 238px) !important;
@@ -2093,9 +2024,16 @@ body.hrms-employee-roster-view .hrms-roster-page-length-hidden {
 	display: none !important;
 }
 
-/* Employee is a normal Frappe ListView.  The page gets its full-width
- * behavior from Frappe's `.no-list-sidebar` class (added in employee_list.js),
- * so no duplicate grid or hidden native list is kept in the DOM. */
+/* This selector is available when Frappe creates the route, before ListView
+ * runs Employee's JavaScript. Keeping the dimensions here prevents the
+ * default 80% list shell from expanding a visible frame later. */
+.page-container[data-page-route^="List/Employee"] .layout-side-section {
+	display: none !important;
+}
+
+.page-container[data-page-route^="List/Employee"] .layout-main-section-wrapper,
+.page-container[data-page-route^="List/Employee"] .layout-main,
+.page-container[data-page-route^="List/Employee"] .layout-main-section,
 body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .layout-main-section-wrapper,
 body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .layout-main,
 body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .layout-main-section {
@@ -2188,23 +2126,13 @@ body.hrms-employee-roster-view .result-container .list-row .list-row-col {
 	padding-top: 8px;
 }
 
+.page-container[data-page-route^="List/Employee"] .layout-main-section,
 body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .layout-main-section {
 	display: flex;
 	flex-direction: column;
 	height: calc(100vh - var(--navbar-height, 56px) - var(--page-head-height, 48px));
 	min-height: calc(100vh - var(--navbar-height, 56px) - var(--page-head-height, 48px));
 	overflow: hidden;
-}
-
-/* Desktop uses `html { zoom: .85 }` for the compact density.  A plain 100vh
- * here is painted at only 85% of the real viewport, leaving a blank strip
- * below the roster.  Use the inverse viewport height so the table reaches
- * the browser bottom while retaining its own scroll area. */
-@media screen and (min-width: 1280px) {
-	body:has(#hrms-top-module-nav) .page-container.hrms-employee-roster-page .layout-main-section {
-		height: calc(117.6470588235vh - var(--navbar-height, 56px) - var(--page-head-height, 48px));
-		min-height: calc(117.6470588235vh - var(--navbar-height, 56px) - var(--page-head-height, 48px));
-	}
 }
 
 body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .frappe-list {
@@ -2492,6 +2420,93 @@ body.hrms-personnel-social-controls-hidden .form-sidebar .comment-box {
  * visible in document order, while this removes only the redundant tab bar. */
 .hrms-employee-one-page .form-tabs-list {
 	display: none !important;
+}
+
+/* Compact roster fields without moving native controls out of their columns. */
+.hrms-employee-one-page .form-layout,
+.hrms-employee-one-page .form-page,
+.hrms-employee-one-page .form-section {
+	max-width: none;
+}
+
+.hrms-employee-one-page .hrms-roster-field-section > .section-body {
+	flex-direction: column;
+	max-width: none !important;
+}
+
+.hrms-employee-one-page .hrms-roster-field-section > .section-body > .form-column {
+	flex: 0 0 100%;
+	max-width: 100%;
+	width: 100%;
+}
+
+.hrms-employee-one-page .hrms-roster-field-section > .section-body > .form-column > form {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 0 24px;
+}
+
+.hrms-employee-one-page .hrms-roster-field-section > .section-body > .form-column > form > .frappe-control {
+	min-width: 0;
+	margin-bottom: 16px;
+}
+
+.hrms-employee-one-page .hrms-roster-field-section > .section-body > .form-column > form > .frappe-control[data-fieldtype="Table"],
+.hrms-employee-one-page .hrms-roster-field-section > .section-body > .form-column > form > .frappe-control[data-fieldtype="Table MultiSelect"],
+.hrms-employee-one-page .hrms-roster-field-section > .section-body > .form-column > form > .frappe-control[data-fieldtype="HTML"],
+.hrms-employee-one-page .hrms-roster-field-section > .section-body > .form-column > form > .frappe-control[data-fieldtype="Text Editor"],
+.hrms-employee-one-page .hrms-employee-group-title {
+	grid-column: 1 / -1;
+}
+
+.hrms-employee-one-page .hrms-employee-group-title {
+	font-size: 14px;
+	font-weight: 650;
+	margin: 4px 0 16px;
+	color: var(--heading-color, #1f2937);
+}
+
+.hrms-employee-one-page .hrms-employee-roster-navigation {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 16px 24px;
+	border-bottom: 1px solid var(--border-color, #e5e7eb);
+}
+
+.hrms-employee-one-page .hrms-employee-roster-caption {
+	font-size: 16px;
+	font-weight: 650;
+	margin-right: auto;
+}
+
+.hrms-employee-one-page .hrms-employee-redundant-name,
+.hrms-employee-one-page .hrms-employee-unused-field,
+.hrms-employee-one-page .hrms-roster-field-section > .section-body > .form-column > form > .frappe-control:not([data-fieldname^="custom_social_insurance"]) .help-box,
+.hrms-employee-one-page .form-heatmap,
+.hrms-employee-one-page:not(.hrms-employee-show-connections) .form-links {
+	display: none !important;
+}
+
+@media (max-width: 1100px) {
+	.hrms-employee-one-page .hrms-roster-field-section > .section-body > .form-column > form {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+@media (max-width: 640px) {
+	.hrms-employee-one-page .hrms-roster-field-section > .section-body > .form-column > form {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+.hrms-employee-one-page .hrms-roster-field-section > .section-head {
+	max-width: none !important;
+}
+
+.hrms-employee-one-page .hrms-roster-field-section > .section-body > .form-column > form > .input-max-width {
+	max-width: none;
 }
 
 /* Frappe restores the active Tab Break pane when a Select control refreshes.
