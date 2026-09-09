@@ -295,8 +295,8 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 							<td>${frappe.utils.escape_html(error.field_label || error.fieldname || "")}</td>
 							<td>${frappe.utils.escape_html(error.current_value || "-")}</td>
 							<td>${frappe.utils.escape_html(error.message || "")}</td>
-							<td>${frappe.utils.escape_html(error.suggestion || __("请修正后重新上传。"))}</td>
-							${editable && error.row && error.fieldname ? `<td><button class="btn btn-xs btn-default" data-action="edit-error-row" data-row-index="${frappe.utils.escape_html(error.row)}">${__("编辑本行")}</button></td>` : editable ? `<td>-</td>` : ""}
+							<td>${frappe.utils.escape_html(error.suggestion || (editable && get_error_row_fields(error.row).length ? __("点击“编辑本行”修正后重新校验。") : __("请修正后重新上传。")))}</td>
+							${editable && get_error_row_fields(error.row).length ? `<td><button class="btn btn-xs btn-default" data-action="edit-error-row" data-row-index="${frappe.utils.escape_html(error.row)}">${__("编辑本行")}</button></td>` : editable ? `<td>-</td>` : ""}
 						</tr>`,
 					)
 					.join("")}</tbody>
@@ -350,11 +350,34 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		);
 	}
 
-	function open_error_row_editor(row_index, source = state.preview_result) {
+	function get_error_row_fields(row_index, source = state.step === 4 ? state.import_result : state.preview_result) {
+		if (!row_index) return [];
 		const row_errors = (source?.errors || []).filter(
-			(error) => Number(error.row) === Number(row_index) && error.fieldname,
+			(error) => Number(error.row) === Number(row_index),
 		);
-		const unique_errors = [...new Map(row_errors.map((error) => [error.fieldname, error])).values()];
+		const fields = new Map();
+		// Save-time validation can only identify the whole row. Recover the
+		// editable columns from its original cells and the user's header mapping.
+		if (row_errors.some((error) => !error.fieldname)) {
+			const failed_row = (source?.failed_rows || []).find((row) => Number(row.row) === Number(row_index));
+			for (const header of state.parse_result?.headers || []) {
+				const fieldname = state.manual_mappings[header.column_index] ?? header.fieldname;
+				const field = (state.parse_result?.fields || []).find((item) => item.fieldname === fieldname);
+				if (!field || !failed_row?.values) continue;
+				fields.set(fieldname, {
+					...field,
+					current_value: failed_row.values[header.column_index] ?? "",
+				});
+			}
+		}
+		for (const error of row_errors) {
+			if (error.fieldname) fields.set(error.fieldname, error);
+		}
+		return [...fields.values()];
+	}
+
+	function open_error_row_editor(row_index, source = state.preview_result) {
+		const unique_errors = get_error_row_fields(row_index, source);
 		if (!unique_errors.length) return;
 
 		const existing_values = state.row_overrides[String(row_index)] || {};
@@ -362,19 +385,25 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			title: __("校正 Excel 第 {0} 行", [row_index]),
 			fields: unique_errors.map((error) => ({
 				fieldname: error.fieldname,
-				label: `${error.excel_cell || ""} · ${error.field_label || error.fieldname}`,
+				label: [error.excel_cell, error.field_label || error.fieldname].filter(Boolean).join(" · "),
 				// Keep corrections as text: a Date control rejects the supported "-"
 				// placeholder before the server can interpret it as "fill in later".
 				fieldtype: "Data",
 				default: existing_values[error.fieldname] ?? error.current_value ?? "",
-				description: `${error.suggestion || ""}${_can_defer_field(error.fieldname) ? `<br>${__("暂不填写时可输入“-”，系统将保留为空，之后可在员工档案补充。")}` : ""}`,
+				description: `${frappe.utils.escape_html(error.suggestion || "")}${_can_defer_field(error.fieldname) ? `<br>${__("暂不填写时可输入“-”，系统将保留为空，之后可在员工档案补充。")}` : ""}`,
 				reqd: [__("必填字段为空"), __("离职员工必须填写离职日期")].includes(error.message),
 			})),
 			primary_action_label: __("保存并重新校验"),
 			primary_action(values) {
+				const corrections = {};
+				for (const error of unique_errors) {
+					const value = values[error.fieldname] ?? "";
+					const original = existing_values[error.fieldname] ?? error.current_value ?? "";
+					if (String(value) !== String(original)) corrections[error.fieldname] = value;
+				}
 				state.row_overrides[String(row_index)] = {
 					...existing_values,
-					...values,
+					...corrections,
 				};
 				dialog.hide();
 				request_preview();
