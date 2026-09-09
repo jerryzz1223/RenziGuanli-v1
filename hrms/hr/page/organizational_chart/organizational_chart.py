@@ -1417,6 +1417,8 @@ def _manual_employee_labels(employee_names):
 
 def _build_manual_organization_tree(company, manual):
 	from hrms.api.organization_package import version_options
+	from hrms.api.organization_source_grades import source_grade_evidence
+	source_grades = source_grade_evidence(company, manual["nodes"])
 	chart_grades = {g["code"]: g for g in version_options(manual["version"]).get("chart_grades", [])} if manual.get("version") else {}
 	nodes_by_name = {node.name: node for node in manual["nodes"]}
 	company_employees = _get_active_employees(company)
@@ -1493,6 +1495,8 @@ def _build_manual_organization_tree(company, manual):
 			"designation": node.manual_config.get("designation"),
 			"role_title": node.manual_config.get("role_title"),
 			"grade": node.manual_config.get("grade"),
+			"source_grade_tags": node.manual_config.get("source_grade_tags", source_grades.get(node.name, {}).get("source_grade_tags", "")),
+			"source_grade_status": node.manual_config.get("source_grade_status", source_grades.get(node.name, {}).get("source_grade_status", "")),
 			"chart_grade": chart_grades.get(node.manual_config.get("chart_grade_code"), node.manual_config.get("chart_grade", {})),
 			"employee": node.manual_config.get("manager_employee") if kind in {"管理层", "分管"} else _manual_primary_employee(node) or node.manual_config.get("employee"),
 			"employee_route": node.manual_config.get("manager_employee") if kind in {"管理层", "分管"} else _manual_primary_employee(node) or node.manual_config.get("employee"),
@@ -1788,17 +1792,24 @@ def save_manual_organization_node(
 		validate_chart_selection(company, None, list(confirmed_display), "管理层")
 	if source_proxy:
 		validate_chart_selection(company, None, [proxy_employee], "管理层")
+	from hrms.utils.organization_scope import department_scopes
+	scope_graph = {n.name: {"config": n.manual_config, "parent": n.parent_node} for n in _get_manual_organization_records(company)["nodes"]}
+	scope_key = doc.name or "__pending__"
+	scope_graph[scope_key] = {"config": {**previous_config, "department": base_department}, "parent": parent_node}
+	allowed_departments = department_scopes(scope_graph, _get_departments(company)).get(scope_key, set())
 	selection = validate_chart_selection(
 		company, base_department,
 		[name for name in [employee, primary_employee, None if source_proxy else proxy_employee, manager_employee, *assigned_employees] if name not in confirmed_display], node_kind,
 		# Local role names must not exclude staff whose main HR job differs.
 		inherit_parent=False,
+		allowed_departments=allowed_departments,
 	)
 	config = {
 		**{key: previous_config[key] for key in ("assignment_rules_manual", "assignment_reviewed_by", "assignment_reviewed_on", "portable_id", "chart_grade_code", "chart_grade", "roster_department_alias_labels", "portable_proxy_display_only", "roster_initialization", "roster_initialization_complete", "reporting_scope_pending", "navigation_upgrade", "roster_generated", "roster_auto_sync", "template_source_cell", "template_leadership_cell", "template_bindings", "template_source_document", "template_source_vacancies", "template_leadership") if key in previous_config},
 		"manual_organization": True,
 		"chart_grade_code": chart_grade_code,
 		"chart_grade": chart_grade,
+		**{key: previous_config[key] for key in ("source_grade_tags", "source_grade_reference", "source_grade_status") if key in previous_config},
 		"roster_subset": roster_subset,
 		"roster_auto_sync": bool(cint(roster_auto_sync)) if roster_auto_sync is not None else bool(previous_config.get("roster_auto_sync")),
 		"leadership_from_roster": bool(cint(leadership_from_roster)) if leadership_from_roster is not None and node_kind == "管理层" else bool(previous_config.get("leadership_from_roster")) if node_kind == "管理层" else False,

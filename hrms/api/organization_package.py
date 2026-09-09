@@ -13,7 +13,7 @@ import frappe
 from frappe.utils import cstr, now_datetime
 from hrms.utils.organization_roles import binding_assignment_type, ASSIGNMENT_TYPES, base_role
 
-SCHEMA = "HRMS-ORGANIZATION-1"
+SCHEMA = "HRMS-ORGANIZATION-2"
 NODE_COLUMNS = {
 	"节点编号": "portable_id", "上级节点编号": "parent", "组织名称": "display_name",
 	"节点类型": "node_kind", "关联部门": "department", "关联岗位": "designation",
@@ -25,7 +25,9 @@ NODE_COLUMNS = {
 	"原表空缺": "template_source_vacancies", "归属待设置": "reporting_scope_pending",
 	"合并关联部门": "roster_department_alias_labels", "自动生成节点": "roster_generated",
 	"分管显示姓名": "manager_name", "使用原表人员规则": "has_template_bindings", "逐人确认任职": "assignment_rules_manual",
+	"原表职级标签": "source_grade_tags", "原表职级来源": "source_grade_reference", "原表职级确认状态": "source_grade_status",
 }
+OPTIONAL_NODE_FIELDS = {"source_grade_tags", "source_grade_reference", "source_grade_status"}
 PERSON_COLUMNS = {
 	"节点编号": "node", "引用类型": "type", "工号": "code", "姓名": "name",
 	"图中职务": "role", "负责人位置": "slot", "仅展示代理": "display_only", "人工确认": "manual_confirmed", "原表职务": "source_role", "任职性质": "assignment_type",
@@ -59,8 +61,10 @@ def version_options(version):
 
 def target_state(company):
 	manual = chart_module()._get_manual_organization_records(company)
+	from hrms.api.organization_source_grades import source_grade_evidence
 	return {
 		"manual": manual,
+		"source_grades": source_grade_evidence(company, manual["nodes"]),
 		"employees": frappe.get_all("Employee", filters={"company": company}, fields=["name", "custom_employee_code", "employee_name", "department", "designation", "status"], order_by="name"),
 		"departments": frappe.get_all("Department", filters={"company": company, "disabled": 0}, fields=["name", "department_name"], order_by="name"),
 		"designations": frappe.get_all("Designation", pluck="name", order_by="name"),
@@ -69,18 +73,18 @@ def target_state(company):
 	}
 
 
-def workbook_bytes(company):
+def workbook_bytes(company, state=None):
 	from openpyxl import Workbook
 	from openpyxl.styles import Font, PatternFill, Alignment
 	from openpyxl.utils import get_column_letter
-	state = target_state(company)
+	state = state if state is not None else target_state(company)
 	nodes = state["manual"]["nodes"]
 	ids = {n.name: n.manual_config.get("portable_id") or n.node_code for n in nodes}
 	employees = {e.name: e for e in state["employees"]}
 	departments = {d.name: d.department_name for d in state["departments"]}
 	rows, people = [], []
 	for node in nodes:
-		cfg = node.manual_config
+		cfg = {**state.get("source_grades", {}).get(node.name, {}), **node.manual_config}
 		row = {**cfg, "portable_id": ids[node.name], "parent": ids.get(node.parent_node, ""),
 			"display_name": node.display_name, "planned_headcount": node.planned_headcount or 0,
 			"department": departments.get(cfg.get("department"), cfg.get("department") or ""),
@@ -113,6 +117,7 @@ def workbook_bytes(company):
 		["人员匹配", "工号按文本填写，保留前导零；仅按目标公司工号匹配。原表人员可不填工号，作为待确认注释。"],
 		["自动更新", "自动岗位按部门和岗位读取花名册；原表组线按已绑定工号更新。手动节点保留人员安排。"],
 		["职级", "职级编码引用职级定义；等级顺序越小越高，允许留空。职级不代替上级节点关系，也不修改员工档案职级。"],
+		["原表职级标签", "保留原组织草稿中与来源文件、工作表及单元格唯一对应的标签和确认状态。标签不代表高低顺序，不写入员工档案职级。"],
 		["花名册职级引用", "现有花名册职级的引用，和图中职级编码分开；需在目标服务器已存在。"],
 		["重复导入", "按节点编号更新，未包含节点保留；预览通过后才能导入。"],
 		["代理", "引用类型代理人保留代理身份；原表人员的负责人位置填 primary 或 proxy。跨部门代理须勾选仅展示代理。"],
@@ -156,11 +161,14 @@ def save_private(content, prefix, company):
 @frappe.whitelist(methods=["POST"])
 def export_configuration(company: str):
 	authorize(company)
-	return save_private(workbook_bytes(company), "组织配置", company)
+	state = target_state(company)
+	content = workbook_bytes(company, state)
+	plan = prepare(company, read_content(content), state=state)
+	return {**save_private(content, "组织配置", company), "completeness": plan["completeness"],
+		"warnings": plan["warnings"], "errors": plan["errors"]}
 
 
 def read_package(file_url):
-	from openpyxl import load_workbook
 	if not cstr(file_url).startswith("/private/files/"):
 		frappe.throw("请上传私有的 .xlsx 组织配置文件。")
 	name = frappe.db.get_value("File", {"file_url": file_url, "is_private": 1}, "name")
@@ -169,6 +177,11 @@ def read_package(file_url):
 	file = frappe.get_doc("File", name)
 	file.check_permission("read")
 	content = file.get_content()
+	return read_content(content)
+
+
+def read_content(content):
+	from openpyxl import load_workbook
 	if len(content) > 10 * 1024 * 1024:
 		frappe.throw("组织配置文件不能超过 10 MB。")
 	try:
@@ -179,7 +192,7 @@ def read_package(file_url):
 	except (ValueError, zipfile.BadZipFile, KeyError):
 		frappe.throw("无法读取文件，请使用系统导出的 .xlsx 模板。")
 	try:
-		if "说明" not in book.sheetnames or book["说明"]["B1"].value != SCHEMA:
+		if "说明" not in book.sheetnames or book["说明"]["B1"].value not in {SCHEMA, "HRMS-ORGANIZATION-1"}:
 			frappe.throw("组织配置格式版本不匹配，请使用系统导出的模板。")
 		package = {}
 		for title, columns in [("组织层级", NODE_COLUMNS), ("人员任职", PERSON_COLUMNS), ("职级定义", GRADE_COLUMNS)]:
@@ -190,13 +203,16 @@ def read_package(file_url):
 				frappe.throw(f"{title} 超出 10000 行或 50 列限制。")
 			rows = sheet.iter_rows()
 			headers = [cstr(c.value).strip() for c in next(rows)]
-			if any(headers.count(h) > 1 or (headers.count(h) == 0 and h not in {"逐人确认任职", "人工确认", "原表职务", "负责人来源单元格", "任职性质"}) for h in columns):
+			if any(headers.count(h) > 1 or (headers.count(h) == 0 and h not in {"逐人确认任职", "人工确认", "原表职务", "负责人来源单元格", "任职性质", "原表职级标签", "原表职级来源", "原表职级确认状态"}) for h in columns):
 				frappe.throw(f"{title} 表头缺失或重复，请保留模板表头。")
 			data = []
 			for index, cells in enumerate(rows, 2):
 				if any(c.data_type == "f" for c in cells):
 					frappe.throw(f"{title} 第 {index} 行含公式，请粘贴为值。")
 				row = {key: cstr(cells[headers.index(label)].value).strip() if label in headers and headers.index(label) < len(cells) else "" for label, key in columns.items()}
+				for label, key in columns.items():
+					if key in OPTIONAL_NODE_FIELDS and label not in headers:
+						row.pop(key, None)
 				if any(row.values()):
 					data.append({**row, "_row": index})
 			package[title] = data
@@ -205,10 +221,10 @@ def read_package(file_url):
 		book.close()
 
 
-def prepare(company, package):
+def prepare(company, package, state=None):
 	"""Pure planning against a read-only target snapshot; collect all actionable errors."""
 	chart = chart_module()
-	state = target_state(company)
+	state = state if state is not None else target_state(company)
 	errors, warnings = [], []
 	def problem(row, message): errors.append(f"第 {row.get('_row', '?')} 行：{message}")
 	def boolean(row, field):
@@ -270,7 +286,13 @@ def prepare(company, package):
 			problem(row, "节点编号不能为空或重复")
 		if not row["display_name"] or kind not in chart.MANUAL_ORGANIZATION_NODE_KINDS:
 			problem(row, "组织名称或节点类型无效")
-		cfg = {k: row[k] for k in NODE_COLUMNS.values() if k not in {"parent", "display_name", "planned_headcount", "has_template_bindings"}}
+		cfg = {k: row.get(k, "") for k in NODE_COLUMNS.values() if k not in {"parent", "display_name", "planned_headcount", "has_template_bindings"}}
+		previous = current.get(key)
+		for field in OPTIONAL_NODE_FIELDS:
+			if field not in row and previous:
+				cfg[field] = previous.manual_config.get(field, state.get("source_grades", {}).get(previous.name, {}).get(field, ""))
+		if cfg["source_grade_status"] not in {"", "待确认", "已确认"}:
+			problem(row, "原表职级确认状态必须为待确认或已确认")
 		cfg.update({k: boolean(row, k) for k in BOOL_FIELDS if k not in {"has_template_bindings", "manual_confirmed"}})
 		cfg.update(manual_organization=True, framework=True, assigned_employees=[])
 		cfg["template_source_vacancies"] = integer(row, "template_source_vacancies")
@@ -321,6 +343,9 @@ def prepare(company, package):
 		if len(matches) > 1: errors.append(f"合并部门未唯一匹配：{label}")
 		if matches and matches[0].name in units and units[matches[0].name] != key: errors.append(f"合并部门仍有独立组织节点：{label}")
 		if not matches: warnings.append(f"合并部门 {label} 尚未创建；保留关联名称，花名册导入后再匹配。")
+	from hrms.utils.organization_scope import department_scopes
+	scopes = department_scopes(graph, state["departments"])
+	department_labels = {d.name: d.department_name for d in state["departments"]}
 	seen_refs = set()
 	for row in package["人员任职"]:
 		if row["node"] not in plans or row["type"] not in REFERENCES:
@@ -351,8 +376,9 @@ def prepare(company, package):
 		display_only = boolean(row, "display_only")
 		if row["slot"] not in {"", "primary", "proxy"}: problem(row, "负责人位置只能填 primary 或 proxy")
 		if display_only and field not in {"proxy_employee", "template_bindings"}: problem(row, "仅展示代理只能用于代理或原表人员引用")
-		if person and cfg.get("department") and person.department != cfg["department"] and not display_only:
-			problem(row, f"工号 {row['code']} 花名册部门与节点不一致；请核对归属")
+		if person and cfg.get("department") and person.department not in scopes[row["node"]] and not display_only:
+			allowed = "、".join(sorted(department_labels.get(d, d) for d in scopes[row["node"]]))
+			problem(row, f"工号 {row['code']} 花名册部门与节点不一致：花名册为 {department_labels.get(person.department, person.department) or '未填写'}，节点 {plans[row['node']]['name']} 允许部门为 {allowed}；请核对归属")
 		if field == "template_bindings":
 			binding = {"source_name": row["name"] or (person.employee_name if person else ""), "source_code": row["code"],
 				"role": row["role"], "slot": row["slot"], "display_only": display_only, "no_auto_match": not bool(row["code"]),
@@ -396,17 +422,32 @@ def prepare(company, package):
 				if department: break
 				parent = graph[parent]["parent"]
 			person = next(e for e in state["employees"] if e.name == cfg["employee"])
-			if not department or person.department != department: errors.append(f"员工节点 {key} 的上级部门与花名册不一致")
+			if not department or person.department not in scopes.get(parent, set()): errors.append(f"员工节点 {key} 的上级部门与花名册不一致")
 			cfg["roster_department"] = department
 		if cfg.get("proxy_employee") and cfg["proxy_employee"] in {cfg.get("primary_employee"), cfg.get("manager_employee")}:
 			errors.append(f"节点 {key} 任职人与代理人不能相同")
+	completeness = {
+		"nodes": len(plans), "grade_definitions": len(package["职级定义"]),
+		"graded_nodes": sum(bool(p["config"].get("chart_grade_code")) for p in plans.values()),
+		"source_grade_nodes": sum(bool(p["config"].get("source_grade_tags")) for p in plans.values()),
+		"person_references": len(package["人员任职"]),
+		"unbound_references": sum(not r["code"] for r in package["人员任职"]),
+	}
+	if not completeness["grade_definitions"] and not completeness["graded_nodes"]:
+		warnings.append("文件未配置图中职级及等级顺序；原表职级标签单独保留，不自动推断高低级别。")
 	fingerprint = hashlib.sha256(json.dumps([package, state], ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 	return {"errors": errors, "warnings": list(dict.fromkeys(warnings)), "fingerprint": fingerprint,
+		"completeness": completeness,
 		"create_count": len(set(plans) - set(current)), "update_count": len(set(plans) & set(current)),
 		"retained_count": len(set(current) - set(plans)), "person_rows": len(package["人员任职"]),
 		"grades": [{k: v for k, v in g.items() if k != "_row"} for g in grades.values()],
 		"preview": [{"id": key, "name": plans[key]["name"], "parent": plans[key]["parent"],
 			"parent_name": plans.get(plans[key]["parent"], {}).get("name") or (current[plans[key]["parent"]].display_name if plans[key]["parent"] in current else "公司"),
+			"node_kind": plans[key]["config"].get("node_kind", ""),
+			"role": plans[key]["config"].get("role_title") or plans[key]["config"].get("designation", ""),
+			"source_grade_tags": plans[key]["config"].get("source_grade_tags", ""),
+			"source_grade_status": plans[key]["config"].get("source_grade_status", ""),
+			"source_grade_reference": plans[key]["config"].get("source_grade_reference", ""),
 			"grade": plans[key]["config"].get("chart_grade", {}).get("label", "")} for key in order if key in plans],
 		"_plans": plans, "_current": current, "_order": order, "_state": state}
 

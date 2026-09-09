@@ -86,7 +86,7 @@ def get_base(department: str):
 	return {"department": doc.name, "company": doc.company, "rows": [{**row, "employee": row.name} for row in data["employees"]], "employee_count": len(data["employees"])}
 
 
-def validate_chart_selection(company, department, selected, kind, designation=None, grade=None, inherit_parent=False):
+def validate_chart_selection(company, department, selected, kind, designation=None, grade=None, inherit_parent=False, allowed_departments=None):
 	if kind not in {"管理层", "分管"} and not department:
 		if not any(selected):
 			return {"rows": [], "employees": [], "roster_department": ""}
@@ -99,6 +99,10 @@ def validate_chart_selection(company, department, selected, kind, designation=No
 		kind in {"管理层", "分管"},
 		inherit_parent=inherit_parent,
 	)
+	for merged_department in sorted(set(allowed_departments or ()) - {department}):
+		merged = get_candidates(company, merged_department, designation or "", grade or "")
+		result["employees"].extend(merged["employees"])
+		result["rows"].extend(merged["rows"])
 	allowed = {row.name for row in result["employees"]}
 	if any(employee and employee not in allowed for employee in selected):
 		frappe.throw(_("所选员工与花名册中的公司、部门、职位、职级或在职状态不一致，请按花名册重新选择。"))

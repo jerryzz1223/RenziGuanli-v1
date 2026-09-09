@@ -8,13 +8,14 @@ from collections import defaultdict
 from hrms.utils.organization_roles import chart_assigned_employees, display_role, binding_assignment_type
 
 
-def reconcile_bindings(config, staff, allow_name_match=False):
+def reconcile_bindings(config, staff, allow_name_match=False, allowed_departments=None):
+	allowed_departments = set(allowed_departments) if allowed_departments is not None else {config.get("department")}
 	by_name = defaultdict(list)
 	by_id = {e.name: e for e in staff}
 	company_names = defaultdict(list)
 	for person in staff:
 		company_names[person.employee_name].append(person)
-		if person.department == config.get("department"):
+		if person.department in allowed_departments:
 			by_name[person.employee_name].append(person)
 	bindings, members = [], []
 	for original in config.get("template_bindings", []):
@@ -32,7 +33,7 @@ def reconcile_bindings(config, staff, allow_name_match=False):
 				person = matches[0]
 				entry["employee"] = person.name
 			entry["issue"] = "同名待确认" if len(matches) > 1 else "未匹配本部门在职花名册"
-		if person and (person.department == config.get("department") or entry.get("display_only") or config.get("node_kind") in {"管理层", "分管"}):
+		if person and (person.department in allowed_departments or entry.get("display_only") or config.get("node_kind") in {"管理层", "分管"}):
 			if not entry.get("display_only"):
 				members.append(person.name)
 			entry.pop("issue", None)

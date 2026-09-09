@@ -52,6 +52,9 @@ def node_lines(node):
 		add(f"职级：{grade['label']}")
 		if grade.get("rank") is not None:
 			add(f"等级：{grade['rank']}")
+	if node.get("source_grade_tags"):
+		labels = "、".join(node["source_grade_tags"].splitlines())
+		add(f"原表职级：{labels}（{node.get('source_grade_status') or '待确认'}）", "muted")
 	if node.get("people"):
 		for person in node["people"]:
 			add("：".join(str(v) for v in (person.get("role"), person.get("employee_name") or person.get("name")) if v))

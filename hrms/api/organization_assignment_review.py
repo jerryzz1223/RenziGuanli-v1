@@ -139,6 +139,10 @@ def save_review(company: str, node_name: str, modified: str, rows: list[dict] | 
 	staff = get_candidates(company, allow_company=True)["employees"]
 	people = {e.name: e for e in staff}
 	old = cfg.get("template_bindings", [])
+	from hrms.utils.organization_scope import department_scopes
+	manual = chart_module()._get_manual_organization_records(company)
+	scopes = department_scopes({n.name: {"config": n.manual_config, "parent": n.parent_node} for n in manual["nodes"]}, chart_module()._get_departments(company))
+	allowed_departments = scopes.get(node_name, {cfg.get("department")})
 	bindings, seen, source_rows = [], set(), set()
 	for index, row in enumerate(rows, 1):
 		if not isinstance(row, dict): frappe.throw("任职记录格式不正确。")
@@ -152,7 +156,7 @@ def save_review(company: str, node_name: str, modified: str, rows: list[dict] | 
 		person = people.get(employee)
 		if employee and not person: frappe.throw(f"第 {index} 行请选择有权查看的当前公司在职员工。")
 		if display_only and kind not in {"兼任", "代理人"}: frappe.throw(f"第 {index} 行：跨部门展示仅用于明确的兼任或代理人。")
-		if person and cfg.get("department") and person.department != cfg["department"] and not display_only:
+		if person and cfg.get("department") and person.department not in allowed_departments and not display_only:
 			frappe.throw(f"第 {index} 行员工不属于本部门；请核对，明确兼任或代理人后才能启用跨部门展示。")
 		ref = row.get("reference_index")
 		if ref not in (None, ""):
@@ -189,7 +193,7 @@ def save_review(company: str, node_name: str, modified: str, rows: list[dict] | 
 	# department; it cannot replace them with a same-name or same-title employee.
 	cfg["roster_auto_sync"] = bool(cfg.get("roster_subset") or whole_department(cfg))
 	if whole_department(cfg): cfg["template_leadership"] = True
-	resolved = reconcile_bindings(cfg, staff)
+	resolved = reconcile_bindings(cfg, staff, allowed_departments=allowed_departments)
 	cfg.update(resolved)
 	if whole_department(cfg) or cfg.get("node_kind") in {"管理层", "分管", "员工"}: cfg["assigned_employees"] = []
 	cfg["primary_employee"] = next(iter(primaries)) if len(primaries) == 1 else None

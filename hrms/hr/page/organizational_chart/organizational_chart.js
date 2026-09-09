@@ -157,8 +157,26 @@ class HybridOrganizationChart {
 			link.href = result.message.file_url;
 			link.download = result.message.file_name;
 			link.click();
-			frappe.show_alert({ message: __("组织配置已导出，包含上下级、人员任职和职级定义。"), indicator: "green" });
+			const data = result.message;
+			const escape = value => frappe.utils.escape_html(String(value ?? ""));
+			frappe.msgprint({ title: __("组织配置已导出"), indicator: data.errors?.length ? "red" : data.warnings?.length ? "orange" : "green",
+				message: `${this.configuration_completeness(data.completeness)}
+				${data.errors?.length ? `<p>源配置存在以下冲突，导入前需要处理：</p><ul>${data.errors.map(e => `<li>${escape(e)}</li>`).join("")}</ul>` : ""}
+				${data.warnings?.length ? `<details open><summary>配置说明及待确认事项</summary><ul>${data.warnings.map(e => `<li>${escape(e)}</li>`).join("")}</ul></details>` : ""}
+				<p><a href="${escape(data.file_url)}" download>下载组织配置</a></p>` });
 		}
+	}
+
+	configuration_completeness(data) {
+		if (!data) return "";
+		const count = value => Number.isFinite(Number(value)) ? Number(value) : 0;
+		return `<p>组织节点 ${count(data.nodes)} 个 · 人员引用 ${count(data.person_references)} 条 · 缺工号引用 ${count(data.unbound_references)} 条</p>
+			<p>原表职级标签：${count(data.source_grade_nodes)} 个节点有记录；图中职级定义：${count(data.grade_definitions)} 项，${count(data.graded_nodes)} 个节点已关联。</p>
+			<p class="text-muted">组织类型、图中职务、原表职级标签与图中职级分别保留。职级标签不代表高低顺序；缺工号人员保留待确认，不按姓名自动绑定。</p>`;
+	}
+
+	source_grade_text(node) {
+		return node.source_grade_tags ? `原表职级：${node.source_grade_tags.split("\n").join("、")}（${node.source_grade_status || "待确认"}）` : "";
 	}
 
 	import_configuration() {
@@ -192,9 +210,10 @@ class HybridOrganizationChart {
 					preview = data.errors.length ? null : { ...data, company: values.company, file_url: values.file_url };
 					dialog.fields_dict.preview.$wrapper.html(`
 						<p><strong>新增 ${data.create_count} 个 · 更新 ${data.update_count} 个 · 保留 ${data.retained_count} 个 · 人员引用 ${data.person_rows} 条</strong></p>
+						${this.configuration_completeness(data.completeness)}
 						${data.errors.length ? `<div class="alert alert-danger"><strong>请修正以下问题后重新上传</strong><ul>${data.errors.map(e => `<li>${escape(e)}</li>`).join("")}</ul></div>` : ""}
 						${data.warnings.length ? `<details open><summary>待确认事项（${data.warnings.length}）</summary><ul>${data.warnings.map(e => `<li>${escape(e)}</li>`).join("")}</ul></details>` : ""}
-						<details open><summary>组织及上下级预览</summary><div style="max-height:320px;overflow:auto"><table class="table table-bordered"><thead><tr><th>节点编号</th><th>组织名称</th><th>上级组织</th><th>职级</th></tr></thead><tbody>${data.preview.map(n => `<tr><td>${escape(n.id)}</td><td>${escape(n.name)}</td><td>${escape(n.parent_name || "公司")}<small class="text-muted d-block">${escape(n.parent)}</small></td><td>${escape(n.grade || "未设置")}</td></tr>`).join("")}</tbody></table></div></details>
+						<details open><summary>组织及上下级预览</summary><div style="max-height:320px;overflow:auto"><table class="table table-bordered"><thead><tr><th>节点编号</th><th>组织名称 / 类型</th><th>上级组织</th><th>图中职务</th><th>原表职级标签</th><th>图中职级</th></tr></thead><tbody>${data.preview.map(n => `<tr><td>${escape(n.id)}</td><td>${escape(n.name)}<small class="text-muted d-block">${escape(n.node_kind)}</small></td><td>${escape(n.parent_name || "公司")}<small class="text-muted d-block">${escape(n.parent)}</small></td><td>${escape(n.role || "—")}</td><td title="${escape(n.source_grade_reference)}">${escape(n.source_grade_tags || "无原表标签")}<small class="text-muted d-block">${escape(n.source_grade_tags ? n.source_grade_status || "待确认" : "")}</small></td><td>${escape(n.grade || "未配置等级")}</td></tr>`).join("")}</tbody></table></div></details>
 						<details><summary>职级定义（${data.grades.length}）</summary><table class="table"><thead><tr><th>编码</th><th>名称</th><th>等级顺序</th><th>上级职级</th></tr></thead><tbody>${data.grades.map(g => `<tr><td>${escape(g.code)}</td><td>${escape(g.label)}</td><td>${escape(g.rank ?? "未设置")}</td><td>${escape(g.parent)}</td></tr>`).join("")}</tbody></table></details>`);
 					dialog.get_primary_btn().text(preview ? __("确认导入") : __("重新校验"));
 					return;
@@ -818,7 +837,7 @@ class HybridOrganizationChart {
 			</section>
 			<div class="hrms-org-list-caption">${this.search_term ? __("全组织搜索结果") : __("直属下级")} · ${children.length}</div>
 			${children.length ? `<div class="hrms-org-level-rows">${children.map(node => `<button type="button" class="hrms-org-level-row" data-action="browse-node" data-node-id="${escape(node.node_id)}">
-				<span><strong>${escape(node.name)}</strong><small>${escape(node.title)}${node.reporting_scope_pending ? " · 分管待设置" : ""}</small>${node.chart_grade?.label ? `<small>职级：${escape(node.chart_grade.label)}</small>` : ""}${this.search_term ? `<small>${escape(this.node_path(node.node_id).slice(0, -1).map(parent => parent.name).join(" / "))}</small>` : ''}</span>
+				<span><strong>${escape(node.name)}</strong><small>${escape(node.title)}${node.reporting_scope_pending ? " · 分管待设置" : ""}</small>${node.chart_grade?.label ? `<small>职级：${escape(node.chart_grade.label)}</small>` : ""}${node.source_grade_tags ? `<small>${escape(this.source_grade_text(node))}</small>` : ""}${this.search_term ? `<small>${escape(this.node_path(node.node_id).slice(0, -1).map(parent => parent.name).join(" / "))}</small>` : ''}</span>
 				<span class="hrms-org-row-info">${(node.lines || []).slice(0, 3).map(escape).join("<br>") + ((node.lines || []).length > 3 ? `<small>另有 ${node.lines.length - 3} 人，点击查看</small>` : "") || (node.department ? `${__("关联部门")}：${escape(node.department)}` : __("负责人待设置"))}<small>${(node.children || []).length} ${__("个下级")} · ${__("实际")} ${escape(this.staffing_value(node, "current_headcount"))} · ${__("编制")} ${escape(this.staffing_value(node, "planned_headcount"))} · ${__("空缺")} ${escape(this.staffing_value(node, "vacancy_count"))}</small></span><span aria-hidden="true">›</span>
 			</button>`).join("")}</div>` : `<div class="hrms-org-list-empty">${this.search_term ? __("没有匹配的组织节点") : __("暂无下级机构，可新增下级或查看人员明细。")}</div>`}
 			${has_people && !this.search_term ? `<section class="hrms-org-inline-people"><div class="hrms-org-roster-heading"><h3>${current.node_type === "company" ? __("待完善部门的人员") : current.organization_node_type === "岗位" || current.node_type === "organization_position" ? __("岗位人员") : __("本部门人员")}</h3><input class="form-control" data-roster-search aria-label="搜索本层人员" placeholder="搜索姓名、工号、职位"></div><div data-inline-people>${__("正在读取人员…")}</div></section>` : ''}
@@ -900,6 +919,7 @@ class HybridOrganizationChart {
 						${this.render_node_heading(node)}
 						<span>${frappe.utils.escape_html(node.title || "")}${node.reporting_scope_pending ? " · 分管待设置" : ""}</span>
 						${node.chart_grade?.label ? `<small>职级：${frappe.utils.escape_html(node.chart_grade.label)}${node.chart_grade.rank != null ? ` · 等级 ${frappe.utils.escape_html(String(node.chart_grade.rank))}` : ""}</small>` : ""}
+						${node.source_grade_tags ? `<small>${frappe.utils.escape_html(this.source_grade_text(node))}</small>` : ""}
 						${this.render_node_lines(node)}
 						${node.card_content ? `<p class="hrms-org-node-note">${frappe.utils.escape_html(node.card_content)}</p>` : ""}
 						${this.render_vacancy_marker(node)}
@@ -1399,6 +1419,7 @@ class HybridOrganizationChart {
 			add(node.name, "heading");
 			add(`${node.title || ""}${node.reporting_scope_pending ? " · 分管待设置" : ""}`, "muted");
 			if (node.chart_grade?.label) add(`职级：${node.chart_grade.label}${node.chart_grade.rank != null ? ` · 等级 ${node.chart_grade.rank}` : ""}`, "muted");
+			add(this.source_grade_text(node), "muted");
 			if (node.people?.length) {
 				for (const person of node.people) {
 					if (!complete && this.search_term && ![person.name, person.employee_name, person.employee_code, person.department, person.designation, person.grade, person.role].filter(Boolean).join(" ").toLowerCase().includes(this.search_term)) continue;

@@ -99,6 +99,8 @@ def reconcile(company):
 	departments = {d.name: d for d in frappe.get_list("Department", filters={"company": company, "disabled": 0},
 		fields=["name", "department_name", "parent_department"], limit_page_length=0)}
 	staff = get_candidates(company, allow_company=True)["employees"]
+	from hrms.utils.organization_scope import department_scopes
+	scopes = department_scopes({n.name: {"config": n.manual_config, "parent": n.parent_node} for n in manual["nodes"]}, departments.values())
 	groups = defaultdict(list)
 	by_department = defaultdict(list)
 	issues = []
@@ -187,7 +189,7 @@ def reconcile(company):
 	for node in manual["nodes"]:
 		config = node.manual_config
 		if config.get("assignment_rules_manual"):
-			resolved = reconcile_bindings(config, staff)
+			resolved = reconcile_bindings(config, staff, allowed_departments=scopes.get(node.name))
 			valid = [b for b in resolved["template_bindings"] if b.get("employee") and not b.get("issue")]
 			primary = set(b["employee"] for b in valid if b.get("slot") == "primary")
 			proxy = set(b["employee"] for b in valid if b.get("slot") == "proxy")
@@ -195,10 +197,10 @@ def reconcile(company):
 				"proxy_employee": next(iter(proxy)) if len(proxy) == 1 else None})
 			reserved.update(resolved["assigned_employees"])
 		elif config.get("roster_subset") and config.get("roster_auto_sync") and config.get("template_bindings") is not None:
-			update(node, reconcile_bindings(config, staff))
+			update(node, reconcile_bindings(config, staff, allowed_departments=scopes.get(node.name)))
 			reserved.update(node.manual_config.get("assigned_employees", []))
 		elif config.get("template_leadership") and config.get("roster_auto_sync"):
-			resolved = reconcile_bindings(config, staff)
+			resolved = reconcile_bindings(config, staff, allowed_departments=scopes.get(node.name))
 			update(node, {"template_bindings": resolved["template_bindings"]})
 			reserved.update(name for name in resolved["assigned_employees"] if staff_by_name[name].department == config.get("department"))
 	for node in manual["nodes"]:
@@ -247,7 +249,7 @@ def reconcile(company):
 		if config.get("roster_subset"):
 			continue
 		if config.get("template_leadership") and config.get("roster_auto_sync"):
-			resolved = reconcile_bindings(config, staff)
+			resolved = reconcile_bindings(config, staff, allowed_departments=scopes.get(node.name))
 			bindings = resolved["template_bindings"]
 			primary = [b["employee"] for b in bindings if not b.get("issue") and b.get("slot") == "primary"]
 			proxy = [b["employee"] for b in bindings if not b.get("issue") and b.get("slot") == "proxy"]
