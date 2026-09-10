@@ -886,6 +886,11 @@
 		// silently close a menu they intentionally left open.
 		if (window.frappe && frappe.set_route && route.indexOf("/desk/") === 0) {
 			announce_hrms_route_change(route);
+			if (route.replace(/\/$/, "") === "/desk/employee-separation") {
+				// A submitted form can leave docstatus=0 in the current URL. The
+				// sidebar entry always means the submitted pending-approval queue.
+				frappe.route_options = { docstatus: 1, boarding_status: "Pending" };
+			}
 			var route_parts = route_to_parts(route);
 			frappe.set_route.apply(frappe, route_parts);
 			return;

@@ -2,8 +2,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync('hrms/hr/page/payroll_input_center/payroll_input_center.js', 'utf8');
+const frappeStub = { pages: { 'payroll-input-center': {} }, utils: { escape_html: (s) => String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;') } };
 const Payroll = vm.runInNewContext(`${source}\nPayrollInputCenter`, {
-  frappe: { pages: { 'payroll-input-center': {} }, utils: { escape_html: (s) => String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;') } },
+  frappe: frappeStub,
 });
 const view = Object.create(Payroll.prototype);
 const today = '2026-09-09';
@@ -42,4 +43,10 @@ assert.match(historyPageSource, /hrms-pay-history-record-table/, 'the page inclu
 assert.match(historyPageSource, /hrms-pay-history-timeline/, 'the original growth-card history remains on the page');
 assert.ok(historyPageSource.lastIndexOf('hrms-pay-history-record-table') < historyPageSource.lastIndexOf('hrms-pay-history-timeline'), 'Excel records render above the growth-card history');
 assert.match(historyPageSource, /\["生效日期", "状态", "底薪"/, 'salary records expose separate searchable amount and audit columns');
+assert.match(source, /standing_history_from_current_route\(\)/, 'personal history can be opened by a stable route from the employee profile');
+assert.match(source, /frappe\.set_route\("payroll-input-center", "salary-register"\)/, 'history return clears the employee route and restores the register');
+frappeStub.get_route = () => ['payroll-input-center', 'salary-register', 'HR-EMP-0001', '社保', 'employee-detail'];
+assert.equal(view.standing_history_from_current_route().employee, 'HR-EMP-0001');
+assert.equal(view.standing_history_from_current_route().type, '社保');
+assert.equal(view.standing_history_from_current_route().return_to_employee_detail, true);
 console.log('Standing history: approval/date boundaries, same-day revisions, salary sum, stopped contributions, charts and full-page record table passed.');

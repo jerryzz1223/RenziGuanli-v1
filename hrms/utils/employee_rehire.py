@@ -8,6 +8,33 @@ EMPLOYEE_DOCTYPE = "Employee"
 IDENTITY_NUMBER_FIELD = "passport_number"
 IDENTITY_NUMBER_FIELDS = (IDENTITY_NUMBER_FIELD, "custom_id_number")
 PREVIOUS_EMPLOYMENT_FIELD = "custom_rehired_from_employee"
+REHIRE_AUTOFILL_FIELDS = (
+	"salutation",
+	"first_name",
+	"middle_name",
+	"last_name",
+	"gender",
+	"date_of_birth",
+	"custom_id_type",
+	"custom_native_place",
+	"custom_ethnicity",
+	"marital_status",
+	"custom_marital_status_text",
+	"blood_group",
+	"cell_number",
+	"personal_email",
+	"current_address",
+	"permanent_address",
+	"person_to_be_contacted",
+	"relation",
+	"emergency_phone_number",
+	"custom_education_category",
+	"custom_study_mode",
+	"custom_education_level",
+	"custom_graduation_school",
+	"custom_major",
+	"custom_transport",
+)
 
 
 def clean_identity_number(value):
@@ -64,6 +91,18 @@ def find_previous_employment(identity_number, exclude_employee=None):
 	"""Return the latest prior employment record for a new employee document."""
 	history = find_employment_history(identity_number, exclude_employee)
 	return history[-1] if history else None
+
+
+def get_rehire_autofill_values(employee):
+	"""Copy person-level values without carrying an old employment into the new one."""
+	values = {}
+	for fieldname in REHIRE_AUTOFILL_FIELDS:
+		if not employee.meta.has_field(fieldname):
+			continue
+		value = employee.get(fieldname)
+		if value is not None and clean_identity_number(value):
+			values[fieldname] = value
+	return values
 
 
 def link_new_employee_to_previous_employment(employee):

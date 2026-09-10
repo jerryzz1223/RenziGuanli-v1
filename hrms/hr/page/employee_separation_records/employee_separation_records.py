@@ -20,9 +20,9 @@ def get_separation_records(
 	can_read_separations = frappe.has_permission("Employee Separation", ptype="read")
 	if can_read_separations:
 		try:
-			submitted_employee_names = _get_submitted_separation_employee_names(company)
+			approved_employee_names = _get_approved_separation_employee_names(company)
 			missing_employee_names = [
-				name for name in submitted_employee_names if name not in employees_by_name
+				name for name in approved_employee_names if name not in employees_by_name
 			]
 			for employee in _get_employees_by_names(missing_employee_names, company):
 				employees_by_name.setdefault(employee.name, employee)
@@ -101,12 +101,14 @@ def _get_departed_employees(company=None):
 	return [row for row in rows if _is_departed_employee(row)]
 
 
-def _get_submitted_separation_employee_names(company=None):
+def _get_approved_separation_employee_names(company=None):
 	meta = frappe.get_meta("Employee Separation")
 	if not _meta_has_field(meta, "employee"):
 		return []
 
 	filters = {"docstatus": 1}
+	if _meta_has_field(meta, "boarding_status"):
+		filters["boarding_status"] = "Completed"
 	if company and _meta_has_field(meta, "company"):
 		filters["company"] = company
 
@@ -166,7 +168,11 @@ def _get_latest_separations(employee_names):
 
 	rows = frappe.get_list(
 		"Employee Separation",
-		filters={"employee": ["in", employee_names], "docstatus": ["<", 2]},
+		filters={
+			"employee": ["in", employee_names],
+			"docstatus": 1,
+			"boarding_status": "Completed",
+		},
 		fields=fields,
 		order_by=", ".join(
 			f"{fieldname} {'asc' if fieldname == 'employee' else 'desc'}"

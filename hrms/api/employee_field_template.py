@@ -19,6 +19,7 @@ from hrms.utils.employee_rehire import (
 	PREVIOUS_EMPLOYMENT_FIELD,
 	clean_identity_number,
 	get_employee_identity_number,
+	get_rehire_autofill_values,
 	find_employment_history,
 )
 
@@ -3842,6 +3843,77 @@ def _make_related_record(
 	}
 
 
+def _build_employee_standing_pay_summary(salary_rows, contribution_rows):
+	"""Build the current salary/social/fund snapshot from newest-first rows."""
+	result = {"salary": None, "social": None, "housing": None}
+	if salary_rows:
+		salary = salary_rows[0]
+		amount = salary.get("full_salary")
+		if amount in (None, ""):
+			amount = sum(
+				flt(salary.get(fieldname))
+				for fieldname in (
+					"base_salary", "function_allowance", "certificate_allowance", "multi_skill_allowance"
+				)
+			)
+		result["salary"] = {
+			"amount": flt(amount),
+			"effective_date": str(salary.get("effective_date") or ""),
+		}
+
+	latest_contributions = {}
+	for contribution in contribution_rows:
+		latest_contributions.setdefault(contribution.get("contribution_type"), contribution)
+	for contribution_type, target in (("社保", "social"), ("公积金", "housing")):
+		contribution = latest_contributions.get(contribution_type)
+		if not contribution:
+			continue
+		enabled = bool(cint(contribution.get("enabled")))
+		result[target] = {
+			"enabled": enabled,
+			"personal_amount": flt(contribution.get("personal_amount")) if enabled else 0,
+			"company_amount": flt(contribution.get("company_amount")) if enabled else 0,
+			"effective_date": str(contribution.get("effective_date") or ""),
+		}
+	return result
+
+
+def _get_employee_standing_pay_summary(doc):
+	"""Return sensitive current standards only to payroll-authorized users."""
+	from hrms.payroll.standing_permissions import can_submit
+	if not can_submit():
+		return {"visible": False}
+
+	as_of = frappe.utils.nowdate()
+	common_filters = {
+		"company": doc.get("company"),
+		"employee": doc.name,
+		"status": "已批准",
+		"effective_date": ["<=", as_of],
+	}
+	salary_rows = frappe.get_all(
+		"HRMS Employee Salary Change",
+		filters={**common_filters, "exclude_from_payroll": 0},
+		fields=[
+			"name", "effective_date", "full_salary", "base_salary", "function_allowance",
+			"certificate_allowance", "multi_skill_allowance",
+		],
+		order_by="effective_date desc, approved_on desc, creation desc, name desc",
+		limit_page_length=1,
+	)
+	contribution_rows = frappe.get_all(
+		"HRMS Employee Contribution Change",
+		filters=common_filters,
+		fields=[
+			"name", "contribution_type", "effective_date", "enabled",
+			"personal_amount", "company_amount",
+		],
+		order_by="effective_date desc, approved_on desc, creation desc, name desc",
+		limit_page_length=100,
+	)
+	return {"visible": True, **_build_employee_standing_pay_summary(salary_rows, contribution_rows)}
+
+
 def _get_employee_related_records(doc):
 	reward_punishment_items = _get_employee_doctype_items(
 		"HRMS Employee Reward Punishment",
@@ -4106,6 +4178,13 @@ def _get_previous_employment(doc, employment_history):
 	return employment_history[current_index - 1] if current_index > 0 else None
 
 
+def _get_current_employment(doc, employment_history):
+	"""Return the newest profile when the user is viewing an older employment."""
+	if not employment_history or employment_history[-1].name == doc.name:
+		return None
+	return employment_history[-1]
+
+
 def _get_employee_growth_timeline(doc, employment_history):
 	"""Build one chronological timeline across every employment profile."""
 	items = []
@@ -4170,9 +4249,18 @@ def _get_employee_growth_timeline(doc, employment_history):
 
 @frappe.whitelist()
 def check_employee_rehire_history(identity_number: str):
-	"""Return a privacy-safe warning for the Employee creation form."""
+	"""Return the latest readable person profile for one-time new-form autofill."""
 	frappe.has_permission(EMPLOYEE_DOCTYPE, "create", throw=True)
-	return {"has_history": bool(find_employment_history(clean_identity_number(identity_number)))}
+	history = find_employment_history(clean_identity_number(identity_number))
+	if not history:
+		return {"has_history": False, "autofill_values": {}}
+	previous_doc = frappe.get_doc(EMPLOYEE_DOCTYPE, history[-1].name)
+	previous_doc.check_permission("read")
+	return {
+		"has_history": True,
+		"source_employee": previous_doc.name,
+		"autofill_values": get_rehire_autofill_values(previous_doc),
+	}
 
 
 @frappe.whitelist()
@@ -4182,6 +4270,7 @@ def get_employee_detail(employee: str):
 	department_display = _department_display_name(doc.get("department"))
 	employment_history = _get_employee_rehire_history(doc)
 	previous_employment = _get_previous_employment(doc, employment_history)
+	current_employment = _get_current_employment(doc, employment_history)
 	return {
 		"header": {
 			"name": doc.name,
@@ -4208,9 +4297,17 @@ def get_employee_detail(employee: str):
 			}
 			if previous_employment
 			else None,
+			"current_employment": {
+				"name": current_employment.name,
+				"employee_name": current_employment.get("employee_name"),
+				"custom_employee_code": current_employment.get("custom_employee_code"),
+			}
+			if current_employment
+			else None,
 		},
 		"growth_records": _get_employee_growth_timeline(doc, employment_history),
 		"sections": _get_employee_detail_sections(doc, department_display),
+		"standing_pay_summary": _get_employee_standing_pay_summary(doc),
 		"materials": _get_employee_materials(doc),
 		"related_records": _get_employee_related_records(doc),
 		"permissions": {

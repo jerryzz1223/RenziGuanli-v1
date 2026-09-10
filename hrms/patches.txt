@@ -71,3 +71,4 @@ hrms.patches.v16_0.migrate_standing_pay_registers #2026-09-09
 
 hrms.patches.v16_0.ensure_standing_pay_roles #2026-09-10
 hrms.patches.v16_0.flatten_yongxin_roster_department_parents #2026-09-10
+hrms.patches.v16_0.migrate_employee_separation_approval_queue #2026-09-10

@@ -55,7 +55,7 @@ frappe.ui.form.on("Employee", {
 	},
 
 	passport_number(frm) {
-		show_employee_rehire_notice(frm);
+		load_employee_rehire_profile(frm);
 	},
 
 	before_save(frm) {
@@ -109,7 +109,24 @@ function setup_employee_form_defaults(frm) {
 	}
 }
 
-function show_employee_rehire_notice(frm) {
+function is_blank_employee_form_value(value) {
+	return value === undefined || value === null || String(value).trim() === "";
+}
+
+function apply_employee_rehire_autofill(frm, values = {}) {
+	const empty_values = Object.fromEntries(
+		Object.entries(values).filter(
+			([fieldname, value]) =>
+				frm.fields_dict[fieldname] &&
+				is_blank_employee_form_value(frm.doc[fieldname]) &&
+				!is_blank_employee_form_value(value),
+		),
+	);
+	if (!Object.keys(empty_values).length) return Promise.resolve(0);
+	return Promise.resolve(frm.set_value(empty_values)).then(() => Object.keys(empty_values).length);
+}
+
+function load_employee_rehire_profile(frm) {
 	if (!frm.is_new()) return;
 	const identity_number = String(frm.doc.passport_number || "").trim();
 	if (!identity_number) {
@@ -122,15 +139,20 @@ function show_employee_rehire_notice(frm) {
 	frappe.call({
 		method: "hrms.api.employee_field_template.check_employee_rehire_history",
 		args: { identity_number },
-	}).then((response) => {
+	}).then(async (response) => {
 		if (frm.__hrms_rehire_notice_request_id !== request_id) return;
 		if (!response.message?.has_history || String(frm.doc.passport_number || "").trim() !== identity_number) return;
 		frm.__hrms_rehire_notice_identity = identity_number;
+		const filled_count = await apply_employee_rehire_autofill(frm, response.message.autofill_values);
+		if (frm.__hrms_rehire_notice_request_id !== request_id) return;
 		frappe.msgprint({
 			title: __("发现历史任职档案"),
 			indicator: "orange",
 			message: __(
-				"该证件号在系统中已有任职记录。继续创建会保留原档案，并按本次填写的工号新建任职档案；新档案可跳转前次档案，成长记录会连续展示。",
+				filled_count
+					? "该证件号在系统中已有任职记录，已自动带入 {0} 项原档案中的个人、联系和教育资料，已填内容不会被覆盖。继续创建会保留原档案，并按本次填写的工号新建任职档案。"
+					: "该证件号在系统中已有任职记录。原档案没有可带入的空缺资料；继续创建会保留原档案，并按本次填写的工号新建任职档案。",
+				[filled_count],
 			),
 		});
 	}).catch(() => {});

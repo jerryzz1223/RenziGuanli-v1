@@ -1366,6 +1366,9 @@ class HybridOrganizationChart {
 
 	toggle_node(node_id) {
 		if (!node_id) return;
+		// A node-level toggle should keep the reader at the current branch.
+		// Re-running readable/overview fitting scrolls the canvas back to the top.
+		this.view_mode = "manual";
 		if (this.collapsed_nodes.has(node_id)) {
 			this.collapsed_nodes.delete(node_id);
 		} else {

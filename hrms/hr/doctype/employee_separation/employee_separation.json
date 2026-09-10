@@ -15,6 +15,8 @@
   "column_break_7",
   "company",
   "boarding_status",
+  "approved_by",
+  "approved_on",
   "resignation_letter_date",
   "boarding_begins_on",
   "project",
@@ -63,8 +65,23 @@
    "default": "Pending",
    "fieldname": "boarding_status",
    "fieldtype": "Select",
-   "label": "状态",
+   "label": "审批状态",
    "options": "Pending\nIn Process\nCompleted",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "approved_by",
+   "fieldtype": "Link",
+   "label": "审批人",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "approved_on",
+   "fieldtype": "Datetime",
+   "label": "审批时间",
    "read_only": 1
   },
   {
@@ -195,12 +212,14 @@
    "read": 1,
    "report": 1,
    "role": "HR Manager",
+   "submit": 1,
    "write": 1
   },
   {
    "create": 1,
    "read": 1,
    "role": "HR User",
+   "submit": 1,
    "write": 1
   }
  ],

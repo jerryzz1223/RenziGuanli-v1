@@ -555,6 +555,16 @@ class PayrollInputCenter {
 		return this.resolve_tab(route[1] || "monthly-workbench");
 	}
 
+	standing_history_from_current_route() {
+		const route = frappe.get_route ? frappe.get_route() : [];
+		if (route[0] !== "payroll-input-center" || !route[2]) return null;
+		return {
+			employee: route[2],
+			type: ["定薪", "社保", "公积金"].includes(route[3]) ? route[3] : "定薪",
+			return_to_employee_detail: route[4] === "employee-detail",
+		};
+	}
+
 	tab_from_route_detail(detail) {
 		const value = String((detail && (detail.slug || detail.route)) || "");
 		const normalized = value.replace(/^\/desk\/?/, "").replace(/^\/app\/?/, "").replace(/\/$/, "");
@@ -790,6 +800,11 @@ class PayrollInputCenter {
 		const master = ["salary-assignments", "salary-register", "contribution-register", "contribution-view", "salary-changes", "salary-approvals", "salary-history", "contribution-changes", "contribution-approvals", "contribution-history"].includes(this.active_tab);
 		const scope = this.wrapper.querySelector(".hrms-payroll-global-scope");
 		if (scope) scope.hidden = master;
+		const standing_history = this.standing_history_from_current_route();
+		if (standing_history && master) {
+			this.show_standing_history(standing_history.employee, standing_history.type);
+			return;
+		}
 		if (["salary-approvals", "contribution-approvals"].includes(this.active_tab)) {
 			this.load_standing_approval_page(this.active_tab.startsWith("salary-") ? "salary" : "contribution"); return;
 		}
@@ -3233,7 +3248,17 @@ class PayrollInputCenter {
 				? ["生效日期", "状态", "底薪", "职能津贴", "证书津贴", "多能工津贴", "定薪合计", "较前次", "修改人", "修改时间", "审批人", "审批时间", "修改原因", "审批意见"]
 				: ["生效日期", "状态", "缴费状态", "个人承担", "公司承担", "修改人", "修改时间", "审批人", "审批时间", "修改原因", "审批意见"];
 			this.body().innerHTML = `<div class="hrms-pay-history-page"><div class="hrms-pay-history-page-head"><div><button class="btn btn-link btn-sm" type="button" data-history-back>← 返回列表</button><h2>${esc(rows[0]?.employee_name || employee)} · 薪资变化</h2><p>${esc(rows[0]?.employee_code || employee)}${rows[0]?.department ? ` · ${esc(rows[0].department)}` : ""}</p></div></div><div class="hrms-pay-history"><div class="hrms-pay-history-tabs" role="group" aria-label="记录类型">${["定薪", "社保", "公积金"].map((label) => `<button class="btn ${label === type ? "btn-primary" : "btn-default"}" data-history-type="${label}" aria-pressed="${label === type}">${label}</button>`).join("")}</div><section class="hrms-pay-history-panel hrms-pay-history-chart-panel"><div class="hrms-pay-history-heading"><div><h3>${esc(type)}变化趋势</h3><p>仅展示已批准且已生效的标准</p></div><div class="hrms-pay-history-current"><small>当前${type === "定薪" ? "定薪合计" : "个人承担"}</small><strong>${current ? `¥${money(current.amount)}` : "尚未设置"}</strong>${current ? `<small>${esc(current.date)} 起${type !== "定薪" ? ` · 公司 ¥${money(current.company)}` : ""}</small>` : ""}</div></div>${this.standing_history_chart(model, type, today)}</section><section class="hrms-pay-history-panel"><div class="hrms-pay-history-heading"><div><h3>${esc(type)} Excel 修改记录</h3><p>共 ${records.length} 条记录 · 可点击列名排序并在列下方搜索</p></div></div><div class="table-responsive hrms-pay-history-table-wrap"><table class="table table-bordered table-sm hrms-standing-history hrms-pay-history-record-table"><thead><tr>${headers.map((label) => `<th>${esc(label)}</th>`).join("")}</tr></thead><tbody>${recordRows || `<tr><td colspan="${headers.length}">暂无变更记录</td></tr>`}</tbody></table></div></section><section class="hrms-pay-history-panel"><div class="hrms-pay-history-heading"><div><h3>${esc(type)}成长记录</h3><p>共 ${records.length} 条记录 · 最近提交在前，待审核及驳回记录均保留</p></div></div><div class="hrms-pay-history-timeline">${timeline || '<div class="hrms-pay-history-empty">暂无变更记录</div>'}</div></section></div></div>`;
-			this.body().querySelector("[data-history-back]")?.addEventListener("click", () => this.load_active_tab());
+			this.body().querySelector("[data-history-back]")?.addEventListener("click", () => {
+				const history_route = this.standing_history_from_current_route();
+				if (history_route?.return_to_employee_detail) {
+					frappe.set_route("employee-detail", employee);
+					return;
+				}
+				// The destination uses the same active tab. Expire the route cache so
+				// clearing the employee segment immediately restores the register.
+				this.last_route_refresh_at = 0;
+				frappe.set_route("payroll-input-center", "salary-register");
+			});
 			this.body().querySelectorAll("[data-history-type]").forEach((button) => button.addEventListener("click", () => render(button.dataset.historyType)));
 		};
 		render(["定薪", "社保", "公积金"].includes(initialType) ? initialType : "定薪");

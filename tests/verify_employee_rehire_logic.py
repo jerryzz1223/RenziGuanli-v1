@@ -37,7 +37,11 @@ sys.modules["frappe"] = frappe
 sys.modules["frappe.utils"] = utils
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from hrms.utils.employee_rehire import find_employment_history, link_new_employee_to_previous_employment  # noqa: E402
+from hrms.utils.employee_rehire import (  # noqa: E402
+	find_employment_history,
+	get_rehire_autofill_values,
+	link_new_employee_to_previous_employment,
+)
 
 
 history = find_employment_history(" ID-001 ")
@@ -62,4 +66,16 @@ employee = NewEmployee(passport_number="ID-001")
 previous = link_new_employee_to_previous_employment(employee)
 assert previous.name == "EMP-2022"
 assert employee["custom_rehired_from_employee"] == "EMP-2022"
-print("PASS: rehire matching includes legacy ID-card records and links the latest prior employment")
+
+profile = NewEmployee(
+	first_name="张三",
+	cell_number="13800000000",
+	department="品保课",
+	designation="检验员",
+	custom_employee_code="22002",
+	date_of_joining="2022-04-01",
+)
+profile.meta.has_field = lambda fieldname: fieldname in profile
+autofill_values = get_rehire_autofill_values(profile)
+assert autofill_values == {"first_name": "张三", "cell_number": "13800000000"}
+print("PASS: rehire matching, latest prior link, and safe person-profile autofill are verified")

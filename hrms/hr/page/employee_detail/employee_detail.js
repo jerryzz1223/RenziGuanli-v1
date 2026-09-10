@@ -388,6 +388,41 @@ class EmployeeDetailPage {
 					font-size: 15px;
 					font-weight: 600;
 				}
+				.hrms-employee-standing-summary {
+					display: grid;
+					grid-template-columns: repeat(3, minmax(0, 1fr));
+					gap: 12px;
+					margin-bottom: 18px;
+				}
+				.hrms-employee-standing-card {
+					display: grid;
+					gap: 5px;
+					padding: 14px 16px;
+					border: 1px solid var(--hrms-border);
+					border-radius: 7px;
+					background: #fbfcfd;
+					color: inherit;
+					text-align: left;
+					transition: border-color 0.15s ease, box-shadow 0.15s ease;
+				}
+				.hrms-employee-standing-card:hover,
+				.hrms-employee-standing-card:focus-visible {
+					border-color: #93c5fd;
+					box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
+				}
+				.hrms-employee-standing-card > span,
+				.hrms-employee-standing-card > small {
+					color: var(--hrms-muted);
+				}
+				.hrms-employee-standing-card > strong {
+					font-size: 18px;
+					font-weight: 600;
+				}
+				.hrms-employee-standing-card > em {
+					color: #2563eb;
+					font-size: 12px;
+					font-style: normal;
+				}
 				.hrms-employee-detail-info-grid {
 					display: grid;
 					grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -756,6 +791,9 @@ class EmployeeDetailPage {
 						padding: 0;
 						row-gap: 12px;
 					}
+					.hrms-employee-standing-summary {
+						grid-template-columns: 1fr;
+					}
 					.hrms-employee-detail-field {
 						grid-template-columns: 110px minmax(0, 1fr);
 					}
@@ -771,6 +809,7 @@ class EmployeeDetailPage {
 	render_header(header) {
 		const department_display = this.get_department_display(header);
 		const previous_employment = header.previous_employment;
+		const current_employment = header.current_employment;
 		const meta = [
 			this.get_employment_type_display(header),
 			header.custom_employee_code ? `${__("工号")}：${header.custom_employee_code}` : "",
@@ -798,6 +837,7 @@ class EmployeeDetailPage {
 					</div>
 					<div class="hrms-employee-detail-actions hrms-employee-detail-action-strip">
 						${previous_employment?.name ? `<button class="btn btn-default btn-sm" data-action="open-previous-employment" data-previous-employee="${frappe.utils.escape_html(previous_employment.name)}">${frappe.utils.escape_html(__("查看前次任职档案"))}</button>` : ""}
+						${current_employment?.name ? `<button class="btn btn-default btn-sm" data-action="open-current-employment" data-current-employee="${frappe.utils.escape_html(current_employment.name)}">${frappe.utils.escape_html(__("查看当前任职档案"))}</button>` : ""}
 						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="upload-photo">${__("上传照片")}</button>` : ""}
 						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="edit-employee">${__("编辑资料")}</button>` : ""}
 						<button class="btn btn-default btn-sm" data-action="compare">${__("员工对比")}</button>
@@ -959,6 +999,7 @@ class EmployeeDetailPage {
 						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-xs" data-action="edit-employee">${__("编辑资料")}</button>` : ""}
 					</div>
 				</div>
+				${tab_label === "工资社保" ? this.render_standing_pay_summary() : ""}
 				${
 					fields.length
 						? `<div class="hrms-employee-detail-info-grid">
@@ -969,6 +1010,38 @@ class EmployeeDetailPage {
 				${this.render_related_blocks(tab_label)}
 				${tab_label === "在职信息" ? this.render_apple_tree_summary() : ""}
 				${tab_label === "工资社保" ? "" : this.render_add_field_hint()}
+			</div>
+		`;
+	}
+
+	render_standing_pay_summary() {
+		const summary = this.detail?.standing_pay_summary || {};
+		if (!summary.visible) return "";
+		const money = (value) => Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+		const cards = [
+			{ type: "定薪", label: "当前定薪", value: summary.salary },
+			{ type: "社保", label: "当前社保", value: summary.social },
+			{ type: "公积金", label: "当前公积金", value: summary.housing },
+		];
+		return `
+			<div class="hrms-employee-standing-summary" aria-label="${__("当前工资社保标准")}">
+				${cards.map((card) => {
+					const value = card.value;
+					const stopped = card.type !== "定薪" && value && !value.enabled;
+					const primary = !value
+						? __("尚未设置")
+						: stopped
+							? __("已停缴")
+							: card.type === "定薪"
+								? `${money(value.amount)} ${__("元")}`
+								: `${__("个人")} ${money(value.personal_amount)} ${__("元")}`;
+					const secondary = !value
+						? __("暂无已生效标准")
+						: card.type === "定薪" || stopped
+							? `${value.effective_date || "-"} ${__("起")}`
+							: `${__("公司")} ${money(value.company_amount)} ${__("元")} · ${value.effective_date || "-"} ${__("起")}`;
+					return `<button type="button" class="hrms-employee-standing-card" data-standing-pay-history="${frappe.utils.escape_html(card.type)}"><span>${frappe.utils.escape_html(__(card.label))}</span><strong>${frappe.utils.escape_html(primary)}</strong><small>${frappe.utils.escape_html(secondary)}</small><em>${__("查看变化记录")} →</em></button>`;
+				}).join("")}
 			</div>
 		`;
 	}
@@ -1184,6 +1257,11 @@ class EmployeeDetailPage {
 				}
 			});
 		});
+		this.wrapper.querySelectorAll("[data-standing-pay-history]").forEach((button) => {
+			button.addEventListener("click", () => {
+				frappe.set_route("payroll-input-center", "salary-register", this.employee, button.dataset.standingPayHistory, "employee-detail");
+			});
+		});
 		this.wrapper.querySelectorAll("[data-action='transfer']").forEach((button) => {
 			button.addEventListener("click", (event) => {
 				event.preventDefault();
@@ -1223,6 +1301,12 @@ class EmployeeDetailPage {
 			button.addEventListener("click", (event) => {
 				event.preventDefault();
 				if (button.dataset.previousEmployee) frappe.set_route("employee-detail", button.dataset.previousEmployee);
+			});
+		});
+		this.wrapper.querySelectorAll("[data-action='open-current-employment']").forEach((button) => {
+			button.addEventListener("click", (event) => {
+				event.preventDefault();
+				if (button.dataset.currentEmployee) frappe.set_route("employee-detail", button.dataset.currentEmployee);
 			});
 		});
 		this.wrapper.querySelectorAll("[data-action='upload-photo']").forEach((button) => {

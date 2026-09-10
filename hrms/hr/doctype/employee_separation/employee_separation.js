@@ -59,6 +59,41 @@ frappe.ui.form.on("Employee Separation", {
 				__("员工"),
 			);
 		}
+
+		if (frm.doc.docstatus === 1 && frm.doc.boarding_status === "Pending") {
+			frm.set_intro(__("离职申请已提交，正在等待审批；审批前不改变员工工作性质。"), "orange");
+		}
+
+		if (frm.doc.docstatus === 1 && frm.doc.boarding_status === "Completed") {
+			const departure_is_future = frappe.datetime.get_diff(frm.doc.boarding_begins_on, frappe.datetime.get_today()) > 0;
+			frm.set_intro(
+				departure_is_future
+					? __("离职申请已审批；未到离职日期，员工工作性质为“待离职”。")
+					: __("离职申请已审批且离职日期已到，员工工作性质为“离职”。"),
+				"green",
+			);
+		}
+
+		if (
+			frm.doc.docstatus === 1 &&
+			frm.doc.boarding_status === "Pending" &&
+			(frappe.session.user === "Administrator" || frappe.user.has_role("System Manager"))
+		) {
+			frm.add_custom_button(__("审批通过"), function () {
+				frappe.confirm(
+					__("审批通过后，未到离职日期的员工将变为“待离职”，到期后自动变为“离职”。是否继续？"),
+					() => {
+						frappe.call({
+							method: "hrms.hr.doctype.employee_separation.employee_separation.approve_employee_separation",
+							args: { separation_name: frm.doc.name },
+							freeze: true,
+							freeze_message: __("正在审批离职申请……"),
+							callback: () => frm.reload_doc(),
+						});
+					},
+				);
+			}).addClass("btn-primary");
+		}
 	},
 
 	employee: function (frm) {

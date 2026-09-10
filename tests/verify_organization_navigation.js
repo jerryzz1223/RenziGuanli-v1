@@ -40,6 +40,20 @@ assert(host.innerHTML.includes('&lt;script>') && !host.innerHTML.includes('<scri
 assert.equal(chart.staffing_value({...leaf,has_staffing_plan:true,planned_headcount:0},'planned_headcount'),0);
 console.log('PASS: shared navigation, role/proxy display, breadcrumbs, search paths, missing-node recovery, escaping, unknown vs explicit zero staffing');
 
+// Expanding or collapsing one branch must not re-run fit-to-view, which resets
+// the chart canvas to the top after every click.
+chart.collapsed_nodes = new Set([leaf.node_id]);
+chart.view_mode = 'readable';
+let toggleRenderCount = 0;
+chart.render_tree = () => { toggleRenderCount += 1; };
+chart.toggle_node(leaf.node_id);
+assert.equal(chart.view_mode,'manual');
+assert(!chart.collapsed_nodes.has(leaf.node_id));
+chart.toggle_node(leaf.node_id);
+assert(chart.collapsed_nodes.has(leaf.node_id));
+assert.equal(toggleRenderCount,2);
+console.log('PASS: node toggles preserve the current chart viewport instead of fitting back to the top');
+
 // Department and position members are visible without opening the side panel.
 const peopleHost = {innerHTML:''};
 chart.wrapper = {querySelector: selector => selector === '[data-inline-people]' ? peopleHost : null};

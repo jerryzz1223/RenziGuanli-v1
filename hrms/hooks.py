@@ -27,7 +27,7 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260910-sidebar-drag-reorder-v1",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260910-sidebar-drag-reorder-v1-separation-queue-v1",
 	"/assets/hrms/js/hrms_top_nav.js?v=20260909-roster-column-search",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
 	"/assets/hrms/js/hrms_file_uploader.js?v=20260827a",
@@ -268,6 +268,7 @@ scheduler_events = {
 	"hourly": [
 		"hrms.hr.doctype.daily_work_summary_group.daily_work_summary_group.trigger_emails",
 		"hrms.hr.employee_confirmation_scheduler.process_due_employee_confirmations",
+		"hrms.hr.doctype.employee_separation.employee_separation.process_due_employee_separations",
 	],
 	"hourly_long": [
 		"hrms.hr.doctype.shift_type.shift_type.update_last_sync_of_checkin",
