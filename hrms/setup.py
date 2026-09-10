@@ -2,6 +2,7 @@ import os
 
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 from frappe.desk.page.setup_wizard.install_fixtures import (
 	_,  # NOTE: this is not the real translation function
 )
@@ -861,6 +862,7 @@ def after_migrate():
 
 	from hrms.api.employee_field_template import ensure_personnel_pages
 	from hrms.api.employee_field_template import ensure_personnel_sidebar_links
+	from hrms.api.employee_field_template import ensure_employee_rehire_setup
 	from hrms.api.employee_field_template import ensure_employee_work_nature_setup
 	from hrms.api.dingtalk_integration import ensure_dingtalk_company_scope
 	from hrms.branding import apply_login_page_customizations
@@ -871,8 +873,10 @@ def after_migrate():
 
 	ensure_personnel_pages()
 	ensure_personnel_sidebar_links()
+	ensure_employee_rehire_setup()
 	ensure_employee_work_nature_setup()
 	ensure_yongxin_departments_roster_assignable()
+	hide_roster_department_tree_columns()
 	ensure_dingtalk_company_scope()
 	ensure_default_reward_punishment_rules(ignore_permissions=True)
 	apply_hrms_zh_translations()
@@ -898,6 +902,62 @@ def ensure_yongxin_departments_roster_assignable():
 		updated += 1
 	frappe.clear_cache(doctype="Department")
 	return updated
+
+
+def flatten_yongxin_roster_department_parents():
+	"""Keep roster Department records as a flat employee-reference dictionary.
+
+	The reporting tree belongs exclusively to ``Organization Node`` (the
+	"部门列表" and organization chart).  ``Department`` must still exist because
+	Employee, attendance, and payroll records link to it, but its parent links
+	must never be treated as a second management hierarchy.
+	"""
+	root = frappe.db.exists("Department", "All Departments")
+	if not root:
+		return {"updated": 0, "reason": "missing_department_root"}
+
+	departments = frappe.get_all(
+		"Department",
+		filters={"company": "永新"},
+		fields=["name", "parent_department"],
+		limit_page_length=0,
+	)
+	changes = [d for d in departments if d.name != root and d.parent_department != root]
+	backup_url = None
+	if changes:
+		from frappe.utils.file_manager import save_file
+		backup = save_file(
+			f"roster-department-parents-{frappe.generate_hash(length=10)}.json",
+			frappe.as_json({"company": "永新", "target_parent": root, "departments": changes}),
+			None, None, is_private=1,
+		)
+		backup_url = backup.file_url
+	updated = 0
+	for department in changes:
+		doc = frappe.get_doc("Department", department.name)
+		doc.parent_department = root
+		doc.save(ignore_permissions=True)
+		updated += 1
+
+	if updated:
+		frappe.clear_cache(doctype="Department")
+	return {"updated": updated, "root": root, "backup_url": backup_url}
+
+
+def hide_roster_department_tree_columns():
+	"""Keep the Department list focused on roster-reference fields, not a tree."""
+	meta = frappe.get_meta("Department")
+	for fieldname in ("parent_department", "is_group"):
+		if meta.has_field(fieldname):
+			make_property_setter(
+				"Department",
+				fieldname,
+				"in_list_view",
+				0,
+				"Check",
+				validate_fields_for_doctype=False,
+			)
+	frappe.clear_cache(doctype="Department")
 
 
 def delete_custom_fields(custom_fields: dict):

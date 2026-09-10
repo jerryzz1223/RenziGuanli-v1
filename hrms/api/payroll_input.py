@@ -9,6 +9,7 @@ from io import BytesIO
 import frappe
 from frappe import _
 from frappe.utils import cint, flt, getdate, now_datetime
+from hrms.api.standing_pay import active_contributions, CONTRIBUTION_TYPES
 from hrms.payroll.termination_settlement import (
 	INPUT_FIELDS as TERMINATION_INPUT_FIELDS,
 	RULE_VERSION as TERMINATION_RULE_VERSION,
@@ -93,7 +94,7 @@ TEST_MONTHLY_RESET_AREAS = {
 
 DEFAULT_PAYROLL_VARIABLE_SOURCE_TYPES = [
 	{"source_code": "attendance_final", "source_name": "考勤终稿 / 全勤奖 / 住房补贴", "purpose": "锁定后的出勤、工时、全勤奖与住房补贴计算基础", "required_fields": "由考勤假期模块锁定终稿自动提供", "template_notes": "本页不上传；全勤奖和住房补贴均在考勤补充来源中导入、校验并随考勤终稿锁定后继承。", "target_area": "考勤继承"},
-	{"source_code": "salary_change", "source_name": "员工定薪", "purpose": "底薪、职能/职务津贴与总薪资", "required_for_payroll": 1, "required_fields": "工号、姓名、生效日期、调整后薪资", "template_notes": "在员工定薪区域保存并提交后立即生效并参与试算。", "target_area": "员工定薪"},
+	{"source_code": "salary_change", "source_name": "员工定薪", "purpose": "底薪、职能/职务津贴与总薪资", "required_for_payroll": 1, "required_fields": "工号、姓名、生效日期、调整后薪资", "template_notes": "定薪经审批后持续生效，后续变更需重新审批。", "target_area": "员工定薪"},
 	{"source_code": "certificate_skill", "source_name": "证书/多能工津贴", "purpose": "证书奖励与多能工奖励", "required_fields": "工号或姓名、证书津贴/多能工津贴", "template_notes": "一人可生成多条月度增项。"},
 	{"source_code": "proposal", "source_name": "提案改善", "purpose": "改善提案奖金", "required_fields": "奖励人、奖金金额", "template_notes": "多个奖励人时必须在预览后分配到每人。"},
 	{"source_code": "continuing_service", "source_name": "继续服务奖", "purpose": "按制度发放继续服务奖", "required_fields": "工号或姓名、金额", "template_notes": "支持原继续服务奖工作表。"},
@@ -130,7 +131,6 @@ PAYROLL_IMPORT_TEMPLATES = [
 		"description": "导入员工底薪、职能津贴、证书津贴、多能工津贴和薪资小计，是薪资结算表 E:H 列的主来源。",
 		"required_columns": ["工号", "姓名", "生效日期"],
 		"columns": [
-			("薪资月份", "payroll_month", "可选；未填时使用页面月份"),
 			("工号", "employee_code", "必填；用于匹配员工花名册"),
 			("姓名", "employee_name", "必填；工号无法匹配时用姓名辅助匹配"),
 			("部门", "department", "可选；未填时取员工花名册部门"),
@@ -141,10 +141,8 @@ PAYROLL_IMPORT_TEMPLATES = [
 			("职能津贴", "function_allowance", "对应薪资结算表 F 列"),
 			("证书津贴", "certificate_allowance", "证书津贴"),
 			("多能工津贴", "multi_skill_allowance", "多能工津贴"),
-			("薪资小计", "full_salary", "对应薪资结算表 H 列；未填时自动 E+F+证书+多能工"),
-			("社保", "social_insurance_enabled", "1/0 或 是/否"),
-			("公积金", "housing_fund_enabled", "1/0 或 是/否"),
-			("备注", "remarks", "可选"),
+			("薪资小计", "full_salary", "对应薪资结算表 H 列；底薪 + 职能津贴"),
+			("备注", "remarks", "修改原因；导入后提交审批"),
 		],
 	},
 	{
@@ -1536,10 +1534,10 @@ def _salary_grade_from_matching_history(employee, base_salary, function_allowanc
 			"employee": employee,
 			"effective_date": ["<=", effective_date],
 			"salary_grade": ["is", "set"],
-			"status": ["!=", "已作废"],
+			"status": "已批准",
 		},
 		fields=["salary_grade", "base_salary", "function_allowance"],
-		order_by="effective_date desc, modified desc",
+		order_by="effective_date desc, approved_on desc, creation desc, name desc",
 		limit_page_length=100,
 	):
 		if flt(change.base_salary) != flt(base_salary) or flt(change.function_allowance) != flt(function_allowance):
@@ -3223,6 +3221,8 @@ def _monthly_variable_scope(payroll_month):
 def _default_variable_source_rows():
 	rows = []
 	for index, item in enumerate(DEFAULT_PAYROLL_VARIABLE_SOURCE_TYPES, 1):
+		if item["source_code"] in {"social_insurance", "housing_fund"}:
+			continue
 		rows.append({**item, "enabled": 1, "sort_order": index * 10, "required_for_payroll": int(item.get("required_for_payroll") or 0), "target_area": item.get("target_area") or "月度增减项"})
 	return rows
 
@@ -3254,7 +3254,7 @@ def list_payroll_variable_source_types():
 			# Salary changes belong to the preceding employee-salary step.  Full
 			# attendance and housing allowance are inherited from the locked attendance
 			# final, so none of them is a monthly-upload card in payroll.
-			filters={"enabled": 1, "source_code": ["not in", ["attendance_final", "salary_change", "attendance_bonus", "housing_allowance"]]},
+			filters={"enabled": 1, "source_code": ["not in", ["attendance_final", "salary_change", "attendance_bonus", "housing_allowance", "social_insurance", "housing_fund"]]},
 			fields=["name", "source_code", "source_name", "purpose", "required_for_payroll", "enabled", "sort_order", "required_fields", "template_notes", "target_area"],
 			order_by="sort_order asc, source_name asc",
 			limit_page_length=200,
@@ -3373,7 +3373,7 @@ def _payroll_run_snapshot(company, payroll_month, attendance_lock_version):
 		if str(row.attendance_lock_version or "") in allowed_versions
 		and not str(row.source_file or "").startswith("attendance-processing-final:")
 	]
-	salary_filters = {"company": company, "status": ["!=", "已作废"]}
+	salary_filters = {"company": company, "status": "已批准"}
 	month_end = _month_end(payroll_month)
 	if month_end:
 		salary_filters["effective_date"] = ["<=", month_end]
@@ -3404,6 +3404,7 @@ def _payroll_run_snapshot(company, payroll_month, attendance_lock_version):
 		"confirmed_batches": [dict(row) for row in batches],
 		"confirmed_variables": [dict(row) for row in variables],
 		"salary_changes": [dict(row) for row in salary_changes],
+		"contribution_changes": [dict(row) for row in active_contributions(company, _month_end(payroll_month))],
 		"participation_decisions": [dict(row) for row in participation_decisions],
 		"calculation_rules": _payroll_calculation_rules(company, payroll_month),
 		"payroll_formulas": _effective_payroll_formulas(company, payroll_month),
@@ -3740,7 +3741,9 @@ def list_assignable_salary_grades(payroll_month: str = ""):
 	newer version (``2H``) is also enabled; hiding the earlier option makes a
 	valid Link render as “手动定薪”.
 	"""
-	_require_payroll_master_manager()
+	from hrms.payroll.standing_permissions import can_submit
+	if not can_submit():
+		frappe.throw(_("没有薪资档案访问权限。"), frappe.PermissionError)
 	versions = _active_salary_structure_versions(payroll_month)
 	if not versions:
 		versions = frappe.get_all(
@@ -3937,6 +3940,11 @@ def _social_insurance_payroll_policy(employee, payroll_month):
 	yet been reached.  This intentionally does not infer non-participation from
 	probation status.
 	"""
+	company = frappe.db.get_value("Employee", employee, "company") if employee else None
+	if company:
+		for row in active_contributions(company, _month_end(payroll_month), employee=employee):
+			if row.employee == employee and row.contribution_type == "社保":
+				return {"apply": bool(row.enabled), "reason": "已批准缴费档案", "reference": row.name}
 	policy = {"apply": True, "reason": "按社保名单"}
 	if not employee or not re.match(r"^\d{4}-\d{2}$", str(payroll_month or "")):
 		return policy
@@ -4012,13 +4020,10 @@ def _employee_salary_change_merge_name(company, employee, employee_code, effecti
 
 @frappe.whitelist()
 def create_employee_salary_change(**kwargs):
-	_require_payroll_master_manager()
 	data = dict(kwargs)
-	company = _require_company(data.get("company"))
-	# 员工定薪不再有草稿或审批状态：每次保存都直接提交并作为算薪依据。
-	# Keep the legacy field internally so existing records and historical queries
-	# remain compatible with the rest of the payroll module.
-	status = "已批准"
+	from hrms.payroll.standing_permissions import require_access
+	company = require_access(data.get("company"))
+	status = "待审核"
 	employee = data.get("employee")
 	if not employee:
 		frappe.throw(_("请先选择员工。"))
@@ -4027,12 +4032,16 @@ def create_employee_salary_change(**kwargs):
 	employee_context = _employee_context(employee)
 	if employee_context.get("company") and employee_context.get("company") != company:
 		frappe.throw(_("员工 {0} 不属于公司 {1}").format(employee, company))
+	if data.get("request_mode") == "initial" and frappe.db.exists(EMPLOYEE_SALARY_CHANGE_DOCTYPE, {
+		"company": company, "employee": employee, "exclude_from_payroll": 0,
+		"status": ["in", ["待审核", "已批准"]]}):
+		frappe.throw(_("该员工已录入或正在审批，请通过申请修改处理。"))
 	grade_context = _grade_context(data.get("salary_grade"))
 	contribution_defaults = _salary_contribution_defaults(employee_context, data.get("effective_date"))
-	base_salary = flt(data.get("base_salary")) or flt(grade_context.get("base_salary"))
-	function_allowance = flt(data.get("function_allowance")) or flt(grade_context.get("function_allowance"))
-	certificate_allowance = flt(data.get("certificate_allowance")) or flt(grade_context.get("certificate_allowance"))
-	multi_skill_allowance = flt(data.get("multi_skill_allowance")) or flt(grade_context.get("multi_skill_allowance"))
+	base_salary = flt(data["base_salary"] if "base_salary" in data else grade_context.get("base_salary"))
+	function_allowance = flt(data["function_allowance"] if "function_allowance" in data else grade_context.get("function_allowance"))
+	certificate_allowance = flt(data["certificate_allowance"] if "certificate_allowance" in data else grade_context.get("certificate_allowance"))
+	multi_skill_allowance = flt(data["multi_skill_allowance"] if "multi_skill_allowance" in data else grade_context.get("multi_skill_allowance"))
 	# The supplied certificate/multi-skill allowance register confirms these
 	# amounts ceased to be part of full salary on 2026-05-01.  Always calculate
 	# the stored hourly-salary base from the two fixed-pay items instead of
@@ -4041,7 +4050,7 @@ def create_employee_salary_change(**kwargs):
 	values = {
 			"company": company,
 			"employee": employee,
-			"employee_code": data.get("employee_code") or employee,
+			"employee_code": _employee_code(employee_context) or employee,
 			"employee_name": data.get("employee_name") or employee_context.get("employee_name"),
 			"department": data.get("department") or employee_context.get("department"),
 			"designation": data.get("designation") or employee_context.get("designation"),
@@ -4057,36 +4066,38 @@ def create_employee_salary_change(**kwargs):
 			"housing_fund_enabled": flt(data.get("housing_fund_enabled")) if "housing_fund_enabled" in data else contribution_defaults["housing_fund_enabled"],
 			"social_insurance_enabled": flt(data.get("social_insurance_enabled")) if "social_insurance_enabled" in data else contribution_defaults["social_insurance_enabled"],
 			"company_cost_total": flt(data.get("company_cost_total")),
-			"prepared_by": data.get("prepared_by"),
-			"reviewed_by": data.get("reviewed_by"),
-			"approved_by": data.get("approved_by"),
+			"prepared_by": frappe.session.user,
+			"reviewed_by": None,
+			"approved_by": None,
 			"status": status,
 			"source_file": data.get("source_file"),
 			"remarks": data.get("remarks"),
 	}
-	# A second submit of the same employee's effective salary must update the
-	# current row, rather than create another indistinguishable salary decision.
-	# The effective date remains part of the key so genuine later salary changes
-	# continue to be retained as history.
-	existing_name = _employee_salary_change_merge_name(
-		company, employee, values["employee_code"], values["effective_date"]
-	)
-	if existing_name:
-		doc = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, existing_name)
-		before = {
-			field: doc.get(field)
-			for field in ("effective_date", "salary_grade", "base_salary", "function_allowance", "certificate_allowance", "multi_skill_allowance", "full_salary", "social_insurance_enabled", "housing_fund_enabled")
-		}
-		doc.update(values)
-		doc.save(ignore_permissions=True)
-		change_reason = doc.remarks or "人工重复提交员工定薪，已合并更新"
-		field_name = "员工定薪（合并更新）"
-	else:
-		doc = frappe.get_doc({"doctype": EMPLOYEE_SALARY_CHANGE_DOCTYPE, **values})
-		doc.insert(ignore_permissions=True)
-		before = {}
-		change_reason = doc.remarks or "人工新增员工定薪"
-		field_name = "__create__"
+	existing = frappe.db.get_value(EMPLOYEE_SALARY_CHANGE_DOCTYPE, {
+		**{key: values[key] for key in ("company", "employee", "effective_date", "base_salary", "function_allowance", "certificate_allowance", "multi_skill_allowance")},
+		"salary_grade": values.get("salary_grade") or ["is", "not set"],
+		"remarks": values.get("remarks") or ["is", "not set"],
+		"status": "待审核", "submitted_by": frappe.session.user,
+	}, "name")
+	if existing:
+		return existing
+	# A repeated click with exactly the same content above is safely idempotent.
+	# Different content must not create a competing approval request for the same
+	# employee and effective date.  Lock the Employee row to make this check safe
+	# even when two browser requests arrive at the same time.
+	frappe.db.sql("SELECT name FROM `tabEmployee` WHERE name=%s FOR UPDATE", (employee,))
+	pending = frappe.db.get_value(EMPLOYEE_SALARY_CHANGE_DOCTYPE, {
+		"company": company, "employee": employee, "effective_date": values["effective_date"],
+		"exclude_from_payroll": 0, "status": "待审核",
+	}, "name")
+	if pending:
+		frappe.throw(_("该员工在此生效日期已有待审批定薪申请，请先等待审批结果或驳回后再提交。"))
+	# Never overwrite an approved or pending decision, including a same-day change.
+	doc = frappe.get_doc({"doctype": EMPLOYEE_SALARY_CHANGE_DOCTYPE, **values})
+	doc.insert(ignore_permissions=True)
+	before = {}
+	change_reason = doc.remarks or "人工新增定薪变更申请"
+	field_name = "__create__"
 	_record_payroll_manual_adjustment(
 		company=company,
 		payroll_month=str(doc.effective_date or "")[:7],
@@ -4101,19 +4112,18 @@ def create_employee_salary_change(**kwargs):
 		employee_code=doc.employee_code,
 		employee_name=doc.employee_name,
 	)
-	frappe.db.commit()
 	return doc.name
 
 
 @frappe.whitelist()
-def update_employee_salary_change(name: str = "", company: str = "", employee: str = "", values: str | dict | None = None):
+def update_employee_salary_change(name: str = "", company: str = "", employee: str = "", values: str | dict | None = None, request_mode: str = "change"):
 	"""Save one row from the employee-salary web table.
 
 	Employee, department and post stay owned by the roster.  This endpoint only
 	updates the salary-adjustment fields that users also maintain in Excel.
 	"""
-	_require_payroll_master_manager()
-	company = _require_company(company)
+	from hrms.payroll.standing_permissions import require_access
+	company = require_access(company)
 	if isinstance(values, str):
 		try:
 			values = json.loads(values or "{}")
@@ -4134,53 +4144,20 @@ def update_employee_salary_change(name: str = "", company: str = "", employee: s
 	if not name:
 		if not employee:
 			frappe.throw(_("请先选择员工"))
-		created_name = create_employee_salary_change(company=company, employee=employee, **values)
+		created_name = create_employee_salary_change(company=company, employee=employee, **{**values, "request_mode": request_mode})
 		created = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, created_name)
 		return {"name": created.name, "full_salary": created.full_salary, "status": created.status, "created": 1}
 	doc = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, name)
 	if doc.company != company:
 		frappe.throw(_("不能修改其他公司的员工定薪记录"))
-	allowed = {"effective_date", "salary_grade", "base_salary", "function_allowance", "certificate_allowance", "multi_skill_allowance", "social_insurance_enabled", "housing_fund_enabled", "remarks"}
-	before = {field: doc.get(field) for field in allowed | {"full_salary", "status"}}
-	if not values.get("effective_date"):
-		frappe.throw(_("请填写生效日期"))
-	for fieldname in allowed:
-		if fieldname not in values:
-			continue
-		if fieldname in {"base_salary", "function_allowance", "certificate_allowance", "multi_skill_allowance", "social_insurance_enabled", "housing_fund_enabled"}:
-			setattr(doc, fieldname, flt(values[fieldname]))
-		else:
-			setattr(doc, fieldname, values[fieldname])
-	if "salary_grade" in values and values.get("salary_grade"):
-		grade_context = _grade_context(doc.salary_grade)
-		if not grade_context:
-			frappe.throw(_("所选薪级不存在，请重新选择"))
-		# API callers may send only a salary grade.  The web table sends the three
-		# displayed values as well, which keeps its explicit manual override valid.
-		if "base_salary" not in values:
-			doc.base_salary = flt(grade_context.get("base_salary"))
-		if "function_allowance" not in values:
-			doc.function_allowance = flt(grade_context.get("function_allowance"))
-	doc.full_salary = flt(doc.base_salary) + flt(doc.function_allowance)
-	# A legacy draft becomes effective as soon as it is edited in the new grid.
-	doc.status = "已批准"
-	doc.save(ignore_permissions=True)
-	_record_payroll_manual_adjustment(
-		company=company,
-		payroll_month=str(doc.effective_date or "")[:7],
-		change_category="员工定薪",
-		reference_doctype=EMPLOYEE_SALARY_CHANGE_DOCTYPE,
-		reference_name=doc.name,
-		field_name="员工定薪",
-		original_value=before,
-		new_value={field: doc.get(field) for field in before},
-		reason=doc.remarks or "人工修改员工定薪",
-		employee=doc.employee,
-		employee_code=doc.employee_code,
-		employee_name=doc.employee_name,
-	)
-	frappe.db.commit()
-	return {"name": doc.name, "full_salary": doc.full_salary, "status": doc.status}
+	if employee and employee != doc.employee:
+		frappe.throw(_("员工与原定薪记录不一致。"))
+	allowed = {"effective_date", "salary_grade", "base_salary", "function_allowance", "certificate_allowance", "multi_skill_allowance", "remarks"}
+	payload = {key: doc.get(key) for key in allowed}
+	payload.update({key: value for key, value in values.items() if key in allowed})
+	created_name = create_employee_salary_change(company=company, employee=doc.employee, **payload)
+	created = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, created_name)
+	return {"name": created.name, "full_salary": created.full_salary, "status": created.status}
 
 
 def _is_salary_excluded(row):
@@ -4206,7 +4183,7 @@ def set_employee_payroll_participation(employee: str, company: str, payroll_mont
 	if context.get("company") and context.get("company") != company:
 		frappe.throw(_("员工不属于当前公司"))
 	filters = {"company": company, "employee": employee, "exclude_from_payroll": 1, "status": "已批准"}
-	markers = frappe.get_all(EMPLOYEE_SALARY_CHANGE_DOCTYPE, filters=filters, fields=["name", "effective_date"], order_by="effective_date desc, modified desc", limit_page_length=20)
+	markers = frappe.get_all(EMPLOYEE_SALARY_CHANGE_DOCTYPE, filters=filters, fields=["name", "effective_date"], order_by="effective_date desc, approved_on desc, creation desc, name desc", limit_page_length=20)
 	if flt(participates):
 		for marker in markers:
 			if str(marker.effective_date or "") <= month_end:
@@ -4535,7 +4512,7 @@ def save_monthly_payroll_participation_decision(
 				"effective_date": ["<=", _month_end(payroll_month)],
 			},
 			"name",
-			order_by="effective_date desc, modified desc",
+			order_by="effective_date desc, approved_on desc, creation desc, name desc",
 		)
 		if marker_name:
 			marker = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, marker_name)
@@ -4567,7 +4544,8 @@ def save_monthly_payroll_participation_decision(
 
 @frappe.whitelist()
 def list_employee_salary_changes(company: str, employee: str = "", payroll_month: str = "", page_length: int = 50):
-	company = _require_company(company)
+	from hrms.payroll.standing_permissions import require_access
+	company = require_access(company)
 	filters = {"company": company}
 	if employee:
 		filters["employee"] = employee
@@ -4578,7 +4556,7 @@ def list_employee_salary_changes(company: str, employee: str = "", payroll_month
 		EMPLOYEE_SALARY_CHANGE_DOCTYPE,
 		filters=filters,
 		fields=["*"],
-		order_by="effective_date desc, modified desc",
+		order_by="effective_date desc, approved_on desc, creation desc, name desc",
 		limit_page_length=int(page_length or 50),
 	)
 
@@ -4592,8 +4570,9 @@ def list_employee_salary_change_grid(company: str, payroll_month: str = "", page
 	leaver who belongs to the month's attendance/payroll population visible so
 	their required salary can still be entered.
 	"""
-	company = _require_company(company)
-	month_end = _month_end(payroll_month)
+	from hrms.payroll.standing_permissions import require_access
+	company = require_access(company)
+	month_end = _month_end(payroll_month) or str(getdate())
 	employee_fields = _safe_fields(
 		"Employee",
 		["name", "employee_name", "custom_employee_code", "department", "designation", "employment_type", "status", "custom_is_confirmed", "date_of_joining", "final_confirmation_date", "confirmation_date", "company"],
@@ -4644,7 +4623,7 @@ def list_employee_salary_change_grid(company: str, payroll_month: str = "", page
 	employee_names = [row.name for row in employees]
 	# A salary-change history can be much larger than the current payroll scope.
 	# The grid only needs the latest applicable history of employees it renders.
-	change_filters = {"company": company, "employee": ["in", employee_names or [""]]}
+	change_filters = {"company": company, "employee": ["in", employee_names or [""]], "status": "已批准"}
 	if month_end:
 		change_filters["effective_date"] = ["<=", month_end]
 	changes = frappe.get_all(
@@ -4656,7 +4635,7 @@ def list_employee_salary_change_grid(company: str, payroll_month: str = "", page
 			"multi_skill_allowance", "full_salary", "social_insurance_enabled",
 			"housing_fund_enabled", "exclude_from_payroll",
 		],
-		order_by="effective_date desc, modified desc",
+		order_by="effective_date desc, approved_on desc, creation desc, name desc",
 		limit_page_length=100000,
 	)
 	changes_by_employee = {}
@@ -4731,7 +4710,8 @@ def list_employee_salary_change_grid(company: str, payroll_month: str = "", page
 				"department": department_names.get(employee_row.get("department"))
 				or re.sub(r"\s+-\s+[^-]+$", "", employee_row.get("department") or "").strip(),
 				"employment_type": "在职·{0}".format(defaults["employment_stage"]),
-				"effective_date": change.effective_date if change else f"{payroll_month}-01" if payroll_month else "",
+				"effective_date": change.effective_date if change else f"{payroll_month}-01" if payroll_month else str(getdate()),
+				"status": "已批准" if change else "未定薪",
 				"salary_grade": change.salary_grade if change else "",
 				"salary_grade_label": grade_labels.get(change.salary_grade, _("已绑定历史薪级")) if change else "",
 				"base_salary": change.base_salary if change else "",
@@ -4754,8 +4734,9 @@ def list_employee_salary_change_grid(company: str, payroll_month: str = "", page
 
 @frappe.whitelist()
 def get_active_salary_change_for_employee(employee: str | None = None, employee_code: str = "", payroll_month: str = "", company: str = ""):
-	company = _require_company(company)
-	filters = {"status": ["!=", "已作废"], "company": company}
+	from hrms.payroll.standing_permissions import require_access
+	company = require_access(company)
+	filters = {"status": "已批准", "company": company}
 	if employee:
 		filters["employee"] = employee
 	elif employee_code:
@@ -4767,7 +4748,7 @@ def get_active_salary_change_for_employee(employee: str | None = None, employee_
 		EMPLOYEE_SALARY_CHANGE_DOCTYPE,
 		filters=filters,
 		fields=["*"],
-		order_by="effective_date desc, modified desc",
+		order_by="effective_date desc, approved_on desc, creation desc, name desc",
 		limit_page_length=1,
 	)
 	return rows[0] if rows else None
@@ -4827,6 +4808,8 @@ def upsert_payroll_welfare_source_record(**kwargs):
 		data.get("attendance_lock_version"),
 	)
 	source_type = data.get("source_type")
+	if source_type in CONTRIBUTION_TYPES:
+		frappe.throw(_("社保、公积金请在独立缴费档案提交变更审批。"))
 	if not source_type:
 		frappe.throw(_("请选择来源类型"))
 	employee_code = data.get("employee_code")
@@ -5260,7 +5243,7 @@ def _employee_salary_change_import_rows(workbook, payroll_month):
 	return [], ""
 
 
-def _validate_employee_salary_change_import_rows(rows, company, payroll_month):
+def _validate_employee_salary_change_import_rows(rows, company, payroll_month, request_mode="change"):
 	preview_rows, valid_rows = [], []
 	for index, row in enumerate(rows, start=1):
 		# Rows from the original form are normalized before this point; rows from the
@@ -5302,6 +5285,9 @@ def _validate_employee_salary_change_import_rows(rows, company, payroll_month):
 				errors.append("未匹配到薪资架构：{0} / {1}".format(structure_version, salary_level))
 		elif not has_source_salary:
 			errors.append("缺少薪资架构匹配信息或表内定薪金额")
+		if request_mode == "initial" and employee and frappe.db.exists(EMPLOYEE_SALARY_CHANGE_DOCTYPE, {
+			"company": company, "employee": employee, "exclude_from_payroll": 0, "status": ["in", ["待审核", "已批准"]]}):
+			errors.append("已录入或正在审批，请通过申请修改处理")
 		preview_rows.append({
 			"row_number": index,
 			"employee_code": employee_code,
@@ -5330,13 +5316,13 @@ def _validate_employee_salary_change_import_rows(rows, company, payroll_month):
 
 
 @frappe.whitelist()
-def preview_employee_salary_change_workbook(file_url: str, company: str, payroll_month: str = ""):
+def preview_employee_salary_change_workbook(file_url: str, company: str, payroll_month: str = "", request_mode: str = "change"):
 	company = _require_company(company)
 	workbook = _load_workbook(file_url)
 	rows, sheet_name = _employee_salary_change_import_rows(workbook, payroll_month)
 	if not sheet_name:
 		return {"found": False, "sheet_name": "", "total_rows": 0, "valid_rows": 0, "failed_rows": 0, "rows": [], "message": "未找到员工薪资调整表"}
-	preview_rows, valid_rows = _validate_employee_salary_change_import_rows(rows, company, payroll_month)
+	preview_rows, valid_rows = _validate_employee_salary_change_import_rows(rows, company, payroll_month, request_mode=request_mode)
 	return {
 		"found": True,
 		"sheet_name": sheet_name,
@@ -5399,14 +5385,14 @@ def _salary_change_import_batch(company, file_url, payroll_month, total_rows, va
 
 
 @frappe.whitelist()
-def import_employee_salary_change_workbook(file_url: str, company: str, payroll_month: str = ""):
-	_require_payroll_master_manager()
-	company = _require_company(company)
+def import_employee_salary_change_workbook(file_url: str, company: str, payroll_month: str = "", request_mode: str = "change"):
+	from hrms.payroll.standing_permissions import require_access
+	company = require_access(company)
 	workbook = _load_workbook(file_url)
 	rows, sheet_name = _employee_salary_change_import_rows(workbook, payroll_month)
 	if not sheet_name:
 		frappe.throw(_("未找到员工薪资调整表；请上传《人员薪资调整模板（月）》或系统下载的模板。"))
-	preview_rows, valid_rows = _validate_employee_salary_change_import_rows(rows, company, payroll_month)
+	preview_rows, valid_rows = _validate_employee_salary_change_import_rows(rows, company, payroll_month, request_mode=request_mode)
 	invalid_rows = [row for row in preview_rows if row["errors"]]
 	if not valid_rows:
 		frappe.throw(_("没有可导入的员工定薪记录。请根据预览中的校验原因修正 Excel 或员工花名册后重试。"))
@@ -5421,29 +5407,16 @@ def import_employee_salary_change_workbook(file_url: str, company: str, payroll_
 		error_summary,
 	)
 	batch.insert(ignore_permissions=True)
-	rollback = {"created": {}, "updated": {}}
 	changes = []
 	for row in valid_rows:
-		existing_name = _employee_salary_change_name_from_row(row, payroll_month, company)
-		if existing_name:
-			existing_doc = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, existing_name)
-			rollback["updated"][existing_name] = _employee_salary_change_snapshot(existing_doc)
 		name = _upsert_employee_salary_change_from_row(
 			row, payroll_month, company, source_file=file_url, salary_import_batch=batch.name
 		)
 		if name:
 			changes.append(name)
-			imported_doc = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, name)
-			if existing_name:
-				rollback["updated"][name] = {
-					"before": rollback["updated"][name],
-					"after_signature": _employee_salary_change_signature(imported_doc),
-				}
-			else:
-				rollback["created"][name] = _employee_salary_change_signature(imported_doc)
 	batch.status = "部分失败" if invalid_rows else "已处理"
-	batch.mapping_json = json.dumps(rollback, ensure_ascii=False, default=str)
-	batch.notes = _("可撤销：新建记录将删除，覆盖记录将恢复至导入前。已被后续修改或已进入正式薪资结算的数据不能撤销。")
+	batch.mapping_json = json.dumps({"approval_requests": changes}, ensure_ascii=False)
+	batch.notes = _("已生成待审核定薪申请，审批通过后持续生效；历史记录永久保留。")
 	batch.save(ignore_permissions=True)
 	frappe.db.commit()
 	return {
@@ -5453,8 +5426,8 @@ def import_employee_salary_change_workbook(file_url: str, company: str, payroll_
 		"skipped_rows": len(invalid_rows),
 		"error_summary": error_summary,
 		"batch": batch.name,
-		"created_rows": len(rollback["created"]),
-		"updated_rows": len(rollback["updated"]),
+		"created_rows": len(changes),
+		"updated_rows": 0,
 	}
 
 
@@ -5494,7 +5467,8 @@ def _assert_salary_change_batch_reversible(batch):
 
 @frappe.whitelist()
 def list_employee_salary_change_import_batches(company: str, page_length: int = 10):
-	company = _require_company(company)
+	from hrms.payroll.standing_permissions import require_access
+	company = require_access(company)
 	batches = frappe.get_all(
 		FORM_IMPORT_BATCH_DOCTYPE,
 		filters={"company": company, "module_name": "薪酬", "template_key": "employee_salary_change"},
@@ -5504,65 +5478,14 @@ def list_employee_salary_change_import_batches(company: str, page_length: int = 
 	)
 	for batch in batches:
 		batch["affected_rows"] = frappe.db.count(EMPLOYEE_SALARY_CHANGE_DOCTYPE, {"salary_import_batch": batch.name})
-		batch["can_rollback"] = int(batch.status in {"已处理", "部分失败"})
+		batch["can_rollback"] = 0  # preserve requests; reject them through the approval register
 	return batches
 
 
 @frappe.whitelist()
 def rollback_employee_salary_change_import_batch(batch_name: str, company: str, reason: str = ""):
 	_require_payroll_master_manager()
-	company = _require_company(company)
-	if not batch_name or not frappe.db.exists(FORM_IMPORT_BATCH_DOCTYPE, batch_name):
-		frappe.throw(_("员工定薪导入批次不存在。"))
-	batch = frappe.get_doc(FORM_IMPORT_BATCH_DOCTYPE, batch_name)
-	if batch.company != company or batch.module_name != "薪酬" or batch.template_key != "employee_salary_change":
-		frappe.throw(_("导入批次与当前公司不匹配。"))
-	_assert_salary_change_batch_reversible(batch)
-	reason = _text(reason).strip()
-	if not reason:
-		frappe.throw(_("请填写撤销原因。"))
-	try:
-		rollback = json.loads(batch.mapping_json or "{}")
-	except (TypeError, ValueError):
-		frappe.throw(_("该批次缺少可验证的撤销快照，无法安全撤销。"))
-	created, updated = rollback.get("created") or {}, rollback.get("updated") or {}
-	changed_after_import = []
-	for name, signature in created.items():
-		if not frappe.db.exists(EMPLOYEE_SALARY_CHANGE_DOCTYPE, name):
-			continue
-		doc = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, name)
-		if doc.salary_import_batch != batch.name or _employee_salary_change_signature(doc) != signature:
-			changed_after_import.append(name)
-	for name, state in updated.items():
-		if not frappe.db.exists(EMPLOYEE_SALARY_CHANGE_DOCTYPE, name):
-			changed_after_import.append(name)
-			continue
-		doc = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, name)
-		if doc.salary_import_batch != batch.name or _employee_salary_change_signature(doc) != state.get("after_signature"):
-			changed_after_import.append(name)
-	if changed_after_import:
-		frappe.throw(_("以下记录在导入后已被修改，不能自动撤销：{0}").format("、".join(changed_after_import[:10])))
-	invalidations = [_invalidate_unconfirmed_payroll_trial(company, month, reason=_("撤销员工定薪导入批次 {0}").format(batch.name)) for month in _salary_change_batch_months(batch.name)]
-	for name in created:
-		if frappe.db.exists(EMPLOYEE_SALARY_CHANGE_DOCTYPE, name):
-			frappe.delete_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, name, ignore_permissions=True, force=True)
-	for name, state in updated.items():
-		if not frappe.db.exists(EMPLOYEE_SALARY_CHANGE_DOCTYPE, name):
-			continue
-		doc = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, name)
-		doc.update(state.get("before") or {})
-		doc.save(ignore_permissions=True)
-	batch.status = "已作废"
-	batch.error_summary = _("撤销原因：{0}").format(reason)
-	batch.notes = "{0}\n{1}".format(batch.notes or "", _("已于 {0} 撤销，新建记录已删除，覆盖记录已恢复。 ").format(now_datetime())).strip()
-	batch.save(ignore_permissions=True)
-	frappe.db.commit()
-	return {
-		"batch": batch.name,
-		"created_rows_removed": len(created),
-		"updated_rows_restored": len(updated),
-		"invalidated_trials": invalidations,
-	}
+	frappe.throw(_("定薪历史须保留；请在变更审批中驳回未生效申请，已批准记录请新增变更。"))
 
 
 @frappe.whitelist()
@@ -5647,24 +5570,14 @@ def _upsert_employee_salary_change_from_row(row, payroll_month="", company="", s
 		"housing_fund_enabled": int(bool(flt(_first(row, "住房公积金", "公积金")) or _bool_value(_first(row, "住房公积金", "公积金")))),
 		"social_insurance_enabled": int(bool(flt(_first(row, "社保费用", "社保")) or _bool_value(_first(row, "社保费用", "社保")))),
 		"company_cost_total": flt(_first(row, "公司总承担")),
-		# Ignore legacy spreadsheet status values: imports are directly submitted.
-		"status": "已批准",
+		# Excel status never grants approval.
+		"status": "待审核",
 		"salary_import_batch": salary_import_batch or "",
 		"source_file": source_file or "Excel导入",
-		"remarks": _first(row, "备注"),
+		"remarks": _first(row, "备注") or "Excel 导入定薪申请",
 	}
-	name = frappe.db.get_value(
-		EMPLOYEE_SALARY_CHANGE_DOCTYPE,
-		{"company": company, "employee_code": values["employee_code"], "effective_date": values["effective_date"]},
-		"name",
-	)
-	if name:
-		doc = frappe.get_doc(EMPLOYEE_SALARY_CHANGE_DOCTYPE, name)
-		doc.update(values)
-		doc.save(ignore_permissions=True)
-	else:
-		doc = frappe.get_doc({"doctype": EMPLOYEE_SALARY_CHANGE_DOCTYPE, **values})
-		doc.insert(ignore_permissions=True)
+	doc = frappe.get_doc({"doctype": EMPLOYEE_SALARY_CHANGE_DOCTYPE, **values})
+	doc.insert(ignore_permissions=True)
 	return doc.name
 
 
@@ -5881,10 +5794,11 @@ def _upsert_sources_from_settlement_row(company, payroll_month, attendance_lock_
 		"certificate_allowance": row.get("certificate_skill_allowance"),
 		"multi_skill_allowance": 0,
 		"full_salary": full_salary,
-		"status": "已批准",
+		"status": "待审核",
 		"source_file": PAYROLL_SETTLEMENT_IMPORT_SOURCE,
+		"remarks": "完整薪资结算表导入定薪申请",
 	}
-	_upsert_by_employee_month(EMPLOYEE_SALARY_CHANGE_DOCTYPE, "effective_date", f"{payroll_month}-01", row.get("employee_code"), salary_values, company)
+	frappe.get_doc({"doctype": EMPLOYEE_SALARY_CHANGE_DOCTYPE, **salary_values}).insert(ignore_permissions=True)
 
 	attendance_values = {
 		"company": company,
@@ -6198,8 +6112,12 @@ def preview_payroll_variable_workbook(file_url: str, company: str = "", payroll_
 
 
 def _insert_variable(batch_name, company, payroll_month, attendance_lock_version, sheet_name, row, variable_type=None, amount=None, allow_zero=False, review_status="待确认", validation_note=""):
+	if variable_type in CONTRIBUTION_TYPES or (row and row.get("变量类型") in CONTRIBUTION_TYPES):
+		frappe.throw(_("社保、公积金请在独立缴费档案提交变更审批。"))
 	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
 	variable_type = variable_type or SHEET_VARIABLE_TYPES[sheet_name]
+	if variable_type in CONTRIBUTION_TYPES:
+		frappe.throw(_("社保、公积金请在独立缴费档案提交变更审批。"))
 	amount = round(_amount_for_type(row, variable_type) if amount is None else flt(amount), 2)
 	if not amount and not allow_zero:
 		return None
@@ -6257,11 +6175,15 @@ def _insert_variable(batch_name, company, payroll_month, attendance_lock_version
 @frappe.whitelist()
 def import_payroll_variable_workbook(file_url: str, payroll_month: str = "", company: str = "", attendance_lock_version: str = "", source_type: str = ""):
 	company = _require_company(company)
+	if source_type in {"social_insurance", "housing_fund"}:
+		frappe.throw(_("社保、公积金请在独立缴费档案导入并报审批。"))
 	payroll_month = _workflow_month(payroll_month or datetime.today().strftime("%Y-%m"))
 	# Monthly additions/deductions belong to company + payroll month, not to one
 	# attendance snapshot.  A later attendance re-lock must not require re-import.
 	attendance_lock_version = _monthly_variable_scope(payroll_month)
 	workbook = _load_workbook(file_url)
+	if any(_raw_payroll_source_kind(sheet) in {"social_insurance", "housing_fund"} for sheet in workbook):
+		frappe.throw(_("社保、公积金请在独立缴费档案导入并报审批。"))
 	if any(_raw_payroll_source_kind(workbook[sheet_name]) == "salary_change" for sheet_name in workbook.sheetnames):
 		frappe.throw(_("薪资异动属于“员工定薪”，请在员工定薪区域完成预览、审核与批准；月度增减项不会直接写入员工定薪。"))
 	if any(_raw_payroll_source_kind(workbook[sheet_name]) == "attendance_bonus" for sheet_name in workbook.sheetnames):
@@ -6600,7 +6522,7 @@ def list_payroll_variable_import_batches(company: str, payroll_month: str = "", 
 		str(row.get("source_code") or row.get("name") or ""): str(row.get("source_name") or row.get("source_code") or row.get("name") or "")
 		for row in list_payroll_variable_source_types()
 	}
-	filters = {"company": company}
+	filters = {"company": company, 'source_type': ["not in", ['social_insurance', 'housing_fund']]}
 	if payroll_month:
 		filters["payroll_month"] = payroll_month
 	batches = frappe.get_all(
@@ -7384,6 +7306,8 @@ def _variable_totals(company, payroll_month, attendance_lock_version=""):
 				if batch.is_selected:
 					selected_batch_by_source[batch.source_type] = batch.name
 	for row in frappe.get_all(VARIABLE_RECORD_DOCTYPE, filters=filters, fields=["*"]):
+		if row.variable_type in CONTRIBUTION_TYPES:
+			continue
 		if str(row.get("attendance_lock_version") or "") not in allowed_versions:
 			continue
 		# Housing allowance is an attendance-support fact.  Historic payroll-side
@@ -7410,6 +7334,15 @@ def _variable_totals(company, payroll_month, attendance_lock_version=""):
 				"source_hash": row.source_hash,
 			}
 		)
+	for row in active_contributions(company, _month_end(payroll_month)):
+		key = _employee_identity_key(row)
+		identity.setdefault(key, row)
+		for suffix, field in (("个人", "personal_amount"), ("公司", "company_amount")):
+			kind = row.contribution_type + suffix
+			amount = flt(row.get(field)) if row.enabled else 0
+			totals[key][kind] = amount
+			sources[key].append({"name": row.name, "variable_type": kind, "amount": amount,
+				"source_sheet": "持续生效缴费档案", "source_hash": _source_trace_hash(dict(row))[1]})
 	return totals, identity, sources
 
 
@@ -7666,7 +7599,7 @@ def _validate_sources_step(company, payroll_month, attendance_lock_version):
 	user_variables = [row for row in variables if str(row.get("source_sheet") or "") != "考勤终稿锁定快照"]
 	pending_batch_filters = {"company": company, "payroll_month": payroll_month, "status": ["in", ["待解析", *sorted(PENDING_VARIABLE_BATCH_STATUSES)]]}
 	if _doctype_has_field(VARIABLE_BATCH_DOCTYPE, "source_type"):
-		pending_batch_filters["source_type"] = ["!=", "salary_change"]
+		pending_batch_filters["source_type"] = ["not in", ["salary_change", "social_insurance", "housing_fund"]]
 	pending_batch_rows = _workflow_rows(VARIABLE_BATCH_DOCTYPE, pending_batch_filters, ["attendance_lock_version", "source_file", "is_selected"])
 	pending_batches = len([
 		row for row in pending_batch_rows
@@ -7720,7 +7653,7 @@ def _validate_sources_step(company, payroll_month, attendance_lock_version):
 	confirmed_welfare = _safe_count(WELFARE_SOURCE_DOCTYPE, {"company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version, "confirmation_status": "已确认", "eligibility_status": "符合"})
 	if not user_variables and not confirmed_welfare:
 		warnings.append("当前没有月度奖金、补贴或扣款；如果本月确实为零，可继续锁定。")
-	evidence = attendance + user_variables + confirmed_batch_rows + _workflow_rows(WELFARE_SOURCE_DOCTYPE, {"company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version}, ["employee", "employee_code", "source_type", "amount", "eligibility_status", "confirmation_status"])
+	evidence = [dict(row) for row in active_contributions(company, _month_end(payroll_month))] + attendance + user_variables + confirmed_batch_rows + _workflow_rows(WELFARE_SOURCE_DOCTYPE, {"company": company, "payroll_month": payroll_month, "attendance_lock_version": attendance_lock_version}, ["employee", "employee_code", "source_type", "amount", "eligibility_status", "confirmation_status"])
 	return _workflow_snapshot(
 		"sources",
 		[{"label": "考勤终稿", "value": len(attendance)}, {"label": "已确认月度增减项", "value": len(user_variables)}, {"label": "已确认来源", "value": len(confirmed_source_types)}, {"label": "福利/扣款", "value": confirmed_welfare}, {"label": "待确认", "value": pending_welfare + pending_batches}],
@@ -8437,7 +8370,7 @@ def generate_payroll_input_records(company: str, payroll_month: str, attendance_
 @frappe.whitelist()
 def list_payroll_variable_records(company: str, payroll_month: str = "", import_batch: str = "", attendance_lock_version: str = "", page_length: int = 50, start: int = 0):
 	company = _require_company(company)
-	filters = {"company": company}
+	filters = {"company": company, 'variable_type': ["not in", ['社保个人', '社保公司', '公积金个人', '公积金公司']]}
 	if payroll_month:
 		filters["payroll_month"] = payroll_month
 	if import_batch:
@@ -9046,9 +8979,8 @@ def get_payroll_home_dashboard(company: str, payroll_month: str = "", attendance
 
 def _latest_salary_change_map(payroll_month="", company=""):
 	company = _require_company(company)
-	# Employee salary records are submitted as soon as they are saved. The legacy
-	# status field only keeps historic voided records out of payroll calculations.
-	filters = {"company": company, "status": ["!=", "已作废"]}
+	# Pending decisions never replace the last approved effective salary.
+	filters = {"company": company, "status": "已批准"}
 	month_end = _month_end(payroll_month)
 	if month_end:
 		filters["effective_date"] = ["<=", month_end]
@@ -9056,7 +8988,7 @@ def _latest_salary_change_map(payroll_month="", company=""):
 		EMPLOYEE_SALARY_CHANGE_DOCTYPE,
 		filters=filters,
 		fields=["*"],
-		order_by="effective_date desc, modified desc",
+		order_by="effective_date desc, approved_on desc, creation desc, name desc",
 		limit_page_length=100000,
 	)
 	by_key = {}
@@ -9580,7 +9512,7 @@ def list_monthly_payroll_overview(company: str, payroll_month: str = "", attenda
 
 
 def _active_salary_changes_for_month(company, payroll_month):
-	filters = {"company": _require_company(company), "status": ["!=", "已作废"]}
+	filters = {"company": _require_company(company), "status": "已批准"}
 	month_end = _month_end(payroll_month)
 	if month_end:
 		filters["effective_date"] = ["<=", month_end]
@@ -9600,7 +9532,7 @@ def _active_salary_changes_for_month(company, payroll_month):
 			"exclude_from_payroll",
 			"exclude_reason",
 		],
-		order_by="effective_date desc, modified desc",
+		order_by="effective_date desc, approved_on desc, creation desc, name desc",
 		limit_page_length=100000,
 	)
 	by_key = {}

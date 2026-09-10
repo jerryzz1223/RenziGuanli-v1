@@ -44,6 +44,14 @@ def chart_module():
 	return organizational_chart
 
 
+def automatic_roster_position(config):
+	"""A plain automatic post carries a roster rule, not fixed source members."""
+	return (config.get("node_kind") == "岗位" and config.get("roster_auto_sync")
+		and not config.get("roster_subset") and not config.get("assignment_rules_manual")
+		and "template_bindings" not in config
+		and not config.get("primary_employee") and not config.get("proxy_employee"))
+
+
 def authorize(company):
 	frappe.only_for("System Manager")
 	frappe.get_doc("Company", company).check_permission("read")
@@ -87,12 +95,14 @@ def workbook_bytes(company, state=None):
 		cfg = {**state.get("source_grades", {}).get(node.name, {}), **node.manual_config}
 		row = {**cfg, "portable_id": ids[node.name], "parent": ids.get(node.parent_node, ""),
 			"display_name": node.display_name, "planned_headcount": node.planned_headcount or 0,
+			"template_source_vacancies": cfg.get("template_source_vacancies") or 0,
 			"department": departments.get(cfg.get("department"), cfg.get("department") or ""),
 			"has_template_bindings": "template_bindings" in cfg,
 			"roster_department_alias_labels": "\n".join(cfg.get("roster_department_alias_labels", []))}
 		rows.append(row)
 		for label, field in REFERENCES.items():
 			if field == "assigned_employees" and cfg.get("node_kind") != "岗位" and not cfg.get("roster_subset"): continue
+			if field == "assigned_employees" and automatic_roster_position(cfg): continue
 			values = cfg.get(field, []) if field in {"assigned_employees", "template_bindings"} else [cfg.get(field)]
 			for value in values:
 				if not value:
@@ -116,6 +126,7 @@ def workbook_bytes(company, state=None):
 		["上下级关系", "节点编号必须唯一且保持不变；上级节点编号决定汇报关系，不按职位名称猜测。"],
 		["人员匹配", "工号按文本填写，保留前导零；仅按目标公司工号匹配。原表人员可不填工号，作为待确认注释。"],
 		["自动更新", "自动岗位按部门和岗位读取花名册；原表组线按已绑定工号更新。手动节点保留人员安排。"],
+		["自动岗位人员", "普通自动岗位迁移部门和岗位规则，导入时按目标公司在职花名册重新匹配；不要求目标公司存在本地的自动岗位人员。手工任职和原表组线仍按工号严格校验。"],
 		["职级", "职级编码引用职级定义；等级顺序越小越高，允许留空。职级不代替上级节点关系，也不修改员工档案职级。"],
 		["原表职级标签", "保留原组织草稿中与来源文件、工作表及单元格唯一对应的标签和确认状态。标签不代表高低顺序，不写入员工档案职级。"],
 		["花名册职级引用", "现有花名册职级的引用，和图中职级编码分开；需在目标服务器已存在。"],
@@ -338,15 +349,34 @@ def prepare(company, package, state=None):
 		for label in cfg.get("roster_department_alias_labels", []):
 			if label in aliases and aliases[label] != key: errors.append(f"合并部门重复关联：{label}")
 			aliases[label] = key
+	retire = []
 	for label, key in aliases.items():
 		matches = departments.get(label, [])
 		if len(matches) > 1: errors.append(f"合并部门未唯一匹配：{label}")
-		if matches and matches[0].name in units and units[matches[0].name] != key: errors.append(f"合并部门仍有独立组织节点：{label}")
+		if matches and matches[0].name in units and units[matches[0].name] != key:
+			duplicate = units[matches[0].name]
+			source = current.get(duplicate)
+			cfg = graph[duplicate]["config"]
+			# An explicit imported alias may absorb an empty pre-existing scaffold.
+			# Never retire nodes present in the file or discard people, children or plans.
+			empty = (key in plans and duplicate not in plans and source is not None
+				and not source.planned_headcount and not cfg.get("planned_headcount_set")
+				and not any(cfg.get(k) for k in ("employee", "primary_employee", "proxy_employee", "manager_employee", "assigned_employees", "template_bindings", "roster_department_alias_labels", "template_source_cell", "template_leadership_cell"))
+				and not any(p["parent"] == duplicate for p in graph.values())
+				and not any(e.status == "Active" and e.department == matches[0].name for e in state["employees"]))
+			if empty:
+				retire.append(duplicate)
+				warnings.append(f"合并部门 {label}：将停用服务器已有的空独立组织节点，保留部门档案；导入前保存配置备份。")
+			else:
+				errors.append(f"合并部门仍有独立组织节点：{label}；该节点在文件中或已有人员、下级、编制或其他配置，请先核对合并。")
 		if not matches: warnings.append(f"合并部门 {label} 尚未创建；保留关联名称，花名册导入后再匹配。")
+	for key in retire:
+		graph.pop(key)
 	from hrms.utils.organization_scope import department_scopes
 	scopes = department_scopes(graph, state["departments"])
 	department_labels = {d.name: d.department_name for d in state["departments"]}
 	seen_refs = set()
+	fixed_position_refs = {r["node"] for r in package["人员任职"] if r["type"] in {"任职人", "代理人"}}
 	for row in package["人员任职"]:
 		if row["node"] not in plans or row["type"] not in REFERENCES:
 			problem(row, "人员任职的节点编号或引用类型无效")
@@ -354,6 +384,9 @@ def prepare(company, package, state=None):
 		cfg = plans[row["node"]]["config"]
 		field = REFERENCES[row["type"]]
 		kind = cfg["node_kind"]
+		if field == "assigned_employees" and row["node"] not in fixed_position_refs and automatic_roster_position(cfg):
+			warnings.append(f"自动岗位 {plans[row['node']]['name']} 按目标花名册重新匹配人员，文件中的岗位成员快照不作为固定任职。")
+			continue
 		if (field == "manager_employee" and kind not in {"管理层", "分管"}
 			or field == "employee" and kind != "员工"
 			or field == "primary_employee" and kind not in {"室", "课", "组", "线", "岗位"}
@@ -370,7 +403,7 @@ def prepare(company, package, state=None):
 		elif not row["code"] and (field != "template_bindings" or not row["name"]):
 			problem(row, "人员必须填写工号；仅原表人员注释允许无工号")
 		elif not row["code"]:
-			warnings.append(f"原表人员 {row['name']} 无工号，仅保留待确认注释，不计人数。")
+			warnings.append(f"原表引用 {row['name']} 尚未绑定员工；保留原表注释，不计在职人数。可查看同名档案工号与状态后核对。")
 		if person and row["name"] and row["name"] != person.employee_name:
 			warnings.append(f"工号 {row['code']} 姓名不同，采用服务器花名册姓名 {person.employee_name}。")
 		display_only = boolean(row, "display_only")
@@ -405,6 +438,19 @@ def prepare(company, package, state=None):
 			if field == "manager_employee" and person: cfg["manager_name"] = person.employee_name
 			if field == "proxy_employee" and display_only and person:
 				cfg["portable_proxy_display_only"] = True
+	# Fixed source assignments take precedence over automatic roster buckets.
+	reserved = set()
+	for node in graph.values():
+		cfg = node["config"]
+		reserved.update(b.get("employee") for b in cfg.get("template_bindings", []) if not b.get("display_only") and not b.get("issue"))
+		if not automatic_roster_position(cfg) and (cfg.get("node_kind") in {"岗位", "员工"} or cfg.get("roster_subset")):
+			reserved.update([cfg.get("employee"), cfg.get("primary_employee"), *chart.chart_assigned_employees(cfg)])
+	for key, plan in plans.items():
+		cfg = plan["config"]
+		if automatic_roster_position(cfg):
+			cfg["assigned_employees"] = sorted(e.name for e in state["employees"]
+				if e.status == "Active" and e.department in scopes[key]
+				and e.designation == cfg.get("designation") and e.name not in reserved)
 	# Validate the resulting graph including nodes retained on the target server.
 	from hrms.api.organization_assignment_review import formal_conflicts
 	resulting_nodes = [n for key, n in current.items() if key not in plans]
@@ -439,7 +485,7 @@ def prepare(company, package, state=None):
 	return {"errors": errors, "warnings": list(dict.fromkeys(warnings)), "fingerprint": fingerprint,
 		"completeness": completeness,
 		"create_count": len(set(plans) - set(current)), "update_count": len(set(plans) & set(current)),
-		"retained_count": len(set(current) - set(plans)), "person_rows": len(package["人员任职"]),
+		"retained_count": len(set(current) - set(plans) - set(retire)), "merged_empty_count": len(retire), "person_rows": len(package["人员任职"]),
 		"grades": [{k: v for k, v in g.items() if k != "_row"} for g in grades.values()],
 		"preview": [{"id": key, "name": plans[key]["name"], "parent": plans[key]["parent"],
 			"parent_name": plans.get(plans[key]["parent"], {}).get("name") or (current[plans[key]["parent"]].display_name if plans[key]["parent"] in current else "公司"),
@@ -449,7 +495,7 @@ def prepare(company, package, state=None):
 			"source_grade_status": plans[key]["config"].get("source_grade_status", ""),
 			"source_grade_reference": plans[key]["config"].get("source_grade_reference", ""),
 			"grade": plans[key]["config"].get("chart_grade", {}).get("label", "")} for key in order if key in plans],
-		"_plans": plans, "_current": current, "_order": order, "_state": state}
+		"_plans": plans, "_current": current, "_order": order, "_state": state, "_retire": retire}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -479,6 +525,10 @@ def apply_configuration(company, file_url, fingerprint, auto_sync=1):
 	backup = save_private(workbook_bytes(company), "组织配置导入前备份", company)
 	version = version or chart._ensure_manual_organization_version(company)
 	ids = {key: node.name for key, node in plan["_current"].items()}
+	for key in plan["_retire"]:
+		doc = frappe.get_doc("Organization Node", ids[key])
+		doc.confirmation_status = "不导入"
+		doc.save()
 	# Detach only imported nodes first; this permits valid hierarchy reversals.
 	for key in plan["_plans"]:
 		if key in ids: frappe.db.set_value("Organization Node", ids[key], "parent_node", None, update_modified=False)
@@ -497,5 +547,5 @@ def apply_configuration(company, file_url, fingerprint, auto_sync=1):
 	doc = frappe.get_doc("Organization Structure Version", version)
 	doc.notes = json.dumps(options, ensure_ascii=False)
 	doc.save()
-	return {"created": plan["create_count"], "updated": plan["update_count"], "backup": backup,
+	return {"created": plan["create_count"], "updated": plan["update_count"], "merged_empty_count": plan["merged_empty_count"], "backup": backup,
 		"warnings": plan["warnings"], "auto_sync": bool(int(auto_sync))}

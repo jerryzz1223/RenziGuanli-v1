@@ -66,6 +66,10 @@ if (redirect.includes("redirect_retired_personnel_home")) {
 	throw new Error("Desk startup must not run the retired Personnel redirect before Frappe has initialized its route.");
 }
 
+if (redirect.includes('normalized === "#"')) {
+	throw new Error("The HRMS home redirect must not intercept Frappe breadcrumb placeholder links.");
+}
+
 for (const marker of [
 	"Employment Type",
 	"工作性质",

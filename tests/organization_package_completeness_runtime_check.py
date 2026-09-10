@@ -15,6 +15,7 @@ def run():
 	try:
 		content = package.workbook_bytes(company, before)
 		data = package.read_content(content)
+		assert all(row["template_source_vacancies"].isdigit() for row in data["组织层级"]), "generated nodes must export canonical vacancy counts"
 		plan = package.prepare(company, data)
 		assert not plan["errors"], plan["errors"]
 		assert plan["completeness"]["source_grade_nodes"] == 17, plan["completeness"]

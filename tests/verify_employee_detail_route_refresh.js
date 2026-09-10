@@ -21,11 +21,36 @@ for (const marker of [
 ]) {
 	assert(source.includes(marker), `Employee detail must provide Apple-tree summary and precise drilldown: ${marker}`);
 }
+for (const marker of ["user-select: text !important", "-webkit-user-select: text !important", "has_text_selection(container)"]) {
+	assert(source.includes(marker), `Employee detail must keep rendered record text copyable: ${marker}`);
+}
+assert.match(
+	source,
+	/row\.addEventListener\("click", \(\) => \{[\s\S]*?if \(this\.has_text_selection\(row\)\) return;[\s\S]*?toggle_related_block/,
+	"Selecting text in a related-record row must not collapse it before it can be copied.",
+);
 assert(!source.includes("hrms-employee-apple-tree"), "Apple-tree summary must reuse related-record collapse styling, not a separate card.");
+for (const marker of [
+	'__("员工花名册 / 员工档案")',
+	'__("返回员工花名册")',
+	"return_to_roster()",
+	'frappe.set_route("List", "Employee")',
+]) {
+	assert(source.includes(marker), `Employee detail must retain a visible, direct return path to the roster: ${marker}`);
+}
 
 let route = ["employee-detail", "EMP-A"];
 const requests = [];
 const main = { innerHTML: "" };
+const breadcrumbs = {
+	items: [],
+	add(item) {
+		this.items = [item];
+	},
+	append_breadcrumb_element(route, label, cssClass) {
+		this.items.push({ route, label, cssClass });
+	},
+};
 const page = {
 	main: [main],
 	title: "",
@@ -57,8 +82,9 @@ const context = {
 		ui: { make_app_page: () => page },
 		utils: { escape_html: (value) => String(value || "") },
 		get_route: () => route,
-		call: createRequest,
-		set_route() {},
+	call: createRequest,
+	set_route() {},
+	breadcrumbs,
 	},
 };
 context.globalThis = context;
@@ -92,6 +118,10 @@ async function run() {
 	const wrapper = {};
 	context.frappe.pages["employee-detail"].on_page_load(wrapper);
 	context.frappe.pages["employee-detail"].on_page_show(wrapper);
+	assert.strictEqual(JSON.stringify(breadcrumbs.items), JSON.stringify([
+		{ type: "Custom", route: "/desk/employee", label: "员工花名册" },
+		{ route: "", label: "员工档案", cssClass: "hrms-employee-detail-current" },
+	]), "Employee detail must show a roster breadcrumb and a non-clickable current page.");
 	assert.strictEqual(requests.length, 2, "Initial load/show must share the in-flight request.");
 
 	route = ["employee-detail", "EMP-B"];

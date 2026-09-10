@@ -65,3 +65,9 @@ hrms.patches.v16_0.normalise_employee_ethnicity_values #2026-09-03
 hrms.patches.v16_0.ensure_employee_work_nature_source #2026-09-03
 hrms.patches.v16_0.convert_employee_tabs_to_sections #2026-09-03
 hrms.patches.v16_0.add_department_organization_card_content #2026-09-03
+hrms.patches.v16_0.ensure_employee_rehire_link #2026-09-09
+
+hrms.patches.v16_0.migrate_standing_pay_registers #2026-09-09
+
+hrms.patches.v16_0.ensure_standing_pay_roles #2026-09-10
+hrms.patches.v16_0.flatten_yongxin_roster_department_parents #2026-09-10

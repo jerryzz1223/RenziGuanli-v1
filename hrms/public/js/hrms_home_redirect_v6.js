@@ -321,7 +321,7 @@
 					label: "快捷入口",
 					children: [
 						{ label: "人事", route: "/desk/employee", slug: "employee" },
-						{ label: "部门", route: "/desk/department", slug: "department" },
+						{ label: "部门", route: "/desk/organizational-chart/list", slug: "organization-list" },
 						{ label: "招聘", route: "/desk/recruitment", slug: "recruitment" },
 						{ label: "考勤假期", route: "/desk/attendance-import-center", slug: "attendance-import-center" },
 						{ label: "薪酬", route: "/desk/payroll-input-center", slug: "payroll-input-center" },
@@ -416,7 +416,6 @@
 			items: [
 				{ type: "link", label: "组织架构图", route: "/desk/organizational-chart", slug: "organizational-chart" },
 				{ type: "link", label: "部门列表", route: "/desk/organizational-chart/list", slug: "organization-list" },
-				{ type: "link", label: "部门基础资料", route: "/desk/department", slug: "department" },
 				{ type: "link", label: "部门报表", route: "/desk/organizational-chart/report", slug: "organization-report" },
 			],
 		},
@@ -535,11 +534,30 @@
 			items: [
 				{ type: "link", label: "薪酬首页", route: "/desk/payroll-input-center", slug: "payroll-input-center" },
 				{
+					type: "section", label: "薪资",
+					children: [
+						{ label: "员工定薪", route: "/desk/payroll-input-center/salary-assignments", slug: "salary-assignments" },
+						{ label: "薪资查看", route: "/desk/payroll-input-center/salary-register", slug: "salary-register" },
+						{ label: "申请修改", route: "/desk/payroll-input-center/salary-changes", slug: "salary-changes" },
+						{ label: "审批", route: "/desk/payroll-input-center/salary-approvals", slug: "salary-approvals", roles: ["System Manager", "HR Manager", "薪资审批"] },
+						{ label: "修改记录", route: "/desk/payroll-input-center/salary-history", slug: "salary-history" },
+					],
+				},
+				{
+					type: "section", label: "社保公积金",
+					children: [
+						{ label: "社保公积金输入", route: "/desk/payroll-input-center/contribution-register", slug: "contribution-register" },
+						{ label: "社保公积金查看", route: "/desk/payroll-input-center/contribution-view", slug: "contribution-view" },
+						{ label: "申请修改", route: "/desk/payroll-input-center/contribution-changes", slug: "contribution-changes" },
+						{ label: "审批", route: "/desk/payroll-input-center/contribution-approvals", slug: "contribution-approvals", roles: ["System Manager", "HR Manager", "薪资审批"] },
+						{ label: "修改记录", route: "/desk/payroll-input-center/contribution-history", slug: "contribution-history" },
+					],
+				},
+				{
 					type: "section",
-					label: "本月薪资",
+					label: "薪资管理",
 					children: [
 						{ label: "人员范围", route: "/desk/payroll-input-center/employee-salary", slug: "employee-salary" },
-						{ label: "员工定薪", route: "/desk/payroll-input-center/salary-assignments", slug: "salary-assignments" },
 						{ label: "月度增减项", route: "/desk/payroll-input-center/variables", slug: "variables" },
 						{ label: "薪资试算", route: "/desk/payroll-input-center/monthly-workbench", slug: "monthly-workbench" },
 						{ label: "确认与发放", route: "/desk/payroll-input-center/payroll-reports", slug: "payroll-reports" },
@@ -628,6 +646,10 @@
 	function redirect_to_hrms_home() {
 		var path = window.location.pathname.replace(/\/+$/, "");
 		var hash = window.location.hash || "";
+		if (/^\/(desk|app)\/department(?:\/view\/[^/]+)?$/i.test(path) || /^#(?:list|tree)\/department(?:\/|$)/i.test(hash)) {
+			window.location.replace("/desk/organizational-chart/list");
+			return;
+		}
 		if (
 			(path === "/desk" && (!hash || hash === "#")) ||
 			path === "/apps"
@@ -690,7 +712,10 @@
 			return false;
 		}
 		var normalized = href.replace(window.location.origin, "").replace(/\/+$/, "");
-		return normalized === "/desk" || normalized === "/app" || normalized === "/apps" || normalized === "#";
+		// `#` is used by Frappe's own page header and breadcrumb controls.  It
+		// must keep its framework click handler so a detail page can return to
+		// its parent; only real Desk root links belong to the HRMS home redirect.
+		return normalized === "/desk" || normalized === "/app" || normalized === "/apps";
 	}
 
 	function fix_desk_home_links() {
@@ -966,6 +991,7 @@
 	}
 
 	function can_access_hrms_item(item) {
+		if (window.frappe && frappe.session && frappe.session.user === "Administrator") return true;
 		var required_roles = (item && item.roles) || [];
 		if (!required_roles.length) {
 			return true;
@@ -1113,6 +1139,13 @@
 		var drag_state = null;
 		var long_press_timer = 0;
 
+		function start_drag() {
+			if (!drag_state || drag_state.started) return;
+			drag_state.started = true;
+			drag_state.item.classList.add("hrms-sidebar-item-dragging");
+			document.body.classList.add("hrms-sidebar-reordering");
+		}
+
 		function clear_drag_state() {
 			window.clearTimeout(long_press_timer);
 			long_press_timer = 0;
@@ -1138,7 +1171,12 @@
 		}
 
 		function move_dragged_item(event) {
-			if (!drag_state || !drag_state.started) return;
+			if (!drag_state || event.pointerId !== drag_state.pointer_id) return;
+			if (!drag_state.started) {
+				var distance = Math.hypot(event.clientX - drag_state.start_x, event.clientY - drag_state.start_y);
+				if (distance < 4) return;
+				start_drag();
+			}
 			var target = document.elementFromPoint(event.clientX, event.clientY);
 			var target_item = target && target.closest("[data-hrms-sidebar-item]");
 			if (!target_item || target_item === drag_state.item || target_item.parentElement !== drag_state.container) return;
@@ -1150,6 +1188,34 @@
 			}
 			event.preventDefault();
 		}
+
+		function finish_pointer_drag(event) {
+			if (!drag_state || event.pointerId !== drag_state.pointer_id) return;
+			finish_drag(event);
+		}
+
+		function cancel_pointer_drag(event) {
+			if (!drag_state || event.pointerId !== drag_state.pointer_id) return;
+			clear_drag_state();
+		}
+
+		// Pointer capture normally keeps events on the icon.  Page-level listeners
+		// are the fallback for browsers that release capture as soon as the pointer
+		// leaves the tiny drag handle, so a dropped item always saves its position.
+		var previous_listeners = sidebar.__hrmsSidebarDragListeners;
+		if (previous_listeners) {
+			document.removeEventListener("pointermove", previous_listeners.move);
+			document.removeEventListener("pointerup", previous_listeners.finish);
+			document.removeEventListener("pointercancel", previous_listeners.cancel);
+		}
+		sidebar.__hrmsSidebarDragListeners = {
+			move: move_dragged_item,
+			finish: finish_pointer_drag,
+			cancel: cancel_pointer_drag,
+		};
+		document.addEventListener("pointermove", move_dragged_item);
+		document.addEventListener("pointerup", finish_pointer_drag);
+		document.addEventListener("pointercancel", cancel_pointer_drag);
 
 		sidebar.querySelectorAll(".hrms-unified-sidebar-link__drag-handle").forEach(function (handle) {
 			handle.addEventListener("pointerdown", function (event) {
@@ -1164,23 +1230,25 @@
 			if (!container) return;
 			event.preventDefault();
 			event.stopPropagation();
-			drag_state = { item: item, container: container, group: group, started: false };
+			drag_state = {
+				item: item,
+				container: container,
+				group: group,
+				pointer_id: event.pointerId,
+				start_x: event.clientX,
+				start_y: event.clientY,
+				started: false,
+			};
 			try {
 				handle.setPointerCapture(event.pointerId);
 			} catch (error) {
 				// Pointer capture is not available in a few older embedded browsers.
 			}
 			long_press_timer = window.setTimeout(function () {
-				if (!drag_state) return;
-				drag_state.started = true;
-				drag_state.item.classList.add("hrms-sidebar-item-dragging");
-				document.body.classList.add("hrms-sidebar-reordering");
+				start_drag();
 			}, 180);
 		});
 
-		handle.addEventListener("pointermove", move_dragged_item);
-		handle.addEventListener("pointerup", finish_drag);
-		handle.addEventListener("pointercancel", clear_drag_state);
 		handle.addEventListener("keydown", function (event) {
 			if (event.key === "Enter" || event.key === " ") {
 				event.preventDefault();

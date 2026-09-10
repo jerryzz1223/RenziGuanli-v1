@@ -9,7 +9,7 @@ const data = {file_url:'/private/files/test.xlsx',file_name:'test.xlsx',errors:[
     source_grade_tags:'文师级<script>',source_grade_status:'待确认',source_grade_reference:'原表"来源',grade:''}]};
 const escape = value => String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
 const context = {__:x=>x, document:{createElement:()=>({click(){}})}, frappe:{pages:{'organizational-chart':{}},utils:{escape_html:escape},
-  call: async()=>({message:data}),msgprint:args=>{notice=args;},ui:{Dialog:class {
+  call: async()=>({message:data}),msgprint:args=>{notice=args;return {$wrapper:{find(){return {on(){}};}}};},ui:{Dialog:class {
     constructor(config){Object.assign(this,config);this.fields_dict={preview:{$wrapper:{html:value=>{html=value;}}}};dialog=this;}
     get_values(){return {company:'永新',file_url:data.file_url,auto_sync:0};}
     get_primary_btn(){return {prop(){return this;},text(){return this;}};}
@@ -21,7 +21,7 @@ vm.runInContext(fs.readFileSync('hrms/hr/page/organizational_chart/organizationa
   const chart=Object.create(context.Chart.prototype);chart.company='永新';
   await chart.export_configuration();
   assert.equal(notice.indicator,'orange');
-  assert(notice.message.includes('17 个节点有记录')&&notice.message.includes('缺工号引用 19 条'));
+  assert(notice.message.includes('17 个节点有记录')&&notice.message.includes('未绑定原表引用 19 条'));
   assert(!notice.message.includes('包含上下级、人员任职和职级定义'));
   chart.import_configuration();await dialog.run_configuration_action();
   assert(html.includes('原表职级标签')&&html.includes('图中职务')&&html.includes('未配置等级'));

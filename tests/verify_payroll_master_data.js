@@ -82,8 +82,11 @@ for (const marker of [
 	"list_salary_grades",
 	"list_employee_salary_change_grid",
 	"员工定薪表",
-	"缴纳社保",
-	"缴纳公积金",
+	"社保公积金输入",
+	"社保公积金查看",
+	"薪资查看",
+	"load_standing_approvals",
+	"show_standing_history",
 	"请输入",
 	"导入 Excel",
 	"人员薪资调整模板（月）",
@@ -97,14 +100,13 @@ for (const marker of [
 	"员工定薪导入记录",
 	"撤销本次导入",
 	"rollback_employee_salary_change_import_batch",
-	"本月不参与计算",
-	"data-exclude-payroll",
+
 	"const missingDifference",
 	"data-salary-change-save-state",
 	"confirm_salary_changes_saved",
 	"values: JSON.stringify(values)",
 	"员工定薪提交失败",
-	"保存并提交",
+	"提交审批",
 	"get_saved_payroll_month",
 	"remember_payroll_month",
 ]) {
@@ -119,9 +121,12 @@ if (pageJs.includes('data-salary-change-field="status"') || pageJs.includes('__(
 	throw new Error("Employee salary grid must not expose legacy status or change-reason columns.");
 }
 
-if (!api.includes('status = "已批准"') || !api.includes('"status": "已批准"')) {
-	throw new Error("Employee salary saves and imports must be submitted immediately.");
-}
+const createSalaryApi = api.slice(api.indexOf("def create_employee_salary_change"), api.indexOf("def update_employee_salary_change"));
+mustInclude(createSalaryApi, 'status = "待审核"', "New salary requests must require approval.");
+const standingController = read("hrms/payroll/standing_pay.py");
+mustInclude(standingController, "old.status != '待审核'", "Only pending requests may be reviewed.");
+mustInclude(standingController, "frappe.session.user == (old.submitted_by or old.owner)", "Self approval must be denied.");
+
 
 mustInclude(
 	api,
@@ -183,7 +188,7 @@ for (const [folder, markers] of [
 	const json = read(`hrms/hr/doctype/${folder}/${folder}.json`);
 	const py = read(`hrms/hr/doctype/${folder}/${folder}.py`);
 	for (const marker of markers) mustInclude(json, marker, `${folder} DocType is missing marker: ${marker}`);
-	mustInclude(py, "Document", `${folder} controller must extend Document.`);
+	mustInclude(py, folder === "hrms_employee_salary_change" ? "StandingPayDecision" : "Document", `${folder} controller must extend its document controller.`);
 }
 
 console.log("Payroll master-data contract passed.");

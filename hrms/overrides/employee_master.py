@@ -7,7 +7,8 @@ from frappe.utils import add_years, cint, cstr, get_link_to_form, getdate
 
 from erpnext.setup.doctype.employee.employee import Employee
 
-from hrms.utils.employee_profile import normalise_employee_profile
+from hrms.utils.employee_profile import calculate_employee_age, normalise_employee_profile
+from hrms.utils.employee_rehire import link_new_employee_to_previous_employment
 
 
 WORK_NATURE_OPTIONS = ("在职·正式", "在职·试用期", "退休返聘", "待离职", "离职")
@@ -16,7 +17,10 @@ WORK_NATURE_OPTIONS = ("在职·正式", "在职·试用期", "退休返聘", "�
 class EmployeeMaster(Employee):
 	def validate(self):
 		normalise_employee_profile(self)
+		if self.meta.has_field("custom_age"):
+			self.custom_age = calculate_employee_age(self.get("date_of_birth"), frappe.utils.today())
 		self._apply_company_employee_code()
+		link_new_employee_to_previous_employment(self)
 		apply_employee_work_nature(self)
 		return super().validate()
 

@@ -1,5 +1,19 @@
 """Match explicit profile abbreviations against the field's allowed values."""
 
+from datetime import date
+
+
+def calculate_employee_age(date_of_birth, today):
+	"""Completed years; missing, invalid and future birth dates have no age."""
+	try:
+		birth = date.fromisoformat(str(date_of_birth))
+		on_date = date.fromisoformat(str(today))
+	except (TypeError, ValueError):
+		return None
+	if birth > on_date:
+		return None
+	return on_date.year - birth.year - ((on_date.month, on_date.day) < (birth.month, birth.day))
+
 
 PROFILE_FIELDS = ("custom_ethnicity", "custom_native_place")
 NATIVE_PLACE_ALIASES = {

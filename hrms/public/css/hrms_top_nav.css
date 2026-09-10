@@ -2290,8 +2290,16 @@ body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-r
 	z-index: 1;
 }
 
-body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table th:first-child,
-body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table td:first-child {
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table .hrms-roster-row-number {
+	min-width: 56px;
+	width: 56px;
+	text-align: center;
+	color: var(--text-muted, #6b7280);
+	font-variant-numeric: tabular-nums;
+}
+
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table th:nth-child(2),
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table td:nth-child(2) {
 	min-width: 88px;
 }
 

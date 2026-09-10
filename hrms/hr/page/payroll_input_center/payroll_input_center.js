@@ -70,7 +70,16 @@ class PayrollInputCenter {
 			{ key: "salary-rules", label: "薪资规则" },
 			{ key: "attendance-pay-rules", label: "考勤计薪规则" },
 			{ key: "salary-templates", label: "工资表模板" },
-			{ key: "salary-assignments", label: "员工分配" },
+			{ key: "salary-assignments", label: "员工定薪" },
+			{ key: "salary-register", label: "薪资查看" },
+			{ key: "contribution-register", label: "社保公积金输入" },
+			{ key: "contribution-view", label: "社保公积金查看" },
+			{ key: "salary-changes", label: "申请修改" },
+			{ key: "salary-approvals", label: "审批" },
+			{ key: "salary-history", label: "修改记录" },
+			{ key: "contribution-changes", label: "申请修改" },
+			{ key: "contribution-approvals", label: "审批" },
+			{ key: "contribution-history", label: "修改记录" },
 			{ key: "variables", label: "变量导入" },
 			{ key: "inputs", label: "薪资输入表" },
 			{ key: "settlements", label: "薪资结算表" },
@@ -83,7 +92,10 @@ class PayrollInputCenter {
 		this.workspace_areas = [
 			{ key: "master", label: "人员范围", route: "employee-salary", description: "查看当月在职、正式、试用及待补资料人数" },
 			{ key: "salary", label: "员工定薪", route: "salary-assignments", description: "维护有变化或缺失的员工固定薪资" },
-			{ key: "sources", label: "月度增减项", route: "variables", description: "导入奖金、补贴、扣款、社保与公积金" },
+			{ key: "salary-view", label: "薪资查看", route: "salary-register", description: "只读查看当前定薪及薪资变化记录" },
+			{ key: "contributions", label: "社保公积金输入", route: "contribution-register", description: "提交缴费标准变更及审批" },
+			{ key: "contribution-view", label: "社保公积金查看", route: "contribution-view", description: "只读查看当前缴费标准及变化记录" },
+			{ key: "sources", label: "月度增减项", route: "variables", description: "导入奖金、补贴与扣款" },
 			{ key: "calculation", label: "薪资试算", route: "monthly-workbench", description: "条件满足时生成并复核本月工资" },
 			{ key: "termination", label: "离职结算", route: "termination-settlement", description: "按离职薪资表核对工时、加扣款及个人结算明细" },
 			{ key: "delivery", label: "确认与发放", route: "payroll-reports", description: "确认结算、导出报表和发放工资条" },
@@ -138,6 +150,7 @@ class PayrollInputCenter {
 		if (this.table_controls_bound) {
 			this.wrapper.removeEventListener("click", this.handle_table_control_click);
 			this.wrapper.removeEventListener("input", this.handle_table_control_input);
+			this.wrapper.removeEventListener("change", this.handle_table_control_input);
 			this.table_control_observer?.disconnect();
 			this.table_controls_bound = false;
 		}
@@ -171,6 +184,8 @@ class PayrollInputCenter {
 		if (this.table_controls_bound) return;
 		this.table_controls_bound = true;
 		this.handle_table_control_click = (event) => {
+			const historyButton = event.target.closest("[data-payroll-person-history]");
+			if (historyButton) { this.show_standing_history(historyButton.dataset.payrollPersonHistory); return; }
 			const paginationButton = event.target.closest("[data-payroll-table-page]");
 			if (paginationButton && this.wrapper.contains(paginationButton)) {
 				const pagination = paginationButton.closest("[data-payroll-table-pagination]");
@@ -194,6 +209,7 @@ class PayrollInputCenter {
 		};
 		this.wrapper.addEventListener("click", this.handle_table_control_click);
 		this.wrapper.addEventListener("input", this.handle_table_control_input);
+		this.wrapper.addEventListener("change", this.handle_table_control_input);
 		// Inline save-state changes and large table renders can create many DOM
 		// mutations in one task. Coalesce them so we only scan the tables once
 		// before the next paint instead of interrupting the current interaction.
@@ -216,7 +232,9 @@ class PayrollInputCenter {
 				Array.from(table.tHead.rows[0].cells).forEach((header, index) => {
 					const label = header.textContent.trim();
 					if (!label || [__("操作"), __("选择")].includes(label)) return;
-					header.innerHTML = `<div class="hrms-payroll-table-column-head"><button class="btn btn-link btn-xs" type="button" data-table-sort="${index}" title="${this.escape(__("按{0}排序", [label]))}"><span>${this.escape(label)}</span><i aria-hidden="true">↕</i></button><input class="form-control input-xs" type="search" data-table-column-search="${index}" placeholder="${this.escape(__("搜索"))}" aria-label="${this.escape(__("搜索{0}", [label]))}"></div>`;
+					const departments = label === "部门" ? [...new Set(this.table_data_rows(table).map((row) => row.cells[index]?.textContent.trim() || "").filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-Hans-CN")) : [];
+					const filterControl = label === "部门" ? `<select class="form-control input-xs" data-table-column-search="${index}" data-filter-exact="1" aria-label="筛选部门"><option value="">全部</option>${departments.map((name) => `<option value="${this.escape(name)}">${this.escape(name)}</option>`).join("")}</select>` : `<input class="form-control input-xs" type="search" data-table-column-search="${index}" placeholder="${this.escape(__("搜索"))}" aria-label="${this.escape(__("搜索{0}", [label]))}">`;
+					header.innerHTML = `<div class="hrms-payroll-table-column-head"><button class="btn btn-link btn-xs" type="button" data-table-sort="${index}" title="${this.escape(__("按{0}排序", [label]))}"><span>${this.escape(label)}</span><i aria-hidden="true">↕</i></button>${filterControl}</div>`;
 				});
 				table.dataset.tableControlsReady = "1";
 				this.prioritize_table_rows(table);
@@ -329,14 +347,15 @@ class PayrollInputCenter {
 
 	filter_table_rows(table) {
 		if (!table?.tBodies.length) return;
-		const filters = Array.from(table.querySelectorAll("[data-table-column-search]")).map((input) => ({ column: Number(input.dataset.tableColumnSearch), value: input.value.trim().toLocaleLowerCase() })).filter((item) => item.value);
+		const filters = Array.from(table.querySelectorAll("[data-table-column-search]")).map((input) => ({ column: Number(input.dataset.tableColumnSearch), exact: input.dataset.filterExact === "1", value: input.value.trim().toLocaleLowerCase() })).filter((item) => item.value);
 		Array.from(table.tBodies[0].rows).forEach((row) => {
 			if (!row.cells.length) return;
 			// textContent avoids a synchronous layout read for every cell. Include
 			// form values explicitly because textContent does not contain them.
-			row.dataset.tableFilterMatch = filters.every((filter) => {
+			row.dataset.tableFilterMatch = (!table.dataset.globalSearch || (row.dataset.search || row.textContent.toLocaleLowerCase()).includes(table.dataset.globalSearch)) && filters.every((filter) => {
 				const cell = row.cells[filter.column];
 				const inputValues = cell ? Array.from(cell.querySelectorAll("input, select, textarea")).map((input) => input.value).join(" ") : "";
+				if (filter.exact) return (cell?.textContent || "").trim().toLocaleLowerCase() === filter.value;
 				return `${cell?.textContent || ""} ${inputValues}`.toLocaleLowerCase().includes(filter.value);
 			}) ? "1" : "0";
 		});
@@ -576,7 +595,8 @@ class PayrollInputCenter {
 		if (tab === "termination-settlement") return "termination";
 		if (tab === "payroll-adjustments") return "delivery";
 		if (tab === "employee-salary") return "master";
-		if (["salary-assignments", "salary-rules", "salary-templates"].includes(tab)) return "salary";
+		if (["salary-assignments", "salary-register", "salary-rules", "salary-templates"].includes(tab)) return "salary";
+		if (["contribution-register", "contribution-view"].includes(tab)) return "contributions";
 		if (tab === "attendance-pay-rules") return "calculation";
 		if (["welfare-sources", "variables"].includes(tab)) return "sources";
 		if (["monthly-workbench", "monthly-payroll", "inputs", "settlements"].includes(tab)) return "calculation";
@@ -656,7 +676,7 @@ class PayrollInputCenter {
 			</div>
 		`;
 		this.bind_month_control();
-		this.load_attendance_dependency();
+		if (!["salary-assignments", "salary-register", "salary-changes", "salary-approvals", "salary-history", "contribution-register", "contribution-view", "contribution-changes", "contribution-approvals", "contribution-history"].includes(this.active_tab)) this.load_attendance_dependency();
 	}
 
 	render_attendance_dependency() {
@@ -709,6 +729,7 @@ class PayrollInputCenter {
 	}
 
 	load_attendance_dependency({ force = false } = {}) {
+		if (["salary-assignments", "salary-register", "salary-changes", "salary-approvals", "salary-history", "contribution-register", "contribution-view", "contribution-changes", "contribution-approvals", "contribution-history"].includes(this.active_tab)) return Promise.resolve(null);
 		if (!this.company || !this.payroll_month) return Promise.resolve(null);
 		const company = this.company;
 		const payroll_month = this.payroll_month;
@@ -766,6 +787,17 @@ class PayrollInputCenter {
 	}
 
 	load_active_tab() {
+		const master = ["salary-assignments", "salary-register", "contribution-register", "contribution-view", "salary-changes", "salary-approvals", "salary-history", "contribution-changes", "contribution-approvals", "contribution-history"].includes(this.active_tab);
+		const scope = this.wrapper.querySelector(".hrms-payroll-global-scope");
+		if (scope) scope.hidden = master;
+		if (["salary-approvals", "contribution-approvals"].includes(this.active_tab)) {
+			this.load_standing_approval_page(this.active_tab.startsWith("salary-") ? "salary" : "contribution"); return;
+		}
+		if (["salary-history", "contribution-history"].includes(this.active_tab)) {
+			this.load_standing_records(this.active_tab.startsWith("salary-") ? "salary" : "contribution"); return;
+		}
+		if (["contribution-register", "contribution-view", "contribution-changes"].includes(this.active_tab)) { this.load_contribution_register(); return; }
+		if (["salary-register", "salary-changes"].includes(this.active_tab)) { this.load_salary_register(); return; }
 		// Background refreshes (for example, the attendance dependency response)
 		// must not rebuild this editable table over a user's pending changes.
 		if (this.has_unsaved_salary_changes()) return;
@@ -1848,14 +1880,75 @@ class PayrollInputCenter {
 		});
 	}
 
+	can_approve_standing() {
+		return frappe.session.user === "Administrator" || (frappe.user_roles || []).some((role) => ["System Manager", "HR Manager", "薪资审批"].includes(role));
+	}
+
+	open_salary_request(row) {
+		const company = this.company;
+		let dialog;
+		dialog = new frappe.ui.Dialog({ title: `${row.employee_name} · 薪资修改申请`, fields: [
+			{ fieldtype: "Date", fieldname: "effective_date", label: "生效日期", default: frappe.datetime.get_today(), reqd: 1 },
+			...[['base_salary', '底薪'], ['function_allowance', '职能津贴'], ['certificate_allowance', '证书津贴'], ['multi_skill_allowance', '多能工津贴']].map(([fieldname, label]) => ({ fieldtype: "Currency", fieldname, label, default: row[fieldname] || 0, reqd: fieldname === "base_salary" })),
+			{ fieldtype: "Small Text", fieldname: "remarks", label: "修改原因", reqd: 1 },
+		], primary_action_label: "提交申请，等待审批", primary_action: async (values) => {
+			await frappe.call({ method: "hrms.api.payroll_input.update_employee_salary_change", args: { company, employee: row.employee, name: row.name || "", values: JSON.stringify(values) }, freeze: true });
+			dialog.hide();
+			frappe.show_alert({ message: "申请已提交，审批前当前薪资不变。可在修改记录查看进度。", indicator: "green" });
+			this.load_active_tab();
+		} });
+		dialog.show();
+	}
+
+	load_standing_approval_page(kind) {
+		const label = kind === "salary" ? "薪资" : "社保公积金";
+		if (!this.can_approve_standing()) {
+			this.body().innerHTML = '<div class="hrms-payroll-input-panel"><h3>无审批权限</h3><p>当前账户可以提交修改申请和查看记录，审批需要授权账户处理。</p></div>';
+			return;
+		}
+		this.body().innerHTML = `<div class="hrms-payroll-input-list-head"><div><h3>审批 · ${label}</h3><p>审批通过后按生效日期更新标准。最高管理员 Administrator 可审批本人申请，其他审批账户须由另一位审批人审核。</p></div></div><div data-standing-approvals></div>`;
+		this.load_standing_approvals(this.body().querySelector("[data-standing-approvals]"), kind === "salary" ? "HRMS Employee Salary Change" : "HRMS Employee Contribution Change");
+	}
+
+	async load_standing_records(kind) {
+		const company = this.company, route = this.active_tab;
+		this.body().innerHTML = '<p>正在读取修改记录…</p>';
+		const response = await frappe.call({ method: "hrms.api.standing_pay.list_change_records", args: { company, kind } });
+		if (this.company !== company || this.active_tab !== route) return;
+		const rows = response.message || [], esc = (value) => this.escape(String(value ?? ""));
+		this.body().innerHTML = `<div class="hrms-payroll-input-list-head"><div><h3>修改记录 · ${kind === "salary" ? "薪资" : "社保公积金"}</h3><p>仅显示首次标准建立后的修改申请及审批结果，并逐项对照原始标准与修改后标准。待审核、已驳回不会更改当前标准；点击姓名查看个人变化趋势。</p></div><span class="hrms-payroll-template-status">共 ${rows.length} 条</span></div><div class="table-responsive"><table class="table table-bordered table-sm hrms-standing-history-list"><thead><tr>${["姓名 / 工号", "部门", "类型", "生效日期", "变更内容（原始 → 修改后）", "状态", "修改人", "修改时间", "审批人", "审批时间", "修改原因 / 审批意见"].map((label) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr><td><button class="btn btn-link btn-xs" data-standing-history="${esc(row.employee)}">${esc(row.employee_name)}</button><br>${esc(row.employee_code)}</td><td>${esc(row.department)}</td><td>${esc(row.contribution_type || "定薪")}</td><td>${esc(row.effective_date)}</td><td>${this.standing_approval_change(row, "history")}</td><td>${esc(row.status)}</td><td>${esc(row.submitted_by || row.owner || "未记录")}</td><td>${esc(this.standing_time(row.submitted_on || row.creation))}</td><td>${esc(row.approved_by || "未记录")}</td><td>${esc(this.standing_time(row.approved_on))}</td><td>${esc([row.remarks, row.review_note].filter(Boolean).join("；"))}</td></tr>`).join("") || '<tr><td colspan="11">暂无修改记录</td></tr>'}</tbody></table></div>`;
+		this.body().querySelectorAll("[data-standing-history]").forEach((button) => button.addEventListener("click", () => this.show_standing_history(button.dataset.standingHistory)));
+	}
+
+	async load_salary_register() {
+		const company = this.company;
+		const route = this.active_tab;
+		const editing = route === "salary-changes";
+		this.body().innerHTML = '<p>正在读取员工定薪档案…</p>';
+		const rows = await this.load_employee_salary_changes({ render: false });
+		if (this.active_tab !== route || this.company !== company) return;
+		const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
+		const money = (row, field) => row.name ? Number(row[field] || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
+		const sorted = rows.filter((row) => !editing || row.name).sort((a, b) => String(a.employee_name || "").localeCompare(String(b.employee_name || ""), "zh-Hans-CN"));
+		this.body().innerHTML = `<div class="hrms-payroll-input-list-head"><div><h3>${editing ? "申请修改 · 薪资" : "薪资查看"}</h3><p>${editing ? "填写调整后的标准及原因，提交后等待审批；批准前当前标准保持不变。" : "只读查看当前已批准且已生效的定薪标准。点击姓名查看薪资变化趋势及历史记录。"}</p></div><span class="hrms-payroll-template-status">${editing ? "修改需审批" : "只读"} · 共 ${sorted.length} 人</span></div><div class="hrms-payroll-filter-row"><input class="form-control input-sm" data-salary-register-search placeholder="搜索姓名、工号、部门或工作性质"></div><div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr>${["姓名 / 工号", "部门", "工作性质", "生效日期", "底薪", "职能津贴", "证书津贴", "多能工津贴", "薪资小计", "状态", ...(editing ? ["操作"] : [])].map((label) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${sorted.map((row, index) => `<tr data-salary-register-row data-search="${esc([row.employee_name, row.employee_code, row.department, row.employment_type].join(" ").toLowerCase())}"><td><button class="btn btn-link btn-xs" data-standing-history="${esc(row.employee)}">${esc(row.employee_name)}</button><br><small>${esc(row.employee_code)}</small></td><td>${esc(row.department)}</td><td>${esc(row.employment_type || "—")}</td><td>${esc(row.name ? row.effective_date : "—")}</td>${["base_salary", "function_allowance", "certificate_allowance", "multi_skill_allowance", "full_salary"].map((field) => `<td>${money(row, field)}</td>`).join("")}<td>${row.name ? "当前沿用" : "未定薪"}</td>${editing ? `<td><button class="btn btn-primary btn-xs" data-salary-request="${index}">申请修改</button></td>` : ""}</tr>`).join("") || `<tr><td colspan="${editing ? 11 : 10}">暂无员工定薪档案</td></tr>`}</tbody></table></div>`;
+		this.body().querySelectorAll("[data-standing-history]").forEach((button) => button.addEventListener("click", () => this.show_standing_history(button.dataset.standingHistory)));
+		this.body().querySelectorAll("[data-salary-request]").forEach((button) => button.addEventListener("click", () => this.open_salary_request(sorted[Number(button.dataset.salaryRequest)])));
+		this.body().querySelector("[data-salary-register-search]").addEventListener("input", (event) => {
+			const query = event.target.value.trim().toLowerCase();
+			const filteredRows = this.body().querySelectorAll("[data-salary-register-row]");
+			const table = filteredRows[0]?.closest("table");
+			if (table) { table.dataset.globalSearch = query; this.filter_table_rows(table); }
+		});
+	}
+
 	load_salary_assignment_step() {
 		const loadId = ++this.salary_assignment_load_id;
 		this.body().innerHTML = `
 			<div class="hrms-payroll-input-list-head hrms-payroll-step-head">
-				<div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("当月定薪维护"))}</span><h3>${frappe.utils.escape_html(__("员工定薪"))}</h3><p>${frappe.utils.escape_html(__("维护本月固定薪资与缴纳选项；保存后立即生效并参与算薪。"))}</p></div>
+				<div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("持续生效定薪档案"))}</span><h3>${frappe.utils.escape_html(__("员工定薪"))}</h3><p>${frappe.utils.escape_html(__("本页仅用于首次录入尚未建档员工。已有薪资请从“申请修改”提交调整，审批统一在第四步处理。"))}</p></div>
 				<div class="hrms-payroll-action-group"><button class="btn btn-default btn-sm" data-open-published-architecture>${frappe.utils.escape_html(__("查看已发布薪资架构"))}</button><button class="btn btn-default btn-sm" data-download-salary-change-template>${frappe.utils.escape_html(__("下载模板"))}</button><button class="btn btn-default btn-sm" data-import-salary-change>${frappe.utils.escape_html(__("导入 Excel"))}</button></div>
 			</div>
-			<div class="hrms-payroll-scope-note">${frappe.utils.escape_html(__("员工定薪只引用独立“薪资架构”中已发布且当前生效的版本，并允许按员工覆盖；架构版本、梯队、等级和标签不在本页维护。"))}</div>
+			<div class="hrms-payroll-scope-note">${frappe.utils.escape_html(__("首次定薪可选择已发布的薪资等级或直接输入金额；已有定薪在“申请修改”中处理。"))}</div>
 			<div data-salary-change-import-preview></div>
 			<div data-salary-change-import-batches></div>
 			<div data-salary-changes><div class="text-muted small">${frappe.utils.escape_html(__("正在读取员工定薪表…"))}</div></div>
@@ -1863,14 +1956,7 @@ class PayrollInputCenter {
 		this.body().querySelector("[data-download-salary-change-template]").addEventListener("click", () => { if (this.confirm_salary_changes_saved()) this.download_employee_salary_change_template(); });
 		this.body().querySelector("[data-import-salary-change]").addEventListener("click", () => { if (this.confirm_salary_changes_saved()) this.open_employee_salary_change_import(); });
 		this.body().querySelector("[data-open-published-architecture]").addEventListener("click", () => { if (this.confirm_salary_changes_saved()) frappe.set_route("salary-architecture"); });
-		frappe.call({
-			method: "hrms.api.payroll_input.get_salary_architecture_workbench",
-			args: { company: this.company, payroll_month: this.payroll_month },
-			callback: (response) => {
-				const result = response.message || {};
-				this.update_process_guide_status(this.process_status_from_salary_architecture(result));
-			},
-		});
+
 		// Render the employee form as soon as its rows arrive. Salary-grade
 		// options are only an enhancement to one column, so they must not hold up
 		// 187 rows of editable salary inputs.
@@ -2653,7 +2739,7 @@ class PayrollInputCenter {
 				this.employee_salary_change_file_url = file.file_url;
 				frappe.call({
 					method: "hrms.api.payroll_input.preview_employee_salary_change_workbook",
-					args: { file_url: file.file_url, company: this.company, payroll_month: this.payroll_month },
+					args: { file_url: file.file_url, company: this.company, payroll_month: "", request_mode: "initial" },
 					freeze: true,
 					freeze_message: __("正在识别人员薪资调整表..."),
 					callback: (response) => {
@@ -2682,7 +2768,7 @@ class PayrollInputCenter {
 		const validRows = Number(preview.valid_rows || 0);
 		const importHint = failedRows
 			? __("确认后将导入 {0} 条通过记录；{1} 条异常记录不会导入，原因已置顶显示。未匹配员工请先维护花名册，其他记录可在下方员工定薪表继续调整。", [validRows, failedRows])
-			: __("确认后将按工号和生效日期生成或更新员工定薪。已匹配的行以薪资架构金额为准，并可在下方员工定薪表继续调整。");
+			: __("确认后按工号和生效日期新增定薪申请，审批通过后持续生效。已批准历史不会被覆盖。");
 		target.innerHTML = `<section class="hrms-payroll-salary-import-preview"><div class="hrms-payroll-project-map-head"><div><span class="hrms-payroll-step-kicker">${frappe.utils.escape_html(__("Excel 导入预览"))}</span><h3>${frappe.utils.escape_html(preview.sheet_name || "")}</h3><p>${frappe.utils.escape_html(preview.message || "")}</p></div><button class="btn btn-default btn-sm" data-clear-salary-change-preview>${frappe.utils.escape_html(__("取消本次导入"))}</button></div><div class="hrms-payroll-metric-grid"><div class="hrms-payroll-metric"><div>${frappe.utils.escape_html(__("读取行数"))}</div><strong>${frappe.utils.escape_html(String(preview.total_rows || 0))}</strong></div><div class="hrms-payroll-metric"><div>${frappe.utils.escape_html(__("可导入"))}</div><strong>${frappe.utils.escape_html(String(preview.valid_rows || 0))}</strong></div><div class="hrms-payroll-metric"><div>${frappe.utils.escape_html(__("需处理"))}</div><strong>${frappe.utils.escape_html(String(preview.failed_rows || 0))}</strong></div></div><div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${frappe.utils.escape_html(__("行"))}</th><th>${frappe.utils.escape_html(__("工号"))}</th><th>${frappe.utils.escape_html(__("姓名"))}</th><th>${frappe.utils.escape_html(__("版本"))}</th><th>${frappe.utils.escape_html(__("序号"))}</th><th>${frappe.utils.escape_html(__("匹配结果"))}</th><th>${frappe.utils.escape_html(__("生效日期"))}</th><th>${frappe.utils.escape_html(__("底薪"))}</th><th>${frappe.utils.escape_html(__("职能津贴"))}</th><th>${frappe.utils.escape_html(__("全薪"))}</th><th>${frappe.utils.escape_html(__("校验"))}</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${frappe.utils.escape_html(String(row.row_number || ""))}</td><td>${frappe.utils.escape_html(row.employee_code || "")}</td><td>${frappe.utils.escape_html(row.employee_name || "")}</td><td>${frappe.utils.escape_html(row.structure_version || "—")}</td><td>${frappe.utils.escape_html(String(row.salary_level || "—"))}</td><td>${frappe.utils.escape_html(row.match_status || "—")}</td><td>${frappe.utils.escape_html(row.effective_date || "")}</td><td>${frappe.utils.escape_html(String(row.base_salary || 0))}</td><td>${frappe.utils.escape_html(String(row.function_allowance || 0))}</td><td>${frappe.utils.escape_html(String(row.full_salary || 0))}</td><td>${row.errors?.length ? `<span class="text-danger">${frappe.utils.escape_html(__("异常："))}${frappe.utils.escape_html(row.errors.join("；"))}</span>` : `<span class="text-success">${frappe.utils.escape_html(__("通过"))}</span>`}</td></tr>`).join("")}</tbody></table></div><div class="hrms-payroll-action-group"><button class="btn btn-primary btn-sm" data-confirm-salary-change-import ${validRows ? "" : "disabled"}>${frappe.utils.escape_html(__("确认导入员工定薪"))}</button><span>${frappe.utils.escape_html(importHint)}</span></div></section>`;
 		target.querySelector("[data-clear-salary-change-preview]")?.addEventListener("click", () => {
 			this.employee_salary_change_import_preview = null;
@@ -2696,7 +2782,7 @@ class PayrollInputCenter {
 		if (!this.employee_salary_change_file_url) return;
 		frappe.call({
 			method: "hrms.api.payroll_input.import_employee_salary_change_workbook",
-			args: { file_url: this.employee_salary_change_file_url, company: this.company, payroll_month: this.payroll_month },
+			args: { file_url: this.employee_salary_change_file_url, company: this.company, payroll_month: "", request_mode: "initial" },
 			freeze: true,
 			freeze_message: __("正在写入员工定薪..."),
 			callback: (response) => {
@@ -2730,7 +2816,7 @@ class PayrollInputCenter {
 			target.innerHTML = "";
 			return;
 		}
-		target.innerHTML = `<section class="hrms-payroll-input-panel hrms-salary-import-batches"><div class="hrms-payroll-project-map-head"><div><h3>${escape(__("员工定薪导入记录"))}</h3><p>${escape(__("撤销会删除本批次新建的定薪，并恢复被覆盖记录的导入前数据；已被后续修改或已进入正式结算的数据不能撤销。"))}</p></div></div><div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${escape(__("导入时间"))}</th><th>${escape(__("来源文件"))}</th><th>${escape(__("导入记录"))}</th><th>${escape(__("当前关联"))}</th><th>${escape(__("状态"))}</th><th>${escape(__("操作"))}</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${escape(row.imported_on || row.modified || "-")}</td><td>${escape((row.source_file || "").split("/").pop() || "-")}</td><td>${escape(row.valid_rows || 0)}</td><td>${escape(row.affected_rows || 0)}</td><td>${escape(row.status || "-")}</td><td>${row.can_rollback ? `<button class="btn btn-danger btn-xs" data-rollback-salary-import="${escape(row.name)}">${escape(__("撤销本次导入"))}</button>` : `<span class="text-muted">${escape(__("不可撤销"))}</span>`}</td></tr>`).join("")}</tbody></table></div></section>`;
+		target.innerHTML = `<section class="hrms-payroll-input-panel hrms-salary-import-batches"><div class="hrms-payroll-project-map-head"><div><h3>${escape(__("员工定薪导入记录"))}</h3><p>${escape(__("导入记录永久保留；未生效申请由授权账户在第四步审批中处理，已批准标准通过新申请调整。"))}</p></div></div><div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${escape(__("导入时间"))}</th><th>${escape(__("来源文件"))}</th><th>${escape(__("导入记录"))}</th><th>${escape(__("当前关联"))}</th><th>${escape(__("状态"))}</th><th>${escape(__("操作"))}</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${escape(row.imported_on || row.modified || "-")}</td><td>${escape((row.source_file || "").split("/").pop() || "-")}</td><td>${escape(row.valid_rows || 0)}</td><td>${escape(row.affected_rows || 0)}</td><td>${escape(row.status || "-")}</td><td>${row.can_rollback ? `<button class="btn btn-danger btn-xs" data-rollback-salary-import="${escape(row.name)}">${escape(__("撤销本次导入"))}</button>` : `<span class="text-muted">${escape(__("不可撤销"))}</span>`}</td></tr>`).join("")}</tbody></table></div></section>`;
 		target.querySelectorAll("[data-rollback-salary-import]").forEach((button) => button.addEventListener("click", () => this.request_salary_change_import_rollback(button.dataset.rollbackSalaryImport)));
 	}
 
@@ -2852,8 +2938,8 @@ class PayrollInputCenter {
 
 	load_employee_salary_changes({ render = true } = {}) {
 		return frappe.call({
-			method: "hrms.api.payroll_input.list_employee_salary_change_grid",
-			args: { company: this.company, payroll_month: this.payroll_month, page_length: 1000 },
+			method: this.active_tab === "salary-assignments" ? "hrms.api.standing_pay.initial_salary_rows" : "hrms.api.payroll_input.list_employee_salary_change_grid",
+			args: this.active_tab === "salary-assignments" ? { company: this.company } : { company: this.company, payroll_month: "", page_length: 1000 },
 		}).then((response) => {
 			const rows = response.message?.rows || [];
 			if (render) {
@@ -2889,23 +2975,19 @@ class PayrollInputCenter {
 			const isMissing = required && !Number(value);
 			return `<div class="hrms-payroll-money-field"><input class="form-control input-sm ${isMissing ? "is-required" : ""}" type="number" min="0" step="0.01" data-salary-change-field="${field}" value="${isMissing ? "" : escape(value || 0)}" placeholder="${isMissing ? escape(__("请输入")) : ""}">${isMissing ? `<small class="hrms-payroll-required-hint">${escape(__("请输入"))}</small>` : ""}</div>`;
 		};
-		const contributionToggle = (field, enabled, hint) => `<label class="hrms-payroll-contribution-toggle" title="${escape(hint)}"><input type="checkbox" data-salary-change-field="${field}" ${Number(enabled) ? "checked" : ""}><span>${escape(field === "social_insurance_enabled" ? __("缴纳社保") : __("缴纳公积金"))}</span></label>`;
 		const salaryGradeSelect = (selected, selectedLabel) => `<select class="form-control input-sm" data-salary-change-field="salary_grade">${this.render_assignable_salary_grade_options(selected, selectedLabel)}</select>`;
 		const salaryRows = [...rows].sort((left, right) => {
 			const missingDifference = Number(!Number(left.base_salary)) - Number(!Number(right.base_salary));
 			if (missingDifference) return -missingDifference;
 			return String(left.employee_name || left.employee_code || "").localeCompare(String(right.employee_name || right.employee_code || ""), "zh-Hans-CN");
 		});
-		target.innerHTML = `<section class="hrms-payroll-salary-grid"><div class="hrms-payroll-project-map-head"><div><h3>${escape(__("员工定薪表"))}</h3><p>${escape(__("选择等级后自动带入薪资；Excel 导入始终按每行的版本 + 薪资序号精确匹配，不受薪资架构页面当前查看版本影响。证书和多能工津贴按月进入奖金，不参与加班、缺勤工时单价。"))}</p></div><span class="hrms-payroll-template-status">${escape(__("共 {0} 人", [salaryRows.length]))}</span></div><div class="hrms-payroll-filter-row"><input class="form-control input-sm" data-salary-change-search placeholder="${escape(__("搜索姓名、工号、部门或工作性质"))}"></div><div class="table-responsive"><table class="table table-bordered table-sm hrms-payroll-editable-table"><thead><tr><th>${escape(__("姓名 / 工号"))}</th><th>${escape(__("部门"))}</th><th>${escape(__("工作性质"))}</th><th>${escape(__("生效日期"))}</th><th>${escape(__("等级"))}</th><th>${escape(__("底薪"))}</th><th>${escape(__("职能津贴"))}</th><th>${escape(__("证书津贴"))}</th><th>${escape(__("多能工津贴"))}</th><th>${escape(__("社保"))}</th><th>${escape(__("公积金"))}</th><th>${escape(__("薪资小计"))}</th><th>${escape(__("操作"))}</th></tr></thead><tbody>${salaryRows.map((row) => {
-			const participationAction = !Number(row.base_salary) ? `<button class="btn btn-default btn-xs" data-exclude-payroll="${escape(row.employee)}">${escape(__("本月不参与计算"))}</button>` : "";
-			return `<tr data-salary-change-row data-search="${escape([row.employee_name, row.employee_code, row.department, row.employment_type].filter(Boolean).join(" ").toLowerCase())}" data-salary-change-name="${escape(row.name)}" data-salary-change-employee="${escape(row.employee)}"><td><strong>${escape(row.employee_name)}</strong><small>${escape(row.employee_code)}</small></td><td>${escape(row.department)}</td><td><span class="hrms-payroll-employment-stage">${escape(row.employment_type || "-")}</span></td><td><input class="form-control input-sm" type="date" data-salary-change-field="effective_date" value="${escape(row.effective_date)}"></td><td>${salaryGradeSelect(row.salary_grade, row.salary_grade_label)}</td><td>${moneyInput("base_salary", row.base_salary, { required: true })}</td><td>${moneyInput("function_allowance", row.function_allowance)}</td><td>${moneyInput("certificate_allowance", row.certificate_allowance)}</td><td>${moneyInput("multi_skill_allowance", row.multi_skill_allowance)}</td><td>${contributionToggle("social_insurance_enabled", row.social_insurance_enabled, row.contribution_default || "")}</td><td>${contributionToggle("housing_fund_enabled", row.housing_fund_enabled, row.contribution_default || "")}</td><td><output data-salary-change-total>${escape(row.full_salary || 0)}</output></td><td><button class="btn btn-primary btn-xs" data-save-salary-change>${escape(__("保存并提交"))}</button><small class="hrms-payroll-save-state" data-salary-change-save-state>${escape(__("已提交"))}</small>${participationAction}</td></tr>`;
+		target.innerHTML = `<section class="hrms-payroll-salary-grid"><div class="hrms-payroll-project-map-head"><div><h3>${escape(__("员工定薪表"))}</h3><p>${escape(__("选择等级后自动带入薪资；Excel 导入始终按每行的版本 + 薪资序号精确匹配，不受薪资架构页面当前查看版本影响。证书和多能工津贴按月进入奖金，不参与加班、缺勤工时单价。"))}</p></div><span class="hrms-payroll-template-status">${escape(__("共 {0} 人", [salaryRows.length]))}</span></div><div class="hrms-payroll-filter-row"><input class="form-control input-sm" data-salary-change-search placeholder="${escape(__("搜索姓名、工号、部门或工作性质"))}"></div><div class="table-responsive"><table class="table table-bordered table-sm hrms-payroll-editable-table"><thead><tr><th>${escape(__("姓名 / 工号"))}</th><th>${escape(__("部门"))}</th><th>${escape(__("工作性质"))}</th><th>${escape(__("生效日期"))}</th><th>${escape(__("等级"))}</th><th>${escape(__("底薪"))}</th><th>${escape(__("职能津贴"))}</th><th>${escape(__("证书津贴"))}</th><th>${escape(__("多能工津贴"))}</th><th>${escape(__("修改原因"))}</th><th>${escape(__("薪资小计"))}</th><th>${escape(__("操作"))}</th></tr></thead><tbody>${salaryRows.map((row) => {
+			return `<tr data-salary-change-row data-search="${escape([row.employee_name, row.employee_code, row.department, row.employment_type].filter(Boolean).join(" ").toLowerCase())}" data-salary-change-name="${escape(row.name)}" data-salary-change-employee="${escape(row.employee)}" data-salary-status="${escape(row.status || "未定薪")}"><td><button class="btn btn-link btn-xs" data-standing-history="${escape(row.employee)}">${escape(row.employee_name)}</button><small>${escape(row.employee_code)}</small></td><td>${escape(row.department)}</td><td><span class="hrms-payroll-employment-stage">${escape(row.employment_type || "-")}</span></td><td><input class="form-control input-sm" type="date" data-salary-change-field="effective_date" value="${escape(row.effective_date)}"></td><td>${salaryGradeSelect(row.salary_grade, row.salary_grade_label)}</td><td>${moneyInput("base_salary", row.base_salary, { required: true })}</td><td>${moneyInput("function_allowance", row.function_allowance)}</td><td>${moneyInput("certificate_allowance", row.certificate_allowance)}</td><td>${moneyInput("multi_skill_allowance", row.multi_skill_allowance)}</td><td><input class="form-control input-sm" data-salary-change-field="remarks" placeholder="填写本次修改原因"></td><td><output data-salary-change-total>${escape(row.full_salary || 0)}</output></td><td><button class="btn btn-primary btn-xs" data-save-salary-change>${escape(__("提交审批"))}</button><small class="hrms-payroll-save-state" data-salary-change-save-state>${escape(__("已提交"))}</small></td></tr>`;
 		}).join("")}</tbody></table></div></section>`;
 		target.querySelector("[data-salary-change-search]")?.addEventListener("input", (event) => {
 			const query = String(event.target.value || "").trim().toLowerCase();
-			target.querySelectorAll("[data-salary-change-row]").forEach((row) => {
-				row.dataset.tableFilterMatch = query && !(row.dataset.search || "").includes(query) ? "0" : "1";
-			});
-			this.update_table_pagination(target.querySelector("table"), 1);
+			const table = target.querySelector("table");
+			if (table) { table.dataset.globalSearch = query; this.filter_table_rows(table); }
 		});
 		target.querySelectorAll("[data-salary-change-row]").forEach((row) => {
 			const refreshTotal = () => {
@@ -2928,6 +3010,8 @@ class PayrollInputCenter {
 				refreshTotal();
 				this.refresh_salary_change_dirty_state(row);
 			});
+			row.querySelector("[data-standing-history]")?.addEventListener("click", () => this.show_standing_history(row.dataset.salaryChangeEmployee));
+			row.querySelector('[data-salary-change-field="remarks"]')?.addEventListener("input", () => this.refresh_salary_change_dirty_state(row));
 			row.querySelector("[data-save-salary-change]")?.addEventListener("click", () => this.save_employee_salary_change_row(row));
 			row.dataset.salaryChangeSnapshot = JSON.stringify(this.salary_change_values(row));
 			this.set_salary_change_dirty_state(row, false);
@@ -2958,9 +3042,9 @@ class PayrollInputCenter {
 		}
 		if (button) {
 			button.disabled = false;
-			button.textContent = __("保存并提交");
+			button.textContent = __("提交审批");
 		}
-		if (indicator) indicator.textContent = dirty ? __("未提交") : __("已提交");
+		if (indicator) indicator.textContent = dirty ? __("未提交") : (row.dataset.salaryStatus || "未定薪");
 	}
 
 	refresh_salary_change_dirty_state(row) {
@@ -2984,6 +3068,7 @@ class PayrollInputCenter {
 	save_employee_salary_change_row(row) {
 		if (row.dataset.salaryChangeSaving === "1") return;
 		const values = this.salary_change_values(row);
+		if (!values.remarks?.trim()) { frappe.msgprint("请填写修改原因后提交审批"); return; }
 		if (!Number(values.base_salary)) {
 			const baseSalary = row.querySelector('[data-salary-change-field="base_salary"]');
 			baseSalary?.classList.add("is-required");
@@ -2995,7 +3080,7 @@ class PayrollInputCenter {
 		this.set_salary_change_dirty_state(row, true, "saving");
 		frappe.call({
 			method: "hrms.api.payroll_input.update_employee_salary_change",
-			args: { name: row.dataset.salaryChangeName, employee: row.dataset.salaryChangeEmployee, company: this.company, values: JSON.stringify(values) },
+			args: { name: row.dataset.salaryChangeName, employee: row.dataset.salaryChangeEmployee, company: this.company, values: JSON.stringify(values), request_mode: this.active_tab === "salary-assignments" ? "initial" : "change" },
 			callback: (response) => {
 				const result = response.message || {};
 				if (!result.name) {
@@ -3005,13 +3090,18 @@ class PayrollInputCenter {
 					return;
 				}
 				row.dataset.salaryChangeName = result.name;
+				row.dataset.salaryStatus = result.status;
 				row.querySelector("[data-salary-change-total]").textContent = result.full_salary ?? row.querySelector("[data-salary-change-total]").textContent;
 				row.dataset.salaryChangeSnapshot = JSON.stringify(this.salary_change_values(row));
 				row.dataset.salaryChangeSaving = "";
 				this.set_salary_change_dirty_state(row, false);
-				frappe.show_alert({ message: __("员工定薪已提交并生效"), indicator: "green" });
+				if (this.active_tab === "salary-assignments") {
+					row.querySelectorAll("input, select, button[data-save-salary-change]").forEach((field) => { field.disabled = true; });
+					row.querySelector("[data-save-salary-change]").textContent = "等待审批";
+				}
+				frappe.show_alert({ message: __("定薪变更已提交，审批通过后生效"), indicator: "green" });
 				this.process_readiness = {};
-				this.load_salary_architecture_overview();
+				if (this.can_approve_standing()) this.load_salary_architecture_overview();
 			},
 			error: (error) => {
 				row.dataset.salaryChangeSaving = "";
@@ -3019,6 +3109,287 @@ class PayrollInputCenter {
 				frappe.show_alert({ message: this.salary_change_save_error_message(error), indicator: "red" });
 			},
 		});
+	}
+
+	standing_time(value) {
+		return value ? String(value).replace("T", " ").slice(0, 19) : "未记录";
+	}
+
+	standing_amounts(row) {
+		if (row.contribution_type) return `${row.enabled ? "" : "停缴 · "}个人 ${row.personal_amount || 0} / 公司 ${row.company_amount || 0}`;
+		return `底薪 ${row.base_salary || 0} / 职能 ${row.function_allowance || 0} / 证书 ${row.certificate_allowance || 0} / 多能工 ${row.multi_skill_allowance || 0}`;
+	}
+
+	standing_approval_change(row, context = "approval") {
+		const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
+		const money = (value) => Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+		const previous = row.previous_standard;
+		const comparison = (label, before, after, options = {}) => {
+			const beforeText = previous ? options.format ? options.format(before) : money(before) : "未设置";
+			const afterText = options.format ? options.format(after) : money(after);
+			const changed = !previous || String(beforeText) !== String(afterText);
+			return `<div class="hrms-standing-change-item ${changed ? "is-changed" : "is-unchanged"}"><span>${esc(label)}</span><strong class="before">${esc(beforeText)}</strong><i aria-hidden="true">→</i><strong class="after ${changed ? "changed" : ""}">${esc(afterText)}</strong></div>`;
+		};
+		const summary = row.contribution_type
+			? [
+				comparison("缴费状态", previous?.enabled, row.enabled, { format: (value) => Number(value) ? "正常" : "停缴" }),
+				comparison("个人承担", previous?.personal_amount, row.personal_amount),
+				comparison("公司承担", previous?.company_amount, row.company_amount),
+			]
+			: [
+				comparison("底薪", previous?.base_salary, row.base_salary),
+				comparison("职能津贴", previous?.function_allowance, row.function_allowance),
+				comparison("证书津贴", previous?.certificate_allowance, row.certificate_allowance),
+				comparison("多能工津贴", previous?.multi_skill_allowance, row.multi_skill_allowance),
+			];
+		const label = row.contribution_type || "定薪";
+		const history = context === "history";
+		return `<div class="hrms-standing-change"><div class="hrms-standing-change-head"><span>项目</span><strong>${history ? "原始" : "当前"}标准</strong><i aria-hidden="true">→</i><strong>${history ? "修改后" : "申请后"}标准</strong></div>${!previous ? `<p class="hrms-standing-change-first">${history ? "未找到该次修改前的生效标准" : `首次建立${esc(label)}标准`}</p>` : ""}<div class="hrms-standing-change-grid">${summary.join("")}</div></div>`;
+	}
+
+	standing_history_model(rows, type, today) {
+		const amount = (row) => type === "定薪"
+			? ["base_salary", "function_allowance", "certificate_allowance", "multi_skill_allowance"].reduce((sum, key) => sum + (Number(row[key]) || 0), 0)
+			: (Number(row.enabled) ? Number(row.personal_amount) || 0 : 0);
+		const records = rows.filter((row) => (row.contribution_type || "定薪") === type);
+		const approved = records.filter((row) => row.status === "已批准" && row.effective_date)
+			.sort((a, b) => ["effective_date", "approved_on", "creation", "name"].reduce((order, key) => order || String(a[key] || "").localeCompare(String(b[key] || "")), 0));
+		const dates = new Map();
+		approved.forEach((row) => { if (row.effective_date <= today) dates.set(row.effective_date, row); });
+		const points = [...dates.values()].map((row) => ({ row, date: row.effective_date, amount: amount(row), company: Number(row.enabled) ? Number(row.company_amount) || 0 : 0 }));
+		return { records, points, current: points.at(-1), amount };
+	}
+
+	standing_history_chart(model, type, today) {
+		const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
+		const money = (value) => Number(value).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+		if (!model.points.length) return '<div class="hrms-pay-history-empty">暂无已生效的审批记录，审批通过并到达生效日期后显示趋势。</div>';
+		const points = model.points;
+		const stamp = (date) => Date.parse(`${date}T00:00:00Z`);
+		const start = stamp(points[0].date), end = Math.max(stamp(today), start + 86400000);
+		const series = [{ key: "amount", label: type === "定薪" ? "定薪合计" : "个人承担", color: "#3978e8" }];
+		if (type !== "定薪") series.push({ key: "company", label: "公司承担", color: "#10a87b" });
+		const max = Math.max(1, ...points.flatMap((point) => series.map((line) => point[line.key]))) * 1.2;
+		const x = (date) => 90 + (stamp(date) - start) / (end - start) * 750;
+		const y = (value) => 218 - value / max * 172;
+		const grid = [0, 1, 2, 3, 4].map((i) => { const value = max * i / 4; return `<line x1="90" x2="840" y1="${y(value)}" y2="${y(value)}" stroke="#e8edf4"/><text x="78" y="${y(value) + 4}" text-anchor="end">${esc(Math.round(value).toLocaleString("zh-CN"))}</text>`; }).join("");
+		const lines = series.map((line) => {
+			let path = `M ${x(points[0].date)} ${y(points[0][line.key])}`;
+			points.slice(1).forEach((point) => { path += ` H ${x(point.date)} V ${y(point[line.key])}`; });
+			path += ` H ${x(today)}`;
+			return `<path d="${path}" fill="none" stroke="${line.color}" stroke-width="3" stroke-linejoin="round" ${line.key === "company" ? 'stroke-dasharray="7 5"' : ""}/>${points.map((point) => `<circle cx="${x(point.date)}" cy="${y(point[line.key])}" r="5" fill="${line.color}" stroke="white" stroke-width="2" tabindex="0"><title>${esc(`${point.date} · ${line.label} ¥${money(point[line.key])}`)}</title></circle>`).join("")}`;
+		}).join("");
+		const labels = [...new Set([points[0].date, ...(points.length > 2 ? [points[Math.floor(points.length / 2)].date] : []), today])];
+		return `<div class="hrms-pay-history-legend">${series.map((line) => `<span><i style="background:${line.color}"></i>${esc(line.label)}</span>`).join("")}<span class="text-muted">单位：元</span></div><div class="hrms-pay-history-chart"><svg viewBox="0 0 890 268" role="img" aria-label="${esc(type)}已生效标准变化图">${grid}${lines}${labels.map((date, i) => `<text x="${x(date)}" y="247" text-anchor="${i === 0 ? "start" : i === labels.length - 1 ? "end" : "middle"}">${esc(date === today ? `${date}（至今）` : date)}</text>`).join("")}</svg></div><p class="hrms-pay-history-hint">${points.length === 1 ? "目前仅有一次已生效记录，横线表示该标准持续沿用。" : "按生效日期显示标准变化，横线表示该期间持续沿用。"}${type === "定薪" ? "定薪合计＝底薪＋职能津贴＋证书津贴＋多能工津贴，不含月度增减项及扣款。" : "停缴后的标准为 0 元。"}</p>`;
+	}
+
+	async show_standing_history(employee, initialType = "定薪") {
+		const company = this.company;
+		const route = this.active_tab;
+		const body = this.body();
+		if (!body) return;
+		body.innerHTML = '<p>正在读取个人薪资变化…</p>';
+		const response = await frappe.call({ method: "hrms.api.standing_pay.employee_history", args: { company, employee } });
+		if (this.company !== company || this.active_tab !== route || !this.body()) return;
+		const rows = response.message || [];
+		const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
+		const money = (value) => Number(value).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+		const today = frappe.datetime.get_today();
+		const render = (type) => {
+			const model = this.standing_history_model(rows, type, today);
+			const current = model.current;
+			const records = [...model.records].sort((a, b) => String(b.submitted_on || b.creation || "").localeCompare(String(a.submitted_on || a.creation || "")));
+			const timeline = records.map((row) => {
+				const isCurrent = current?.row.name === row.name;
+				const future = row.status === "已批准" && row.effective_date > today;
+				const status = isCurrent ? "当前沿用" : future ? "已批准 · 待生效" : row.status;
+				const tone = row.status === "已批准" ? "approved" : row.status === "待审核" ? "pending" : "inactive";
+				const previous = [...model.points].reverse().find((point) => point.date < row.effective_date);
+				const delta = previous && row.status === "已批准" && !future ? model.amount(row) - previous.amount : null;
+				return `<article class="hrms-pay-history-event"><div class="hrms-pay-history-date">${esc(row.effective_date || "未设置")}<small>生效日期</small></div><div class="hrms-pay-history-rail"></div><div class="hrms-pay-history-card ${tone}"><div class="hrms-pay-history-card-head"><strong>${esc(type)}${row.contribution_type && !Number(row.enabled) ? "停缴" : "调整"}</strong><span class="hrms-pay-history-status ${tone}">${esc(status)}</span></div><div class="hrms-pay-history-amount">${esc(type === "定薪" ? `定薪合计 ¥${money(model.amount(row))}` : this.standing_amounts(row))}${delta !== null && delta !== 0 ? `<span class="hrms-pay-history-delta">${type === "定薪" ? "较前次" : "个人较前次"} ${delta > 0 ? "+" : "−"}¥${money(Math.abs(delta))}</span>` : ""}</div>${type === "定薪" ? `<p>${esc(this.standing_amounts(row))}</p>` : ""}<div class="hrms-pay-history-audit"><span>修改人：${esc(row.submitted_by || row.owner || "未记录")}</span><span>修改时间：${esc(this.standing_time(row.submitted_on || row.creation))}</span><span>审批人：${esc(row.approved_by || "未记录")}</span><span>审批时间：${esc(this.standing_time(row.approved_on))}</span></div>${row.remarks ? `<p class="hrms-pay-history-note">修改原因：${esc(row.remarks)}</p>` : ""}${row.review_note ? `<p class="hrms-pay-history-note">审批意见：${esc(row.review_note)}</p>` : ""}${row.legacy_reference ? '<small class="text-muted">历史来源已保留；缺失的审批信息显示为“未记录”。</small>' : ""}</div></article>`;
+			}).join("");
+			const recordRows = records.map((row) => {
+				const isCurrent = current?.row.name === row.name;
+				const future = row.status === "已批准" && row.effective_date > today;
+				const status = isCurrent ? "当前沿用" : future ? "已批准 · 待生效" : row.status;
+				const previous = [...model.points].reverse().find((point) => point.date < row.effective_date);
+				const delta = previous && row.status === "已批准" && !future ? model.amount(row) - previous.amount : null;
+				const common = [
+					esc(row.effective_date || "未设置"),
+					`<span class="hrms-pay-history-status ${row.status === "待审核" ? "pending" : row.status === "已批准" ? "approved" : "inactive"}">${esc(status || "未记录")}</span>`,
+				];
+				const amounts = type === "定薪"
+					? [row.base_salary, row.function_allowance, row.certificate_allowance, row.multi_skill_allowance, model.amount(row)].map((value) => esc(money(value)))
+						.concat(delta === null || delta === 0 ? "—" : esc(`${delta > 0 ? "+" : "−"}${money(Math.abs(delta))}`))
+					: [Number(row.enabled) ? "缴纳" : "停缴", esc(money(Number(row.enabled) ? row.personal_amount : 0)), esc(money(Number(row.enabled) ? row.company_amount : 0))];
+				const audit = [
+					esc(row.submitted_by || row.owner || "未记录"), esc(this.standing_time(row.submitted_on || row.creation)),
+					esc(row.approved_by || "未记录"), esc(this.standing_time(row.approved_on)),
+					esc(row.remarks || "—"), esc(row.review_note || "—"),
+				];
+				return `<tr>${common.concat(amounts, audit).map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
+			}).join("");
+			const headers = type === "定薪"
+				? ["生效日期", "状态", "底薪", "职能津贴", "证书津贴", "多能工津贴", "定薪合计", "较前次", "修改人", "修改时间", "审批人", "审批时间", "修改原因", "审批意见"]
+				: ["生效日期", "状态", "缴费状态", "个人承担", "公司承担", "修改人", "修改时间", "审批人", "审批时间", "修改原因", "审批意见"];
+			this.body().innerHTML = `<div class="hrms-pay-history-page"><div class="hrms-pay-history-page-head"><div><button class="btn btn-link btn-sm" type="button" data-history-back>← 返回列表</button><h2>${esc(rows[0]?.employee_name || employee)} · 薪资变化</h2><p>${esc(rows[0]?.employee_code || employee)}${rows[0]?.department ? ` · ${esc(rows[0].department)}` : ""}</p></div></div><div class="hrms-pay-history"><div class="hrms-pay-history-tabs" role="group" aria-label="记录类型">${["定薪", "社保", "公积金"].map((label) => `<button class="btn ${label === type ? "btn-primary" : "btn-default"}" data-history-type="${label}" aria-pressed="${label === type}">${label}</button>`).join("")}</div><section class="hrms-pay-history-panel hrms-pay-history-chart-panel"><div class="hrms-pay-history-heading"><div><h3>${esc(type)}变化趋势</h3><p>仅展示已批准且已生效的标准</p></div><div class="hrms-pay-history-current"><small>当前${type === "定薪" ? "定薪合计" : "个人承担"}</small><strong>${current ? `¥${money(current.amount)}` : "尚未设置"}</strong>${current ? `<small>${esc(current.date)} 起${type !== "定薪" ? ` · 公司 ¥${money(current.company)}` : ""}</small>` : ""}</div></div>${this.standing_history_chart(model, type, today)}</section><section class="hrms-pay-history-panel"><div class="hrms-pay-history-heading"><div><h3>${esc(type)} Excel 修改记录</h3><p>共 ${records.length} 条记录 · 可点击列名排序并在列下方搜索</p></div></div><div class="table-responsive hrms-pay-history-table-wrap"><table class="table table-bordered table-sm hrms-standing-history hrms-pay-history-record-table"><thead><tr>${headers.map((label) => `<th>${esc(label)}</th>`).join("")}</tr></thead><tbody>${recordRows || `<tr><td colspan="${headers.length}">暂无变更记录</td></tr>`}</tbody></table></div></section><section class="hrms-pay-history-panel"><div class="hrms-pay-history-heading"><div><h3>${esc(type)}成长记录</h3><p>共 ${records.length} 条记录 · 最近提交在前，待审核及驳回记录均保留</p></div></div><div class="hrms-pay-history-timeline">${timeline || '<div class="hrms-pay-history-empty">暂无变更记录</div>'}</div></section></div></div>`;
+			this.body().querySelector("[data-history-back]")?.addEventListener("click", () => this.load_active_tab());
+			this.body().querySelectorAll("[data-history-type]").forEach((button) => button.addEventListener("click", () => render(button.dataset.historyType)));
+		};
+		render(["定薪", "社保", "公积金"].includes(initialType) ? initialType : "定薪");
+	}
+
+	async load_standing_approvals(target, doctype) {
+		if (!target || !this.can_approve_standing()) return;
+		const response = await frappe.call({ method: "hrms.api.standing_pay.list_pending", args: { company: this.company } });
+		if (!target?.isConnected) return;
+		const rows = (response.message || []).filter((row) => row.decision_doctype === doctype);
+		const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
+		target.innerHTML = `<section class="hrms-payroll-input-panel"><h3>待审批变更（${rows.length}）</h3><p>审批通过前继续使用当前标准；申请内容会逐项显示“当前标准 → 申请后标准”。最高管理员 Administrator 可自审，其他审批账户不能自审。</p><div class="table-responsive"><table class="table table-bordered table-sm hrms-standing-approval-table"><thead><tr><th>员工</th><th>类型 / 生效日期</th><th>变更内容（当前 → 申请后）</th><th>修改人 / 修改时间</th><th>修改原因</th><th>操作</th></tr></thead><tbody>${rows.map((row, index) => `<tr><td><button class="btn btn-link btn-xs" data-standing-history="${esc(row.employee)}">${esc(row.employee_name)} / ${esc(row.employee_code)}</button></td><td>${esc(row.contribution_type || "定薪")} / ${esc(row.effective_date)}</td><td>${this.standing_approval_change(row)}</td><td>${esc(row.submitted_by || row.owner)}<br>${esc(this.standing_time(row.submitted_on || row.creation))}</td><td>${esc(row.remarks)}</td><td>${(row.submitted_by || row.owner) === frappe.session.user && frappe.session.user !== "Administrator" ? "等待其他管理员审批" : `<button class="btn btn-primary btn-xs" data-standing-review="${index}" data-decision="已批准">批准</button> <button class="btn btn-default btn-xs" data-standing-review="${index}" data-decision="已驳回">驳回</button>`}</td></tr>`).join("") || '<tr><td colspan="6">暂无待审批变更</td></tr>'}</tbody></table></div></section>`;
+		target.querySelectorAll("[data-standing-history]").forEach((button) => button.addEventListener("click", () => this.show_standing_history(button.dataset.standingHistory)));
+		target.querySelectorAll("[data-standing-review]").forEach((button) => button.addEventListener("click", () => {
+			const row = rows[Number(button.dataset.standingReview)];
+			frappe.prompt([{ fieldname: "review_note", fieldtype: "Small Text", label: "审批意见", reqd: 1 }], async (values) => {
+				await frappe.call({ method: "hrms.api.standing_pay.review_decision", args: { company: this.company, decision_doctype: doctype, name: row.name, decision: button.dataset.decision, review_note: values.review_note }, freeze: true });
+				frappe.show_alert({ message: `申请${button.dataset.decision}`, indicator: "green" });
+				this.load_active_tab();
+			}, `${button.dataset.decision} · ${row.employee_name}`);
+		}));
+	}
+
+	contribution_view_rows(result) {
+		const current = new Map((result.contributions || []).map((row) => [`${row.employee}:${row.contribution_type}`, row]));
+		const initialized = new Set((result.initialized || []).map((row) => `${row.employee}:${row.contribution_type}`));
+		return (result.employees || []).map((employee) => {
+			const items = ["社保", "公积金"].map((kind) => {
+				const key = `${employee.employee}:${kind}`;
+				const row = current.get(key);
+				const enabled = !!row && Number(row.enabled) === 1;
+				return { row, enabled, pending: !row && initialized.has(key),
+					personal: enabled ? Math.round(Number(row.personal_amount || 0) * 100) : 0,
+					company: enabled ? Math.round(Number(row.company_amount || 0) * 100) : 0 };
+			});
+			return { ...employee, items, missing: items.some((item) => !item.row),
+				stopped: items.some((item) => item.row && !item.enabled), paying: items.some((item) => item.enabled),
+				personal: items.reduce((sum, item) => sum + item.personal, 0), company: items.reduce((sum, item) => sum + item.company, 0) };
+		});
+	}
+
+	render_contribution_view(result) {
+		const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
+		const money = (cents) => (cents / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+		const rows = this.contribution_view_rows(result);
+		const departments = [...new Set(rows.map((row) => row.department).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+		const state = { query: "", department: "", status: "", sort: "name", page: 1 };
+		const body = this.body();
+		body.innerHTML = `<section class="hrms-contribution-view">
+			<header class="hrms-contribution-heading"><div><h3>社保公积金查看</h3><p>${esc(this.company)} · 当前已批准且已生效的缴费标准，持续沿用至下一次变更。</p></div><span class="hrms-contribution-readonly">只读档案</span></header>
+			<div class="hrms-contribution-summary" data-contribution-summary aria-live="polite"></div>
+			<div class="hrms-contribution-toolbar">
+				<label class="hrms-contribution-search"><span>查找员工</span><input type="search" class="form-control" data-contribution-query placeholder="输入姓名、工号或部门"></label>
+				<label><span>部门</span><select class="form-control" data-contribution-department><option value="">全部部门</option>${departments.map((name) => `<option value="${esc(name)}">${esc(name)}</option>`).join("")}</select></label>
+				<label><span>缴费状态</span><select class="form-control" data-contribution-status><option value="">全部状态</option><option value="paying">缴费中（至少一项）</option><option value="missing">缺少生效标准</option><option value="stopped">有停缴项目</option></select></label>
+				<label><span>排序</span><select class="form-control" data-contribution-sort><option value="name">姓名顺序</option><option value="personal">个人合计从高到低</option><option value="company">公司合计从高到低</option><option value="missing">缺少标准优先</option></select></label>
+				<button class="btn btn-default" data-contribution-reset>重置</button>
+			</div>
+			<div class="hrms-contribution-caption"><span data-contribution-count></span><span>金额单位：元 / 月 · 点击姓名查看趋势与历史</span></div>
+			<div class="hrms-contribution-table-wrap"><table class="hrms-contribution-table"><thead><tr><th scope="col">员工 / 工号</th><th scope="col">部门</th><th scope="col">社保</th><th scope="col">公积金</th><th scope="col">个人 / 公司合计</th></tr></thead><tbody data-contribution-details></tbody></table></div>
+			<nav class="hrms-contribution-pagination" aria-label="缴费档案分页" data-contribution-pagination></nav>
+		</section>`;
+		const amountPair = (item) => `<div class="hrms-contribution-pair"><div><small>个人</small><strong>${money(item.personal)}</strong></div><div><small>公司</small><strong>${money(item.company)}</strong></div></div>`;
+		const itemCell = (item) => !item.row
+			? `<span class="hrms-contribution-status missing">${item.pending ? "已申请 · 未生效" : "尚未建档"}</span><p class="hrms-contribution-meta">暂无生效金额</p>`
+			: `${amountPair(item)}<div class="hrms-contribution-meta"><span class="hrms-contribution-status ${item.enabled ? "paying" : "stopped"}">${item.enabled ? "缴费中" : "已停缴"}</span><span>${esc(item.row.effective_date)} 起</span></div>`;
+		const render = () => {
+			const filtered = rows.filter((row) => (!state.query || `${row.employee_name} ${row.employee_code} ${row.department}`.toLowerCase().includes(state.query)) && (!state.department || row.department === state.department) && (!state.status || row[state.status]));
+			filtered.sort((a, b) => (state.sort === "personal" || state.sort === "company" ? b[state.sort] - a[state.sort] : state.sort === "missing" ? Number(b.missing) - Number(a.missing) : 0) || String(a.employee_name).localeCompare(String(b.employee_name), "zh-CN", { numeric: true }));
+			const total = filtered.reduce((sum, row) => ({ personal: sum.personal + row.personal, company: sum.company + row.company, missing: sum.missing + Number(row.missing) }), { personal: 0, company: 0, missing: 0 });
+			body.querySelector("[data-contribution-summary]").innerHTML = `<article><span>当前筛选员工</span><strong>${filtered.length}<small>人</small></strong><p>全部档案 ${rows.length} 人</p></article><article class="personal"><span>个人承担合计</span><strong>${money(total.personal)}<small>元 / 月</small></strong><p>社保 + 公积金 · 已生效金额</p></article><article class="company"><span>公司承担合计</span><strong>${money(total.company)}<small>元 / 月</small></strong><p>当前筛选全部员工，跨页汇总</p></article><article class="missing"><span>缺少生效标准</span><strong>${total.missing}<small>人</small></strong><p>至少一项未生效，未计入金额</p></article>`;
+			const pages = Math.max(1, Math.ceil(filtered.length / 20));
+			state.page = Math.max(1, Math.min(state.page, pages));
+			const start = (state.page - 1) * 20;
+			body.querySelector("[data-contribution-count]").textContent = `缴费明细 · ${filtered.length} 人${total.missing ? `（${total.missing} 人金额待补全）` : ""}`;
+			body.querySelector("[data-contribution-details]").innerHTML = filtered.slice(start, start + 20).map((row) => `<tr><td><button class="hrms-contribution-employee" data-standing-history="${esc(row.employee)}">${esc(row.employee_name)}<span aria-hidden="true"> ›</span></button><small class="hrms-contribution-code">${esc(row.employee_code)}</small></td><td>${esc(row.department || "—")}</td>${row.items.map((item) => `<td>${itemCell(item)}</td>`).join("")}<td class="hrms-contribution-total">${row.items.some((item) => item.row) ? amountPair(row) : '<span class="hrms-contribution-no-amount">—</span>'}${row.missing ? '<small class="hrms-contribution-incomplete">金额待补全</small>' : '<small class="hrms-contribution-total-label">社保 + 公积金</small>'}</td></tr>`).join("") || '<tr><td colspan="5" class="hrms-contribution-empty">没有符合条件的员工，请调整筛选条件。</td></tr>';
+			body.querySelector("[data-contribution-pagination]").innerHTML = `<span>${filtered.length ? start + 1 : 0}–${Math.min(start + 20, filtered.length)} / ${filtered.length} 人</span><div><button class="btn btn-default btn-sm" data-contribution-page="${state.page - 1}" ${state.page === 1 ? "disabled" : ""}>上一页</button><span>第 ${state.page} / ${pages} 页</span><button class="btn btn-default btn-sm" data-contribution-page="${state.page + 1}" ${state.page === pages ? "disabled" : ""}>下一页</button></div>`;
+			body.querySelectorAll("[data-standing-history]").forEach((button) => button.addEventListener("click", () => this.show_standing_history(button.dataset.standingHistory, "社保")));
+			body.querySelectorAll("[data-contribution-page]").forEach((button) => button.addEventListener("click", () => { state.page = Number(button.dataset.contributionPage); render(); body.querySelector(".hrms-contribution-table-wrap").scrollTop = 0; }));
+		};
+		body.querySelector("[data-contribution-query]").addEventListener("input", (event) => { state.query = event.target.value.trim().toLowerCase(); state.page = 1; render(); });
+		for (const key of ["department", "status", "sort"]) body.querySelector(`[data-contribution-${key}]`).addEventListener("change", (event) => { state[key] = event.target.value; state.page = 1; render(); });
+		body.querySelector("[data-contribution-reset]").addEventListener("click", () => {
+			Object.assign(state, { query: "", department: "", status: "", sort: "name", page: 1 });
+			for (const key of ["query", "department", "status", "sort"]) body.querySelector(`[data-contribution-${key}]`).value = state[key];
+			render();
+		});
+		render();
+	}
+
+	async load_contribution_register() {
+		const company = this.company;
+		const route = this.active_tab;
+		const readOnly = route === "contribution-view";
+		const modifying = route === "contribution-changes";
+		this.body().innerHTML = '<p>正在读取持续生效缴费档案…</p>';
+		const response = await frappe.call({ method: "hrms.api.standing_pay.list_register", args: { company } });
+		if (this.active_tab !== route || this.company !== company) return;
+		const result = response.message || {};
+		if (readOnly) { this.render_contribution_view(result); return; }
+		const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
+		const contributions = new Map((result.contributions || []).map((row) => [`${row.employee}:${row.contribution_type}`, row]));
+		const initialized = new Set((result.initialized || []).map((row) => `${row.employee}:${row.contribution_type}`));
+		const availableKinds = (employee) => ["社保", "公积金"].filter((kind) => modifying ? contributions.has(`${employee}:${kind}`) : !initialized.has(`${employee}:${kind}`));
+		const employees = (result.employees || []).filter((employee) => readOnly || availableKinds(employee.employee).length);
+		this.body().innerHTML = `<div class="hrms-payroll-input-list-head"><div><h3>${readOnly ? "社保公积金查看" : modifying ? "申请修改 · 社保公积金" : "社保公积金输入"}</h3><p>${readOnly ? "只读查看当前已批准且已生效的缴费标准。点击姓名查看变化趋势及历史记录。" : modifying ? "已有标准的金额调整、启缴或停缴均在此申请，批准前当前标准保持不变。" : "仅首次录入尚未建档的社保或公积金项目。已有标准请从第三步申请修改，审批在第四步处理。"}</p></div>${readOnly ? '<span class="hrms-payroll-template-status">只读</span>' : modifying ? '<span class="hrms-payroll-template-status">修改需审批</span>' : '<button class="btn btn-default btn-sm" data-import-contribution>导入 Excel</button>'}</div><input class="form-control input-sm" data-contribution-search placeholder="搜索姓名、工号或部门"><div class="table-responsive"><table class="table table-bordered"><thead><tr><th>姓名 / 工号</th><th>部门</th><th>社保：个人 / 公司</th><th>公积金：个人 / 公司</th>${readOnly ? "" : "<th>操作</th>"}</tr></thead><tbody>${employees.map((employee, index) => `<tr data-contribution-row data-search="${esc([employee.employee_name, employee.employee_code, employee.department].join(" ").toLowerCase())}"><td><button class="btn btn-link btn-xs" data-standing-history="${esc(employee.employee)}">${esc(employee.employee_name)}</button><br>${esc(employee.employee_code)}</td><td>${esc(employee.department)}</td>${["社保", "公积金"].map((kind) => { const row = contributions.get(`${employee.employee}:${kind}`); return `<td>${row ? `${esc(this.standing_amounts(row))}<br><small>${esc(row.effective_date)} 起持续生效</small>` : "尚未建档"}</td>`; }).join("")}${readOnly ? "" : `<td><button class="btn btn-primary btn-xs" data-contribution-edit="${index}">${modifying ? "申请修改" : "首次录入"}</button></td>`}</tr>`).join("")}</tbody></table></div>`;
+		this.body().querySelectorAll("[data-standing-history]").forEach((button) => button.addEventListener("click", () => this.show_standing_history(button.dataset.standingHistory)));
+		this.body().querySelector("[data-contribution-search]").addEventListener("input", (event) => {
+			const query = event.target.value.trim().toLowerCase();
+			const rows = this.body().querySelectorAll("[data-contribution-row]");
+			const table = rows[0]?.closest("table");
+			if (table) { table.dataset.globalSearch = query; this.filter_table_rows(table); }
+		});
+		if (readOnly) return;
+		this.body().querySelectorAll("[data-contribution-edit]").forEach((button) => button.addEventListener("click", () => {
+			const employee = employees[Number(button.dataset.contributionEdit)];
+			const kinds = availableKinds(employee.employee);
+			const initial = contributions.get(`${employee.employee}:${kinds[0]}`);
+			let dialog;
+			dialog = new frappe.ui.Dialog({ title: `${employee.employee_name} · ${modifying ? "缴费修改申请" : "缴费首次录入"}`, fields: [
+				{ fieldname: "contribution_type", fieldtype: "Select", label: "类型", options: kinds.join("\n"), default: kinds[0], reqd: 1, onchange: () => {
+					if (!dialog) return;
+					const row = contributions.get(`${employee.employee}:${dialog.get_value("contribution_type")}`);
+					dialog.set_value("personal_amount", row?.personal_amount || 0); dialog.set_value("company_amount", row?.company_amount || 0); dialog.set_value("enabled", row ? row.enabled : 1);
+				} },
+				{ fieldname: "effective_date", fieldtype: "Date", label: "生效日期", default: frappe.datetime.get_today(), reqd: 1 },
+				{ fieldname: "enabled", fieldtype: "Check", label: "缴纳（取消勾选为停缴）", default: initial?.enabled ?? 1 },
+				{ fieldname: "personal_amount", fieldtype: "Currency", label: "个人承担", default: initial?.personal_amount || 0 },
+				{ fieldname: "company_amount", fieldtype: "Currency", label: "公司承担", default: initial?.company_amount || 0 },
+				{ fieldname: "remarks", fieldtype: "Small Text", label: modifying ? "修改原因" : "录入说明", reqd: 1 },
+			], primary_action_label: modifying ? "提交申请，等待审批" : "提交首次录入", primary_action: async (values) => {
+				await frappe.call({ method: "hrms.api.standing_pay.submit_contribution", args: { company, employee: employee.employee, ...values, request_mode: modifying ? "change" : "initial" }, freeze: true });
+				dialog.hide(); frappe.show_alert({ message: "变更已提交，审批通过后生效", indicator: "green" }); this.load_active_tab();
+			} });
+			dialog.show();
+		}));
+		this.body().querySelector("[data-import-contribution]")?.addEventListener("click", () => this.import_standing_contributions());
+	}
+
+	import_standing_contributions() {
+		frappe.prompt([{ fieldname: "effective_date", fieldtype: "Date", label: "本次导入生效日期", default: frappe.datetime.get_today(), reqd: 1 }], ({ effective_date }) => {
+			new frappe.ui.FileUploader({ allow_multiple: false, restrictions: { allowed_file_types: [".xlsx"] }, on_success: async (file) => {
+				const args = { company: this.company, file_url: file.file_url, effective_date, request_mode: "initial" };
+				const response = await frappe.call({ method: "hrms.api.standing_pay.import_contribution_workbook", args: { ...args, preview: 1 }, freeze: true });
+				const data = response.message || {};
+				const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
+				const dialog = new frappe.ui.Dialog({ title: "社保 / 公积金导入预览", size: "extra-large", fields: [{ fieldname: "preview", fieldtype: "HTML" }], primary_action_label: "提交全部变更审批", primary_action: async () => {
+					if (data.errors?.length || !data.rows?.length) return;
+					await frappe.call({ method: "hrms.api.standing_pay.import_contribution_workbook", args: { ...args, preview: 0 }, freeze: true });
+					dialog.hide(); this.load_contribution_register();
+				} });
+				dialog.fields_dict.preview.$wrapper.html(`<p>${esc(effective_date)} 起生效，审批前原标准保持有效。</p><p class="text-danger">${(data.errors || []).map(esc).join("<br>")}</p><table class="table table-bordered"><thead><tr><th>员工</th><th>类型</th><th>个人承担</th><th>公司承担</th></tr></thead><tbody>${(data.rows || []).map((row) => `<tr><td>${esc(row.employee_name)} / ${esc(row.employee)}</td><td>${esc(row.contribution_type)}</td><td>${esc(row.personal_amount)}</td><td>${esc(row.company_amount)}</td></tr>`).join("")}</tbody></table>`);
+				dialog.show();
+				if (data.errors?.length || !data.rows?.length) dialog.get_primary_btn().prop("disabled", true);
+			} });
+		}, "导入缴费变更");
 	}
 
 	load_welfare_sources() {
@@ -5014,7 +5385,7 @@ class PayrollInputCenter {
 						<tbody>
 							${
 								rows.length
-									? rows.map((row) => `<tr>${mapRow(row).map((cell) => `<td>${frappe.utils.escape_html(String(cell ?? ""))}</td>`).join("")}</tr>`).join("")
+									? rows.map((row) => `<tr>${mapRow(row).map((cell, index) => `<td>${columns[index] === "姓名" && row.employee ? `<button class="btn btn-link btn-xs" data-payroll-person-history="${frappe.utils.escape_html(row.employee)}">${frappe.utils.escape_html(String(cell ?? ""))}</button>` : frappe.utils.escape_html(String(cell ?? ""))}</td>`).join("")}</tr>`).join("")
 									: `<tr><td colspan="${columns.length}" class="text-muted">${frappe.utils.escape_html(__(`${title}暂无数据`))}</td></tr>`
 							}
 						</tbody>

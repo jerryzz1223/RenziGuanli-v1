@@ -20,7 +20,7 @@ mustInclude(department, "self.hrms_roster_assignable = 1", "Yongxin folder depar
 mustInclude(form, 'const isYongxin = frm.doc.company === "永新"', "The form must restrict the rule to Yongxin.");
 mustInclude(form, "function enforce_yongxin_roster_assignment(frm)", "The form must keep all Yongxin nodes assignable.");
 mustInclude(form, "文件夹部门：可承载下级部门，也可作为花名册归属。", "Folder departments must be presented as roster destinations.");
-mustInclude(employeeTemplate, "def _resolve_roster_department(value, company):", "Imports must resolve roster departments.");
+mustInclude(employeeTemplate, "def _resolve_roster_department(value, company, create=False, base_records=None):", "Imports must resolve roster departments.");
 if (employeeTemplate.includes("花名册只能选择最末级组织")) throw new Error("Folder departments must not be rejected by roster import.");
 
 console.log("Yongxin department roster assignment invariant verified");

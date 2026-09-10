@@ -39,13 +39,11 @@ frappe.ui.form.on("Employee", {
 			});
 		}
 		frm.set_df_property("holiday_list", "hidden", 1);
-
-		// Naming Series creates Frappe's internal document name. The HR-facing
-		// identifier is always the company work number plus employee name.
-		frm.toggle_display("naming_series", false);
 	},
 
 	date_of_birth(frm) {
+		update_employee_age(frm);
+		if (!frm.doc.date_of_birth) return;
 		frm.call({
 			method: "hrms.overrides.employee_master.get_retirement_date",
 			args: {
@@ -54,6 +52,10 @@ frappe.ui.form.on("Employee", {
 		}).then((r) => {
 			if (r && r.message) frm.set_value("date_of_retirement", r.message);
 		});
+	},
+
+	passport_number(frm) {
+		show_employee_rehire_notice(frm);
 	},
 
 	before_save(frm) {
@@ -107,6 +109,33 @@ function setup_employee_form_defaults(frm) {
 	}
 }
 
+function show_employee_rehire_notice(frm) {
+	if (!frm.is_new()) return;
+	const identity_number = String(frm.doc.passport_number || "").trim();
+	if (!identity_number) {
+		frm.__hrms_rehire_notice_identity = "";
+		return;
+	}
+	if (frm.__hrms_rehire_notice_identity === identity_number) return;
+	const request_id = (frm.__hrms_rehire_notice_request_id || 0) + 1;
+	frm.__hrms_rehire_notice_request_id = request_id;
+	frappe.call({
+		method: "hrms.api.employee_field_template.check_employee_rehire_history",
+		args: { identity_number },
+	}).then((response) => {
+		if (frm.__hrms_rehire_notice_request_id !== request_id) return;
+		if (!response.message?.has_history || String(frm.doc.passport_number || "").trim() !== identity_number) return;
+		frm.__hrms_rehire_notice_identity = identity_number;
+		frappe.msgprint({
+			title: __("发现历史任职档案"),
+			indicator: "orange",
+			message: __(
+				"该证件号在系统中已有任职记录。继续创建会保留原档案，并按本次填写的工号新建任职档案；新档案可跳转前次档案，成长记录会连续展示。",
+			),
+		});
+	}).catch(() => {});
+}
+
 function return_to_employee_roster_after_insert(frm) {
 	if (!frm.__hrms_return_to_employee_roster) return;
 	frm.__hrms_return_to_employee_roster = false;
@@ -124,7 +153,14 @@ function setup_employee_work_nature_field(frm) {
 	// control on top of `employment_type`, or the roster would have to infer the
 	// choice from implementation fields after every save.
 	frm.set_df_property("custom_work_nature", "label", __("工作性质"));
-	frm.set_df_property("custom_work_nature", "options", EMPLOYEE_WORK_NATURE_VALUES.join("\n"));
+	const options = frm.is_new()
+		? EMPLOYEE_WORK_NATURE_VALUES.filter((value) => !["待离职", "离职"].includes(value))
+		: EMPLOYEE_WORK_NATURE_VALUES;
+	frm.set_df_property("custom_work_nature", "options", options.join("\n"));
+	// List filters can prefill departure values when opening a new employee.
+	if (frm.is_new() && ["待离职", "离职"].includes(frm.doc.custom_work_nature)) {
+		frm.set_value("custom_work_nature", options[0]);
+	}
 }
 
 function apply_employee_work_nature_choice(frm, work_nature) {
@@ -137,7 +173,19 @@ function apply_employee_work_nature_choice(frm, work_nature) {
 }
 
 function sync_employee_work_nature_dependent_fields(frm, work_nature = frm.doc.custom_work_nature) {
-	const is_leaving = work_nature === "离职";
+	const is_probation = work_nature === "在职·试用期";
+	for (const fieldname of ["custom_probation_months", "final_confirmation_date"]) {
+		if (!frm.fields_dict[fieldname]) continue;
+		frm.toggle_display(fieldname, is_probation);
+		if (!is_probation) frm.set_df_property(fieldname, "reqd", false);
+		frm.fields_dict[fieldname].$wrapper?.prev(".hrms-employee-group-title").toggle(is_probation);
+	}
+	const is_leaving = !frm.is_new() && work_nature === "离职";
+	const exit_tab = frm.layout?.tabs?.find((tab) => tab.df.fieldname === "exit");
+	if (exit_tab) {
+		exit_tab.df.hidden = frm.is_new() ? 1 : 0;
+		exit_tab.refresh();
+	}
 	if (!frm.fields_dict.relieving_date) return;
 
 	frm.toggle_display("relieving_date", is_leaving);
@@ -227,6 +275,18 @@ function apply_employee_field_template(frm) {
 }
 
 function show_employee_form_as_one_page(frm) {
+	// EmployeeMaster names employees by company work number. Apply this after
+	// the async template too, otherwise it can restore the unused series field.
+	frm.toggle_display("naming_series", false);
+	frm.set_df_property("naming_series", "reqd", false);
+	for (const fieldname of ["custom_roster_sequence", "education", "educational_qualification", "custom_is_confirmed"]) {
+		frm.toggle_display(fieldname, false);
+		frm.set_df_property(fieldname, "reqd", false);
+	}
+	update_employee_age(frm);
+	// Apply this on every render, including while the template RPC is pending
+	// or unavailable, so the native form cannot expose departure fields on add.
+	sync_employee_work_nature_dependent_fields(frm);
 	$(frm.wrapper).addClass("hrms-employee-one-page");
 	setup_employee_roster_layout(frm);
 
@@ -239,6 +299,22 @@ function show_employee_form_as_one_page(frm) {
 			if (!tab.hidden) tab.wrapper.addClass("show active");
 		});
 	});
+}
+
+function calculate_employee_age(date_of_birth, today) {
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(date_of_birth || "")) return null;
+	const birth = new Date(`${date_of_birth}T00:00:00Z`);
+	if (!Number.isFinite(birth.getTime()) || birth.toISOString().slice(0, 10) !== date_of_birth) return null;
+	if (date_of_birth > today) return null;
+	const age = Number(today.slice(0, 4)) - Number(date_of_birth.slice(0, 4));
+	return age - (today.slice(5) < date_of_birth.slice(5) ? 1 : 0);
+}
+
+function update_employee_age(frm) {
+	if (!frm.fields_dict.custom_age) return;
+	frm.set_df_property("custom_age", "read_only", 1);
+	const age = calculate_employee_age(frm.doc.date_of_birth, frappe.datetime.get_today());
+	if (frm.doc.custom_age !== age) frm.set_value("custom_age", age);
 }
 
 // Keep Frappe's controls, columns and dependency handling in place. Only add

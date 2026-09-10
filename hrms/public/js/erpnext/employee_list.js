@@ -34,16 +34,12 @@
 	const roster_list_columns = [
 		{ fieldname: "employee_name", label: "姓名" },
 		{ fieldname: "custom_employee_code", label: "工号" },
-		{ fieldname: "department", label: "部门" },
-		{ fieldname: "designation", label: "岗位" },
-		{ fieldname: "custom_work_nature", label: "工作性质" },
-		// Kept as the same Employee field that payroll_input reads when it
-		// decides whether to apply the employee's social-insurance amounts.
-		{ fieldname: "custom_social_insurance_status", label: "社保参保状态" },
+		{ fieldname: "department", label: "部门", filter_control: "select" },
+		{ fieldname: "designation", label: "岗位", filter_control: "select" },
+		// 工作性质由表格上方的状态卡片选择，表头不再重复提供筛选。
+		{ fieldname: "custom_work_nature", label: "工作性质", filterable: false },
 		{ fieldname: "date_of_joining", label: "入职日期" },
 		{ fieldname: "relieving_date", label: "离职日期" },
-		{ fieldname: "custom_id_type", label: "证件类型" },
-		{ fieldname: "passport_number", label: "证件号码" },
 		{ fieldname: "cell_number", label: "手机号码" },
 	];
 	const roster_fieldnames = new Set(roster_list_columns.map((column) => column.fieldname));
@@ -77,21 +73,10 @@
 			"company",
 			"image",
 		],
-		button: {
-			show(doc) {
-				return Boolean(doc.name);
-			},
-			get_label() {
-				return __("快速编辑");
-			},
-			get_description(doc) {
-				return __("打开 {0}", [doc.employee_name || doc.name]);
-			},
-			action(doc) {
-				frappe.set_route("employee-detail", doc.name);
-			},
-		},
 		formatters: {
+			cell_number(value) {
+				return frappe.utils.escape_html(format_roster_phone_number(value));
+			},
 			name(value, df, doc) {
 				return format_roster_employee_code_display(value, doc);
 			},
@@ -117,6 +102,10 @@
 
 	function format_roster_work_nature(value) {
 		return value || __("未设置");
+	}
+
+	function format_roster_phone_number(value) {
+		return String(value ?? "").trim().replace(/^\+86\s*/, "");
 	}
 
 	function setup_roster_page(listview) {
@@ -423,6 +412,7 @@
 		const header_row = document.createElement("tr");
 		columns.forEach((column) => {
 			const th = document.createElement("th");
+			if (column.fieldname === "row_number") th.className = "hrms-roster-row-number";
 			if (!column.sortable && !column.filterable) {
 				th.textContent = __(column.label);
 				header_row.appendChild(th);
@@ -447,7 +437,24 @@
 				ensure_roster_empty_result_header(listview);
 			});
 			head.appendChild(sort);
-			if (column.filterable) {
+			if (column.filter_control === "select") {
+				const select = document.createElement("select");
+				select.className = "form-control input-xs hrms-roster-table-filter-select";
+				select.setAttribute("aria-label", __("选择{0}", [column.label]));
+				const all_option = document.createElement("option");
+				all_option.value = "";
+				all_option.textContent = __("全部");
+				select.appendChild(all_option);
+				get_roster_table_select_filter_options(state.records, column).forEach((item) => {
+					const option = document.createElement("option");
+					option.value = item.value;
+					option.textContent = item.label;
+					select.appendChild(option);
+				});
+				select.value = state.filters[column.fieldname] || "";
+				select.addEventListener("change", () => apply_roster_table_filter(listview, state, column.fieldname, select.value));
+				head.appendChild(select);
+			} else if (column.filterable) {
 				const input = document.createElement("input");
 				input.type = "search";
 				// This is a persistent table-column search, not Frappe's generic
@@ -507,10 +514,11 @@
 			row.appendChild(cell);
 			tbody.appendChild(row);
 		}
-		rows.forEach((employee) => {
+		rows.forEach((employee, index) => {
 			const row = document.createElement("tr");
 			row.className = "hrms-roster-table-row";
-			columns.forEach((column) => row.appendChild(render_roster_table_cell(employee, column)));
+			const row_number = (state.page - 1) * page_size + index + 1;
+			columns.forEach((column) => row.appendChild(render_roster_table_cell(employee, column, row_number)));
 			tbody.appendChild(row);
 		});
 		table.appendChild(tbody);
@@ -530,10 +538,27 @@
 			(column) => !["employee_name", "custom_employee_code"].includes(column.fieldname),
 		);
 		return [
+			{ fieldname: "row_number", label: "序号", filterable: false, sortable: false },
 			{ fieldname: "employee_identity", label: "姓名 / 工号", sort_field: "custom_employee_code", filterable: true, sortable: true },
-			...visible_columns.map((column) => ({ ...column, sort_field: column.fieldname, filterable: true, sortable: true })),
-			{ fieldname: "actions", label: "操作", filterable: false, sortable: false },
+			...visible_columns.map((column) => ({
+				...column,
+				sort_field: column.fieldname,
+				filterable: column.filterable !== false,
+				sortable: true,
+			})),
 		];
+	}
+
+	function get_roster_table_select_filter_options(records, column) {
+		const options = new Map();
+		(Array.isArray(records) ? records : []).forEach((employee) => {
+			const value = String(get_roster_table_cell_value(employee, column) || "").trim();
+			if (!value || value === "-") return;
+			options.set(value, { value, label: value });
+		});
+		return Array.from(options.values()).sort((left, right) =>
+			left.label.localeCompare(right.label, "zh-CN", { numeric: true, sensitivity: "base" }),
+		);
 	}
 
 	function get_roster_table_state(listview) {
@@ -701,11 +726,17 @@
 		const value = employee?.[column?.fieldname];
 		if (column?.fieldname === "department") return get_roster_department_label(value);
 		if (column?.fieldname === "custom_work_nature") return format_roster_work_nature(value);
+		if (column?.fieldname === "cell_number") return format_roster_phone_number(value) || "-";
 		return value == null || value === "" ? "-" : value;
 	}
 
-	function render_roster_table_cell(employee, column) {
+	function render_roster_table_cell(employee, column, row_number) {
 		const cell = document.createElement("td");
+		if (column.fieldname === "row_number") {
+			cell.className = "hrms-roster-row-number";
+			cell.textContent = String(row_number);
+			return cell;
+		}
 		if (column.fieldname === "employee_identity") {
 			const photo = create_roster_employee_photo(employee.image, employee.employee_name);
 			const identity = document.createElement("div");
@@ -723,15 +754,6 @@
 			identity.style.cssText = "min-width:0;";
 			identity.append(name, code);
 			cell.append(photo, identity);
-			return cell;
-		}
-		if (column.fieldname === "actions") {
-			const action = document.createElement("button");
-			action.type = "button";
-			action.className = "btn btn-default btn-xs";
-			action.textContent = __("快速编辑");
-			action.addEventListener("click", () => open_roster_employee_detail(employee.name));
-			cell.appendChild(action);
 			return cell;
 		}
 		cell.textContent = get_roster_table_cell_value(employee, column);

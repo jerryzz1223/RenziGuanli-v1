@@ -1,0 +1,173 @@
+{
+ "doctype": "DocType",
+ "name": "HRMS Employee Contribution Change",
+ "module": "HR",
+ "engine": "InnoDB",
+ "autoname": "hash",
+ "track_changes": 1,
+ "field_order": [
+  "company",
+  "employee",
+  "employee_code",
+  "employee_name",
+  "department",
+  "contribution_type",
+  "effective_date",
+  "enabled",
+  "personal_amount",
+  "company_amount",
+  "remarks",
+  "status",
+  "approved_by",
+  "submitted_by",
+  "submitted_on",
+  "approved_on",
+  "review_note",
+  "legacy_reference"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "员工",
+   "options": "Employee",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee_code",
+   "fieldtype": "Data",
+   "label": "工号",
+   "read_only": 1
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "label": "姓名",
+   "read_only": 1
+  },
+  {
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "label": "部门",
+   "options": "Department",
+   "read_only": 1
+  },
+  {
+   "fieldname": "contribution_type",
+   "fieldtype": "Select",
+   "label": "缴费类型",
+   "options": "社保\n公积金",
+   "reqd": 1
+  },
+  {
+   "fieldname": "effective_date",
+   "fieldtype": "Date",
+   "label": "生效日期",
+   "reqd": 1
+  },
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "缴纳",
+   "default": "1"
+  },
+  {
+   "fieldname": "personal_amount",
+   "fieldtype": "Currency",
+   "label": "个人承担",
+   "default": "0"
+  },
+  {
+   "fieldname": "company_amount",
+   "fieldtype": "Currency",
+   "label": "公司承担",
+   "default": "0"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "修改原因",
+   "reqd": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "状态",
+   "options": "待审核\n已批准\n已驳回\n已作废",
+   "default": "待审核"
+  },
+  {
+   "fieldname": "approved_by",
+   "fieldtype": "Link",
+   "label": "审批人",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "submitted_by",
+   "fieldtype": "Link",
+   "label": "修改人",
+   "read_only": 1,
+   "options": "User"
+  },
+  {
+   "fieldname": "submitted_on",
+   "fieldtype": "Datetime",
+   "label": "修改时间",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approved_on",
+   "fieldtype": "Datetime",
+   "label": "审批时间",
+   "read_only": 1
+  },
+  {
+   "fieldname": "review_note",
+   "fieldtype": "Small Text",
+   "label": "审批意见",
+   "read_only": 1
+  },
+  {
+   "fieldname": "legacy_reference",
+   "fieldtype": "Small Text",
+   "label": "历史来源",
+   "read_only": 1
+  }
+ ],
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "effective_date",
+ "sort_order": "DESC"
+}

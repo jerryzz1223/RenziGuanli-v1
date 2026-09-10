@@ -97,7 +97,7 @@ def reconcile(company):
 	frappe.db.sql("select name from `tabOrganization Structure Version` where name=%s for update", version)
 	manual = chart._get_manual_organization_records(company)
 	departments = {d.name: d for d in frappe.get_list("Department", filters={"company": company, "disabled": 0},
-		fields=["name", "department_name", "parent_department"], limit_page_length=0)}
+		fields=["name", "department_name"], limit_page_length=0)}
 	staff = get_candidates(company, allow_company=True)["employees"]
 	from hrms.utils.organization_scope import department_scopes
 	scopes = department_scopes({n.name: {"config": n.manual_config, "parent": n.parent_node} for n in manual["nodes"]}, departments.values())
@@ -159,24 +159,21 @@ def reconcile(company):
 				if department in units and units[department].name != node.name:
 					frappe.throw(f"合并部门仍有独立组织节点：{label}")
 				units[department] = node
-	def ensure_unit(name, seen=None):
+	def ensure_unit(name):
 		nonlocal changed
 		if name in units:
 			return units[name]
-		seen = set(seen or ())
-		if name in seen:
-			frappe.throw("部门上级关系存在循环。")
-		seen.add(name)
 		dept = departments[name]
 		kind = next((kind for kind in ("室", "课", "组", "线") if dept.department_name.endswith(kind)), None)
 		if not kind:
 			issues.append({"department": name, "reason": "待确定组织类型"})
 			return None
-		parent = ensure_unit(dept.parent_department, seen) if dept.parent_department in departments else None
+		# A roster gives membership, not reporting lines. Newly discovered units
+		# start at company level until explicitly placed in organization config.
 		saved = chart.save_manual_organization_node(kind, display_name=dept.department_name, department=name,
-			parent_node=parent.name if parent else None, company=company)
+			parent_node=None, company=company)
 		node = frappe._dict(name=saved["name"], manual_config={})
-		update(node, {"roster_auto_sync": True, "roster_generated": True, "reporting_scope_pending": parent is None})
+		update(node, {"roster_auto_sync": True, "roster_generated": True, "reporting_scope_pending": True})
 		units[name] = node
 		changed += 1
 		return node

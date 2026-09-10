@@ -1,7 +1,7 @@
 frappe.pages["employee-detail"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
-		title: __("员工档案详情"),
+		title: __("员工花名册 / 员工档案"),
 		single_column: true,
 	});
 
@@ -10,6 +10,7 @@ frappe.pages["employee-detail"].on_page_load = function (wrapper) {
 };
 
 frappe.pages["employee-detail"].on_page_show = function (wrapper) {
+	wrapper.employee_detail?.set_breadcrumb();
 	wrapper.employee_detail?.refresh_from_route();
 };
 
@@ -43,8 +44,39 @@ class EmployeeDetailPage {
 
 	show() {
 		document.body.classList.add("hrms-employee-detail-view");
-		this.page.set_secondary_action(__("返回花名册"), () => frappe.set_route("List", "Employee"));
+		this.page.set_secondary_action(__("返回员工花名册"), () => this.return_to_roster());
+		this.set_breadcrumb();
 		this.refresh_from_route();
+	}
+
+	set_breadcrumb() {
+		const breadcrumbs = frappe.breadcrumbs;
+		if (!breadcrumbs?.add || !breadcrumbs?.append_breadcrumb_element) return;
+		breadcrumbs.add({
+			type: "Custom",
+			route: "/desk/employee",
+			label: __("员工花名册"),
+		});
+
+		// Frappe rebuilds breadcrumbs while a page route is being shown. Append
+		// the current page in the next frame so that rebuild cannot remove it.
+		const append_current_page = () => {
+			if (breadcrumbs.$breadcrumbs?.find?.(".hrms-employee-detail-current").length) return;
+			breadcrumbs.append_breadcrumb_element("", __("员工档案"), "hrms-employee-detail-current");
+			breadcrumbs.$breadcrumbs?.find?.("li").last().addClass("disabled");
+		};
+		if (window.requestAnimationFrame) window.requestAnimationFrame(append_current_page);
+		else append_current_page();
+	}
+
+	set_page_title() {
+		// The detail screen is always opened from the roster. Keep that parent
+		// visible in the page header instead of leaving users at “主页 / 详情”.
+		this.page.set_title(__("员工花名册 / 员工档案"));
+	}
+
+	return_to_roster() {
+		frappe.set_route("List", "Employee");
 	}
 
 	refresh_from_route() {
@@ -85,13 +117,13 @@ class EmployeeDetailPage {
 			this.load_promise = null;
 			this.detail = null;
 			this.navigation = {};
-			this.page.set_title(__("员工档案详情"));
+			this.set_page_title();
 			this.wrapper.innerHTML = `<div class="text-muted">${__("请选择员工")}</div>`;
 			return Promise.resolve();
 		}
 
 		this.loading_employee = employee;
-		this.page.set_title(__("员工档案详情"));
+		this.set_page_title();
 		this.wrapper.innerHTML = `<div class="text-muted hrms-employee-detail-loading">${__("正在加载员工档案...")}</div>`;
 
 		const detail_request = frappe.call({
@@ -125,7 +157,7 @@ class EmployeeDetailPage {
 				this.detail = null;
 				this.navigation = {};
 				this.last_loaded_at = 0;
-				this.page.set_title(__("员工档案详情"));
+				this.set_page_title();
 				this.wrapper.innerHTML = `<div class="text-muted">${__("员工档案加载失败，请重试。")}</div>`;
 			})
 			.finally(() => {
@@ -159,7 +191,7 @@ class EmployeeDetailPage {
 
 	render() {
 		const header = this.detail?.header || {};
-		this.page.set_title(header.employee_name || __("员工档案详情"));
+		this.set_page_title();
 		this.wrapper.innerHTML = `
 			${this.render_styles()}
 			<div class="hrms-employee-detail hrms-employee-detail-shell">
@@ -175,6 +207,13 @@ class EmployeeDetailPage {
 	render_styles() {
 		return `
 			<style>
+				/* Employee records are read-only here, but every displayed value must
+				 * remain selectable for the normal Copy command/context menu. */
+				.hrms-employee-detail-shell,
+				.hrms-employee-detail-shell * {
+					user-select: text !important;
+					-webkit-user-select: text !important;
+				}
 				.hrms-employee-detail {
 					max-width: 1160px;
 					margin: 0 auto;
@@ -731,6 +770,7 @@ class EmployeeDetailPage {
 
 	render_header(header) {
 		const department_display = this.get_department_display(header);
+		const previous_employment = header.previous_employment;
 		const meta = [
 			this.get_employment_type_display(header),
 			header.custom_employee_code ? `${__("工号")}：${header.custom_employee_code}` : "",
@@ -757,6 +797,7 @@ class EmployeeDetailPage {
 						</div>
 					</div>
 					<div class="hrms-employee-detail-actions hrms-employee-detail-action-strip">
+						${previous_employment?.name ? `<button class="btn btn-default btn-sm" data-action="open-previous-employment" data-previous-employee="${frappe.utils.escape_html(previous_employment.name)}">${frappe.utils.escape_html(__("查看前次任职档案"))}</button>` : ""}
 						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="upload-photo">${__("上传照片")}</button>` : ""}
 						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="edit-employee">${__("编辑资料")}</button>` : ""}
 						<button class="btn btn-default btn-sm" data-action="compare">${__("员工对比")}</button>
@@ -885,31 +926,11 @@ class EmployeeDetailPage {
 	}
 
 	render_growth_timeline() {
-		const header = this.detail?.header || {};
-		const department_display = this.get_department_display(header);
-		const employment_type_changes = (this.detail?.growth_records || []).map((record) => ({
+		const items = (this.detail?.growth_records || []).map((record) => ({
 			date: record.date,
-			title: record.title || __("工作性质调整"),
-			description: [
-				record.from_value,
-				record.to_value,
-			]
-				.filter(Boolean)
-				.join(" → "),
+			title: record.title || __("员工记录"),
+			description: record.description || [record.from_value, record.to_value].filter(Boolean).join(" → "),
 		}));
-		const items = [
-			...employment_type_changes,
-			{
-				date: header.date_of_joining || __("入职"),
-				title: __("入职"),
-				description: this.join_values([department_display, header.designation]) || __("员工入职"),
-			},
-			{
-				date: __("至今"),
-				title: __("当前任职"),
-				description: this.join_values([department_display, header.designation, this.get_employment_type_display(header)]),
-			},
-		];
 		return items
 			.map(
 				(item) => `
@@ -1142,7 +1163,12 @@ class EmployeeDetailPage {
 			});
 		});
 		this.wrapper.querySelectorAll("[data-related-key]").forEach((row) => {
-			row.addEventListener("click", () => this.toggle_related_block(row.dataset.relatedKey));
+			row.addEventListener("click", () => {
+				// A mouseup after selecting a field also emits click. Do not collapse
+				// the record and discard the selection before the user can copy it.
+				if (this.has_text_selection(row)) return;
+				this.toggle_related_block(row.dataset.relatedKey);
+			});
 		});
 		this.wrapper.querySelectorAll("[data-related-action], [data-related-route]").forEach((button) => {
 			button.addEventListener("click", (event) => {
@@ -1191,6 +1217,12 @@ class EmployeeDetailPage {
 				}
 				frappe.route_options = { hrms_allow_employee_form: 1 };
 				frappe.set_route("Form", "Employee", this.employee);
+			});
+		});
+		this.wrapper.querySelectorAll("[data-action='open-previous-employment']").forEach((button) => {
+			button.addEventListener("click", (event) => {
+				event.preventDefault();
+				if (button.dataset.previousEmployee) frappe.set_route("employee-detail", button.dataset.previousEmployee);
 			});
 		});
 		this.wrapper.querySelectorAll("[data-action='upload-photo']").forEach((button) => {
@@ -1266,6 +1298,16 @@ class EmployeeDetailPage {
 		if (compare_button) {
 			compare_button.addEventListener("click", () => frappe.show_alert(__("员工对比功能将在后续阶段接入")));
 		}
+	}
+
+	has_text_selection(container) {
+		const selection = window.getSelection?.();
+		if (!selection || !String(selection).trim()) return false;
+		if (!container) return true;
+		return [selection.anchorNode, selection.focusNode].some((node) => {
+			const element = node?.nodeType === 1 ? node : node?.parentElement;
+			return Boolean(element && container.contains(element));
+		});
 	}
 
 	upload_employee_photo() {

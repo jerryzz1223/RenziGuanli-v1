@@ -130,7 +130,7 @@ class HybridOrganizationChart {
 	setup_actions() {
 		this.page.clear_inner_toolbar();
 		if (frappe.user.has_role("System Manager")) {
-			for (const [label, action] of [["导出配置", () => this.export_configuration()], ["导入配置", () => this.import_configuration()]]) {
+			for (const [label, action] of [["如何建立组织关系", () => this.show_configuration_guide()], ["从花名册初始化", () => this.initialize_from_roster()], ["导出配置", () => this.export_configuration()], ["导入配置", () => this.import_configuration()], ["核对原表工号", () => this.show_reference_report()]]) {
 				const item = this.page.add_inner_button(__(label), action, __("组织配置"));
 				// These are actions, not home links. The site's navigation normalizer
 				// treats href="#" as a homepage shortcut.
@@ -150,6 +150,25 @@ class HybridOrganizationChart {
 		this.page.set_primary_action(__("新增组织节点"), () => this.show_manual_node_dialog(null, this.mode === "list" ? this.list_node_id : undefined));
 	}
 
+	show_configuration_guide() {
+		frappe.msgprint({ title: __("只有花名册，如何建立组织关系"), message: `
+			<p>花名册提供部门、职位和人员。分管范围、课组线的上下级以及兼任、代理关系，需要设置组织配置。</p>
+			<p><strong>已有正确的架构：</strong>在整理好的系统中选择“组织配置 → 导出配置”，在目标服务器选择“导入配置 → 校验并预览 → 确认导入”。请使用组织配置文件；图片和“导出架构图”生成的 Excel 不能作为配置导入。</p>
+			<p><strong>从零手工建立：</strong>公司尚无组织节点时，选择“从花名册初始化”，生成待设置上级的部门及职位。然后新增管理层、分管节点，在已有课室的“编辑节点”中选择“上级组织节点”。</p>
+			<p>生产组、直线级等内部层级使用“部门内分组”，关联所属课室，再按实际归属安排成员。同名职位不能自动决定员工属于哪个组或哪条线。</p>
+			<p>批量调整时，导出当前配置，保留“节点编号”，修改“上级节点编号”后重新导入。未列入文件的节点通常保留；删除文件中的一行不会删除系统记录。重复导入同一配置按编号更新。</p>
+			<p>勾选“导入后按花名册自动更新人员”，之后的花名册更新跟随人员变化；已设置的名称、上下级和编制会保留。负责人、代理及固定人员需按目标服务器工号核对。</p>` });
+	}
+
+	initialize_from_roster() {
+		const company = this.company;
+		frappe.confirm(__("将为当前公司生成待设置上级的部门及岗位，并启用花名册人员自动更新。仅适用于尚无组织节点的公司；已有正确配置文件时可直接导入。继续初始化？"), async () => {
+			const { message: data } = await frappe.call({ method: "hrms.api.organization_flow.initialize_from_roster", args: { company }, freeze: true });
+			frappe.msgprint({ title: __("初始化完成"), message: `已生成 ${Number(data.nodes)} 个组织节点。在部门列表中新增管理层、分管，再编辑各课室的“上级组织节点”。` });
+			if (company === this.company) await this.load_tree();
+		});
+	}
+
 	async export_configuration() {
 		const result = await frappe.call({ method: "hrms.api.organization_package.export_configuration", args: { company: this.company }, freeze: true, freeze_message: __("正在导出组织配置…") });
 		if (result.message?.file_url) {
@@ -159,20 +178,31 @@ class HybridOrganizationChart {
 			link.click();
 			const data = result.message;
 			const escape = value => frappe.utils.escape_html(String(value ?? ""));
-			frappe.msgprint({ title: __("组织配置已导出"), indicator: data.errors?.length ? "red" : data.warnings?.length ? "orange" : "green",
+			const report = frappe.msgprint({ title: __("组织配置已导出"), indicator: data.errors?.length ? "red" : data.warnings?.length ? "orange" : "green",
 				message: `${this.configuration_completeness(data.completeness)}
 				${data.errors?.length ? `<p>源配置存在以下冲突，导入前需要处理：</p><ul>${data.errors.map(e => `<li>${escape(e)}</li>`).join("")}</ul>` : ""}
 				${data.warnings?.length ? `<details open><summary>配置说明及待确认事项</summary><ul>${data.warnings.map(e => `<li>${escape(e)}</li>`).join("")}</ul></details>` : ""}
-				<p><a href="${escape(data.file_url)}" download>下载组织配置</a></p>` });
+				<p><a href="${escape(data.file_url)}" download>下载组织配置</a></p>
+				<button class="btn btn-default btn-sm" data-reference-report>查看未绑定引用、候选工号与状态</button>` });
+			report.$wrapper.find('[data-reference-report]').on('click', () => { report.hide(); this.show_reference_report(); });
 		}
 	}
 
 	configuration_completeness(data) {
 		if (!data) return "";
 		const count = value => Number.isFinite(Number(value)) ? Number(value) : 0;
-		return `<p>组织节点 ${count(data.nodes)} 个 · 人员引用 ${count(data.person_references)} 条 · 缺工号引用 ${count(data.unbound_references)} 条</p>
+		return `<p>组织节点 ${count(data.nodes)} 个 · 人员引用 ${count(data.person_references)} 条 · 未绑定原表引用 ${count(data.unbound_references)} 条</p>
 			<p>原表职级标签：${count(data.source_grade_nodes)} 个节点有记录；图中职级定义：${count(data.grade_definitions)} 项，${count(data.graded_nodes)} 个节点已关联。</p>
-			<p class="text-muted">组织类型、图中职务、原表职级标签与图中职级分别保留。职级标签不代表高低顺序；缺工号人员保留待确认，不按姓名自动绑定。</p>`;
+			<p class="text-muted">未绑定表示原表引用尚未关联员工，不代表花名册没有工号；可查看候选档案及在职状态。同名档案仅供核对，不自动认定为同一人。职级标签与等级定义分别保留。</p>`;
+	}
+
+	async show_reference_report() {
+		const {message: rows} = await frappe.call({method: 'hrms.api.organization_flow.get_reference_report', args: {company: this.company}});
+		const escape = value => frappe.utils.escape_html(String(value || ''));
+		const dialog = new frappe.ui.Dialog({title: '未绑定原表引用 · 工号核对', size: 'extra-large', fields: [{fieldtype: 'HTML', fieldname: 'report', options:
+			`<p>以下为同名候选档案，尚未确认身份。非在职档案可查看但不计入在职人数；兼任及跨部门关系需在核对任职中明确。</p><table class="table"><thead><tr><th>原表姓名 / 位置</th><th>核对结果</th><th>候选工号 / 部门 / 状态</th><th>操作</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escape(row.source_name)}<small class="d-block">${escape(row.node_name)} / ${escape(row.role)}</small></td><td>${escape(row.status)}</td><td>${row.candidates.map(p => `<a href="/desk/employee/${encodeURIComponent(p.employee)}" target="_blank" rel="noopener">${escape(p.code || '档案未填工号')}</a> · ${escape(p.department)} · ${p.status === 'Active' ? '在职' : p.status === 'Left' ? '已离职' : escape(p.status)}<br>`).join('') || '无同名候选'}</td><td><button class="btn btn-default btn-xs" data-review-reference="${escape(row.node)}">核对任职</button></td></tr>`).join('')}</tbody></table>`}]});
+		dialog.fields_dict.report.$wrapper.on('click', '[data-review-reference]', event => { dialog.hide(); this.show_assignment_review(`organization_node:${event.currentTarget.dataset.reviewReference}`); });
+		dialog.show();
 	}
 
 	source_grade_text(node) {
@@ -186,7 +216,7 @@ class HybridOrganizationChart {
 		const dialog = new frappe.ui.Dialog({
 			title: __("导入组织配置"), size: "extra-large",
 			fields: [
-				{ fieldtype: "HTML", options: `<p>${__("按节点编号更新组织，按工号匹配当前公司的花名册。未包含的节点保留；导入前自动保存配置备份。")}</p>` },
+				{ fieldtype: "HTML", options: `<p>${__("按节点编号更新组织，按工号匹配当前公司的花名册。未包含的节点通常保留；明确合并关系对应的空独立节点会在预览中列出并停用。导入前自动保存配置备份。")}</p>` },
 				{ fieldname: "company", fieldtype: "Link", options: "Company", label: __("目标公司"), reqd: 1, default: this.company, onchange: () => { preview = null; } },
 				{ fieldname: "file_url", fieldtype: "Attach", label: __("组织配置 Excel（私有文件）"), reqd: 1, options: { make_attachments_public: false, restrictions: { allowed_file_types: [".xlsx"] } }, onchange: () => { preview = null; } },
 				{ fieldname: "auto_sync", fieldtype: "Check", label: __("导入后按花名册自动更新人员"), default: 1 },
@@ -209,7 +239,7 @@ class HybridOrganizationChart {
 					const data = result.message;
 					preview = data.errors.length ? null : { ...data, company: values.company, file_url: values.file_url };
 					dialog.fields_dict.preview.$wrapper.html(`
-						<p><strong>新增 ${data.create_count} 个 · 更新 ${data.update_count} 个 · 保留 ${data.retained_count} 个 · 人员引用 ${data.person_rows} 条</strong></p>
+						<p><strong>新增 ${data.create_count} 个 · 更新 ${data.update_count} 个 · 保留 ${data.retained_count} 个 · 合并空节点 ${data.merged_empty_count || 0} 个 · 人员引用 ${data.person_rows} 条</strong></p>
 						${this.configuration_completeness(data.completeness)}
 						${data.errors.length ? `<div class="alert alert-danger"><strong>请修正以下问题后重新上传</strong><ul>${data.errors.map(e => `<li>${escape(e)}</li>`).join("")}</ul></div>` : ""}
 						${data.warnings.length ? `<details open><summary>待确认事项（${data.warnings.length}）</summary><ul>${data.warnings.map(e => `<li>${escape(e)}</li>`).join("")}</ul></details>` : ""}
@@ -228,7 +258,7 @@ class HybridOrganizationChart {
 				}
 				dialog.hide();
 				const data = result.message;
-				frappe.msgprint({ title: __("导入完成"), indicator: "green", message: `新增 ${data.created} 个节点，更新 ${data.updated} 个节点。<br><a href="${escape(data.backup.file_url)}" download>${__("下载导入前备份")}</a>` });
+				frappe.msgprint({ title: __("导入完成"), indicator: "green", message: `新增 ${data.created} 个节点，更新 ${data.updated} 个节点，合并空节点 ${data.merged_empty_count || 0} 个。<br><a href="${escape(data.backup.file_url)}" download>${__("下载导入前备份")}</a>` });
 				if (values.company === this.company) await this.load_tree();
 			} finally {
 				busy = false;
@@ -1049,6 +1079,7 @@ class HybridOrganizationChart {
 						title="${frappe.utils.escape_html([person.match_status, meta].filter(Boolean).join(" · "))}"
 					>
 						<span>${frappe.utils.escape_html(label || "")}</span>
+						${matched && employee_code ? `<small>工号 ${frappe.utils.escape_html(employee_code)}</small>` : ''}
 						${person.source_reference ? `<small>原表 · ${frappe.utils.escape_html(person.match_status || "待核对")}</small>` : ""}
 						${options.showMeta && meta ? `<small>${frappe.utils.escape_html(meta)}</small>` : ""}
 					</button>
@@ -1654,7 +1685,10 @@ class HybridOrganizationChart {
 						? `${sourceLabel} · 在职 ${pool.employees.length} 人。部门成员自动取自花名册，无需逐个选用；这里只填写负责人、代理人和编制。下级岗位或员工可直接从对应部门花名册选人。`
 						: `${sourceLabel} · 在职 ${pool.employees.length} 人。可直接按姓名或工号选择，无需先在上级分配；图中任职不改变花名册主职。`;
 				dialog.fields_dict.roster_department_hint.$wrapper.html(`<p class="text-muted">${frappe.utils.escape_html(hint)}</p><button type="button" class="btn btn-default btn-xs" data-open-base>查看部门花名册统计</button>`);
-				dialog.fields_dict.roster_department_hint.$wrapper.find("[data-open-base]").on("click", () => { dialog.hide(); rosterDepartment ? frappe.set_route("Form", "Department", rosterDepartment) : frappe.set_route("List", "Department"); });
+				dialog.fields_dict.roster_department_hint.$wrapper.find("[data-open-base]").on("click", () => {
+					if (!rosterDepartment) return;
+					frappe.require("/assets/hrms/js/organization_roster.js?v=20260907b", () => window.hrmsOrganizationRoster.open(rosterDepartment));
+				});
 			} catch (error) {
 				if (request === poolRequest) dialog.fields_dict.roster_department_hint.$wrapper.html('<p class="text-danger">花名册读取失败，请重新打开窗口。</p>');
 			}

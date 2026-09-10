@@ -110,12 +110,12 @@ for (const marker of [
 }
 
 for (const marker of [
-	"def _resolve_roster_department(value, company):",
+	"def _resolve_roster_department(value, company, create=False, base_records=None):",
 	'frappe.db.get_value("Department", {"department_name": department_name, "company": company}, "name")',
 	'values["department"] = department',
-	'部门“{0}”不存在；请先在部门管理中建立并同步组织层级。',
+	'确认导入时将从花名册新建部门“{0}”（{1}）；上下级与合并关系请通过组织配置设置。',
 ]) {
-	mustInclude(api, marker, `花名册导入必须直接匹配既有可归属部门，且不能自动创建：${marker}`);
+	mustInclude(api, marker, `花名册导入预览识别部门，确认导入时建立缺少的部门：${marker}`);
 }
 
 if (api.includes('values.pop("department", None)')) {

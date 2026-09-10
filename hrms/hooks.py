@@ -27,7 +27,7 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260909-sidebar-preload",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260910-sidebar-drag-reorder-v1",
 	"/assets/hrms/js/hrms_top_nav.js?v=20260909-roster-column-search",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
 	"/assets/hrms/js/hrms_file_uploader.js?v=20260827a",
@@ -35,7 +35,7 @@ app_include_js = [
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260909-black-loader",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260909-roster-sequence",
 	"/assets/hrms/css/hrms_training_learning.css?v=20260827a",
 	"/assets/hrms/css/hrms_entry.css?v=20260909-minimal-d",
 	"/assets/hrms/css/hrms_loading.css?v=20260909-black-loader",

@@ -1,6 +1,6 @@
 {
  "actions": [],
- "allow_rename": 1,
+ "allow_rename": 0,
  "creation": "2026-07-06 00:00:00.000000",
  "description": "员工薪资异动",
  "doctype": "DocType",
@@ -33,7 +33,12 @@
   "status",
   "salary_import_batch",
   "source_file",
-  "remarks"
+  "remarks",
+  "submitted_by",
+  "submitted_on",
+  "approved_on",
+  "review_note",
+  "legacy_reference"
  ],
  "fields": [
   {
@@ -141,13 +146,17 @@
    "default": "0",
    "fieldname": "housing_fund_enabled",
    "fieldtype": "Check",
-   "label": "缴纳公积金"
+   "label": "缴纳公积金",
+   "hidden": 1,
+   "read_only": 1
   },
   {
    "default": "0",
    "fieldname": "social_insurance_enabled",
    "fieldtype": "Check",
-   "label": "缴纳社保"
+   "label": "缴纳社保",
+   "hidden": 1,
+   "read_only": 1
   },
   {
    "default": "0",
@@ -179,15 +188,16 @@
   {
    "fieldname": "approved_by",
    "fieldtype": "Data",
-   "label": "核准"
+   "label": "审批人",
+   "read_only": 1
   },
   {
-   "default": "已批准",
+   "default": "待审核",
    "fieldname": "status",
    "fieldtype": "Select",
-   "hidden": 1,
+   "hidden": 0,
    "label": "状态",
-   "options": "草稿\n待审核\n已批准\n已作废"
+   "options": "待审核\n已批准\n已驳回\n已作废"
   },
   {
    "fieldname": "salary_import_batch",
@@ -205,6 +215,37 @@
    "fieldname": "remarks",
    "fieldtype": "Small Text",
    "label": "备注"
+  },
+  {
+   "fieldname": "submitted_by",
+   "fieldtype": "Link",
+   "label": "修改人",
+   "read_only": 1,
+   "options": "User"
+  },
+  {
+   "fieldname": "submitted_on",
+   "fieldtype": "Datetime",
+   "label": "修改时间",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approved_on",
+   "fieldtype": "Datetime",
+   "label": "审批时间",
+   "read_only": 1
+  },
+  {
+   "fieldname": "review_note",
+   "fieldtype": "Small Text",
+   "label": "审批意见",
+   "read_only": 1
+  },
+  {
+   "fieldname": "legacy_reference",
+   "fieldtype": "Small Text",
+   "label": "历史来源",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
@@ -243,5 +284,6 @@
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
- "title_field": "employee_name"
+ "title_field": "employee_name",
+ "track_changes": 1
 }

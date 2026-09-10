@@ -1,19 +1,14 @@
 // Copyright (c) 2022, Frappe Technologies Pvt. Ltd. and contributors
 // For license information, please see license.txt
 
-const FOCUSED_DEPARTMENT_FIELDS = [
-	"department_name",
+const FOCUSED_DEPARTMENT_FIELDS = ["department_name", "company", "disabled", "hrms_roster_assignable"];
+const HIDDEN_DEPARTMENT_FIELDS = [
 	"parent_department",
 	"is_group",
 	"hrms_org_level",
 	"hrms_org_role",
 	"hrms_org_manager",
 	"hrms_org_card_content",
-	"hrms_roster_assignable",
-];
-const HIDDEN_DEPARTMENT_FIELDS = [
-	"company",
-	"disabled",
 	"payroll_cost_center",
 	"leave_block_list",
 	"hrms_org_section",
@@ -35,22 +30,15 @@ frappe.ui.form.on("Department", {
 		configure_focused_department_form(frm);
 		sync_company_root_parent_display(frm);
 		hide_department_sidebar(frm);
-		render_department_relationships(frm);
+		frm.set_intro(__("此处维护花名册部门名称、公司和启用状态。组织上下级、合并关系、负责人及编制请通过部门列表中的组织配置维护。"), "blue");
 		if (!frm.is_new()) {
 			frm.add_custom_button(__("花名册职位与人员"), () => {
 				frappe.require("/assets/hrms/js/organization_roster.js?v=20260907b", () => window.hrmsOrganizationRoster.open(frm.doc.name));
 			});
 		}
 
-		frm.add_custom_button(__("调整层级"), () => {
-			frappe.set_route("List", "Department");
-			frappe.after_ajax(() => {
-				frappe.show_alert({
-					message: __("请在部门列表勾选该部门后使用“调整层级”。"),
-					indicator: "blue",
-				});
-			});
-		});
+		frm.add_custom_button(__("配置上下级与合并部门"), () => frappe.set_route("organizational-chart", "list"));
+
 	},
 
 	company(frm) {
@@ -59,7 +47,7 @@ frappe.ui.form.on("Department", {
 
 	parent_department(frm) {
 		sync_company_root_parent_display(frm);
-		render_department_relationships(frm);
+		frm.set_intro(__("此处维护花名册部门名称、公司和启用状态。组织上下级、合并关系、负责人及编制请通过部门列表中的组织配置维护。"), "blue");
 	},
 
 	is_group(frm) {
@@ -72,7 +60,7 @@ frappe.ui.form.on("Department", {
 
 	after_save(frm) {
 		sync_company_root_parent_display(frm);
-		render_department_relationships(frm);
+		frm.set_intro(__("此处维护花名册部门名称、公司和启用状态。组织上下级、合并关系、负责人及编制请通过部门列表中的组织配置维护。"), "blue");
 	},
 
 	after_delete() {

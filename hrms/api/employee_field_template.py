@@ -14,6 +14,13 @@ from frappe.custom.doctype.property_setter.property_setter import make_property_
 from frappe.utils import cint, flt
 
 from hrms.utils.employee_profile import normalise_profile_value
+from hrms.utils.employee_rehire import (
+	IDENTITY_NUMBER_FIELD,
+	PREVIOUS_EMPLOYMENT_FIELD,
+	clean_identity_number,
+	get_employee_identity_number,
+	find_employment_history,
+)
 
 
 TEMPLATE_DOCTYPE = "HRMS Employee Field Template"
@@ -1531,6 +1538,37 @@ def ensure_employee_china_profile_selectors():
 	doc = _get_template_doc()
 	_sync_company_roster_fields(doc, {"custom_native_place", "custom_ethnicity"})
 	return {"updated": True, "ethnicity_backfilled": _normalise_employee_ethnicity_values()}
+
+
+def ensure_employee_rehire_setup():
+	"""Install the hidden audit link used to connect successive employments."""
+	custom_field_name = f"{EMPLOYEE_DOCTYPE}-{PREVIOUS_EMPLOYMENT_FIELD}"
+	values = {
+		"fieldname": PREVIOUS_EMPLOYMENT_FIELD,
+		"label": "前次任职档案",
+		"fieldtype": "Link",
+		"options": EMPLOYEE_DOCTYPE,
+		"insert_after": IDENTITY_NUMBER_FIELD,
+		"hidden": 1,
+		"read_only": 1,
+		"no_copy": 1,
+		"description": "系统按证件号码自动关联的前次任职档案，不可手工修改。",
+	}
+	if not frappe.db.exists("Custom Field", custom_field_name):
+		create_custom_field(EMPLOYEE_DOCTYPE, values)
+		frappe.clear_cache(doctype=EMPLOYEE_DOCTYPE)
+		return {"updated": True}
+
+	updated = False
+	for fieldname, value in values.items():
+		if fieldname == "fieldname":
+			continue
+		if frappe.db.get_value("Custom Field", custom_field_name, fieldname) != value:
+			frappe.db.set_value("Custom Field", custom_field_name, fieldname, value, update_modified=False)
+			updated = True
+	if updated:
+		frappe.clear_cache(doctype=EMPLOYEE_DOCTYPE)
+	return {"updated": updated}
 
 
 def _normalise_employee_ethnicity_values():
@@ -4035,11 +4073,115 @@ def _get_employee_growth_records(doc):
 	return sorted(records, key=lambda record: str(record.get("date") or ""))
 
 
+def _employee_history_row(doc):
+	return frappe._dict(
+		{
+			"name": doc.name,
+			"employee_name": doc.get("employee_name"),
+			"custom_employee_code": doc.get("custom_employee_code"),
+			"company": doc.get("company"),
+			"department": doc.get("department"),
+			"designation": doc.get("designation"),
+			"status": doc.get("status"),
+			"date_of_joining": doc.get("date_of_joining"),
+			"relieving_date": doc.get("relieving_date"),
+			"creation": doc.get("creation"),
+		}
+	)
+
+
+def _get_employee_rehire_history(doc):
+	"""Return all employment profiles for this person's stable document number."""
+	history = find_employment_history(get_employee_identity_number(doc))
+	if doc.name not in {row.name for row in history}:
+		history.append(_employee_history_row(doc))
+	return sorted(history, key=lambda row: (str(row.get("date_of_joining") or ""), str(row.get("creation") or "")))
+
+
+def _get_previous_employment(doc, employment_history):
+	previous_name = doc.get(PREVIOUS_EMPLOYMENT_FIELD)
+	if previous_name:
+		return next((row for row in employment_history if row.name == previous_name), None)
+	current_index = next((index for index, row in enumerate(employment_history) if row.name == doc.name), -1)
+	return employment_history[current_index - 1] if current_index > 0 else None
+
+
+def _get_employee_growth_timeline(doc, employment_history):
+	"""Build one chronological timeline across every employment profile."""
+	items = []
+	multiple_employments = len(employment_history) > 1
+	for employment in employment_history:
+		is_current = employment.name == doc.name
+		identity = " · ".join(
+			value for value in (employment.get("employee_name"), employment.get("custom_employee_code")) if value
+		)
+		role = " / ".join(
+			value
+			for value in (
+				_department_display_name(employment.get("department")),
+				employment.get("designation"),
+			)
+			if value
+		)
+		context = " / ".join(value for value in (("本次任职" if is_current else "历史任职") if multiple_employments else "", identity, role) if value)
+		if employment.get("date_of_joining"):
+			items.append(
+				{
+					"date": employment.date_of_joining,
+					"title": "入职" if is_current else "历史入职",
+					"description": context or "员工入职",
+				}
+			)
+		for record in _get_employee_growth_records(employment):
+			items.append(
+				{
+					"date": record.get("date"),
+					"title": record.get("title") or "工作性质调整",
+					"description": " / ".join(
+						value
+						for value in (context if multiple_employments else "", " → ".join(value for value in (record.get("from_value"), record.get("to_value")) if value))
+						if value
+					),
+				}
+			)
+		if employment.get("relieving_date"):
+			items.append(
+				{
+					"date": employment.relieving_date,
+					"title": "离职",
+					"description": context or "结束本次任职",
+				}
+			)
+
+	department_display = _department_display_name(doc.get("department"))
+	items.append(
+		{
+			"date": "至今",
+			"title": "当前任职",
+			"description": " / ".join(
+				value
+				for value in (department_display, doc.get("designation"), doc.get("custom_work_nature") or doc.get("employment_type"))
+				if value
+			),
+		}
+	)
+	return sorted(items[:-1], key=lambda item: str(item.get("date") or "")) + items[-1:]
+
+
+@frappe.whitelist()
+def check_employee_rehire_history(identity_number: str):
+	"""Return a privacy-safe warning for the Employee creation form."""
+	frappe.has_permission(EMPLOYEE_DOCTYPE, "create", throw=True)
+	return {"has_history": bool(find_employment_history(clean_identity_number(identity_number)))}
+
+
 @frappe.whitelist()
 def get_employee_detail(employee: str):
 	doc = frappe.get_doc(EMPLOYEE_DOCTYPE, employee)
 	doc.check_permission("read")
 	department_display = _department_display_name(doc.get("department"))
+	employment_history = _get_employee_rehire_history(doc)
+	previous_employment = _get_previous_employment(doc, employment_history)
 	return {
 		"header": {
 			"name": doc.name,
@@ -4059,8 +4201,15 @@ def get_employee_detail(employee: str):
 			"age": doc.get("age"),
 			"cell_number": doc.get("cell_number"),
 			"image": doc.get("image"),
+			"previous_employment": {
+				"name": previous_employment.name,
+				"employee_name": previous_employment.get("employee_name"),
+				"custom_employee_code": previous_employment.get("custom_employee_code"),
+			}
+			if previous_employment
+			else None,
 		},
-		"growth_records": _get_employee_growth_records(doc),
+		"growth_records": _get_employee_growth_timeline(doc, employment_history),
 		"sections": _get_employee_detail_sections(doc, department_display),
 		"materials": _get_employee_materials(doc),
 		"related_records": _get_employee_related_records(doc),
@@ -4587,28 +4736,49 @@ def _resolve_company(value, default_company, warnings):
 	return default_company
 
 
-def _resolve_roster_department(value, company):
-	"""Match a roster department to an existing assignable Department record.
+def _get_roster_department_root():
+	"""Return the sole technical parent used by roster Department records."""
+	root = frappe.db.exists("Department", "All Departments")
+	if not root:
+		frappe.throw(_("系统部门根节点不存在，无法导入花名册。"))
+	return root
 
-	The organization chart is still an independent display layer.  This only
-	uses the Department master already maintained for roster assignment and
-	never creates a department from an uploaded cell.
-	"""
+
+def _resolve_roster_department(value, company, create=False, base_records=None):
+	"""Preview names without writing; create missing departments only on import."""
 	value = _clean_import_value(value)
 	if not value:
 		return None, ""
 	department_name = _strip_department_company_suffix(value)
+	if not company or not frappe.db.exists("Company", company):
+		return None, _("请先确定部门所属公司。")
+	if not department_name or len(department_name) > 120:
+		return None, _("部门名称必须为 1 至 120 个字符。")
 	existing = (
 		frappe.db.get_value("Department", {"department_name": department_name, "company": company}, "name")
 		or frappe.db.get_value("Department", {"department_name": department_name}, "name")
 		or frappe.db.exists("Department", str(value).strip())
 	)
 	if not existing:
-		return None, _("部门“{0}”不存在；请先在部门管理中建立并同步组织层级。").format(department_name)
+		if not create:
+			return department_name, ""
+		# Serialize imports for the company and recheck before creating a shared name.
+		frappe.db.sql("select name from tabCompany where name=%s for update", company)
+		existing = frappe.db.get_value("Department", {"department_name": department_name, "company": company}, "name")
+		if not existing:
+			doc = frappe.get_doc({"doctype": "Department", "department_name": department_name,
+				"company": company, "parent_department": _get_roster_department_root(), "is_group": 0,
+				"disabled": 0, "hrms_roster_assignable": 1})
+			doc.insert(ignore_permissions=True)
+			if base_records is not None:
+				base_records["部门"] = base_records.get("部门", 0) + 1
+			return doc.name, ""
 
 	department = frappe.get_cached_doc("Department", existing)
 	if company and department.company and department.company != company:
 		return None, _("部门“{0}”不属于当前公司。").format(department_name)
+	if department.disabled:
+		return None, _("部门“{0}”已停用，请先核对部门名称。").format(department_name)
 	if frappe.get_meta("Department").has_field("hrms_roster_assignable") and not cint(
 		department.get("hrms_roster_assignable")
 	):
@@ -4664,6 +4834,11 @@ def _find_or_create_gender(value, base_records):
 def _ensure_employee_base_records(values, base_records, warnings):
 	default_company = _get_default_company()
 	values["company"] = _resolve_company(values.get("company"), default_company, warnings)
+	if values.get("department"):
+		department, error = _resolve_roster_department(values["department"], values["company"], create=True, base_records=base_records)
+		if error:
+			frappe.throw(error)
+		values["department"] = department
 	if values.get("gender"):
 		values["gender"] = _find_or_create_gender(values["gender"], base_records)
 	if values.get("designation"):
@@ -5112,6 +5287,13 @@ def _build_employee_roster_import_plan(
 		)
 		planned_rows.append({"row_index": row_index, "row": row, "values": values, "action": action, "existing": existing})
 
+	new_departments = sorted({(row["values"]["company"], row["values"]["department"])
+		for row in planned_rows if row["action"] != "skip" and row["values"].get("department")
+		and not frappe.db.exists("Department", row["values"]["department"])})
+	result["new_departments"] = [{"company": company, "department": department} for company, department in new_departments]
+	for company, department in new_departments:
+		result["warnings"].append(_("确认导入时将从花名册新建部门“{0}”（{1}）；上下级与合并关系请通过组织配置设置。").format(department, company))
+
 	if mode == "replace":
 		target_companies = {row["values"].get("company") for row in planned_rows if row["values"].get("company")}
 		if len(target_companies) > 1:
@@ -5160,8 +5342,12 @@ def import_employee_roster(
 	}
 
 	for planned_row in planned_rows:
+		if planned_row["action"] == "skip":
+			continue
 		row_index = planned_row["row_index"]
 		values = planned_row["values"]
+		frappe.db.savepoint("roster_employee_row")
+		base_records_before = dict(result["base_records"])
 		try:
 			_drop_invalid_employee_date_ranges(values, result["warnings"], row_index)
 			_ensure_employee_base_records(values, result["base_records"], result["warnings"])
@@ -5180,6 +5366,8 @@ def import_employee_roster(
 				doc.insert(ignore_permissions=True)
 				result["inserted"] += 1
 		except Exception as exc:
+			frappe.db.rollback(save_point="roster_employee_row")
+			result["base_records"] = base_records_before
 			frappe.log_error(frappe.get_traceback(), _("员工花名册导入失败"))
 			result["failed"] += 1
 			error = {
