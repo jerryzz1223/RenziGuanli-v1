@@ -45,14 +45,18 @@ if (!topNavCssVersion || topNavCssVersion < "20260903f") {
 	throw new Error("The top navigation CSS cache version must change when its desktop layout is corrected.");
 }
 
-if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260909-roster-column-search")) {
-	throw new Error("The top navigation JavaScript cache version must change when roster layout loading is corrected.");
+if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260912-hide-frappe-search-access-center-unified-v1")) {
+	throw new Error("The top navigation JavaScript cache version must change when framework controls change.");
 }
 
-for (const marker of [".navbar .search-wrapper", ".navbar .awesomebar", ".navbar .btn-new", ".navbar .btn-primary", "path === \"/app\"", "input.closest(\"form, .input-group, .form-group, .search, .search-bar, .search-wrapper, .search-container, .search-box, .awesomebar\")"]) {
+for (const marker of ["#full-search-button", ".navbar .search-wrapper", ".navbar .awesomebar", ".navbar .btn-new", ".navbar .btn-primary", "path === \"/app\"", "input.closest(\"form, .input-group, .form-group, .search, .search-bar, .search-wrapper, .search-container, .search-box, .awesomebar\")"]) {
 	if (!topNavSource.includes(marker)) {
 		throw new Error(`Top navigation must remove the current Frappe global search and primary New control: ${marker}`);
 	}
+}
+
+if (!topNavCssSource.includes("#full-search-button,")) {
+	throw new Error("Desk CSS must hide Frappe's command-search button before JavaScript removes it.");
 }
 
 if (topNavCssSource.includes("body.hrms-module-shell > .main-section {\n\t\t/* Reserve the drawer") && topNavCssSource.includes("width: calc(100% - 300px);")) {
@@ -79,8 +83,12 @@ if (!topNavSource.includes('label: "人事",') || !topNavSource.includes('route:
 	throw new Error("Clicking the 人事 top-navigation module must open the personnel home first.");
 }
 
-if (!topNavSource.includes('label: "部门",') || !topNavSource.includes('route: "/desk/organizational-chart",')) {
-	throw new Error("Clicking the 部门 top-navigation module must open the organization chart first.");
+if (!topNavSource.includes('label: "组织",') || !topNavSource.includes('route: "/desk/organizational-chart",')) {
+	throw new Error("Clicking the 组织 top-navigation module must open the organization chart first.");
+}
+
+if (topNavSource.includes('label: "部门",')) {
+	throw new Error("The top-navigation module must be named 组织, not 部门.");
 }
 
 for (const marker of ["yongxin-brand-mark-red.png", "Navbar Settings", "MODULE_ICONS", "hrms-top-module-nav__brand-logo", "hrms-top-module-nav__brand-company", "loadBrandLogo", "decoratePageTitle"]) {

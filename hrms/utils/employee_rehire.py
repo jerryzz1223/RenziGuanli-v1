@@ -8,6 +8,7 @@ EMPLOYEE_DOCTYPE = "Employee"
 IDENTITY_NUMBER_FIELD = "passport_number"
 IDENTITY_NUMBER_FIELDS = (IDENTITY_NUMBER_FIELD, "custom_id_number")
 PREVIOUS_EMPLOYMENT_FIELD = "custom_rehired_from_employee"
+PREVIOUS_EMPLOYEE_CODE_FIELD = "custom_previous_employee_code"
 REHIRE_AUTOFILL_FIELDS = (
 	"salutation",
 	"first_name",
@@ -111,4 +112,9 @@ def link_new_employee_to_previous_employment(employee):
 		return None
 	previous = find_previous_employment(get_employee_identity_number(employee), employee.name)
 	employee.set(PREVIOUS_EMPLOYMENT_FIELD, previous.name if previous else None)
+	if employee.meta.has_field(PREVIOUS_EMPLOYEE_CODE_FIELD):
+		employee.set(
+			PREVIOUS_EMPLOYEE_CODE_FIELD,
+			(previous.get("custom_employee_code") or previous.name) if previous else None,
+		)
 	return previous

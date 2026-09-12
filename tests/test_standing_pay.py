@@ -3,7 +3,9 @@ import ast
 from collections import defaultdict
 from copy import deepcopy
 from datetime import date, datetime
+from io import BytesIO
 import importlib.util
+import inspect
 import json
 from pathlib import Path
 import sys
@@ -262,6 +264,26 @@ class StandingPayTests(unittest.TestCase):
             ['social-change'],
         )
 
+    def test_latest_register_action_keeps_one_most_recent_submitter_per_employee(self):
+        rows = [
+            Row(name='e1-initial', employee='e1', submitted_on='2026-09-01 08:00:00'),
+            Row(name='e1-change', employee='e1', submitted_on='2026-09-03 08:00:00'),
+            Row(name='e2-initial', employee='e2', submitted_on='2026-09-02 08:00:00'),
+        ]
+        latest = {row.employee: row.name for row in self.api._latest_action_rows(rows)}
+        self.assertEqual(latest, {'e1': 'e1-change', 'e2': 'e2-initial'})
+
+    def test_actor_names_use_full_name_and_preserve_legacy_fallback(self):
+        self.frappe.get_all = Mock(return_value=[Row(name='editor@example.com', full_name='张三')])
+        rows = [
+            Row(submitted_by='editor@example.com', owner='owner@example.com', approved_by='reviewer@example.com'),
+            Row(owner='legacy@example.com'),
+        ]
+        self.api._attach_actor_names(rows)
+        self.assertEqual(rows[0].submitted_by_name, '张三')
+        self.assertEqual(rows[0].approved_by_name, 'reviewer@example.com')
+        self.assertEqual(rows[1].submitted_by_name, 'legacy@example.com')
+
     def test_change_history_uses_standard_effective_when_request_was_submitted(self):
         baseline = Row(name='baseline', employee='e1', status='已批准', submitted_on='2026-09-01 08:00:00',
             approved_on='2026-09-01 09:00:00', creation='2026-09-01 08:00:00', effective_date='2026-09-01', base_salary=3370)
@@ -277,6 +299,92 @@ class StandingPayTests(unittest.TestCase):
         self.assertEqual(parallel_change.previous_standard.name, 'baseline')
         self.assertEqual(later_change.previous_standard.name, 'first-change')
         self.assertIsNone(baseline.previous_standard)
+
+    def test_compensation_export_keeps_opening_snapshot_and_equal_valued_changes(self):
+        employee = Row(name='e1', employee_name='员工甲', custom_employee_code='E1',
+            department_label='工程课', work_nature='在职·正式')
+        salary = lambda name, effective, amount: Row(
+            name=name, employee='e1', effective_date=effective, approved_on=effective,
+            creation=effective, base_salary=amount, function_allowance=200,
+            certificate_allowance=0, multi_skill_allowance=0, full_salary=amount + 200,
+            remarks=name)
+        contribution = Row(name='social-change', employee='e1', contribution_type='社保',
+            effective_date='2026-03-01', approved_on='2026-03-01', creation='2026-03-01',
+            enabled=1, personal_amount=120, company_amount=240, remarks='社保调整')
+        rows = self.api._build_compensation_export_rows(
+            [employee],
+            [salary('opening-salary', '2025-12-01', 3000), salary('equal-salary', '2026-02-01', 3000), salary('raise', '2026-04-01', 3200)],
+            [contribution],
+            '2026-01-01', '2026-08-10',
+            ['base_salary', 'social_personal'],
+        )
+        self.assertEqual([row['change_type'] for row in rows], ['期初沿用', '定薪', '社保', '定薪'])
+        self.assertEqual([str(row['period_start']) for row in rows], ['2026-01-01', '2026-02-01', '2026-03-01', '2026-04-01'])
+        self.assertEqual([str(row['period_end']) for row in rows], ['2026-01-31', '2026-02-28', '2026-03-31', '2026-08-10'])
+        self.assertEqual(rows[0]['base_salary'], rows[1]['base_salary'])
+        self.assertEqual(rows[2]['social_personal'], 120)
+
+    def test_compensation_export_only_emits_events_for_selected_content(self):
+        employee = Row(name='e1', employee_name='员工甲', employee_code='E1')
+        salary = Row(name='salary', employee='e1', effective_date='2026-01-01', approved_on='2026-01-01',
+            creation='2026-01-01', base_salary=3000, full_salary=3000)
+        social = Row(name='social', employee='e1', contribution_type='社保', effective_date='2026-02-01',
+            approved_on='2026-02-01', creation='2026-02-01', enabled=1, personal_amount=100, company_amount=200)
+        rows = self.api._build_compensation_export_rows(
+            [employee], [salary], [social], '2026-01-01', '2026-03-31', ['base_salary'])
+        self.assertEqual([row['change_type'] for row in rows], ['定薪'])
+        self.assertEqual(str(rows[0]['period_end']), '2026-03-31')
+
+    def test_compensation_export_creates_typed_filtered_xlsx(self):
+        try:
+            from openpyxl import load_workbook
+        except ImportError:
+            self.skipTest('openpyxl is unavailable')
+
+        employee = Row(name='e1', employee_name='员工甲', custom_employee_code='E001',
+            department='DEP-1', employment_type='Full-time', status='Active')
+        salary = Row(name='salary-1', employee='e1', effective_date='2026-01-01',
+            approved_on='2026-01-02', creation='2026-01-01', base_salary=3000,
+            function_allowance=200, certificate_allowance=0, multi_skill_allowance=0,
+            full_salary=3200, remarks='首次定薪')
+        department = Row(name='DEP-1', department_name='工程课')
+        def get_all(doctype, **kwargs):
+            return {'Employee': [employee], 'Department': [department],
+                self.api.SALARY: [salary], self.api.CONTRIBUTION: []}.get(doctype, [])
+        self.frappe.get_all = get_all
+        self.frappe.db.get_all = lambda doctype, **kwargs: [department] if doctype == 'Department' else []
+        stored = {}
+        class FileDoc(Row):
+            def insert(self, **kwargs):
+                stored.update(self)
+                self.file_url = '/private/files/export.xlsx'
+                return self
+        self.frappe.get_doc = lambda *args: FileDoc(args[0]) if len(args) == 1 and isinstance(args[0], dict) else SimpleNamespace(check_permission=lambda *a: None)
+        payroll = sys.modules['hrms.api.payroll_input']
+        payroll._safe_fields = lambda _doctype, fields: fields
+        payroll._salary_contribution_defaults = lambda row, effective: {'employment_stage': '正式'}
+        watermark = ModuleType('hrms.utils.export_watermark')
+        watermark.save_workbook_with_logo_watermark = lambda workbook, output: workbook.save(output)
+        with patch.dict(sys.modules, {'hrms.utils.export_watermark': watermark}):
+            result = self.api.export_compensation_register(
+                'ACME', '2026-01-01', '2026-08-10',
+                json.dumps(['base_salary', 'social_personal', 'remarks']), 'DEP-1', 'e1')
+        workbook = load_workbook(BytesIO(stored['content']))
+        sheet = workbook['工资社保历史']
+        self.assertEqual(result['row_count'], 1)
+        self.assertEqual([cell.value for cell in sheet[1]], [
+            '姓名', '工号', '工作性质', '部门', '生效开始', '生效结束', '记录类型',
+            '底薪', '社保个人承担', '变更原因'])
+        self.assertEqual(sheet['A2'].value, '员工甲')
+        self.assertEqual(sheet['B2'].value, 'E001')
+        self.assertEqual(sheet['D2'].value, '工程课')
+        self.assertEqual(sheet['H2'].value, 3000)
+        self.assertIsInstance(sheet['E2'].value, datetime)
+        self.assertEqual(sheet.auto_filter.ref, 'A1:J2')
+
+    def test_compensation_export_whitelist_arguments_are_typed(self):
+        parameters = inspect.signature(self.api.export_compensation_register).parameters
+        self.assertTrue(all(parameter.annotation is not inspect.Parameter.empty for parameter in parameters.values()))
 
     def test_salary_selector_uses_approved_only_with_month_end(self):
         add=self.selector_store();add('salary');add('pending','待审核','2026-08-01');add('future',effective='2027-01-01')

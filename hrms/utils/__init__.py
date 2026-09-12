@@ -53,7 +53,11 @@ def get_country(fields: list[str] | tuple[str, ...] | str | None = None) -> dict
 				timeout=IP_API_TIMEOUT_IN_SECONDS,
 			)
 			res.raise_for_status()
-			country_info[cache_key] = res.json()
+			result = res.json()
+			if not isinstance(result, dict):
+				# Keep malformed responses out of the cache so a later request can retry.
+				return {}
+			country_info[cache_key] = result
 
 		except (requests.RequestException, ValueError):
 			# Let a later call recover from a temporary HTTP or JSON failure.

@@ -222,24 +222,7 @@
 				"access-log",
 			],
 			items: [
-				{ type: "link", label: "账户与权限总览", route: "/desk/hrms-access-center", slug: "hrms-access-center" },
-				{
-					type: "section",
-					label: "账户管理",
-					children: [
-						{ label: "全部账户", route: "/desk/user", slug: "user" },
-						{ label: "用户数据范围", route: "/desk/user-permission", slug: "user-permission" },
-						{ label: "测试实际权限", route: "/desk/hrms-access-center", slug: "hrms-access-center" },
-					],
-				},
-				{
-					type: "section",
-					label: "角色与业务权限",
-					children: [
-						{ label: "角色资料", route: "/desk/role", slug: "role" },
-						{ label: "角色权限配置", route: "/desk/permission-manager", slug: "permission-manager" },
-					],
-				},
+				{ type: "link", label: "账户、权限与角色", route: "/desk/hrms-access-center", slug: "hrms-access-center" },
 				{
 					type: "section",
 					label: "安全审计",
@@ -395,16 +378,10 @@
 			items: [
 				{
 					type: "link",
-					label: "个人年度汇总",
+					label: "苹果树统计",
 					route: "/desk/apple-tree-center",
 					slug: "apple-tree-center",
-					active_slugs: ["apple-tree-center/annual-summary", "apple-tree-center/person"],
-				},
-				{
-					type: "link",
-					label: "每月明细",
-					route: "/desk/apple-tree-center/monthly-detail",
-					slug: "apple-tree-center/monthly-detail",
+					active_slugs: ["apple-tree-center/annual-summary", "apple-tree-center/monthly-detail", "apple-tree-center/person"],
 				},
 			],
 		},
@@ -534,23 +511,14 @@
 			items: [
 				{ type: "link", label: "薪酬首页", route: "/desk/payroll-input-center", slug: "payroll-input-center" },
 				{
-					type: "section", label: "薪资",
+					type: "section", label: "薪资与社保公积金",
 					children: [
 						{ label: "员工定薪", route: "/desk/payroll-input-center/salary-assignments", slug: "salary-assignments" },
-						{ label: "薪资查看", route: "/desk/payroll-input-center/salary-register", slug: "salary-register" },
+						{ label: "社保公积金输入", route: "/desk/payroll-input-center/contribution-register", slug: "contribution-register" },
+						{ label: "薪资与社保查看", route: "/desk/payroll-input-center/salary-register", slug: "salary-register" },
 						{ label: "申请修改", route: "/desk/payroll-input-center/salary-changes", slug: "salary-changes" },
 						{ label: "审批", route: "/desk/payroll-input-center/salary-approvals", slug: "salary-approvals", roles: ["System Manager", "HR Manager", "薪资审批"] },
 						{ label: "修改记录", route: "/desk/payroll-input-center/salary-history", slug: "salary-history" },
-					],
-				},
-				{
-					type: "section", label: "社保公积金",
-					children: [
-						{ label: "社保公积金输入", route: "/desk/payroll-input-center/contribution-register", slug: "contribution-register" },
-						{ label: "社保公积金查看", route: "/desk/payroll-input-center/contribution-view", slug: "contribution-view" },
-						{ label: "申请修改", route: "/desk/payroll-input-center/contribution-changes", slug: "contribution-changes" },
-						{ label: "审批", route: "/desk/payroll-input-center/contribution-approvals", slug: "contribution-approvals", roles: ["System Manager", "HR Manager", "薪资审批"] },
-						{ label: "修改记录", route: "/desk/payroll-input-center/contribution-history", slug: "contribution-history" },
 					],
 				},
 				{
@@ -863,6 +831,98 @@
 			return (module.keys || []).some(function (key) {
 				return route_key_matches(slug, key);
 			});
+		});
+	}
+
+	var BREADCRUMB_PARENT_OVERRIDES = {
+		"employee-detail": { label: "员工花名册", route: "/desk/employee", slug: "employee" },
+		"employee-roster-import": { label: "员工花名册", route: "/desk/employee", slug: "employee" },
+		"employee-roster-export": { label: "员工花名册", route: "/desk/employee", slug: "employee" },
+	};
+
+	function find_sidebar_item(module, route_slug) {
+		var match = null;
+		var match_score = -1;
+		function visit(item) {
+			(item.children || []).forEach(visit);
+			var item_slug = item.slug || route_to_slug(item.route);
+			var slugs = [item_slug, route_to_slug(item.route)].concat(item.active_slugs || []);
+			slugs.forEach(function (slug) {
+				if (!route_key_matches(route_slug, slug)) return;
+				var score = (route_slug === slug ? 10000 : 0) + String(slug || "").length;
+				if (score <= match_score) return;
+				match_score = score;
+				match = Object.assign({ current: true }, item);
+			});
+		}
+		(module?.items || []).forEach(visit);
+		return match;
+	}
+
+	function separation_breadcrumb_parent(route) {
+		if (route[0] !== "Form" || normalize_slug(route[1]) !== "employee-separation") return null;
+		var form = window.cur_frm;
+		var completed = form?.doc?.docstatus === 1 && form?.doc?.boarding_status === "Completed";
+		return completed
+			? { label: "离职记录", route: "/desk/employee-separation-records", slug: "employee-separation-records" }
+			: { label: "离职管理", route: "/desk/employee-separation", slug: "employee-separation" };
+	}
+
+	function current_breadcrumb_label(route, parent, label_override) {
+		if (label_override) return String(label_override).trim();
+		if (route[0] === "Form") {
+			var form = window.cur_frm;
+			if (normalize_slug(route[1]) === "employee-separation") {
+				var employee_label = [form?.doc?.employee_code_display, form?.doc?.employee_name].filter(Boolean).join(" · ");
+				if (employee_label) return employee_label;
+			}
+			return String(form?.page?.title || form?.doc?.title || form?.doc?.name || route[2] || "").trim();
+		}
+		var title = document.querySelector(".page-container.active .page-title .title-text, .page-container.active .page-title h1, .page-container.active .page-title h2");
+		return String(title?.textContent || parent?.label || "").trim();
+	}
+
+	function append_hrms_breadcrumb(breadcrumbs, item, current) {
+		if (!item?.label) return;
+		breadcrumbs.append_breadcrumb_element(
+			current ? "" : item.route,
+			__(item.label),
+			current ? "hrms-breadcrumb-current" : "hrms-breadcrumb-link",
+		);
+		if (current) breadcrumbs.$breadcrumbs?.find?.("li").last().addClass("disabled").attr("aria-current", "page");
+	}
+
+	function apply_contextual_breadcrumbs(label_override) {
+		var breadcrumbs = window.frappe?.breadcrumbs;
+		var route = window.frappe?.get_route?.() || [];
+		var slug = current_route_slug();
+		var module = active_sidebar_module(slug);
+		if (!module || !breadcrumbs?.append_breadcrumb_element || !breadcrumbs?.$breadcrumbs) return;
+
+		var parent = separation_breadcrumb_parent(route) || BREADCRUMB_PARENT_OVERRIDES[slug] || find_sidebar_item(module, slug);
+		var is_form = route[0] === "Form";
+		var current_label = current_breadcrumb_label(route, parent, label_override);
+		var trail = [{ label: "主页", route: "/desk/hrms-workbench", slug: "hrms-workbench" }];
+		if (module.label !== "主页") trail.push({ label: module.label, route: module.route, slug: normalize_slug(module.route) });
+		if (parent && parent.slug !== normalize_slug(module.route) && parent.label !== module.label) trail.push(parent);
+		if (is_form || !parent || !parent.current) trail.push({ label: current_label || parent?.label || module.label });
+
+		var unique_trail = trail.filter(function (item, index, items) {
+			return item.label && items.findIndex(function (candidate) { return candidate.label === item.label; }) === index;
+		});
+		breadcrumbs.$breadcrumbs.empty();
+		unique_trail.forEach(function (item, index) {
+			append_hrms_breadcrumb(breadcrumbs, item, index === unique_trail.length - 1);
+		});
+		document.body.classList.remove("hrms-hide-breadcrumbs");
+	}
+	window.hrmsApplyContextualBreadcrumbs = apply_contextual_breadcrumbs;
+	var hrms_breadcrumb_followups = [];
+
+	function schedule_contextual_breadcrumbs() {
+		hrms_breadcrumb_followups.forEach(window.clearTimeout);
+		hrms_breadcrumb_followups = [180, 700].map(function (delay) {
+			return window.setTimeout(apply_contextual_breadcrumbs, delay);
 		});
 	}
 
@@ -1524,6 +1584,7 @@
 		hide_frappe_breadcrumbs();
 		fix_desk_home_links();
 		apply_hrms_sidebar_shell();
+		apply_contextual_breadcrumbs();
 		hide_personnel_social_metadata();
 	}
 
@@ -1599,6 +1660,7 @@
 				hrms_shell_ui_scheduled = false;
 				run_hrms_shell_step("redirecting the Desk home", redirect_to_hrms_home);
 				run_hrms_shell_step("rendering navigation", apply_hrms_shell_rules);
+				schedule_contextual_breadcrumbs();
 				schedule_hrms_localization(220);
 				window.clearTimeout(hrms_shell_ui_followup);
 				hrms_shell_ui_followup = window.setTimeout(function () {

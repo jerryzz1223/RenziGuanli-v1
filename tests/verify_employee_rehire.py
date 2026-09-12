@@ -17,6 +17,7 @@ for source in (REHIRE, MASTER, API, SETUP):
 
 for marker in (
 	"PREVIOUS_EMPLOYMENT_FIELD = \"custom_rehired_from_employee\"",
+	"PREVIOUS_EMPLOYEE_CODE_FIELD = \"custom_previous_employee_code\"",
 	"IDENTITY_NUMBER_FIELDS = (IDENTITY_NUMBER_FIELD, \"custom_id_number\")",
 	"REHIRE_AUTOFILL_FIELDS = (",
 	"find_employment_history",
@@ -34,6 +35,7 @@ for marker in (
 	'"previous_employment"',
 	'"current_employment"',
 	'"autofill_values"',
+	'"previous_employee_code"',
 ):
 	assert marker in API, marker
 
@@ -41,6 +43,9 @@ assert "ensure_employee_rehire_setup()" in SETUP
 assert "passport_number(frm)" in FORM
 assert "load_employee_rehire_profile(frm)" in FORM
 assert "apply_employee_rehire_autofill(frm, response.message.autofill_values)" in FORM
+assert 'frm.set_value("custom_previous_employee_code", response.message.previous_employee_code || "")' in FORM
+assert 'has_previous_code ? "新工号" : "工号"' in FORM
+assert 'frappe.throw(__("请填写新工号。"))' in FORM
 assert "is_blank_employee_form_value(frm.doc[fieldname])" in FORM
 assert "check_employee_rehire_history" in FORM
 assert "open-previous-employment" in DETAIL

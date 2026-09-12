@@ -60,6 +60,8 @@ def create_employee_separation(employee=None, submit=True):
 	separation.employee = employee
 	separation.boarding_begins_on = add_days(getdate(), 1)
 	separation.company = "_Test Company"
+	separation.separation_reason_type = "主动离职"
+	separation.separation_reason = "个人原因"
 	separation.append("activities", {"activity_name": "Deactivate Employee", "role": "HR User"})
 	separation.boarding_status = "Pending"
 	separation.insert()

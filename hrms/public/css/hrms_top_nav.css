@@ -33,6 +33,7 @@
 /* The HR module already provides its own navigation and account entry.  The
  * framework-wide command search and generic “New” control are duplicate,
  * confusing entry points here, so keep them out of the Desk chrome. */
+#full-search-button,
 body:has(#hrms-top-module-nav) #navbar-search,
 body:has(#hrms-top-module-nav) .navbar-search,
 body:has(#hrms-top-module-nav) .navbar .search-form,
@@ -2351,19 +2352,14 @@ body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-r
 	color: inherit;
 }
 
-body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-employee-name-link,
-body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-identity-cell small {
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-employee-name-link {
 	display: block;
 }
 
-body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-identity-cell {
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-employee-name-cell {
 	align-items: center;
 	display: flex;
 	gap: 9px;
-}
-
-body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-identity-text {
-	min-width: 0;
 }
 
 body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-employee-name-link {
@@ -2388,12 +2384,6 @@ body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-r
 body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-table-row:focus-visible {
 	outline: 2px solid #16784a;
 	outline-offset: -2px;
-}
-
-body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-identity-cell small {
-	color: var(--text-muted, #6b7280);
-	font-size: 12px;
-	margin-top: 2px;
 }
 
 body.hrms-employee-roster-view .list-row-head.hrms-roster-native-table-header-hidden {
@@ -2427,6 +2417,15 @@ body.hrms-personnel-social-controls-hidden .form-sidebar .comment-box {
  * their original controls and grid columns; the form script makes each pane
  * visible in document order, while this removes only the redundant tab bar. */
 .hrms-employee-one-page .form-tabs-list {
+	display: none !important;
+}
+
+/* Employee entry uses the roster as its navigation context. Keep only the
+ * business Save action in the form header; search and document templates are
+ * unrelated shortcuts on this focused data-entry page. */
+.page-container.hrms-employee-header-actions-clean #full-search-button,
+.page-container.hrms-employee-header-actions-clean #small-search-button,
+.page-container.hrms-employee-header-actions-clean .hrms-employee-form-action-hidden {
 	display: none !important;
 }
 

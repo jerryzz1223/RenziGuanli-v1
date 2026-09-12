@@ -17,6 +17,7 @@ from hrms.utils.employee_profile import normalise_profile_value
 from hrms.utils.employee_rehire import (
 	IDENTITY_NUMBER_FIELD,
 	PREVIOUS_EMPLOYMENT_FIELD,
+	PREVIOUS_EMPLOYEE_CODE_FIELD,
 	clean_identity_number,
 	get_employee_identity_number,
 	get_rehire_autofill_values,
@@ -1542,30 +1543,50 @@ def ensure_employee_china_profile_selectors():
 
 
 def ensure_employee_rehire_setup():
-	"""Install the hidden audit link used to connect successive employments."""
-	custom_field_name = f"{EMPLOYEE_DOCTYPE}-{PREVIOUS_EMPLOYMENT_FIELD}"
-	values = {
-		"fieldname": PREVIOUS_EMPLOYMENT_FIELD,
-		"label": "前次任职档案",
-		"fieldtype": "Link",
-		"options": EMPLOYEE_DOCTYPE,
-		"insert_after": IDENTITY_NUMBER_FIELD,
-		"hidden": 1,
-		"read_only": 1,
-		"no_copy": 1,
-		"description": "系统按证件号码自动关联的前次任职档案，不可手工修改。",
-	}
-	if not frappe.db.exists("Custom Field", custom_field_name):
-		create_custom_field(EMPLOYEE_DOCTYPE, values)
-		frappe.clear_cache(doctype=EMPLOYEE_DOCTYPE)
-		return {"updated": True}
-
 	updated = False
-	for fieldname, value in values.items():
-		if fieldname == "fieldname":
+	field_definitions = (
+		{
+			"fieldname": PREVIOUS_EMPLOYEE_CODE_FIELD,
+			"label": "原工号",
+			"fieldtype": "Data",
+			"insert_after": "naming_series",
+			"hidden": 1,
+			"read_only": 1,
+			"no_copy": 1,
+			"description": "系统按证件号码匹配到的最近一次历史工号，只读。",
+		},
+		{
+			"fieldname": PREVIOUS_EMPLOYMENT_FIELD,
+			"label": "前次任职档案",
+			"fieldtype": "Link",
+			"options": EMPLOYEE_DOCTYPE,
+			"insert_after": IDENTITY_NUMBER_FIELD,
+			"hidden": 1,
+			"read_only": 1,
+			"no_copy": 1,
+			"description": "系统按证件号码自动关联的前次任职档案，不可手工修改。",
+		},
+	)
+	for values in field_definitions:
+		custom_field_name = f"{EMPLOYEE_DOCTYPE}-{values['fieldname']}"
+		if not frappe.db.exists("Custom Field", custom_field_name):
+			create_custom_field(EMPLOYEE_DOCTYPE, values)
+			updated = True
 			continue
-		if frappe.db.get_value("Custom Field", custom_field_name, fieldname) != value:
-			frappe.db.set_value("Custom Field", custom_field_name, fieldname, value, update_modified=False)
+		for fieldname, value in values.items():
+			if fieldname == "fieldname":
+				continue
+			if frappe.db.get_value("Custom Field", custom_field_name, fieldname) != value:
+				frappe.db.set_value("Custom Field", custom_field_name, fieldname, value, update_modified=False)
+				updated = True
+
+	# Keep the editable current code immediately after the read-only original code.
+	current_code_field = f"{EMPLOYEE_DOCTYPE}-custom_employee_code"
+	if frappe.db.exists("Custom Field", current_code_field):
+		if frappe.db.get_value("Custom Field", current_code_field, "insert_after") != PREVIOUS_EMPLOYEE_CODE_FIELD:
+			frappe.db.set_value(
+				"Custom Field", current_code_field, "insert_after", PREVIOUS_EMPLOYEE_CODE_FIELD, update_modified=False
+			)
 			updated = True
 	if updated:
 		frappe.clear_cache(doctype=EMPLOYEE_DOCTYPE)
@@ -2372,6 +2393,64 @@ def get_hr_settings_center():
 	}
 
 
+def _employee_codes_for_links(employee_links):
+	"""Map internal Employee Link values to the only public employee identifier."""
+	employee_links = sorted({str(value or "").strip() for value in employee_links if value})
+	if not employee_links:
+		return {}
+	return {
+		row.name: str(row.custom_employee_code or "").strip()
+		for row in frappe.get_all(
+			EMPLOYEE_DOCTYPE,
+			filters={"name": ["in", employee_links]},
+			fields=["name", "custom_employee_code"],
+			limit_page_length=0,
+			ignore_permissions=True,
+		)
+	}
+
+
+def _business_user_permissions(permission_rows):
+	"""Serialize scopes without exposing legacy Frappe Employee document names."""
+	employee_codes = _employee_codes_for_links(
+		scope.for_value for scope in permission_rows if scope.allow == EMPLOYEE_DOCTYPE
+	)
+	return [
+		{
+			"name": getattr(scope, "name", None),
+			"allow": scope.allow,
+			"allow_label": _("公司工号") if scope.allow == EMPLOYEE_DOCTYPE else _(scope.allow),
+			"for_value": (
+				employee_codes.get(scope.for_value) or _("未配置公司工号")
+				if scope.allow == EMPLOYEE_DOCTYPE
+				else scope.for_value
+			),
+			"applicable_for": scope.applicable_for,
+			"is_default": int(scope.is_default or 0),
+			"hide_descendants": int(scope.hide_descendants or 0),
+			"identity_issue": int(scope.allow == EMPLOYEE_DOCTYPE and not employee_codes.get(scope.for_value)),
+		}
+		for scope in permission_rows
+	]
+
+
+def _employee_link_from_company_code(employee_code):
+	"""Resolve only custom_employee_code; never accept a legacy HR-EMP-* key as input."""
+	employee_code = str(employee_code or "").strip()
+	rows = frappe.get_all(
+		EMPLOYEE_DOCTYPE,
+		filters={"custom_employee_code": employee_code},
+		fields=["name", "custom_employee_code"],
+		limit_page_length=2,
+		ignore_permissions=True,
+	)
+	if not rows:
+		frappe.throw(_("未找到公司工号 {0} 对应的员工档案。").format(employee_code))
+	if len(rows) > 1:
+		frappe.throw(_("公司工号 {0} 对应多份员工档案，请先处理重复工号。").format(employee_code))
+	return rows[0].name
+
+
 @frappe.whitelist()
 def get_hrms_access_center():
 	"""Return a deliberately small account/role summary for the admin landing page.
@@ -2389,6 +2468,7 @@ def get_hrms_access_center():
 	)
 	user_names = [user.name for user in users]
 	roles_by_user = {name: [] for name in user_names}
+	permissions_by_user = {name: [] for name in user_names}
 	if user_names:
 		role_rows = frappe.get_all(
 			"Has Role",
@@ -2399,6 +2479,16 @@ def get_hrms_access_center():
 		)
 		for row in role_rows:
 			roles_by_user.setdefault(row.parent, []).append(row.role)
+
+		permission_rows = frappe.get_all(
+			"User Permission",
+			filters={"user": ["in", user_names]},
+			fields=["name", "user", "allow", "for_value", "applicable_for", "is_default", "hide_descendants"],
+			order_by="user asc, allow asc, for_value asc",
+			ignore_permissions=True,
+		)
+		for row in permission_rows:
+			permissions_by_user.setdefault(row.user, []).append(row)
 
 	role_users = {}
 	for user_name, assigned_roles in roles_by_user.items():
@@ -2433,6 +2523,8 @@ def get_hrms_access_center():
 	accounts = []
 	for user in users:
 		roles = roles_by_user.get(user.name, [])
+		data_scopes = permissions_by_user.get(user.name, [])
+		business_scopes = _business_user_permissions(data_scopes)
 		accounts.append(
 			{
 				"user": user.name,
@@ -2443,6 +2535,8 @@ def get_hrms_access_center():
 				"assigned_roles": roles,
 				"assigned_role_labels": [role_labels.get(role, _(role)) for role in roles],
 				"role_count": len(roles),
+				"data_scope_count": len(data_scopes),
+				"data_scopes": business_scopes,
 				"last_login": user.last_login,
 			}
 		)
@@ -3051,11 +3145,17 @@ def test_hrms_effective_permission(
 		frappe.throw(_("不支持的权限类型：{0}").format(permission_type))
 
 	document_name = (document_name or "").strip()
+	business_document_name = document_name
 	doc = None
 	if document_name:
-		if not frappe.db.exists(doctype, document_name):
-			frappe.throw(_("{0} 记录 {1} 不存在").format(doctype, document_name))
-		doc = frappe.get_doc(doctype, document_name)
+		resolved_document_name = (
+			_employee_link_from_company_code(document_name)
+			if doctype == EMPLOYEE_DOCTYPE
+			else document_name
+		)
+		if not frappe.db.exists(doctype, resolved_document_name):
+			frappe.throw(_("{0} 记录 {1} 不存在").format(doctype, business_document_name))
+		doc = frappe.get_doc(doctype, resolved_document_name)
 
 	roles = frappe.get_roles(user)
 	allowed = bool(frappe.has_permission(doctype, permission_type, doc=doc, user=user))
@@ -3066,6 +3166,7 @@ def test_hrms_effective_permission(
 		order_by="allow asc, for_value asc",
 		ignore_permissions=True,
 	)
+	business_user_permissions = _business_user_permissions(user_permissions)
 	permission_field = {
 		"select": "select",
 		"read": "read",
@@ -3096,11 +3197,11 @@ def test_hrms_effective_permission(
 		"allowed": int(allowed),
 		"user": user,
 		"doctype": doctype,
-		"document_name": document_name,
+		"document_name": business_document_name,
 		"permission_type": permission_type,
 		"roles": roles,
 		"granting_roles": sorted(granting_roles),
-		"user_permissions": user_permissions,
+		"user_permissions": business_user_permissions,
 		"scope_mode": "具体记录" if document_name else "单据类型入口",
 		"explanation": (
 			"系统实际权限引擎允许该操作。" if allowed else "系统实际权限引擎拒绝该操作。"
@@ -4259,6 +4360,7 @@ def check_employee_rehire_history(identity_number: str):
 	return {
 		"has_history": True,
 		"source_employee": previous_doc.name,
+		"previous_employee_code": previous_doc.get("custom_employee_code") or previous_doc.name,
 		"autofill_values": get_rehire_autofill_values(previous_doc),
 	}
 
@@ -4308,6 +4410,7 @@ def get_employee_detail(employee: str):
 		"growth_records": _get_employee_growth_timeline(doc, employment_history),
 		"sections": _get_employee_detail_sections(doc, department_display),
 		"standing_pay_summary": _get_employee_standing_pay_summary(doc),
+		"photo_history": _get_employee_photo_history(doc),
 		"materials": _get_employee_materials(doc),
 		"related_records": _get_employee_related_records(doc),
 		"permissions": {
@@ -4329,28 +4432,63 @@ def _get_employee_material_type_map():
 	}
 
 
+def _employee_file_payload(file, *, is_current=False):
+	return {
+		"name": file.name,
+		"file_name": file.file_name,
+		"file_url": file.file_url,
+		"is_private": file.is_private,
+		"modified": file.modified,
+		"creation": file.creation,
+		"is_current": is_current,
+	}
+
+
+def _get_employee_photo_history(doc):
+	"""Return the current avatar file and every retained earlier upload."""
+	files = frappe.get_all(
+		"File",
+		filters={
+			"attached_to_doctype": EMPLOYEE_DOCTYPE,
+			"attached_to_name": doc.name,
+			"attached_to_field": "image",
+		},
+		fields=["name", "file_name", "file_url", "is_private", "modified", "creation"],
+		order_by="modified desc, creation desc, name desc",
+	)
+	current_file = next((file for file in files if file.file_url == doc.get("image")), None)
+	return {
+		"current_file": _employee_file_payload(current_file, is_current=True) if current_file else None,
+		"history_files": [
+			_employee_file_payload(file)
+			for file in files
+			if not current_file or file.name != current_file.name
+		],
+	}
+
+
 def _get_employee_materials(doc):
-	"""Return employee-linked files grouped by their HR material type."""
+	"""Return the current and retained historical file for every material type."""
 	type_map = _get_employee_material_type_map()
 	files_by_fieldname = {material["fieldname"]: [] for material in type_map.values()}
 	files = frappe.get_all(
 		"File",
 		filters={"attached_to_doctype": EMPLOYEE_DOCTYPE, "attached_to_name": doc.name},
-		fields=["name", "file_name", "file_url", "attached_to_field", "is_private", "modified"],
-		order_by="modified desc",
+		fields=[
+			"name",
+			"file_name",
+			"file_url",
+			"attached_to_field",
+			"is_private",
+			"modified",
+			"creation",
+		],
+		order_by="modified desc, creation desc, name desc",
 	)
 	for file in files:
 		if file.attached_to_field not in files_by_fieldname:
 			continue
-		files_by_fieldname[file.attached_to_field].append(
-			{
-				"name": file.name,
-				"file_name": file.file_name,
-				"file_url": file.file_url,
-				"is_private": file.is_private,
-				"modified": file.modified,
-			}
-		)
+		files_by_fieldname[file.attached_to_field].append(_employee_file_payload(file))
 
 	return [
 		{
@@ -4359,7 +4497,12 @@ def _get_employee_materials(doc):
 			"types": [
 				{
 					**type_map[key],
-					"files": files_by_fieldname[type_map[key]["fieldname"]],
+					"current_file": (
+						files_by_fieldname[type_map[key]["fieldname"]][0]
+						if files_by_fieldname[type_map[key]["fieldname"]]
+						else None
+					),
+					"history_files": files_by_fieldname[type_map[key]["fieldname"]][1:],
 				}
 				for key, _label in group["types"]
 			],
@@ -4482,7 +4625,7 @@ def update_employee_photo(employee: str, file_url: str):
 
 	doc.image = file_doc.file_url
 	doc.save()
-	return {"name": doc.name, "image": doc.image}
+	return {"name": doc.name, "image": doc.image, "photo_history": _get_employee_photo_history(doc)}
 
 
 @frappe.whitelist()

@@ -393,7 +393,7 @@
 		load_roster_table_records(listview, state);
 		const columns = get_roster_table_columns();
 		const render_key = JSON.stringify([
-			state.request_id, state.loading, state.error, state.page, state.filters,
+			state.request_id, state.loading, state.error, state.page, state.filters, state.select_filter_input,
 			state.sort_field, state.sort_order, columns.map((column) => column.fieldname),
 		]);
 		if (table_wrap.__hrmsRenderKey === render_key) return;
@@ -477,6 +477,8 @@
 					if (event.key !== "Enter") return;
 					event.preventDefault();
 					event.stopPropagation();
+					input.select();
+					state.select_filter_input = column.fieldname;
 					apply_roster_table_filter(listview, state, column.fieldname, input.value);
 				});
 				head.appendChild(input);
@@ -527,9 +529,12 @@
 		if (total > page_size) table_wrap.appendChild(render_roster_table_pagination(listview, state, total, page_count));
 		scroll.scrollLeft = scroll_left;
 		if (focused_label) {
-			Array.from(table_wrap.querySelectorAll("input[aria-label]")).find(
+			const restored_input = Array.from(table_wrap.querySelectorAll("input[aria-label]")).find(
 				(input) => input.getAttribute("aria-label") === focused_label,
-			)?.focus({ preventScroll: true });
+			);
+			restored_input?.focus({ preventScroll: true });
+			if (restored_input && state.select_filter_input) restored_input.select();
+			state.select_filter_input = "";
 		}
 	}
 
@@ -539,7 +544,8 @@
 		);
 		return [
 			{ fieldname: "row_number", label: "序号", filterable: false, sortable: false },
-			{ fieldname: "employee_identity", label: "姓名 / 工号", sort_field: "custom_employee_code", filterable: true, sortable: true },
+			{ fieldname: "employee_name", label: "姓名", sort_field: "employee_name", filterable: true, sortable: true },
+			{ fieldname: "custom_employee_code", label: "工号", sort_field: "custom_employee_code", filterable: true, sortable: true },
 			...visible_columns.map((column) => ({
 				...column,
 				sort_field: column.fieldname,
@@ -694,12 +700,7 @@
 			}
 			return actual === expected;
 		};
-		const filter_value = (employee, column) => {
-			if (column.fieldname === "employee_identity") {
-				return `${employee.employee_name || ""} ${get_employee_business_code(employee)}`;
-			}
-			return get_roster_table_cell_value(employee, column);
-		};
+		const filter_value = (employee, column) => get_roster_table_cell_value(employee, column);
 		const column_filters = Object.entries(state.filters).filter(([, value]) => String(value || "").trim());
 		const rows = source_records
 			.filter((employee) => Object.entries(active_card.filters || {}).every((filter) => matches_card_filter(employee, filter)))
@@ -737,23 +738,17 @@
 			cell.textContent = String(row_number);
 			return cell;
 		}
-		if (column.fieldname === "employee_identity") {
+		if (column.fieldname === "employee_name") {
 			const photo = create_roster_employee_photo(employee.image, employee.employee_name);
-			const identity = document.createElement("div");
-			identity.className = "hrms-roster-identity-text";
 			const name = document.createElement("button");
 			name.type = "button";
 			name.className = "hrms-roster-employee-name-link";
 			name.textContent = employee.employee_name || employee.name || "-";
 			name.setAttribute("aria-label", __("查看{0}的档案", [employee.employee_name || employee.name]));
 			name.addEventListener("click", () => open_roster_employee_detail(employee.name));
-			const code = document.createElement("small");
-			code.textContent = get_employee_business_code(employee) || "-";
-			cell.className = "hrms-roster-identity-cell";
+			cell.className = "hrms-roster-employee-name-cell";
 			cell.style.cssText = "align-items:center;display:flex;gap:8px;white-space:normal;";
-			identity.style.cssText = "min-width:0;";
-			identity.append(name, code);
-			cell.append(photo, identity);
+			cell.append(photo, name);
 			return cell;
 		}
 		cell.textContent = get_roster_table_cell_value(employee, column);

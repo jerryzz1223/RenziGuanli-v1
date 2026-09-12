@@ -24,6 +24,8 @@ for (const marker of [
 	"apply_roster_table_filter",
 	"hrms-roster-table-filter-input",
 	'input.addEventListener("compositionend"',
+	"state.select_filter_input = column.fieldname;",
+	"restored_input.select();",
 	"event.stopPropagation();",
 	"search.exact ? search.value",
 ]) {
@@ -46,6 +48,16 @@ for (const marker of [
 ]) {
 	mustInclude(rosterCss, marker, `花名册缺少表头筛选样式：${marker}`);
 }
+
+for (const marker of [
+	'{ fieldname: "employee_name", label: "姓名", sort_field: "employee_name", filterable: true, sortable: true }',
+	'{ fieldname: "custom_employee_code", label: "工号", sort_field: "custom_employee_code", filterable: true, sortable: true }',
+	'column.fieldname === "employee_name"',
+	"hrms-roster-employee-name-cell",
+]) {
+	mustInclude(employeeList, marker, `花名册的姓名与工号必须分成独立列：${marker}`);
+}
+if (employeeList.includes("employee_identity")) throw new Error("花名册不应继续合并姓名与工号列。");
 
 for (const obsoleteMarker of ["hrms-roster-search-control", "hrms-roster-search-button"]) {
 	if (employeeList.includes(obsoleteMarker)) {

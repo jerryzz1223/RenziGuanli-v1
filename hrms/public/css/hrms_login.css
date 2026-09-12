@@ -1,3 +1,7 @@
+/* Keep Frappe's uncustomised card invisible until the custom login is ready. */
+.login-content.page-card:has(.for-login) { visibility: hidden; }
+body.hrms-login-ready .login-content.page-card:has(.for-login) { visibility: visible; }
+
 /* Login and recovery share one restrained, single-logo form. */
 body.hrms-login-page { background: #fff; color: #202124; }
 body.hrms-login-page .page-card-head > .app-logo,
@@ -47,6 +51,28 @@ body.hrms-login-page .page-card .page-card-actions :is(.btn-login,.btn-forgot):d
 body.hrms-login-page .page-card :is(a, button, [role="button"]):focus-visible { outline: 3px solid #aeb2b9; outline-offset: 3px; }
 body.hrms-login-page .page-card .login-error-banner { border-radius: 8px; font-size: 13px; }
 body.hrms-login-page .login-content.page-card .page-card-body .form-group.invalid .form-control { border-color: #bc5151; }
+.hrms-register-entry { display: flex; align-items: center; justify-content: center; gap: 2px; margin-top: -44px; font-size: 13px; color: #858a92; }
+.hrms-register-entry .btn-link { padding: 4px; color: #30343a; font-size: 13px; }
+.hrms-register-panel { width: 100%; }
+.hrms-register-panel[hidden] { display: none !important; }
+.hrms-register-heading { display: grid; gap: 8px; margin-bottom: 22px; text-align: center; }
+.hrms-register-heading strong { font-size: 20px; color: #202124; }
+.hrms-register-heading span { color: #777c84; font-size: 13px; line-height: 1.7; }
+.hrms-register-form { display: grid; gap: 14px; }
+.hrms-register-form label { display: grid; gap: 6px; color: #555a62; font-size: 13px; font-weight: 400; }
+.hrms-register-form .form-control { height: 44px; border: 1px solid #dfe1e5; border-radius: 8px; }
+.hrms-register-form .form-control[readonly] { background: #f5f6f7; color: #4e545d; }
+.hrms-register-form small { color: #858a92; line-height: 1.6; }
+.hrms-register-form .btn-primary { min-height: 46px; border: 0; border-radius: 8px; background: #25272b; }
+.hrms-register-form .btn-primary:hover { background: #41444a; }
+.hrms-register-status { min-height: 20px; color: #5d6470; font-size: 13px; }
+.hrms-register-status.is-error { color: #a33e3e; }
+.hrms-register-match { padding: 9px 11px; margin-top: -6px; border-radius: 8px; font-size: 13px; line-height: 1.5; }
+.hrms-register-match.is-matched { border: 1px solid #b7dbc4; background: #eff9f2; color: #2f6f46; }
+.hrms-register-match.is-error { border: 1px solid #e3bcbc; background: #fff4f4; color: #a33e3e; }
+.hrms-register-success { padding: 10px 12px; margin-bottom: 14px; border: 1px solid #b7dbc4; border-radius: 8px; background: #eff9f2; color: #2f6f46; font-size: 13px; }
+body.hrms-login-page .login-content.page-card.is-registering { padding-bottom: 32px; }
+body.hrms-login-page .login-content.page-card.is-registering :is(.for-login,.for-forgot,.for-signup,.for-email-login) { display: none !important; }
 @media (max-width: 480px) {
 	body.hrms-login-page .page-content-wrapper { padding: 28px 8px; }
 	body.hrms-login-page .login-content.page-card { padding: 24px 8px 48px; gap: 30px; }

@@ -79,6 +79,135 @@
 		});
 	}
 
+	function installReadOnlyRegistration(card) {
+		if (!card || card.querySelector(".hrms-register-entry")) return;
+		const entry = document.createElement("div");
+		entry.className = "hrms-register-entry";
+		entry.innerHTML = '<span>还没有账号？</span><button type="button" class="btn btn-link">注册账号</button>';
+		card.appendChild(entry);
+
+		const panel = document.createElement("section");
+		panel.className = "hrms-register-panel";
+		panel.hidden = true;
+		panel.innerHTML = `
+			<div class="hrms-register-heading"><strong>注册新账号</strong><span>本公司员工填写工号后会自动匹配花名册中的个人档案；管理员等非公司人员可不填。</span></div>
+			<form class="hrms-register-form">
+				<label>工号（选填）<input class="form-control" name="employee_code" autocomplete="off" maxlength="64" inputmode="numeric"></label>
+				<div class="hrms-register-match" data-register-match hidden></div>
+				<label>姓名（不填工号时必填）<input class="form-control" name="full_name" autocomplete="name" maxlength="140"></label>
+				<label>邮箱（登录账号）<input class="form-control" name="email" type="email" autocomplete="email" required></label>
+				<label>密码<input class="form-control" name="password" type="password" autocomplete="new-password" minlength="10" required></label>
+				<label>确认密码<input class="form-control" name="password_confirm" type="password" autocomplete="new-password" minlength="10" required></label>
+				<small>密码至少 10 位，并同时包含字母和数字。</small>
+				<div class="hrms-register-status" role="status" aria-live="polite"></div>
+				<button type="submit" class="btn btn-primary btn-block">创建账号</button>
+				<button type="button" class="btn btn-link btn-block" data-register-back>返回登录</button>
+			</form>`;
+		card.appendChild(panel);
+
+		const loginSections = Array.from(card.children).filter((child) =>
+			!child.matches(".hrms-login-brand, .hrms-register-entry, .hrms-register-panel"),
+		);
+		const setRegistrationVisible = (visible) => {
+			loginSections.forEach((section) => { section.hidden = visible; });
+			entry.hidden = visible;
+			panel.hidden = !visible;
+			card.classList.toggle("is-registering", visible);
+			if (visible) panel.querySelector("input")?.focus();
+		};
+		const form = panel.querySelector("form");
+		const employeeCode = form.elements.employee_code;
+		const fullName = form.elements.full_name;
+		const match = form.querySelector("[data-register-match]");
+		let lookupSequence = 0;
+		const resetEmployeeMatch = () => {
+			if (fullName.readOnly) fullName.value = "";
+			match.hidden = true;
+			match.textContent = "";
+			match.className = "hrms-register-match";
+			fullName.readOnly = false;
+			fullName.removeAttribute("aria-readonly");
+		};
+		const previewEmployee = async () => {
+			const code = employeeCode.value.trim();
+			const sequence = ++lookupSequence;
+			resetEmployeeMatch();
+			if (!code || !window.frappe?.call) return;
+			match.hidden = false;
+			match.textContent = "正在匹配花名册…";
+			try {
+				const response = await frappe.call("hrms.access_control.preview_registration_employee", {
+					employee_code: code,
+				});
+				if (sequence !== lookupSequence) return;
+				const profile = response.message || {};
+				if (!profile.matched) return resetEmployeeMatch();
+				fullName.value = profile.employee_name || "";
+				fullName.readOnly = true;
+				fullName.setAttribute("aria-readonly", "true");
+				match.textContent = [profile.employee_name, profile.department, profile.designation]
+					.filter(Boolean).join(" · ");
+				match.className = "hrms-register-match is-matched";
+			} catch (error) {
+				if (sequence !== lookupSequence) return;
+				match.textContent = error?.message || "未匹配到花名册资料，请核对工号。";
+				match.className = "hrms-register-match is-error";
+			}
+		};
+		entry.querySelector("button").addEventListener("click", () => setRegistrationVisible(true));
+		panel.querySelector("[data-register-back]").addEventListener("click", () => setRegistrationVisible(false));
+		employeeCode.addEventListener("change", previewEmployee);
+		employeeCode.addEventListener("input", () => { lookupSequence += 1; resetEmployeeMatch(); });
+		form.addEventListener("submit", async (event) => {
+			event.preventDefault();
+			const form = event.currentTarget;
+			const status = form.querySelector(".hrms-register-status");
+			const submit = form.querySelector("button[type='submit']");
+			const values = Object.fromEntries(new FormData(form).entries());
+			if (!values.employee_code.trim() && !values.full_name.trim()) {
+				status.textContent = "未填工号时，请填写姓名。";
+				status.className = "hrms-register-status is-error";
+				return;
+			}
+			if (values.password !== values.password_confirm) {
+				status.textContent = "两次输入的密码不一致。";
+				status.className = "hrms-register-status is-error";
+				return;
+			}
+			if (!window.frappe?.call) {
+				status.textContent = "注册服务尚未就绪，请刷新后重试。";
+				status.className = "hrms-register-status is-error";
+				return;
+			}
+			submit.disabled = true;
+			status.textContent = "正在创建账号…";
+			status.className = "hrms-register-status";
+			try {
+				await frappe.call("hrms.access_control.register_read_only_account", {
+					email: values.email,
+					full_name: values.full_name,
+					password: values.password,
+					employee_code: values.employee_code,
+				});
+				const username = document.getElementById("login_email");
+				if (username) username.value = values.email;
+				setRegistrationVisible(false);
+				const success = document.createElement("div");
+				success.className = "hrms-register-success";
+				success.textContent = values.employee_code.trim()
+					? "注册成功，已匹配花名册中的个人档案，请登录。"
+					: "注册成功。当前为基础只读账号，请登录。";
+				card.querySelector(".for-login")?.prepend(success);
+				document.getElementById("login_password")?.focus();
+			} catch (error) {
+				status.textContent = error?.message || "注册未完成，请检查输入或稍后重试。";
+				status.className = "hrms-register-status is-error";
+			} finally {
+				submit.disabled = false;
+			}
+		});
+	}
+
 	function customizeLoginPage() {
 		if (!isLoginPage()) return;
 
@@ -91,6 +220,7 @@
 			brand.className = "hrms-login-brand";
 			brand.innerHTML = '<img src="/assets/hrms/images/yongxin-brand-mark-red.png" alt="永新电子" width="40" height="40"><div><strong>人资管理系统</strong><span>永新电子（常熟）有限公司</span></div>';
 			card.prepend(brand);
+			installReadOnlyRegistration(card);
 		});
 		const heading = document.querySelector(".for-login .page-card-head h4");
 		const subtitle = document.querySelector(".for-login .page-card-subtitle");
@@ -141,6 +271,7 @@
 				else record.addedNodes.forEach(translateNode);
 			}
 		}).observe(document.body, { childList: true, characterData: true, subtree: true });
+		document.body.classList.add("hrms-login-ready");
 	}
 
 	if (document.readyState === "loading") {

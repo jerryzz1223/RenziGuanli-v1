@@ -865,19 +865,23 @@ def after_migrate():
 	from hrms.api.employee_field_template import ensure_employee_rehire_setup
 	from hrms.api.employee_field_template import ensure_employee_work_nature_setup
 	from hrms.api.dingtalk_integration import ensure_dingtalk_company_scope
+	from hrms.access_control import ensure_hrms_access_roles
 	from hrms.branding import apply_login_page_customizations
 	from hrms.hr.doctype.hrms_reward_punishment_rule.hrms_reward_punishment_rule import (
 		ensure_default_reward_punishment_rules,
 	)
 	from hrms.localize_zh import apply_hrms_zh_translations
+	from hrms.utils.employee_form_layout import ensure_employee_identity_number_in_basic_information
 
 	ensure_personnel_pages()
 	ensure_personnel_sidebar_links()
 	ensure_employee_rehire_setup()
 	ensure_employee_work_nature_setup()
+	ensure_employee_identity_number_in_basic_information()
 	ensure_yongxin_departments_roster_assignable()
 	hide_roster_department_tree_columns()
 	ensure_dingtalk_company_scope()
+	ensure_hrms_access_roles()
 	ensure_default_reward_punishment_rules(ignore_permissions=True)
 	apply_hrms_zh_translations()
 	apply_login_page_customizations()

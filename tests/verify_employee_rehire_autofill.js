@@ -10,13 +10,15 @@ const source = fs.readFileSync(
 const context = {
 	Promise,
 	console,
+	__: (value) => value,
 	window: {},
 	frappe: { ui: { form: { on() {} } } },
 };
 context.globalThis = context;
 vm.createContext(context);
 vm.runInContext(
-	`${source}\nglobalThis.applyEmployeeRehireAutofill = apply_employee_rehire_autofill;`,
+	`${source}\nglobalThis.applyEmployeeRehireAutofill = apply_employee_rehire_autofill;\n` +
+		"globalThis.setupEmployeeRehireFields = setup_employee_rehire_fields;",
 	context,
 );
 
@@ -44,6 +46,27 @@ async function run() {
 	assert.deepStrictEqual(JSON.parse(JSON.stringify(submitted)), { cell_number: "13800000000" });
 	assert.strictEqual(doc.first_name, "已填姓名", "Existing form values must not be overwritten.");
 	assert.strictEqual(doc.department, "新部门", "Current-employment values must stay unchanged.");
+
+	const properties = [];
+	const visibility = [];
+	const rehireForm = {
+		doc: { custom_previous_employee_code: "22002", custom_employee_code: "" },
+		fields_dict: { custom_previous_employee_code: {}, custom_employee_code: {} },
+		set_df_property(fieldname, property, value) {
+			properties.push([fieldname, property, value]);
+		},
+		toggle_display(fieldname, visible) {
+			visibility.push([fieldname, visible]);
+		},
+	};
+	context.setupEmployeeRehireFields(rehireForm);
+	assert.deepStrictEqual(JSON.parse(JSON.stringify(visibility)), [["custom_previous_employee_code", true]]);
+	assert(properties.some(([field, property, value]) =>
+		field === "custom_previous_employee_code" && property === "read_only" && value === 1));
+	assert(properties.some(([field, property, value]) =>
+		field === "custom_employee_code" && property === "label" && value === "新工号"));
+	assert(properties.some(([field, property, value]) =>
+		field === "custom_employee_code" && property === "reqd" && value === 1));
 	console.log("Employee rehire autofill only fills supported blank fields.");
 }
 

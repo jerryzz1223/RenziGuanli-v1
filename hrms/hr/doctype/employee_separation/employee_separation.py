@@ -4,12 +4,17 @@
 
 import frappe
 from frappe import _
+from frappe.model.document import Document
 from frappe.utils import getdate, now_datetime, nowdate
 
-from hrms.controllers.employee_boarding_controller import EmployeeBoardingController
+
+SEPARATION_REASONS_BY_TYPE = {
+	"主动离职": {"家庭原因", "个人原因", "发展原因", "合同到期不续签", "其他"},
+	"被动离职": {"协议解除", "无法胜任工作", "经济性裁员", "严重违法违纪", "其他"},
+}
 
 
-class EmployeeSeparation(EmployeeBoardingController):
+class EmployeeSeparation(Document):
 	# begin: auto-generated types
 	# This code is auto-generated. Do not modify anything in this block.
 
@@ -40,10 +45,45 @@ class EmployeeSeparation(EmployeeBoardingController):
 		notify_users_by_email: DF.Check
 		project: DF.Link | None
 		resignation_letter_date: DF.Date | None
+		separation_reason: (
+			DF.Literal[
+				"家庭原因",
+				"个人原因",
+				"发展原因",
+				"合同到期不续签",
+				"其他",
+				"协议解除",
+				"无法胜任工作",
+				"经济性裁员",
+				"严重违法违纪",
+			]
+			| None
+		)
+		separation_reason_type: DF.Literal["主动离职", "被动离职", "自定义"]
+		custom_separation_reason: DF.SmallText | None
+		separation_reason_detail: DF.SmallText | None
 	# end: auto-generated types
 
 	def validate(self):
 		self._sync_employee_business_identity()
+		self._validate_separation_reason()
+
+	def _validate_separation_reason(self):
+		self.separation_reason_detail = (self.separation_reason_detail or "").strip() or None
+		if self.separation_reason_type == "自定义":
+			self.separation_reason = None
+			self.custom_separation_reason = (self.custom_separation_reason or "").strip()
+			if not self.custom_separation_reason:
+				frappe.throw(_("选择“自定义”时，请填写自定义离职原因。"))
+			return
+
+		valid_reasons = SEPARATION_REASONS_BY_TYPE.get(self.separation_reason_type)
+		if not valid_reasons:
+			frappe.throw(_("请选择离职原因分类：主动离职、被动离职或自定义。"))
+
+		self.custom_separation_reason = None
+		if self.separation_reason not in valid_reasons:
+			frappe.throw(_("请选择与“{0}”对应的离职原因。").format(self.separation_reason_type))
 
 	def on_submit(self):
 		# Submission sends the application to the approval queue. It is not the
@@ -54,11 +94,8 @@ class EmployeeSeparation(EmployeeBoardingController):
 		pass
 
 	def on_cancel(self):
-		# 兼容历史离职单：旧流程创建过项目/任务时仍负责清理。
-		if self.project and frappe.db.exists("Project", self.project):
-			super().on_cancel()
-		else:
-			self.db_set("boarding_status", "Pending")
+		# 自定义离职流程不创建或清理 HRMS 原生项目、任务和活动。
+		self.db_set("boarding_status", "Pending")
 
 	def _sync_employee_business_identity(self):
 		if not self.employee:

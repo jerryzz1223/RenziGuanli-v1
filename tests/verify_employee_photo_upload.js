@@ -17,6 +17,12 @@ for (const marker of [
 	'allowed_file_types: [".jpg", ".jpeg", ".png", ".webp"]',
 	"update_employee_photo",
 	"员工照片已更新",
+	"头像历史记录",
+	"data-action=\"view-photo-history\"",
+	"data-action=\"view-material-history\"",
+	"show_upload_history(title, current_file, history_files)",
+	"当前使用",
+	"历史版本",
 	"render_material_attachments()",
 	"data-action=\"upload-material\"",
 	"upload_employee_material(material_type)",
@@ -39,6 +45,11 @@ for (const marker of [
 	assert(detail.includes(marker), `Employee photo upload UI is missing: ${marker}`);
 }
 
+assert(
+	!detail.includes('files.length ? files.map((file) => this.render_material_file(file)).join("")'),
+	"The material landing page must not expose every historical upload inline.",
+);
+
 for (const marker of [
 	"def update_employee_photo(employee: str, file_url: str):",
 	"doc.check_permission(\"write\")",
@@ -49,6 +60,10 @@ for (const marker of [
 	'file_doc.attached_to_field != "image"',
 	"doc.image = file_doc.file_url",
 	"EMPLOYEE_MATERIAL_GROUPS",
+	"def _get_employee_photo_history(doc):",
+	'"photo_history": _get_employee_photo_history(doc)',
+	'"current_file":',
+	'"history_files":',
 	"def _get_employee_materials(doc):",
 	"def upload_employee_material(employee: str, material_type: str, file_url: str):",
 	'file_doc.db_set("attached_to_field", material["fieldname"])',
@@ -64,7 +79,7 @@ for (const marker of [
 	"get_roster_employee_name_cell(cells, doc)",
 	"prepend_roster_employee_photo(employee_name_cell, doc.image, doc.employee_name)",
 	"create_roster_employee_photo(employee.image, employee.employee_name)",
-	"hrms-roster-identity-text",
+	"hrms-roster-employee-name-cell",
 	"align-items:center;display:flex;gap:8px;white-space:normal;",
 	'!row.classList.contains("list-row-head")',
 	'cell.dataset.fieldname === "name"',

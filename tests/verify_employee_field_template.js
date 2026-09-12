@@ -330,6 +330,21 @@ for (const marker of [
 	mustInclude(employeeForm, marker, `Employee native one-page display missing marker: ${marker}`);
 }
 
+for (const marker of [
+	"hide_employee_form_header_actions",
+	'$(frm.wrapper).addClass("hrms-employee-header-actions-clean")',
+	"frm.toolbar?.template_manager?.$btn?.addClass",
+]) {
+	mustInclude(employeeForm, marker, `Employee header cleanup missing marker: ${marker}`);
+}
+for (const marker of [
+	".page-container.hrms-employee-header-actions-clean #full-search-button",
+	".page-container.hrms-employee-header-actions-clean #small-search-button",
+	".page-container.hrms-employee-header-actions-clean .hrms-employee-form-action-hidden",
+]) {
+	mustInclude(employeeFormCss, marker, `Employee header cleanup CSS missing marker: ${marker}`);
+}
+
 mustInclude(
 	employeeFormCss,
 	"#employee-basic_details_tab",

@@ -8,7 +8,12 @@
 		const isEntry = ENTRY_PATHS.has(window.location.pathname.replace(/\/+$/, ""));
 		const wrapper = isEntry && document.querySelector(".desktop-wrapper");
 		// Enhance only the app already rendered by Frappe's permission-aware desktop.
-		const entry = wrapper && wrapper.querySelector('.desktop-container a.desktop-icon[data-id="人资管理系统"]');
+		const entry =
+			wrapper &&
+			wrapper.querySelector(
+				'.desktop-container a.desktop-icon[href="/desk/hrms-workbench"], ' +
+					'.desktop-container a.desktop-icon[data-id="人资管理系统"]',
+			);
 		document.body.classList.toggle("hrms-entry-page", Boolean(entry));
 		if (!entry) return;
 		wrapper.classList.add("hrms-entry");

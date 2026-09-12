@@ -3,12 +3,15 @@
 
 frappe.ui.form.on("Employee", {
 	onload_post_render: function (frm) {
+		hide_employee_form_header_actions(frm);
 		show_employee_form_as_one_page(frm);
 	},
 
 	refresh: function (frm) {
+		hide_employee_form_header_actions(frm);
 		remember_employee_list_return(frm);
 		setup_employee_form_defaults(frm);
+		setup_employee_rehire_fields(frm);
 		setup_employee_gender_field(frm);
 		setup_employee_work_nature_field(frm);
 		apply_employee_field_template(frm);
@@ -59,6 +62,13 @@ frappe.ui.form.on("Employee", {
 	},
 
 	before_save(frm) {
+		if (
+			frm.is_new() &&
+			!is_blank_employee_form_value(frm.doc.custom_previous_employee_code) &&
+			is_blank_employee_form_value(frm.doc.custom_employee_code)
+		) {
+			frappe.throw(__("请填写新工号。"));
+		}
 		prepare_employee_save_defaults(frm);
 	},
 
@@ -72,6 +82,11 @@ frappe.ui.form.on("Employee", {
 		return_to_employee_roster_after_insert(frm);
 	},
 });
+
+function hide_employee_form_header_actions(frm) {
+	$(frm.wrapper).addClass("hrms-employee-header-actions-clean");
+	frm.toolbar?.template_manager?.$btn?.addClass("hrms-employee-form-action-hidden");
+}
 
 window.hrmsEmployeeNavigation = window.hrmsEmployeeNavigation || {};
 window.hrmsEmployeeNavigation.openEmployeeFormForEdit = function (employee) {
@@ -126,11 +141,34 @@ function apply_employee_rehire_autofill(frm, values = {}) {
 	return Promise.resolve(frm.set_value(empty_values)).then(() => Object.keys(empty_values).length);
 }
 
+function setup_employee_rehire_fields(frm) {
+	const has_previous_code = !is_blank_employee_form_value(frm.doc.custom_previous_employee_code);
+	if (frm.fields_dict.custom_previous_employee_code) {
+		frm.set_df_property("custom_previous_employee_code", "read_only", 1);
+		frm.toggle_display("custom_previous_employee_code", has_previous_code);
+	}
+	if (frm.fields_dict.custom_employee_code) {
+		frm.set_df_property("custom_employee_code", "label", __(has_previous_code ? "新工号" : "工号"));
+		frm.set_df_property("custom_employee_code", "reqd", 1);
+	}
+}
+
+function clear_employee_rehire_context(frm) {
+	frm.__hrms_rehire_notice_identity = "";
+	if (!frm.fields_dict.custom_previous_employee_code || is_blank_employee_form_value(frm.doc.custom_previous_employee_code)) {
+		setup_employee_rehire_fields(frm);
+		return Promise.resolve();
+	}
+	return Promise.resolve(frm.set_value("custom_previous_employee_code", "")).then(() => {
+		setup_employee_rehire_fields(frm);
+	});
+}
+
 function load_employee_rehire_profile(frm) {
 	if (!frm.is_new()) return;
 	const identity_number = String(frm.doc.passport_number || "").trim();
 	if (!identity_number) {
-		frm.__hrms_rehire_notice_identity = "";
+		clear_employee_rehire_context(frm);
 		return;
 	}
 	if (frm.__hrms_rehire_notice_identity === identity_number) return;
@@ -141,8 +179,16 @@ function load_employee_rehire_profile(frm) {
 		args: { identity_number },
 	}).then(async (response) => {
 		if (frm.__hrms_rehire_notice_request_id !== request_id) return;
-		if (!response.message?.has_history || String(frm.doc.passport_number || "").trim() !== identity_number) return;
+		if (String(frm.doc.passport_number || "").trim() !== identity_number) return;
+		if (!response.message?.has_history) {
+			await clear_employee_rehire_context(frm);
+			return;
+		}
 		frm.__hrms_rehire_notice_identity = identity_number;
+		if (frm.fields_dict.custom_previous_employee_code) {
+			await frm.set_value("custom_previous_employee_code", response.message.previous_employee_code || "");
+		}
+		setup_employee_rehire_fields(frm);
 		const filled_count = await apply_employee_rehire_autofill(frm, response.message.autofill_values);
 		if (frm.__hrms_rehire_notice_request_id !== request_id) return;
 		frappe.msgprint({
@@ -305,6 +351,9 @@ function show_employee_form_as_one_page(frm) {
 		frm.toggle_display(fieldname, false);
 		frm.set_df_property(fieldname, "reqd", false);
 	}
+	// The asynchronous field template restores its configured "工号" label.
+	// Reapply the returnee-specific pair after every layout render.
+	setup_employee_rehire_fields(frm);
 	update_employee_age(frm);
 	// Apply this on every render, including while the template RPC is pending
 	// or unavailable, so the native form cannot expose departure fields on add.

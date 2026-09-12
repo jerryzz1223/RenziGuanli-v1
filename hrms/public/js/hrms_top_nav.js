@@ -16,6 +16,7 @@
 	const HR_SETTINGS_MANAGER_ROLES = ["HR Manager", "System Manager"];
 	const SYSTEM_ADMIN_ROLES = ["System Manager"];
 	const REDUNDANT_FRAMEWORK_CONTROL_SELECTOR = [
+		"#full-search-button",
 		"#navbar-search",
 		".navbar-search",
 		".navbar .search-form",
@@ -102,7 +103,7 @@
 			],
 		},
 		{
-			label: "部门",
+			label: "组织",
 			icon: "building",
 			route: "/desk/organizational-chart",
 			keys: ["department", "organizational-chart"],
@@ -584,9 +585,6 @@
 		const requiredRoles = {
 			settings: HR_SETTINGS_MANAGER_ROLES,
 			"user-permissions": SYSTEM_ADMIN_ROLES,
-			users: SYSTEM_ADMIN_ROLES,
-			roles: SYSTEM_ADMIN_ROLES,
-			"user-permission-list": SYSTEM_ADMIN_ROLES,
 			"developer-tools": SYSTEM_ADMIN_ROLES,
 		};
 		if (requiredRoles[action] && !hasAnyRole(requiredRoles[action])) {
@@ -611,18 +609,6 @@
 		}
 		if (action === "user-permissions") {
 			frappe.set_route("hrms-access-center");
-			return;
-		}
-		if (action === "users" && window.frappe?.set_route) {
-			frappe.set_route("List", "User");
-			return;
-		}
-		if (action === "roles" && window.frappe?.set_route) {
-			frappe.set_route("List", "Role");
-			return;
-		}
-		if (action === "user-permission-list" && window.frappe?.set_route) {
-			frappe.set_route("List", "User Permission");
 			return;
 		}
 		if (action === "developer-tools" && window.frappe?.set_route) {
@@ -842,10 +828,7 @@
 			{ label: "修改密码", action: "change-password" },
 			{ label: "设置中心", action: "settings", roles: HR_SETTINGS_MANAGER_ROLES },
 			{ label: "品牌外观", action: "branding", roles: SYSTEM_ADMIN_ROLES },
-			{ label: "用户与权限", action: "user-permissions", roles: SYSTEM_ADMIN_ROLES },
-			{ label: "用户管理", action: "users", roles: SYSTEM_ADMIN_ROLES },
-			{ label: "角色管理", action: "roles", roles: SYSTEM_ADMIN_ROLES },
-			{ label: "用户权限", action: "user-permission-list", roles: SYSTEM_ADMIN_ROLES },
+			{ label: "账户与权限", action: "user-permissions", roles: SYSTEM_ADMIN_ROLES },
 			{ label: "开发工具（开发环境）", action: "developer-tools", roles: SYSTEM_ADMIN_ROLES },
 			{ label: "数据处理中心", action: "data-operations", roles: SYSTEM_ADMIN_ROLES },
 			{ label: "退出登录", action: "logout", danger: true },

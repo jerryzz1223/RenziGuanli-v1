@@ -268,7 +268,7 @@ class CrossDepartmentSupportPage {
 		}
 		result.html(`
 			<table class="table table-bordered table-hover">
-				<thead><tr><th>${__("姓名 / 工号")}</th><th>${__("原部门 / 岗位")}</th><th>${__("可支援部门")}</th><th>${__("可支援岗位")}</th><th>${__("状态")}</th><th>${__("有效期")}</th><th>${__("备注")}</th></tr></thead>
+				<thead><tr><th>${__("姓名")}</th><th>${__("工号")}</th><th>${__("原部门 / 岗位")}</th><th>${__("可支援部门")}</th><th>${__("可支援岗位")}</th><th>${__("状态")}</th><th>${__("有效期")}</th><th>${__("备注")}</th></tr></thead>
 				<tbody>${this.rows.map((row) => this.render_row(row)).join("")}</tbody>
 			</table>
 			${this.render_pagination(count)}
@@ -289,7 +289,8 @@ class CrossDepartmentSupportPage {
 		const period = row.valid_from || row.valid_until ? `${escape(row.valid_from || __("不限"))} ~ ${escape(row.valid_until || __("不限"))}` : __("长期有效");
 		const indicator = row.availability === "可派" ? "green" : "gray";
 		return `<tr class="pointer" data-capability="${escape(row.name)}">
-			<td>${two_lines(row.employee_name, row.employee_code, true)}</td>
+			<td><strong>${escape(row.employee_name)}</strong></td>
+			<td>${escape(row.employee_code)}</td>
 			<td>${two_lines(row.source_department, row.source_designation)}</td>
 			<td>${escape(row.support_department)}</td><td>${escape(row.support_designation)}</td>
 			<td><span class="indicator-pill ${indicator}">${escape(row.availability)}</span><br><small class="text-muted">${escape(row.qualification_status)}</small></td>

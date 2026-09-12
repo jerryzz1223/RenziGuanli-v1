@@ -11,7 +11,9 @@ class Row(dict):
 
 class EmployeeMeta:
 	def has_field(self, fieldname):
-		return fieldname in {"passport_number", "custom_id_number", "custom_rehired_from_employee"}
+		return fieldname in {
+			"passport_number", "custom_id_number", "custom_rehired_from_employee", "custom_previous_employee_code"
+		}
 
 
 ROWS = [
@@ -66,6 +68,7 @@ employee = NewEmployee(passport_number="ID-001")
 previous = link_new_employee_to_previous_employment(employee)
 assert previous.name == "EMP-2022"
 assert employee["custom_rehired_from_employee"] == "EMP-2022"
+assert employee["custom_previous_employee_code"] == "22002"
 
 profile = NewEmployee(
 	first_name="张三",

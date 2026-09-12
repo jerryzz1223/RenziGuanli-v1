@@ -155,6 +155,10 @@ def _get_latest_separations(employee_names):
 			"docstatus",
 			"boarding_begins_on",
 			"boarding_status",
+			"separation_reason_type",
+			"separation_reason",
+			"custom_separation_reason",
+			"separation_reason_detail",
 			"exit_interview",
 			"modified",
 		)
@@ -201,10 +205,31 @@ def _build_record(employee, separation=None, department_names=None):
 			or (separation.get("boarding_begins_on") if separation else None),
 			"separation_name": separation.get("name") if separation else None,
 			"separation_status": separation.get("boarding_status") if separation else None,
+			"separation_reason_type": (
+				separation.get("separation_reason_type") if separation else ""
+			),
+			"separation_reason": separation.get("separation_reason") if separation else "",
+			"custom_separation_reason": (
+				separation.get("custom_separation_reason") if separation else ""
+			),
+			"separation_reason_display": _separation_reason_display(separation),
+			"separation_reason_detail": (
+				separation.get("separation_reason_detail") if separation else ""
+			),
 			"exit_interview": separation.get("exit_interview") if separation else None,
 			"modified": separation.get("modified") if separation else employee.get("modified"),
 		}
 	)
+
+
+def _separation_reason_display(separation):
+	if not separation:
+		return ""
+
+	reason_type = str(separation.get("separation_reason_type") or "").strip()
+	if reason_type == "自定义":
+		return str(separation.get("custom_separation_reason") or "").strip()
+	return str(separation.get("separation_reason") or "").strip()
 
 
 def _strip_department_company_suffix(value):
@@ -252,5 +277,8 @@ def _matches_search(row, needle):
 		row.employee_name,
 		row.department_display,
 		row.designation,
+		row.separation_reason_type,
+		row.separation_reason_display,
+		row.separation_reason_detail,
 	)
 	return any(needle in str(value or "").casefold() for value in values)

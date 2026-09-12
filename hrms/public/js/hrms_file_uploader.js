@@ -1,5 +1,5 @@
-// Keep every Desk upload dialog focused on the two sources used in HRMS:
-// the current device and the existing file library.
+// HRMS files are selected from the current device. Hide alternative sources
+// and uploader settings that are not part of the business import workflow.
 (function simplify_file_uploader() {
 	function install() {
 		const BaseFileUploader = window.frappe?.ui?.FileUploader;
@@ -7,7 +7,14 @@
 
 		class HRMSFileUploader extends BaseFileUploader {
 			constructor(options = {}) {
-				super({ ...options, allow_web_link: false, allow_take_photo: false });
+				super({
+					...options,
+					disable_file_browser: true,
+					allow_web_link: false,
+					allow_take_photo: false,
+					allow_google_drive: false,
+					allow_toggle_private: false,
+				});
 			}
 		}
 

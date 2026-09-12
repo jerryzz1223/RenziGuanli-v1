@@ -889,7 +889,7 @@ class HybridOrganizationChart {
 		const term = search.trim().toLowerCase();
 		const rows = all.filter(row => [row.employee_name, row.employee_code, row.designation].some(value => String(value || "").toLowerCase().includes(term)));
 		host.innerHTML = `<p class="text-muted">${detail.employee_match_mode === "missing_department" ? "花名册尚未填写部门，待补齐后分配" : detail.employee_match_mode === "department" ? "花名册部门归属" : "本岗位已分配人员"} · ${rows.length} / ${all.length} 人</p>
-			${rows.length ? `<table class="hrms-org-roster-table"><thead><tr><th>工号</th><th>姓名</th><th>花名册职位</th></tr></thead><tbody>${rows.map(person => `<tr data-roster-employee="${escape(person.name)}"><td>${escape(this.resolve_employee_code_value(person))}</td><td><button class="btn btn-link" data-action="open-employee" data-employee="${escape(person.name)}" data-employee-route="${escape(this.resolve_employee_route_value(person))}">${escape(person.employee_name || person.name)}</button></td><td>${escape(person.designation || "未设置")}</td></tr>`).join("")}</tbody></table>` : `<p class="text-muted">${term ? "没有匹配的人员" : "暂无人员"}</p>`}`;
+			${rows.length ? `<table class="hrms-org-roster-table"><thead><tr><th>姓名</th><th>工号</th><th>花名册职位</th></tr></thead><tbody>${rows.map(person => `<tr data-roster-employee="${escape(person.name)}"><td><button class="btn btn-link" data-action="open-employee" data-employee="${escape(person.name)}" data-employee-route="${escape(this.resolve_employee_route_value(person))}">${escape(person.employee_name || person.name)}</button></td><td>${escape(this.resolve_employee_code_value(person))}</td><td>${escape(person.designation || "未设置")}</td></tr>`).join("")}</tbody></table>` : `<p class="text-muted">${term ? "没有匹配的人员" : "暂无人员"}</p>`}`;
 	}
 
 	render_tree() {

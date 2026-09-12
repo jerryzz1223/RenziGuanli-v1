@@ -50,6 +50,14 @@ class EmployeeDetailPage {
 	}
 
 	set_breadcrumb() {
+		if (window.hrmsApplyContextualBreadcrumbs) {
+			const header = this.detail?.header || {};
+			const employee_label = [header.employee_code || header.custom_employee_code, header.employee_name]
+				.filter(Boolean)
+				.join(" · ");
+			window.hrmsApplyContextualBreadcrumbs(employee_label || __("员工档案"));
+			return;
+		}
 		const breadcrumbs = frappe.breadcrumbs;
 		if (!breadcrumbs?.add || !breadcrumbs?.append_breadcrumb_element) return;
 		breadcrumbs.add({
@@ -192,6 +200,7 @@ class EmployeeDetailPage {
 	render() {
 		const header = this.detail?.header || {};
 		this.set_page_title();
+		this.set_breadcrumb();
 		this.wrapper.innerHTML = `
 			${this.render_styles()}
 			<div class="hrms-employee-detail hrms-employee-detail-shell">
@@ -556,6 +565,37 @@ class EmployeeDetailPage {
 					color: var(--hrms-muted);
 					line-height: 1.6;
 				}
+				.hrms-employee-upload-history-summary {
+					display: flex;
+					align-items: center;
+					justify-content: space-between;
+					gap: 16px;
+					padding: 14px 16px;
+					margin-bottom: 16px;
+					border: 1px solid #dfe7ef;
+					border-radius: 8px;
+					background: #fff;
+				}
+				.hrms-employee-upload-history-summary__copy { display: grid; gap: 3px; }
+				.hrms-employee-upload-history-summary__copy strong { color: #26323f; }
+				.hrms-employee-material-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+				.hrms-employee-upload-history-dialog .modal-dialog { width: min(860px, calc(100vw - 48px)); max-width: none; }
+				.hrms-employee-upload-history-list { display: grid; gap: 10px; max-height: 65vh; overflow: auto; }
+				.hrms-employee-upload-history-item {
+					display: grid;
+					grid-template-columns: 72px minmax(0, 1fr) auto;
+					align-items: center;
+					gap: 12px;
+					padding: 10px;
+					border: 1px solid #e5eaf0;
+					border-radius: 8px;
+				}
+				.hrms-employee-upload-history-item__preview { width: 72px; height: 56px; border: 0; padding: 0; border-radius: 6px; overflow: hidden; background: #f4f6f8; }
+				.hrms-employee-upload-history-item__preview img { width: 100%; height: 100%; object-fit: cover; }
+				.hrms-employee-upload-history-item__meta { display: grid; gap: 3px; min-width: 0; }
+				.hrms-employee-upload-history-item__meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+				.hrms-employee-upload-history-item__status { color: #667085; white-space: nowrap; }
+				.hrms-employee-upload-history-item__status.is-current { color: #12a77a; font-weight: 600; }
 				.hrms-employee-material-groups {
 					display: grid;
 					gap: 14px;
@@ -670,7 +710,12 @@ class EmployeeDetailPage {
 				.hrms-employee-material-preview__canvas img { cursor: zoom-in; }
 				.hrms-employee-material-preview__canvas img.is-zoomed { max-width: none; max-height: none; cursor: zoom-out; }
 				@media (max-width: 767px) {
+					.hrms-employee-upload-history-summary { align-items: stretch; flex-direction: column; }
+					.hrms-employee-upload-history-item { grid-template-columns: 56px minmax(0, 1fr); }
+					.hrms-employee-upload-history-item__preview { width: 56px; height: 48px; }
+					.hrms-employee-upload-history-item__status { grid-column: 2; }
 					.hrms-employee-material-type { grid-template-columns: 1fr; gap: 8px; }
+					.hrms-employee-material-actions { justify-content: flex-start; flex-wrap: wrap; }
 				}
 				.hrms-employee-detail-collapse-row {
 					min-height: 46px;
@@ -813,7 +858,7 @@ class EmployeeDetailPage {
 		const meta = [
 			this.get_employment_type_display(header),
 			header.custom_employee_code ? `${__("工号")}：${header.custom_employee_code}` : "",
-			header.cell_number,
+			this.format_employee_field_value("cell_number", header.cell_number),
 		].filter(Boolean);
 		return `
 			<div class="hrms-employee-detail-card-panel hrms-employee-detail-header hrms-employee-detail-profile-card">
@@ -907,7 +952,7 @@ class EmployeeDetailPage {
 							<h3>${__("员工概况")}</h3>
 						</div>
 						<div class="hrms-employee-detail-summary-line">
-							<span>${__("概况")}：${frappe.utils.escape_html(this.join_values([header.gender, header.age, department_display, header.designation]))}</span>
+							<span>${__("概况")}：${frappe.utils.escape_html(this.join_values([this.format_employee_field_value("gender", header.gender), header.age, department_display, header.designation]))}</span>
 							<span>${__("司龄")}：${frappe.utils.escape_html(header.service_years || this.calculate_service_years(header.date_of_joining))}</span>
 						</div>
 						<div class="hrms-employee-detail-kpi-grid">
@@ -1065,7 +1110,7 @@ class EmployeeDetailPage {
 	render_readonly_field(field) {
 		const value = field.fieldname === "custom_work_nature"
 			? this.get_employment_type_display({ ...this.detail?.header, custom_work_nature: field.value })
-			: field.value;
+			: this.format_employee_field_value(field.fieldname, field.value);
 		return `
 			<div class="hrms-employee-detail-field">
 				<span>${frappe.utils.escape_html(field.field_label || field.fieldname)}</span>
@@ -1085,9 +1130,24 @@ class EmployeeDetailPage {
 					</div>
 				</div>
 				<div class="hrms-employee-material-intro">${__("每份材料都会归档到当前员工名下。可从设备选择文件，也可直接调用摄像头拍照；支持 JPG、PNG、WebP 和 PDF。")}</div>
+				${this.render_photo_history_summary()}
 				<div class="hrms-employee-material-groups">
 					${groups.map((group) => this.render_material_group(group)).join("")}
 				</div>
+			</div>
+		`;
+	}
+
+	render_photo_history_summary() {
+		const photo_history = this.detail?.photo_history || {};
+		const history_count = (photo_history.history_files || []).length;
+		return `
+			<div class="hrms-employee-upload-history-summary">
+				<div class="hrms-employee-upload-history-summary__copy">
+					<strong>${__("头像历史记录")}</strong>
+					<span class="text-muted">${__("花名册和员工档案主页只显示当前头像，过往上传保留在此。")}</span>
+				</div>
+				<button class="btn btn-default btn-sm" data-action="view-photo-history">${__("查看历史（{0}）", [history_count])}</button>
 			</div>
 		`;
 	}
@@ -1107,14 +1167,18 @@ class EmployeeDetailPage {
 	}
 
 	render_material_type(material) {
-		const files = material.files || [];
+		const current_file = material.current_file || (material.files || [])[0];
+		const history_files = material.history_files || (material.files || []).slice(1);
 		return `
 			<div class="hrms-employee-material-type">
 				<div class="hrms-employee-material-type__name">${frappe.utils.escape_html(__(material.label))}</div>
 				<div class="hrms-employee-material-files">
-					${files.length ? files.map((file) => this.render_material_file(file)).join("") : `<span class="text-muted">${__("未上传")}</span>`}
+					${current_file ? this.render_material_file(current_file) : `<span class="text-muted">${__("未上传")}</span>`}
 				</div>
-				${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-xs" data-action="upload-material" data-material-type="${frappe.utils.escape_html(material.key)}">${__("拍照/上传")}</button>` : ""}
+				<div class="hrms-employee-material-actions">
+					<button class="btn btn-default btn-xs" data-action="view-material-history" data-material-type="${frappe.utils.escape_html(material.key)}">${__("历史记录（{0}）", [history_files.length])}</button>
+					${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-xs" data-action="upload-material" data-material-type="${frappe.utils.escape_html(material.key)}">${__("拍照/上传")}</button>` : ""}
+				</div>
 			</div>
 		`;
 	}
@@ -1321,6 +1385,21 @@ class EmployeeDetailPage {
 				this.upload_employee_material(button.dataset.materialType);
 			});
 		});
+		this.wrapper.querySelectorAll("[data-action='view-photo-history']").forEach((button) => {
+			button.addEventListener("click", (event) => {
+				event.preventDefault();
+				const history = this.detail?.photo_history || {};
+				this.show_upload_history(__("头像历史记录"), history.current_file, history.history_files || []);
+			});
+		});
+		this.wrapper.querySelectorAll("[data-action='view-material-history']").forEach((button) => {
+			button.addEventListener("click", (event) => {
+				event.preventDefault();
+				const material = this.find_material_type(button.dataset.materialType);
+				if (!material) return;
+				this.show_upload_history(__("{0}·历史记录", [__(material.label)]), material.current_file, material.history_files || []);
+			});
+		});
 		this.wrapper.querySelectorAll("[data-action='preview-material-image']").forEach((button) => {
 			button.addEventListener("click", (event) => {
 				event.preventDefault();
@@ -1360,13 +1439,9 @@ class EmployeeDetailPage {
 			});
 		});
 		this.wrapper.querySelectorAll("[data-action='separation']").forEach((button) => {
-			button.addEventListener("click", () => {
-				const header = this.detail?.header || {};
-				frappe.new_doc("Employee Separation", {
-					employee: this.employee,
-					employee_code_display: header.custom_employee_code || "",
-					employee_name: header.employee_name || "",
-				});
+			button.addEventListener("click", (event) => {
+				event.preventDefault();
+				this.open_separation_reason_picker();
 			});
 		});
 		this.wrapper.querySelectorAll("[data-action='contract']").forEach((button) => {
@@ -1382,6 +1457,103 @@ class EmployeeDetailPage {
 		if (compare_button) {
 			compare_button.addEventListener("click", () => frappe.show_alert(__("员工对比功能将在后续阶段接入")));
 		}
+	}
+
+	open_separation_reason_picker() {
+		const reason_groups = [
+			{
+				type: "主动离职",
+				label: __("主动原因"),
+				reasons: ["家庭原因", "个人原因", "发展原因", "合同到期不续签", "其他"],
+			},
+			{
+				type: "被动离职",
+				label: __("被动原因"),
+				reasons: ["协议解除", "无法胜任工作", "经济性裁员", "严重违法违纪", "其他"],
+			},
+		];
+		const escape = frappe.utils.escape_html;
+		const group_html = reason_groups
+			.map(
+				(group) => `
+					<section class="hrms-separation-reason-group">
+						<div class="hrms-separation-reason-group__title">${escape(group.label)}</div>
+						<div class="hrms-separation-reason-options">
+							${group.reasons
+								.map(
+									(reason) => `<label class="hrms-separation-reason-option"><input type="radio" name="hrms-separation-reason" data-reason-type="${escape(group.type)}" value="${escape(reason)}"><span>${escape(__(reason))}</span></label>`,
+								)
+								.join("")}
+						</div>
+					</section>`,
+			)
+			.join("");
+		const picker_html = `
+			<style>
+				.hrms-separation-reason-picker { border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+				.hrms-separation-reason-group { margin: 0; padding: 0 16px 14px; }
+				.hrms-separation-reason-group + .hrms-separation-reason-group { border-top: 1px solid #eef0f2; }
+				.hrms-separation-reason-group__title { margin: 0 -16px 12px; padding: 10px 16px; background: #f7f7f8; color: #1f2937; font-weight: 600; }
+				.hrms-separation-reason-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 22px; }
+				.hrms-separation-reason-option { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 400; cursor: pointer; }
+				.hrms-separation-reason-option input { margin: 0; }
+				.hrms-separation-custom { padding: 14px 16px 16px; border-top: 1px solid #eef0f2; }
+				.hrms-separation-custom textarea { display: none; margin-top: 10px; resize: vertical; }
+				.hrms-separation-custom.is-selected textarea { display: block; }
+				.hrms-separation-detail { padding: 14px 16px 16px; border-top: 1px solid #eef0f2; }
+				.hrms-separation-detail label { display: block; margin-bottom: 8px; color: #374151; font-weight: 600; }
+				.hrms-separation-detail textarea { resize: vertical; }
+				@media (max-width: 575px) { .hrms-separation-reason-options { grid-template-columns: 1fr; } }
+			</style>
+			<div class="hrms-separation-reason-picker">
+				${group_html}
+				<section class="hrms-separation-custom">
+					<label class="hrms-separation-reason-option"><input type="radio" name="hrms-separation-reason" data-reason-type="自定义" value="自定义"><span>${escape(__("自定义离职原因"))}</span></label>
+					<textarea class="form-control hrms-separation-custom-reason" rows="3" maxlength="500" placeholder="${escape(__("请输入具体离职原因"))}"></textarea>
+				</section>
+				<section class="hrms-separation-detail">
+					<label for="hrms-separation-reason-detail">${escape(__("详细原因（选填）"))}</label>
+					<textarea id="hrms-separation-reason-detail" class="form-control hrms-separation-reason-detail" rows="3" maxlength="1000" placeholder="${escape(__("可补充离职背景、具体情况等，不填写也可以"))}"></textarea>
+				</section>
+			</div>`;
+
+		const dialog = new frappe.ui.Dialog({
+			title: __("选择离职原因"),
+			fields: [{ fieldtype: "HTML", fieldname: "separation_reason_picker", options: picker_html }],
+			primary_action_label: __("确定"),
+			primary_action: () => {
+				const selected = dialog.$wrapper.find('input[name="hrms-separation-reason"]:checked');
+				if (!selected.length) {
+					frappe.msgprint(__("请选择离职原因。"));
+					return;
+				}
+				const reason_type = selected.attr("data-reason-type");
+				const custom_reason = String(dialog.$wrapper.find(".hrms-separation-custom-reason").val() || "").trim();
+				const reason_detail = String(dialog.$wrapper.find(".hrms-separation-reason-detail").val() || "").trim();
+				if (reason_type === "自定义" && !custom_reason) {
+					frappe.msgprint(__("请输入自定义离职原因。"));
+					return;
+				}
+
+				const header = this.detail?.header || {};
+				dialog.hide();
+				frappe.new_doc("Employee Separation", {
+					employee: this.employee,
+					employee_code_display: header.custom_employee_code || "",
+					employee_name: header.employee_name || "",
+					separation_reason_type: reason_type,
+					separation_reason: reason_type === "自定义" ? "" : selected.val(),
+					custom_separation_reason: reason_type === "自定义" ? custom_reason : "",
+					separation_reason_detail: reason_detail,
+				});
+			},
+		});
+		dialog.show();
+		dialog.$wrapper.find('input[name="hrms-separation-reason"]').on("change", (event) => {
+			const custom_selected = event.currentTarget.dataset.reasonType === "自定义";
+			dialog.$wrapper.find(".hrms-separation-custom").toggleClass("is-selected", custom_selected);
+			if (custom_selected) dialog.$wrapper.find(".hrms-separation-custom-reason").trigger("focus");
+		});
 	}
 
 	has_text_selection(container) {
@@ -1420,11 +1592,53 @@ class EmployeeDetailPage {
 					.then((response) => {
 						const image = response.message?.image || file.file_url;
 						if (this.detail?.header) this.detail.header.image = image;
+						if (this.detail) this.detail.photo_history = response.message?.photo_history || this.detail.photo_history;
 						this.render();
 						frappe.show_alert({ message: __("员工照片已更新"), indicator: "green" });
 					});
 			},
 		});
+	}
+
+	find_material_type(material_type) {
+		for (const group of this.detail?.materials || []) {
+			const material = (group.types || []).find((row) => row.key === material_type);
+			if (material) return material;
+		}
+		return null;
+	}
+
+	show_upload_history(title, current_file, history_files) {
+		const files = [
+			...(current_file ? [{ ...current_file, is_current: true }] : []),
+			...(history_files || []).map((file) => ({ ...file, is_current: false })),
+		];
+		const rows = files.length
+			? files.map((file) => this.render_upload_history_file(file)).join("")
+			: `<div class="text-muted">${__("暂无上传记录")}</div>`;
+		const dialog = new frappe.ui.Dialog({
+			title,
+			fields: [{ fieldtype: "HTML", fieldname: "upload_history", options: `<div class="hrms-employee-upload-history-list">${rows}</div>` }],
+			primary_action_label: __("关闭"),
+			primary_action: () => dialog.hide(),
+		});
+		dialog.show();
+		dialog.$wrapper.addClass("hrms-employee-upload-history-dialog");
+		dialog.$wrapper.find("[data-action='preview-history-image']").on("click", (event) => {
+			const button = event.currentTarget;
+			this.preview_employee_material_image(button.dataset.fileUrl, button.dataset.fileName);
+		});
+	}
+
+	render_upload_history_file(file) {
+		const name = frappe.utils.escape_html(file.file_name || __("未命名文件"));
+		const url = frappe.utils.escape_html(file.file_url || "");
+		const image = /\.(?:jpe?g|png|webp)(?:\?.*)?$/i.test(file.file_url || "");
+		const preview = image
+			? `<button class="hrms-employee-upload-history-item__preview" type="button" data-action="preview-history-image" data-file-url="${url}" data-file-name="${name}"><img src="${url}" alt=""></button>`
+			: `<a class="hrms-employee-upload-history-item__preview hrms-employee-material-file__placeholder" href="${url}" target="_blank" rel="noopener">PDF</a>`;
+		const timestamp = frappe.datetime.str_to_user(file.creation || file.modified || "");
+		return `<div class="hrms-employee-upload-history-item">${preview}<div class="hrms-employee-upload-history-item__meta"><strong title="${name}">${name}</strong><span class="text-muted">${frappe.utils.escape_html(timestamp || "-")}</span></div><span class="hrms-employee-upload-history-item__status${file.is_current ? " is-current" : ""}">${file.is_current ? __("当前使用") : __("历史版本")}</span></div>`;
 	}
 
 	upload_employee_material(material_type) {
@@ -1528,6 +1742,22 @@ class EmployeeDetailPage {
 			return "";
 		}
 		return String(value);
+	}
+
+	format_employee_field_value(fieldname, value) {
+		if (value === null || value === undefined || value === "") return "";
+		if (fieldname === "gender") {
+			const gender_labels = {
+				Male: "男",
+				Female: "女",
+				Other: "其他",
+			};
+			return gender_labels[String(value)] || value;
+		}
+		if (["cell_number", "emergency_phone_number"].includes(fieldname)) {
+			return String(value).replace(/^\+86[\s-]?/, "");
+		}
+		return value;
 	}
 
 	get_department_display(header) {

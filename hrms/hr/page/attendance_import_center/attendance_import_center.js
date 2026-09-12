@@ -1048,7 +1048,7 @@ class AttendanceImportCenter {
 
 	attendance_draft_columns() {
 		return [
-			["department", "部门"], ["employee_name", "姓名"], ["employee_code", "工号"], ["standard_hours", "标准工时"],
+			["employee_name", "姓名"], ["employee_code", "工号"], ["department", "部门"], ["standard_hours", "标准工时"],
 			["actual_attendance_hours", "实际出勤"], ["workday_overtime_hours", "工作日加班"], ["restday_overtime_hours", "休息日加班"],
 			["holiday_overtime_hours", "节假日加班"], ["large_night_shifts", "大夜班"], ["small_night_shifts", "小夜班"],
 			["personal_leave_hours", "事假"], ["sick_leave_hours", "病假"], ["annual_leave_hours", "特休"], ["work_injury_hours", "工伤"],
@@ -1115,23 +1115,23 @@ class AttendanceImportCenter {
 
 	apple_tree_columns() {
 		return [
-			["创建时间", "创建时间"], ["奖惩日期", "奖/惩日期"], ["部门", "受奖/惩人部门"], ["姓名", "受奖/惩人"],
+			["创建时间", "创建时间"], ["奖惩日期", "奖/惩日期"], ["姓名", "姓名"], ["工号", "工号"], ["部门", "受奖/惩人部门"],
 			["绿苹果", "绿苹果"], ["红苹果", "红苹果"], ["项目", "奖/惩项目"], ["备注", "备注"], ["创建人", "创建人"],
-			["工号", "工号"], ["审批编号", "审批编号"],
+			["审批编号", "审批编号"],
 			["审批结果", "审批结果"], ["审批状态", "审批状态"],
 		];
 	}
 
 	missed_punch_columns() {
 		return [
-			["employee_code", "工号"], ["employee_name", "姓名"], ["department", "部门"], ["created_at", "创建时间"],
+			["employee_name", "姓名"], ["employee_code", "工号"], ["department", "部门"], ["created_at", "创建时间"],
 			["punch_time", "补卡时间"], ["punch_type", "补卡类型"], ["reason", "补卡理由"], ["approval_result", "审批结果"],
 			["approval_status", "审批状态"], ["included", "是否计入"], ["red_apples", "红苹果"], ["amount", "红苹果金额"],
 		];
 	}
 
 	monthly_support_columns(sourceType) {
-		const shared = [["department", "部门"], ["employee_name", "姓名"], ["employee_code", "工号"]];
+		const shared = [["employee_name", "姓名"], ["employee_code", "工号"], ["department", "部门"]];
 		if (sourceType === "housing_allowance") return shared.concat([["housing_allowance", "住房补贴"]]);
 		if (sourceType === "full_attendance") return shared.concat([["full_attendance_award", "全勤奖"]]);
 		return shared.concat([["special_hours", "特殊工时"], ["special_hours_days", "按日明细"]]);
@@ -1209,7 +1209,7 @@ class AttendanceImportCenter {
 					? ["序号"].concat(this.missed_punch_columns().map(([, label]) => label), ["异常", "处理状态", "来源追溯", "操作"])
 					: isMonthlySupport
 						? ["序号"].concat(supportColumns.map(([, label]) => label), ["导入校验", "导入状态", "来源追溯", "操作"])
-						: ["工号", "姓名", "部门", "加工结果", "异常", "处理状态", "来源追溯", "操作"];
+						: ["姓名", "工号", "部门", "加工结果", "异常", "处理状态", "来源追溯", "操作"];
 		const renderRow = isAttendanceDraft
 			? (row, index) => this.render_attendance_draft_result_row(row, index)
 			: isAppleTree
@@ -1304,7 +1304,7 @@ class AttendanceImportCenter {
 		const resultText = this.format_processing_value(resultValue);
 		const exceptionLabels = row.exception_codes?.length ? this.exception_label_text(row) : "--";
 		const trace = this.result_trace(row);
-		return `<tr><td>${this.escape(row.employee_code || row.employee_id || "--")}</td><td>${this.escape(row.employee_name || "--")}</td><td>${this.escape(row.department || "--")}</td><td class="hrms-attendance-long-cell">${this.escape(resultText)}</td><td><strong>${this.escape(exceptionLabels)}</strong><br><small>${this.escape(row.exception_message || "")}</small></td><td>${this.review_status_badge(row.review_status || "待审核")}</td><td class="hrms-attendance-trace" title="${this.escape(trace)}">${this.escape(trace)}</td><td><button class="btn btn-default btn-xs" data-edit-processing-record="${this.escape(row.record_id)}" data-edit-processing-source="${this.escape(this.selected_source_type)}">${this.escape(this.processing_record_action_label(row))}</button></td></tr>`;
+		return `<tr><td>${this.escape(row.employee_name || "--")}</td><td>${this.escape(row.employee_code || row.employee_id || "--")}</td><td>${this.escape(row.department || "--")}</td><td class="hrms-attendance-long-cell">${this.escape(resultText)}</td><td><strong>${this.escape(exceptionLabels)}</strong><br><small>${this.escape(row.exception_message || "")}</small></td><td>${this.review_status_badge(row.review_status || "待审核")}</td><td class="hrms-attendance-trace" title="${this.escape(trace)}">${this.escape(trace)}</td><td><button class="btn btn-default btn-xs" data-edit-processing-record="${this.escape(row.record_id)}" data-edit-processing-source="${this.escape(this.selected_source_type)}">${this.escape(this.processing_record_action_label(row))}</button></td></tr>`;
 	}
 
 	bind_processing_result_events() {

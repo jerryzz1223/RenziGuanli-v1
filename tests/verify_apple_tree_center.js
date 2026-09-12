@@ -16,11 +16,11 @@ if (page.name !== "apple-tree-center" || page.title !== "苹果树统计") {
 	throw new Error("Apple-tree statistics must be a dedicated HRMS page.");
 }
 
-for (const marker of ["_summarize_records", "HRMS Monthly Attendance Summary", "list_monthly_attendance_summary", "get_employee_summary", "employee_doc.check_permission", "employee_code", "person_key", "green_apples", "red_apples", "net_apples", "attendance_month", "月度考勤终稿", "year: str", "month: str", "search: str", "company: str"]) {
+for (const marker of ["_summarize_records", "HRMS Monthly Attendance Summary", "list_monthly_attendance_summary", "HRMS Apple Tree History Summary", "apple_tree_history", "preview_history_import", "import_history", "download_history_import_template", "_build_history_import_template", "受奖/惩人工号", "_history_sheet_rows", "get_employee_summary", "employee_doc.check_permission", "employee_code", "person_key", "green_apples", "red_apples", "net_apples", "attendance_month", "月度考勤终稿", "year: str", "month: str", "search: str", "company: str", "start_date: str", "end_date: str", "_parse_custom_date_range"]) {
 	if (!server.includes(marker)) throw new Error(`Apple-tree statistics server contract is missing: ${marker}`);
 }
 
-for (const marker of ["统计年份", "统计期间", "个人季度汇总", "个人年度汇总", "每月明细", "苹果树明细", "monthly-detail", "data-employee-detail", "data-apple-table-sort", "data-apple-table-filter", "data-apple-table-page", "查看明细", "tablePager"]) {
+for (const marker of ["统计年份", "统计期间", "开始日期", "结束日期", "按日期查询", "data-apple-start-date", "data-apple-end-date", "data-apple-date-apply", "个人季度汇总", "个人年度汇总", "每月明细", "苹果树明细", "monthly-detail", "data-employee-detail", "data-apple-table-sort", "data-apple-table-filter", "data-apple-table-page", "data-apple-history-import", "历史数据导入", "openHistoryImport", "preview_history_import", "import_history", "download_history_import_template", "下载填写模板", "受奖/惩人工号", "disable_file_browser: true", "allow_web_link: false", "allow_take_photo: false", "allow_toggle_private: false", "查看明细", "tablePager"]) {
 	if (!script.includes(marker)) throw new Error(`Apple-tree statistics screen is missing: ${marker}`);
 }
 
@@ -32,11 +32,15 @@ for (const marker of ["personnel-home__apple-tree", "查看苹果树", '["apple-
 	if (!personnelHome.includes(marker)) throw new Error(`Personnel home is missing Apple-tree jump: ${marker}`);
 }
 
-for (const marker of ['label: "苹果树统计"', 'keys: ["apple-tree-center"]', 'label: "个人年度汇总"', 'label: "每月明细"', 'route: "/desk/apple-tree-center/monthly-detail"', 'route[0] === "apple-tree-center"']) {
+for (const marker of ['label: "苹果树统计"', 'keys: ["apple-tree-center"]', 'active_slugs: ["apple-tree-center/annual-summary", "apple-tree-center/monthly-detail", "apple-tree-center/person"]', 'route[0] === "apple-tree-center"']) {
 	if (!sidebarShell.includes(marker)) throw new Error(`Apple-tree statistics must have its own contextual drawer: ${marker}`);
 }
+const appleTreeSidebar = sidebarShell.match(/label: "苹果树统计",[\s\S]*?\n\t\t},\n\t\t\{/);
+if (!appleTreeSidebar || (appleTreeSidebar[0].match(/type: "link"/g) || []).length !== 1) {
+	throw new Error("Apple-tree statistics drawer must keep one entry and use in-page view tabs.");
+}
 
-if (!hooks.includes("/assets/hrms/js/hrms_home_redirect_v6.js?v=20260907c")) {
+if (!hooks.includes("/assets/hrms/js/hrms_home_redirect_v6.js?v=")) {
 	throw new Error("The sidebar route correction must have a fresh JavaScript cache version.");
 }
 
@@ -73,6 +77,27 @@ assert.match(center.detailValue(null, true), /—/);
 assert.equal(center.detailValue(0, true), "0");
 console.log("Employee route, name link, return state and missing-value checks passed.");
 
+center.data = {
+	records: [
+		{ attendance_month: "2026-07", department: "连续课", employee_name: "员工甲", employee_code: "001", green_apples: 8, red_apples: 1, reward_amount: 0, reward_item: "月度考勤终稿", approval_result: "已确认", approval_status: "已锁定" },
+		{ reward_date: "2026-06-18", department: "品管课", employee_name: "员工乙", employee_code: "010", green_apples: 2, red_apples: 4, reward_amount: -10, reward_item: "手工补录" },
+	],
+};
+center.table = { page: 1, pageSize: 20, sortKey: "net_apples", sortOrder: "desc", filters: {} };
+assert.deepEqual(Array.from(center.monthlyDetailRows(), row => row.employee_code), ["001", "010"]);
+center.table.sortOrder = "asc";
+assert.deepEqual(Array.from(center.monthlyDetailRows(), row => row.employee_code), ["010", "001"]);
+center.table.filters = { attendance_month: "2026-06", reward_item: "手工", final_status: "未提供" };
+assert.deepEqual(Array.from(center.monthlyDetailRows(), row => row.employee_code), ["010"]);
+const monthlyTable = center.monthlyDetailTable();
+assert.match(monthlyTable, /apple-tree-center__monthly-table/);
+assert.equal((monthlyTable.match(/data-apple-table-sort=/g) || []).length, 10);
+assert.equal((monthlyTable.match(/data-apple-table-filter=/g) || []).length, 10);
+assert.match(monthlyTable, />-2<\/td>/);
+center.table.filters.department = "不存在的部门";
+assert.match(center.monthlyDetailTable(), /没有符合列筛选条件的明细记录/);
+console.log("Monthly-detail column filtering and numeric sorting passed.");
+
 center.year = "2026";
 center.personData = {
 	person: { employee_code: "001", employee_name: "员工甲" },
@@ -105,4 +130,14 @@ const sortedGrid = center.personGrid(cols);
 assert.match(sortedGrid, /aria-sort="descending"/);
 assert.ok(sortedGrid.indexOf("<tfoot>") > sortedGrid.indexOf("</tbody>"));
 assert.doesNotMatch(sortedGrid, /data-person-filter/);
-console.log("Twelve-month grid, numeric sorting, empty values and fixed totals passed.");
+const frozenGrid = center.personGrid([
+	{ field: "attendance_month", label: "月份" },
+	{ field: "department", label: "部门" },
+	{ field: "employee_name", label: "姓名" },
+	{ field: "employee_code", label: "工号" },
+	{ field: "green_apples", label: "绿苹果", numeric: true },
+]);
+for (const marker of ["is-frozen is-month", "is-frozen is-department", "is-frozen is-employee-name", "is-frozen is-employee-code"]) {
+	assert.match(frozenGrid, new RegExp(marker), `Personal detail must freeze identity column: ${marker}`);
+}
+console.log("Twelve-month grid, numeric sorting, four frozen identity columns and fixed totals passed.");

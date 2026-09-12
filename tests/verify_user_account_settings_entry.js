@@ -45,13 +45,11 @@ for (const marker of [
 	"hrms.api.get_current_user_info",
 	"个人资料",
 	"修改密码",
-	"用户与权限",
+	"账户与权限",
 	"设置中心",
 	"退出登录",
 	"frappe.set_route(\"Form\", \"User\"",
-	"frappe.set_route(\"List\", \"User\")",
-	"frappe.set_route(\"List\", \"Role\")",
-	"frappe.set_route(\"List\", \"User Permission\")",
+	"frappe.set_route(\"hrms-access-center\")",
 	"frappe.app.logout",
 ]) {
 	mustInclude(topNav, marker, `Top account menu must implement ${marker}`);
@@ -67,18 +65,21 @@ for (const marker of [
 	mustInclude(topNavCss, marker, `Account menu CSS is missing ${marker}`);
 }
 
-for (const marker of [
-	"用户与权限",
-	"用户管理",
-	"创建用户",
-	"角色管理",
-	"用户权限",
-	"角色权限管理",
-	"User",
-	"Role",
-	"User Permission",
-]) {
+for (const marker of ["账户与权限", "进入账户与权限中心", "角色分配", "数据范围", "角色业务权限"]) {
 	mustInclude(settingsCenter, marker, `Settings center must expose user permission management: ${marker}`);
+}
+
+for (const obsolete of [
+	'{ label: "用户管理", action: "users"',
+	'{ label: "角色管理", action: "roles"',
+	'{ label: "用户权限", action: "user-permission-list"',
+	'data-doctype="User"',
+	'data-doctype="Role"',
+	'data-doctype="User Permission"',
+]) {
+	if (topNav.includes(obsolete) || settingsCenter.includes(obsolete)) {
+		throw new Error(`Duplicate account or role entry must be removed: ${obsolete}`);
+	}
 }
 
 const moreItemsMatch = topNav.match(/const\s+moreItems\s*=\s*\[([\s\S]*?)\];/);

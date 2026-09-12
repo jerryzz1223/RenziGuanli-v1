@@ -1,0 +1,144 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-09-12 00:00:00.000000",
+ "description": "苹果树统计模块独立导入的历史月汇总，不参与考勤终稿或薪资计算。",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "import_batch",
+  "company",
+  "attendance_month",
+  "employee",
+  "employee_code",
+  "employee_name",
+  "department",
+  "source_department",
+  "green_apples",
+  "red_apples",
+  "reward_amount",
+  "source_row_count",
+  "source_rows_json"
+ ],
+ "fields": [
+  {
+   "fieldname": "import_batch",
+   "fieldtype": "Link",
+   "label": "导入批次",
+   "options": "HRMS Attendance Import Batch",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "公司",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "attendance_month",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "统计月份",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "员工",
+   "options": "Employee",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "工号",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "姓名",
+   "reqd": 1
+  },
+  {
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "label": "部门",
+   "options": "Department"
+  },
+  {
+   "fieldname": "source_department",
+   "fieldtype": "Data",
+   "label": "历史表部门"
+  },
+  {
+   "default": "0",
+   "fieldname": "green_apples",
+   "fieldtype": "Float",
+   "label": "绿苹果"
+  },
+  {
+   "default": "0",
+   "fieldname": "red_apples",
+   "fieldtype": "Float",
+   "label": "红苹果"
+  },
+  {
+   "default": "0",
+   "fieldname": "reward_amount",
+   "fieldtype": "Currency",
+   "label": "苹果金额"
+  },
+  {
+   "default": "0",
+   "fieldname": "source_row_count",
+   "fieldtype": "Int",
+   "label": "源数据行数"
+  },
+  {
+   "fieldname": "source_rows_json",
+   "fieldtype": "Code",
+   "label": "源行追溯 JSON",
+   "options": "JSON"
+  }
+ ],
+ "links": [],
+ "modified": "2026-09-12 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "HRMS Apple Tree History Summary",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "attendance_month",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name"
+}

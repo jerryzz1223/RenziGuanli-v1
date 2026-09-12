@@ -13,7 +13,7 @@ assert.doesNotMatch(css, /hrms-desktop-density/);
 assert.doesNotMatch(css, /117\.6470588235/);
 assert.match(css, /body > \.main-section/);
 assert.doesNotMatch(script, /prepareDesktopDensity|hrms-desktop-density/);
-assert.match(hooks, /hrms_top_nav\.js\?v=20260909-roster-column-search/);
-assert.match(hooks, /hrms_top_nav\.css\?v=20260909-native-scale/);
+assert.match(hooks, /hrms_top_nav\.js\?v=20260912-organization-label-v1/);
+assert.match(hooks, /hrms_top_nav\.css\?v=20260909-roster-sequence/);
 
 console.log("Desktop uses the browser's native scale before navigation mounts.");

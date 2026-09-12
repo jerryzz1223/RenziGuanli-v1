@@ -307,16 +307,11 @@ frappe.pages["hr-settings-center"].on_page_load = function (wrapper) {
 				<div class="hrms-settings-panel-head">
 					<div>
 						<h3>${__("账户与权限")}</h3>
-						<p>${__("先进入账户与权限中心查看现有账户与角色，再按账号、角色、数据范围和权限矩阵分别维护。这样不会把“用户权限限制”误认为账户列表。")}</p>
+						<p>${__("账户、用户数据范围和角色权限统一在一个中心管理，避免在多个原生列表之间来回切换。")}</p>
 					</div>
 				</div>
 				<div class="hrms-settings-card-grid">
-					<button class="hrms-settings-card hrms-settings-card--primary" data-route="hrms-access-center">${__("打开账户与权限中心")}<small>${__("账户摘要、角色说明和操作步骤")}</small></button>
-					<button class="hrms-settings-card" data-new-doctype="User">${__("创建用户")}<small>${__("为办公人员创建登录账号")}</small></button>
-					<button class="hrms-settings-card" data-doctype="User">${__("用户管理")}<small>User</small></button>
-					<button class="hrms-settings-card" data-doctype="Role">${__("角色管理")}<small>Role</small></button>
-					<button class="hrms-settings-card" data-doctype="User Permission">${__("数据范围限制")}<small>${__("User Permission：按公司、员工等限制可见数据")}</small></button>
-					<button class="hrms-settings-card" data-route="permission-manager">${__("角色权限管理")}<small>${__("维护 DocType 级权限矩阵")}</small></button>
+					<button class="hrms-settings-card hrms-settings-card--primary" data-route="hrms-access-center">${__("进入账户与权限中心")}<small>${__("管理账户、角色分配、数据范围和角色业务权限")}</small></button>
 				</div>
 				<div class="alert alert-info mt-3">
 					${__("建议：普通员工只开移动端/自助权限；人事专员开放员工档案、入离转调和导入导出；系统管理员再开放字段中心和权限管理。")}

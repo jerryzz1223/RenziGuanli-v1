@@ -156,8 +156,9 @@ for (const marker of [
 	"hrms-payroll-input-table hrms-roster-input-table",
 	"render_roster_table_pagination",
 	"page_size: 20",
-	"姓名 / 工号",
-	"hrms-roster-identity-cell",
+	'{ fieldname: "employee_name", label: "姓名"',
+	'{ fieldname: "custom_employee_code", label: "工号"',
+	"hrms-roster-employee-name-cell",
 	"get_roster_filter_suggestions",
 	"apply_roster_column_filter",
 	"ROSTER_COLUMN_FILTER_STORAGE_KEY",
@@ -217,7 +218,7 @@ mustInclude(topNavCss, ".hrms-roster-table-header__input", "Employee roster head
 mustInclude(topNavCss, ".hrms-roster-table-header__sort", "Employee roster header must provide sortable column titles.");
 mustInclude(topNavCss, ".hrms-roster-table-wrap", "Employee roster must use one payroll-style table surface.");
 mustInclude(topNavCss, ".hrms-roster-input-table", "Employee roster data and header must share one table layout.");
-mustInclude(topNavCss, ".hrms-roster-identity-cell", "Employee name and business code must be rendered in one identity cell.");
+mustInclude(topNavCss, ".hrms-roster-employee-name-cell", "Employee name and photo must share the name column.");
 mustInclude(topNavCss, ".hrms-roster-table-pagination", "Employee roster must provide visible paging for the custom table.");
 mustInclude(topNavCss, ".hrms-roster-input-table", "Employee roster must style its payroll-compatible table cells.");
 const rosterTableCss = topNavCss.slice(topNavCss.indexOf(".hrms-roster-table-wrap"), topNavCss.indexOf(".hrms-roster-input-table"));

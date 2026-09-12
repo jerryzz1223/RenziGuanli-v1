@@ -14,6 +14,8 @@ class AppleTreeCenter {
 		this.wrapper = page.main[0];
 		this.year = String(new Date().getFullYear());
 		this.month = "";
+		this.startDate = "";
+		this.endDate = "";
 		this.search = "";
 		this.data = null;
 		this.activePerson = "";
@@ -76,12 +78,14 @@ class AppleTreeCenter {
 		this.wrapper.innerHTML = `<section class="apple-tree-center apple-tree-center--state">${__("正在加载苹果树统计...")}</section>`;
 		return frappe.call({
 			method: "hrms.hr.page.apple_tree_center.apple_tree_center.get_data",
-			args: { year: this.year, month: this.month, search: this.search, company: this.company() },
+			args: { year: this.year, month: this.month, search: this.search, company: this.company(), start_date: this.startDate, end_date: this.endDate },
 		}).then((response) => {
 			if (requestId !== this.requestId) return;
 			this.data = response.message || {};
 			this.year = this.data.filters?.year || this.year;
 			this.month = this.data.filters?.month || this.month;
+			this.startDate = this.data.filters?.start_date || "";
+			this.endDate = this.data.filters?.end_date || "";
 			if (this.activePerson && !(this.data.people || []).some((person) => this.personKey(person) === this.activePerson)) this.activePerson = "";
 			this.render();
 		}).catch(() => {
@@ -113,12 +117,12 @@ class AppleTreeCenter {
 		const isMonthlyDetail = this.view === "monthly-detail";
 		const title = isMonthlyDetail ? __("每月明细") : this.month.includes("-Q") ? __("个人季度汇总") : __("个人年度汇总");
 		const subtitle = isMonthlyDetail
-			? __("按发生日期查看每条苹果树奖惩记录")
+			? __("按月份和员工查看苹果树月度记录")
 			: __("按员工汇总所选年度、季度或月份内的苹果树记录");
 		this.page.set_title(__("苹果树统计"));
 		this.wrapper.innerHTML = `
 			<section class="apple-tree-center">
-				<header class="apple-tree-center__header"><div><p>${__("按人员、月份和年份查看苹果树明细")}</p><h2>${__("苹果树统计")}</h2><span>${this.escape(this.data.notice)}</span></div><div class="apple-tree-center__header-actions"><nav class="apple-tree-center__view-tabs" aria-label="${__("苹果树统计表")}"><button class="btn btn-sm ${isMonthlyDetail ? "btn-default" : "btn-primary"}" data-apple-view="annual-summary">${__("个人年度汇总")}</button><button class="btn btn-sm ${isMonthlyDetail ? "btn-primary" : "btn-default"}" data-apple-view="monthly-detail">${__("每月明细")}</button></nav><button class="btn btn-default" data-apple-refresh>${__("刷新数据")}</button></div></header>
+				<header class="apple-tree-center__header"><div><p>${__("按人员、月份和年份查看苹果树明细")}</p><h2>${__("苹果树统计")}</h2><span>${this.escape(this.data.notice)}</span></div><div class="apple-tree-center__header-actions"><nav class="apple-tree-center__view-tabs" aria-label="${__("苹果树统计表")}"><button class="btn btn-sm ${isMonthlyDetail ? "btn-default" : "btn-primary"}" data-apple-view="annual-summary">${__("个人年度汇总")}</button><button class="btn btn-sm ${isMonthlyDetail ? "btn-primary" : "btn-default"}" data-apple-view="monthly-detail">${__("每月明细")}</button></nav><button class="btn btn-default" data-apple-history-import>${__("历史数据导入")}</button><button class="btn btn-default" data-apple-refresh>${__("刷新数据")}</button></div></header>
 				<section class="apple-tree-center__filters">
 					<label>${__("统计年份")}<select class="form-control" data-apple-year>${(this.data.available_years || [this.year]).map((year) => `<option value="${this.escape(year)}" ${String(year) === this.year ? "selected" : ""}>${this.escape(year)}${__("年")}</option>`).join("")}</select></label>
 					<label>${__("统计期间")}<select class="form-control" data-apple-month><option value="">${__("全年")}</option><optgroup label="${__("季度")}">${[1, 2, 3, 4].map(quarter => {
@@ -128,6 +132,7 @@ class AppleTreeCenter {
 						const value = `${this.year}-${String(index + 1).padStart(2, "0")}`;
 						return `<option value="${value}" ${value === this.month ? "selected" : ""}>${index + 1}${__("月")}</option>`;
 					}).join("")}</optgroup></select></label>
+					<div class="apple-tree-center__date-range"><label>${__("开始日期")}<input type="date" class="form-control" data-apple-start-date value="${this.escape(this.startDate)}"></label><span>${__("至")}</span><label>${__("结束日期")}<input type="date" class="form-control" data-apple-end-date value="${this.escape(this.endDate)}"></label><button class="btn btn-default" data-apple-date-apply>${__("按日期查询")}</button>${this.startDate ? `<button class="btn btn-link" data-apple-date-clear>${__("清除")}</button>` : ""}</div>
 					<label class="apple-tree-center__search">${__("检索员工或项目")}<input class="form-control" data-apple-search value="${this.escape(this.search)}" placeholder="${__("姓名、工号、部门或项目")}"></label>
 				</section>
 				<section class="apple-tree-center__metrics">
@@ -174,6 +179,49 @@ class AppleTreeCenter {
 		});
 	}
 
+	monthlyDetailColumns() {
+		return [
+			{ key: "attendance_month", label: __("月份") },
+			{ key: "department", label: __("部门") },
+			{ key: "employee_name", label: __("姓名") },
+			{ key: "employee_code", label: __("工号") },
+			{ key: "green_apples", label: __("绿苹果"), numeric: true },
+			{ key: "red_apples", label: __("红苹果"), numeric: true },
+			{ key: "net_apples", label: __("净苹果"), numeric: true },
+			{ key: "reward_amount", label: __("苹果金额"), numeric: true },
+			{ key: "reward_item", label: __("来源") },
+			{ key: "final_status", label: __("终稿状态") },
+		];
+	}
+
+	monthlyDetailValue(row, key) {
+		if (key === "attendance_month") return row.attendance_month || String(row.reward_date || "").slice(0, 7);
+		if (key === "net_apples") return Number(row.green_apples || 0) - Number(row.red_apples || 0);
+		if (key === "final_status") return row.approval_result || row.approval_status
+			? `${row.approval_result || "-"} / ${row.approval_status || "-"}`
+			: __("未提供");
+		return row[key];
+	}
+
+	monthlyDetailRows() {
+		const columns = this.monthlyDetailColumns();
+		const filters = this.table.filters || {};
+		const rows = [...(this.data.records || [])].filter((row) => columns.every((column) => {
+			const query = String(filters[column.key] || "").trim().toLowerCase();
+			return !query || String(this.monthlyDetailValue(row, column.key) ?? "").toLowerCase().includes(query);
+		}));
+		const { sortKey, sortOrder } = this.table;
+		const column = columns.find((item) => item.key === sortKey);
+		if (!column) return rows;
+		const multiplier = sortOrder === "asc" ? 1 : -1;
+		return rows.sort((left, right) => {
+			const leftValue = this.monthlyDetailValue(left, sortKey);
+			const rightValue = this.monthlyDetailValue(right, sortKey);
+			if (column.numeric) return (Number(leftValue || 0) - Number(rightValue || 0)) * multiplier;
+			return String(leftValue || "").localeCompare(String(rightValue || ""), "zh-Hans-CN", { numeric: true }) * multiplier;
+		});
+	}
+
 	tablePager(total, page) {
 		const pageSize = this.table.pageSize;
 		const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -203,7 +251,10 @@ class AppleTreeCenter {
 	monthlyDetailTable() {
 		const records = this.data.records || [];
 		if (!records.length) return `<p class="apple-tree-center__empty">${__("当前筛选条件下没有苹果树记录。")}</p>`;
-		return `<div class="apple-tree-center__table-wrap"><table class="table"><thead><tr><th>${__("月份")}</th><th>${__("部门")}</th><th>${__("姓名")}</th><th>${__("工号")}</th><th>${__("绿苹果")}</th><th>${__("红苹果")}</th><th>${__("净苹果")}</th><th>${__("苹果金额")}</th><th>${__("来源")}</th><th>${__("终稿状态")}</th></tr></thead><tbody>${records.map((row) => `<tr><td>${this.escape(row.attendance_month || String(row.reward_date || "").slice(0, 7))}</td><td>${this.escape(row.department)}</td><td><a class="apple-tree-center__name-link" href="/desk/apple-tree-center/person/${encodeURIComponent(this.personKey(row))}/${this.year}" data-apple-person="${this.escape(this.personKey(row))}">${this.escape(row.employee_name)}</a></td><td>${this.escape(row.employee_code)}</td><td>${this.number(row.green_apples)}</td><td>${this.number(row.red_apples)}</td><td>${this.number(Number(row.green_apples || 0) - Number(row.red_apples || 0))}</td><td>${this.number(row.reward_amount)}</td><td>${this.escape(row.reward_item)}</td><td>${this.escape(row.approval_result || row.approval_status ? `${row.approval_result || "-"} / ${row.approval_status || "-"}` : __("未提供"))}</td></tr>`).join("")}</tbody></table></div>`;
+		const columns = this.monthlyDetailColumns();
+		const rows = this.monthlyDetailRows();
+		const direction = (key) => this.table.sortKey === key ? (this.table.sortOrder === "asc" ? "↑" : "↓") : "↕";
+		return `<div class="apple-tree-center__table-wrap"><table class="table apple-tree-center__monthly-table"><thead><tr>${columns.map((column) => `<th><button class="apple-tree-center__sort" data-apple-table-sort="${column.key}">${column.label}<span>${direction(column.key)}</span></button></th>`).join("")}</tr><tr class="apple-tree-center__filter-row">${columns.map((column) => `<th><input class="form-control input-xs" data-apple-table-filter="${column.key}" value="${this.escape(this.table.filters[column.key])}" placeholder="${__("搜索")}"></th>`).join("")}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr><td>${this.escape(this.monthlyDetailValue(row, "attendance_month"))}</td><td>${this.escape(row.department)}</td><td><a class="apple-tree-center__name-link" href="/desk/apple-tree-center/person/${encodeURIComponent(this.personKey(row))}/${this.year}" data-apple-person="${this.escape(this.personKey(row))}">${this.escape(row.employee_name)}</a></td><td>${this.escape(row.employee_code)}</td><td>${this.number(row.green_apples)}</td><td>${this.number(row.red_apples)}</td><td>${this.number(this.monthlyDetailValue(row, "net_apples"))}</td><td>${this.number(row.reward_amount)}</td><td>${this.escape(row.reward_item)}</td><td>${this.escape(this.monthlyDetailValue(row, "final_status"))}</td></tr>`).join("") : `<tr><td class="apple-tree-center__empty-cell" colspan="${columns.length}">${__("没有符合列筛选条件的明细记录。")}</td></tr>`}</tbody></table></div>`;
 	}
 
 	loadPerson() {
@@ -274,7 +325,13 @@ class AppleTreeCenter {
 		const rows = this.sortPersonRows(calendar, columns);
 		const recorded = rows.filter((row) => !row.__placeholder);
 		const identity = this.personData.person || {};
-		const cellClass = (column) => [column.numeric ? "is-numeric" : "", column.field === "attendance_month" ? "is-month" : "", column.field === "missing_hours" ? "is-absence" : "", column.field === "green_apples" ? "is-green" : "", column.field === "red_apples" ? "is-red" : "", column.field === "review_note" ? "is-note" : ""].filter(Boolean).join(" ");
+		const frozenColumns = {
+			attendance_month: "is-month",
+			department: "is-department",
+			employee_name: "is-employee-name",
+			employee_code: "is-employee-code",
+		};
+		const cellClass = (column) => [column.numeric ? "is-numeric" : "", frozenColumns[column.field] ? `is-frozen ${frozenColumns[column.field]}` : "", column.field === "missing_hours" ? "is-absence" : "", column.field === "green_apples" ? "is-green" : "", column.field === "red_apples" ? "is-red" : "", column.field === "review_note" ? "is-note" : ""].filter(Boolean).join(" ");
 		const headers = columns.map((column) => {
 			const active = sort.field === column.field;
 			const arrow = active ? (sort.direction === "asc" ? "↑" : "↓") : "↕";
@@ -318,11 +375,97 @@ class AppleTreeCenter {
 		this.wrapper.querySelector("[data-employee-detail]")?.addEventListener("click", (event) => frappe.set_route("employee-detail", event.currentTarget.dataset.employeeDetail));
 	}
 
+	historyImportPreview(data) {
+		const issues = data.issues || [];
+		const replacement = (data.replaces_batches || []).length;
+		return `<section class="apple-tree-center__import-preview">
+			<div class="apple-tree-center__import-metrics">
+				<div><span>${__("统计月份")}</span><strong>${this.escape(data.attendance_month || "待确定")}</strong></div>
+				<div><span>${__("源数据")}</span><strong>${this.number(data.source_row_count)} ${__("行")}</strong></div>
+				<div><span>${__("匹配员工")}</span><strong>${this.number(data.employee_count)} ${__("人")}</strong></div>
+				<div><span>${__("绿苹果 / 红苹果")}</span><strong>${this.number(data.green_apples)} / ${this.number(data.red_apples)}</strong></div>
+			</div>
+			<p>${this.escape(__("已识别工作表“{0}”，表头在第 {1} 行。", [data.sheet_name || "-", data.header_row || "-"]))}</p>
+			${data.duplicate ? `<div class="alert alert-info">${__("相同文件已导入，确认时不会重复写入。")}</div>` : ""}
+			${replacement ? `<div class="alert alert-warning">${this.escape(__("该月已有 {0} 个历史版本，确认后新版本在本统计页生效，旧批次保留追溯。", [replacement]))}</div>` : ""}
+			${issues.length ? `<div class="alert alert-danger"><strong>${this.escape(__("共 {0} 条问题，请修正文件后重新上传。", [data.issue_count || issues.length]))}</strong><ul>${issues.slice(0, 20).map((issue) => `<li>${issue.row ? `${__("第")} ${this.number(issue.row)} ${__("行")}：` : ""}${this.escape(issue.employee_name)} ${this.escape(issue.message)}</li>`).join("")}</ul></div>` : `<div class="alert alert-success">${__("预览校验通过。确认后只更新苹果树统计，不修改考勤终稿或薪资。")}</div>`}
+		</section>`;
+	}
+
+	openHistoryImport() {
+		let preview = null;
+		let busy = false;
+		const dialog = new frappe.ui.Dialog({
+			title: __("导入苹果树历史数据"),
+			size: "large",
+			fields: [
+				{ fieldtype: "HTML", options: `<div class="apple-tree-center__template-intro"><div><p>${__("请按“苹果树合计”模板填写：每个文件只填一个月份，1–8 月可逐月上传。")}</p><p class="text-muted">${__("系统优先按“受奖/惩人工号”匹配，并校验姓名。旧文件未填工号时，才按当前公司和姓名匹配。")}</p></div><a class="btn btn-default btn-sm" href="/api/method/hrms.hr.page.apple_tree_center.apple_tree_center.download_history_import_template">${__("下载填写模板")}</a></div>` },
+				{ fieldname: "company", fieldtype: "Link", options: "Company", label: __("目标公司"), reqd: 1, default: this.company(), onchange: () => { preview = null; dialog.get_primary_btn().text(__("校验并预览")); } },
+				{ fieldname: "file_url", fieldtype: "Attach", label: __("苹果树合计 Excel"), reqd: 1, options: { make_attachments_public: false, disable_file_browser: true, allow_web_link: false, allow_take_photo: false, allow_google_drive: false, allow_toggle_private: false, restrictions: { allowed_file_types: [".xlsx"] } }, onchange: () => { preview = null; dialog.get_primary_btn().text(__("校验并预览")); } },
+				{ fieldname: "preview", fieldtype: "HTML" },
+			],
+			primary_action_label: __("校验并预览"),
+			primary_action: () => { void dialog.runHistoryImport().catch(() => {}); },
+		});
+		dialog.runHistoryImport = async () => {
+			if (busy) return;
+			busy = true;
+			dialog.get_primary_btn().prop("disabled", true);
+			try {
+				const values = dialog.get_values();
+				if (!values) return;
+				if (!preview || preview.company !== values.company || preview.file_url !== values.file_url) {
+					const response = await frappe.call({
+						method: "hrms.hr.page.apple_tree_center.apple_tree_center.preview_history_import",
+						args: { company: values.company, file_url: values.file_url },
+						freeze: true,
+						freeze_message: __("正在校验苹果树历史文件…"),
+					});
+					const data = response.message || {};
+					dialog.fields_dict.preview.$wrapper.html(this.historyImportPreview(data));
+					preview = data.can_import ? { ...data, company: values.company, file_url: values.file_url } : null;
+					dialog.get_primary_btn().text(preview ? __("确认导入") : __("重新校验"));
+					return;
+				}
+				const response = await frappe.call({
+					method: "hrms.hr.page.apple_tree_center.apple_tree_center.import_history",
+					args: { company: values.company, file_url: values.file_url, fingerprint: preview.fingerprint },
+					freeze: true,
+					freeze_message: __("正在写入苹果树历史统计…"),
+				});
+				const result = response.message || {};
+				dialog.hide();
+				frappe.msgprint({
+					title: result.duplicate ? __("文件未重复写入") : __("历史数据导入完成"),
+					indicator: "green",
+					message: this.escape(__("{0}：源数据 {1} 行，汇总员工 {2} 人。", [result.attendance_month || "-", result.source_row_count || 0, result.employee_count || 0])),
+				});
+				this.year = String(result.attendance_month || this.year).slice(0, 4);
+				this.month = result.attendance_month || "";
+				this.resetTable();
+				await this.load();
+			} finally {
+				busy = false;
+				dialog.get_primary_btn().prop("disabled", false);
+			}
+		};
+		dialog.show();
+	}
+
 	bind() {
 		this.wrapper.querySelector("[data-apple-refresh]")?.addEventListener("click", () => this.load());
+		this.wrapper.querySelector("[data-apple-history-import]")?.addEventListener("click", () => this.openHistoryImport());
 		this.wrapper.querySelectorAll("[data-apple-view]").forEach((button) => button.addEventListener("click", () => this.setView(button.dataset.appleView)));
-		this.wrapper.querySelector("[data-apple-year]")?.addEventListener("change", (event) => { this.year = event.target.value; this.month = ""; this.activePerson = ""; this.resetTable(); this.load(); });
-		this.wrapper.querySelector("[data-apple-month]")?.addEventListener("change", (event) => { this.month = event.target.value; this.activePerson = ""; this.resetTable(); this.load(); });
+		this.wrapper.querySelector("[data-apple-year]")?.addEventListener("change", (event) => { this.year = event.target.value; this.month = ""; this.startDate = ""; this.endDate = ""; this.activePerson = ""; this.resetTable(); this.load(); });
+		this.wrapper.querySelector("[data-apple-month]")?.addEventListener("change", (event) => { this.month = event.target.value; this.startDate = ""; this.endDate = ""; this.activePerson = ""; this.resetTable(); this.load(); });
+		this.wrapper.querySelector("[data-apple-date-apply]")?.addEventListener("click", () => {
+			const startDate = this.wrapper.querySelector("[data-apple-start-date]")?.value || "";
+			const endDate = this.wrapper.querySelector("[data-apple-end-date]")?.value || "";
+			if (!startDate || !endDate) return frappe.msgprint(__("请选择完整的开始日期和结束日期。"));
+			if (startDate > endDate) return frappe.msgprint(__("开始日期不能晚于结束日期。"));
+			this.startDate = startDate; this.endDate = endDate; this.month = ""; this.activePerson = ""; this.resetTable(); this.load();
+		});
+		this.wrapper.querySelector("[data-apple-date-clear]")?.addEventListener("click", () => { this.startDate = ""; this.endDate = ""; this.activePerson = ""; this.resetTable(); this.load(); });
 		this.wrapper.querySelector("[data-apple-search]")?.addEventListener("change", (event) => { this.search = event.target.value.trim(); this.activePerson = ""; this.resetTable(); this.load(); });
 		this.wrapper.querySelectorAll("[data-apple-table-sort]").forEach((button) => button.addEventListener("click", () => {
 			const key = button.dataset.appleTableSort;

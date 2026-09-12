@@ -1,5 +1,7 @@
 """Persistent salary and contribution registers, independent of payroll months."""
 import json
+from datetime import timedelta
+from io import BytesIO
 
 import frappe
 from frappe import _
@@ -8,6 +10,101 @@ from frappe.utils import flt, getdate, nowdate
 SALARY = 'HRMS Employee Salary Change'
 CONTRIBUTION = 'HRMS Employee Contribution Change'
 CONTRIBUTION_TYPES = ('社保个人', '社保公司', '公积金个人', '公积金公司')
+
+COMPENSATION_EXPORT_FIELDS = {
+	'base_salary': ('底薪', 'salary'),
+	'function_allowance': ('职能津贴', 'salary'),
+	'certificate_allowance': ('证书津贴', 'salary'),
+	'multi_skill_allowance': ('多能工津贴', 'salary'),
+	'full_salary': ('薪资小计', 'salary'),
+	'social_enabled': ('社保缴纳状态', 'social'),
+	'social_personal': ('社保个人承担', 'social'),
+	'social_company': ('社保公司承担', 'social'),
+	'housing_enabled': ('公积金缴纳状态', 'housing'),
+	'housing_personal': ('公积金个人承担', 'housing'),
+	'housing_company': ('公积金公司承担', 'housing'),
+	'remarks': ('变更原因', 'audit'),
+}
+
+
+def _row_value(row, key, default=None):
+	return row.get(key, default) if hasattr(row, 'get') else getattr(row, key, default)
+
+
+def _export_event_order(event):
+	row = event['row']
+	return (
+		str(_row_value(row, 'effective_date') or ''),
+		str(_row_value(row, 'approved_on') or _row_value(row, 'submitted_on') or _row_value(row, 'creation') or ''),
+		str(_row_value(row, 'name') or ''),
+		event['kind'],
+	)
+
+
+def _apply_compensation_event(state, event):
+	row, kind = event['row'], event['kind']
+	if kind == 'salary':
+		for field in ('base_salary', 'function_allowance', 'certificate_allowance', 'multi_skill_allowance', 'full_salary'):
+			state[field] = flt(_row_value(row, field))
+		return
+	prefix = 'social' if kind == 'social' else 'housing'
+	enabled = int(bool(_row_value(row, 'enabled')))
+	state[f'{prefix}_enabled'] = enabled
+	state[f'{prefix}_personal'] = flt(_row_value(row, 'personal_amount')) if enabled else 0
+	state[f'{prefix}_company'] = flt(_row_value(row, 'company_amount')) if enabled else 0
+
+
+def _build_compensation_export_rows(employees, salary_rows, contribution_rows, start_date, end_date, selected_fields):
+	"""Build effective-period snapshots without collapsing equal-valued decisions."""
+	start, end = getdate(start_date), getdate(end_date)
+	selected_kinds = {COMPENSATION_EXPORT_FIELDS[field][1] for field in selected_fields if field in COMPENSATION_EXPORT_FIELDS}
+	selected_kinds.discard('audit')
+	events_by_employee = {}
+	for row in salary_rows:
+		events_by_employee.setdefault(_row_value(row, 'employee'), []).append({'kind': 'salary', 'row': row})
+	for row in contribution_rows:
+		kind = 'social' if _row_value(row, 'contribution_type') == '社保' else 'housing'
+		events_by_employee.setdefault(_row_value(row, 'employee'), []).append({'kind': kind, 'row': row})
+
+	result = []
+	for employee in employees:
+		employee_id = _row_value(employee, 'name') or _row_value(employee, 'employee')
+		events = sorted(events_by_employee.get(employee_id, []), key=_export_event_order)
+		state, output_events = {}, []
+		for event in events:
+			effective = getdate(_row_value(event['row'], 'effective_date'))
+			if effective < start:
+				_apply_compensation_event(state, event)
+				continue
+			if effective > end:
+				break
+			if event['kind'] in selected_kinds:
+				output_events.append(event)
+
+		# A standard already in force at the start of the requested period must be
+		# represented even when the employee had no changes inside that period.
+		if state and not any(getdate(_row_value(event['row'], 'effective_date')) == start for event in output_events):
+			output_events.insert(0, {'kind': 'opening', 'row': {'effective_date': start}})
+
+		for index, event in enumerate(output_events):
+			if event['kind'] != 'opening':
+				_apply_compensation_event(state, event)
+			period_start = max(start, getdate(_row_value(event['row'], 'effective_date')))
+			next_start = getdate(_row_value(output_events[index + 1]['row'], 'effective_date')) if index + 1 < len(output_events) else None
+			period_end = min(end, next_start - timedelta(days=1)) if next_start and next_start > period_start else (period_start if next_start else end)
+			result.append({
+				'employee': employee_id,
+				'employee_name': _row_value(employee, 'employee_name') or employee_id,
+				'employee_code': _row_value(employee, 'custom_employee_code') or _row_value(employee, 'employee_code') or employee_id,
+				'department': _row_value(employee, 'department_label') or _row_value(employee, 'department') or '',
+				'employment_type': _row_value(employee, 'work_nature') or _row_value(employee, 'employment_type') or '',
+				'period_start': period_start,
+				'period_end': period_end,
+				'change_type': {'salary': '定薪', 'social': '社保', 'housing': '公积金', 'opening': '期初沿用'}[event['kind']],
+				'remarks': '' if event['kind'] == 'opening' else (_row_value(event['row'], 'remarks') or _row_value(event['row'], 'change_reason') or ''),
+				**state,
+			})
+	return result
 
 
 def _access(company, approve=False):
@@ -28,6 +125,32 @@ def _register_key(row, doctype):
 
 def _request_order(row):
 	return (str(row.get('submitted_on') or row.get('creation') or ''), str(row.name))
+
+
+def _latest_action_rows(rows):
+	"""Keep the most recently submitted salary/contribution action per employee."""
+	latest = {}
+	for row in sorted(rows, key=_request_order, reverse=True):
+		latest.setdefault(row.employee, row)
+	return list(latest.values())
+
+
+def _attach_actor_names(rows):
+	"""Expose user full names while preserving the immutable user ids in audit rows."""
+	users = {
+		row.get(field)
+		for row in rows
+		for field in ('submitted_by', 'owner', 'approved_by')
+		if row.get(field)
+	}
+	full_names = {row.name: row.full_name or row.name for row in frappe.get_all(
+		'User', filters={'name': ['in', sorted(users or {'__none__'})]},
+		fields=['name', 'full_name'], limit_page_length=100000)}
+	for row in rows:
+		submitter = row.get('submitted_by') or row.get('owner')
+		row['submitted_by_name'] = full_names.get(submitter, submitter) or ''
+		row['approved_by_name'] = full_names.get(row.get('approved_by'), row.get('approved_by')) or ''
+	return rows
 
 
 def _attach_previous_standards(rows, doctype):
@@ -82,7 +205,7 @@ def list_change_records(company: str, kind: str):
 	for row in rows:
 		row['decision_doctype'] = doctype
 		row['department'] = departments.get(row.department, row.department) or ''
-	return rows
+	return _attach_actor_names(rows)
 
 
 def active_contributions(company, as_of=None, employee=None):
@@ -116,7 +239,19 @@ def list_register(company: str):
 		for row in rows if row.status == 'Active' or row.name in registered]
 	initialized = frappe.get_all(CONTRIBUTION, filters={'company': company, 'status': ['in', ['待审核', '已批准']]},
 		fields=['employee', 'contribution_type'], limit_page_length=100000)
-	return {'employees': employees, 'contributions': contributions, 'initialized': initialized}
+	actions = []
+	for doctype in (SALARY, CONTRIBUTION):
+		filters = {'company': company}
+		if doctype == SALARY:
+			filters['exclude_from_payroll'] = 0
+		for row in frappe.get_all(doctype, filters=filters,
+			fields=['name', 'employee', 'status', 'owner', 'submitted_by', 'submitted_on', 'creation'],
+			order_by='submitted_on desc, creation desc, name desc', limit_page_length=100000):
+			actions.append(row)
+	latest_actions = _attach_actor_names(_latest_action_rows(actions))
+	return {'employees': employees, 'contributions': contributions, 'initialized': initialized,
+		'latest_actions': latest_actions,
+		'pending_employees': sorted({row.employee for row in actions if row.status == '待审核'})}
 
 
 @frappe.whitelist()
@@ -209,7 +344,124 @@ def employee_history(company: str, employee: str):
 			fields=['*'], order_by='effective_date desc, creation desc', limit_page_length=100000):
 			row['decision_doctype'] = doctype
 			result.append(row)
-	return sorted(result, key=lambda row: str(row.get('submitted_on') or row.get('creation') or ''), reverse=True)
+	result = sorted(result, key=lambda row: str(row.get('submitted_on') or row.get('creation') or ''), reverse=True)
+	return _attach_actor_names(result)
+
+
+def _selected_compensation_export_fields(selected_fields):
+	if isinstance(selected_fields, str):
+		try:
+			selected_fields = json.loads(selected_fields)
+		except (TypeError, ValueError):
+			selected_fields = []
+	selected = []
+	for field in selected_fields or []:
+		if field in COMPENSATION_EXPORT_FIELDS and field not in selected:
+			selected.append(field)
+	if not selected or not any(COMPENSATION_EXPORT_FIELDS[field][1] != 'audit' for field in selected):
+		frappe.throw(_('请至少选择一项薪资、社保或公积金内容。'))
+	return selected
+
+
+@frappe.whitelist()
+def export_compensation_register(company: str, start_date: str, end_date: str, selected_fields: str | None = None,
+	department: str = '', employee: str = ''):
+	"""Export approved effective-dated standards as a real XLSX workbook."""
+	from openpyxl import Workbook
+	from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+	from openpyxl.utils import get_column_letter
+	from hrms.api.payroll_input import _safe_fields, _salary_contribution_defaults
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+
+	company = _access(company)
+	start, end = getdate(start_date), getdate(end_date)
+	if end < start:
+		frappe.throw(_('结束日期不能早于开始日期。'))
+	selected = _selected_compensation_export_fields(selected_fields)
+	employee_fields = _safe_fields('Employee', [
+		'name', 'employee_name', 'custom_employee_code', 'employee_number', 'department',
+		'employment_type', 'status', 'custom_is_confirmed', 'final_confirmation_date', 'confirmation_date', 'company',
+	])
+	employee_filters = {'company': company}
+	if employee:
+		employee_filters['name'] = employee
+	employees = frappe.get_all('Employee', filters=employee_filters, fields=employee_fields,
+		order_by='employee_name asc, name asc', limit_page_length=100000)
+
+	department_ids = {row.get('department') for row in employees if row.get('department')}
+	# Salary operators can read the compensation register without having the
+	# standalone Department doctype permission. Access was already checked above;
+	# read only the two labels needed to reproduce the authorized register filter.
+	department_labels = {row.name: row.department_name for row in frappe.db.get_all('Department',
+		filters={'name': ['in', sorted(department_ids or {'__none__'})]},
+		fields=['name', 'department_name'], limit_page_length=100000)}
+	for row in employees:
+		row['department_label'] = department_labels.get(row.get('department'), row.get('department')) or ''
+		defaults = _salary_contribution_defaults(row, str(end))
+		row['work_nature'] = _('在职·{0}').format(defaults['employment_stage'])
+	if department:
+		employees = [row for row in employees if department in (row.get('department'), row.get('department_label'))]
+	if not employees:
+		frappe.throw(_('当前筛选条件下没有员工。'))
+
+	employee_ids = [row.name for row in employees]
+	salary_rows = frappe.get_all(SALARY, filters={
+		'company': company, 'employee': ['in', employee_ids], 'status': '已批准',
+		'exclude_from_payroll': 0, 'effective_date': ['<=', end],
+	}, fields=['*'], order_by='effective_date asc, approved_on asc, creation asc, name asc', limit_page_length=100000)
+	contribution_rows = frappe.get_all(CONTRIBUTION, filters={
+		'company': company, 'employee': ['in', employee_ids], 'status': '已批准', 'effective_date': ['<=', end],
+	}, fields=['*'], order_by='effective_date asc, approved_on asc, creation asc, name asc', limit_page_length=100000)
+	rows = _build_compensation_export_rows(employees, salary_rows, contribution_rows, start, end, selected)
+	if not rows:
+		frappe.throw(_('所选日期和内容范围内没有已批准且生效的工资社保记录。'))
+
+	fixed_columns = [
+		('姓名', 'employee_name'), ('工号', 'employee_code'), ('工作性质', 'employment_type'), ('部门', 'department'),
+		('生效开始', 'period_start'), ('生效结束', 'period_end'), ('记录类型', 'change_type'),
+	]
+	columns = fixed_columns + [(COMPENSATION_EXPORT_FIELDS[field][0], field) for field in selected]
+	workbook = Workbook()
+	sheet = workbook.active
+	sheet.title = '工资社保历史'
+	sheet.append([label for label, _field in columns])
+	header_fill = PatternFill('solid', fgColor='DDEBF7')
+	thin = Side(style='thin', color='B7C9D6')
+	border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	for cell in sheet[1]:
+		cell.fill = header_fill
+		cell.font = Font(name='Microsoft YaHei', size=10, bold=True)
+		cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+		cell.border = border
+	for row in rows:
+		values = []
+		for _label, field in columns:
+			value = row.get(field, '')
+			if field in ('social_enabled', 'housing_enabled'):
+				value = '' if field not in row else ('缴纳' if value else '停缴')
+			values.append(value)
+		sheet.append(values)
+		for column_index, (_label, field) in enumerate(columns, start=1):
+			cell = sheet.cell(sheet.max_row, column_index)
+			cell.border = border
+			cell.alignment = Alignment(vertical='center', wrap_text=True)
+			if field in ('period_start', 'period_end'):
+				cell.number_format = 'yyyy-mm-dd'
+			elif field in COMPENSATION_EXPORT_FIELDS and COMPENSATION_EXPORT_FIELDS[field][1] in ('salary', 'social', 'housing') and not field.endswith('_enabled'):
+				cell.number_format = '#,##0.00'
+	widths = {'employee_name': 14, 'employee_code': 14, 'employment_type': 14, 'department': 18,
+		'period_start': 13, 'period_end': 13, 'change_type': 12, 'remarks': 28}
+	for index, (_label, field) in enumerate(columns, start=1):
+		sheet.column_dimensions[get_column_letter(index)].width = widths.get(field, 16)
+	sheet.freeze_panes = 'A2'
+	sheet.auto_filter.ref = f'A1:{get_column_letter(len(columns))}{sheet.max_row}'
+	sheet.sheet_view.showGridLines = False
+
+	output = BytesIO()
+	save_workbook_with_logo_watermark(workbook, output)
+	filename = f'工资社保历史_{start:%Y%m%d}-{end:%Y%m%d}.xlsx'
+	file_doc = frappe.get_doc({'doctype': 'File', 'file_name': filename, 'content': output.getvalue(), 'is_private': 1}).insert(ignore_permissions=True)
+	return {'file_url': file_doc.file_url, 'file_name': filename, 'row_count': len(rows)}
 
 
 @frappe.whitelist()

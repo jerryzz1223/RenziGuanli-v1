@@ -42,11 +42,34 @@ assert.match(historyPageSource, /data-history-back/, 'full-page history provides
 assert.match(historyPageSource, /hrms-pay-history-record-table/, 'the page includes a structured Excel record table');
 assert.match(historyPageSource, /hrms-pay-history-timeline/, 'the original growth-card history remains on the page');
 assert.ok(historyPageSource.lastIndexOf('hrms-pay-history-record-table') < historyPageSource.lastIndexOf('hrms-pay-history-timeline'), 'Excel records render above the growth-card history');
-assert.match(historyPageSource, /\["生效日期", "状态", "底薪"/, 'salary records expose separate searchable amount and audit columns');
+assert.match(historyPageSource, /\["生效日期", "状态", "记录类型", "底薪"/, 'salary records distinguish initial submission from later changes');
+assert.match(historyPageSource, /action_label = row\.name === first_record_name \? "首次提交" : "修改"/);
+assert.match(historyPageSource, /\$\{action_label\}人/);
+assert.match(historyPageSource, /submitted_by_name/);
+assert.match(historyPageSource, /approved_by_name/);
 assert.match(source, /standing_history_from_current_route\(\)/, 'personal history can be opened by a stable route from the employee profile');
-assert.match(source, /frappe\.set_route\("payroll-input-center", "salary-register"\)/, 'history return clears the employee route and restores the register');
+assert.match(source, /return_from_standing_history/, 'history return uses one stable navigation helper');
 frappeStub.get_route = () => ['payroll-input-center', 'salary-register', 'HR-EMP-0001', '社保', 'employee-detail'];
 assert.equal(view.standing_history_from_current_route().employee, 'HR-EMP-0001');
 assert.equal(view.standing_history_from_current_route().type, '社保');
 assert.equal(view.standing_history_from_current_route().return_to_employee_detail, true);
+
+let loaded = 0;
+let routed = null;
+view.active_tab = 'salary-register';
+view.resolve_tab = (tab) => tab;
+view.load_active_tab = () => { loaded += 1; };
+frappeStub.set_route = (...parts) => { routed = parts; };
+frappeStub.get_route = () => ['payroll-input-center', 'salary-register'];
+view.return_from_standing_history('HR-EMP-0001', { tab: 'salary-register' });
+assert.equal(loaded, 1, 'return restores a list opened in-place even when its URL did not change');
+assert.equal(routed, null, 'same-route return must not rely on Frappe emitting a route event');
+
+frappeStub.get_route = () => ['payroll-input-center', 'salary-register', 'HR-EMP-0001', '社保'];
+view.return_from_standing_history('HR-EMP-0001', { tab: 'salary-register' });
+assert.deepEqual(routed, ['payroll-input-center', 'salary-register'], 'deep-linked history clears its employee route segment');
+
+routed = null;
+view.return_from_standing_history('HR-EMP-0001', { tab: 'salary-register', return_to_employee_detail: true });
+assert.deepEqual(routed, ['employee-detail', 'HR-EMP-0001'], 'employee profile history returns to the employee profile');
 console.log('Standing history: approval/date boundaries, same-day revisions, salary sum, stopped contributions, charts and full-page record table passed.');

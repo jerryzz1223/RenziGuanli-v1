@@ -71,7 +71,7 @@ class EmployeeSeparationRecordsPage {
 				.hrms-separation-records { padding: 0 2px 24px; }
 				.hrms-separation-records__toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; max-width: 520px; }
 				.hrms-separation-records__table-wrap { overflow-x: auto; border-top: 1px solid var(--border-color); }
-				.hrms-separation-records__table { min-width: 820px; margin-bottom: 0; }
+				.hrms-separation-records__table { min-width: 980px; margin-bottom: 0; }
 				.hrms-separation-records__table tbody tr { cursor: pointer; }
 				.hrms-separation-records__table tbody tr:hover { background: var(--subtle-fg); }
 				.hrms-separation-records__empty { padding: 56px 16px; text-align: center; }
@@ -87,7 +87,7 @@ class EmployeeSeparationRecordsPage {
 			</style>
 			<div class="hrms-separation-records">
 				<div class="hrms-separation-records__toolbar">
-					<input type="search" class="form-control" data-search placeholder="${frappe.utils.escape_html(__("姓名、工号、部门、岗位"))}">
+					<input type="search" class="form-control" data-search placeholder="${frappe.utils.escape_html(__("姓名、工号、部门、岗位、离职原因"))}">
 					<button type="button" class="btn btn-default btn-sm" data-search-button>${frappe.utils.escape_html(__("搜索"))}</button>
 				</div>
 				<div class="hrms-separation-records__table-wrap">
@@ -98,6 +98,7 @@ class EmployeeSeparationRecordsPage {
 							<th>${frappe.utils.escape_html(__("工号"))}</th>
 							<th>${frappe.utils.escape_html(__("部门"))}</th>
 							<th>${frappe.utils.escape_html(__("岗位"))}</th>
+							<th>${frappe.utils.escape_html(__("离职原因"))}</th>
 							<th>${frappe.utils.escape_html(__("离职面谈"))}</th>
 						</tr></thead>
 						<tbody data-rows></tbody>
@@ -182,6 +183,7 @@ class EmployeeSeparationRecordsPage {
 						<td>${frappe.utils.escape_html(row.employee_code || "-")}</td>
 						<td>${frappe.utils.escape_html(row.department_display || "-")}</td>
 						<td>${frappe.utils.escape_html(row.designation || "-")}</td>
+						<td>${frappe.utils.escape_html(row.separation_reason_display || __("未填写"))}</td>
 						<td>${frappe.utils.escape_html(row.exit_interview ? __("查看面谈") : __("未填写"))}</td>
 					</tr>`,
 			)
@@ -199,6 +201,9 @@ class EmployeeSeparationRecordsPage {
 	show_record_details(row) {
 		const escape = frappe.utils.escape_html;
 		const date = row.departure_date ? frappe.datetime.str_to_user(row.departure_date) : __("未填写");
+		const reason_type = row.separation_reason_type || __("未填写");
+		const reason = row.separation_reason_display || __("未填写");
+		const reason_detail = row.separation_reason_detail || __("未填写");
 		const interview = this.plain_text(row.exit_interview) || __("暂无离职面谈记录");
 		const dialog = new frappe.ui.Dialog({
 			title: `${row.employee_code || __("未设置工号")} · ${row.employee_name || __("未命名员工")}`,
@@ -213,6 +218,9 @@ class EmployeeSeparationRecordsPage {
 							${this.detail_item(__("离职日期"), date)}
 							${this.detail_item(__("部门"), row.department_display)}
 							${this.detail_item(__("岗位"), row.designation)}
+							${this.detail_item(__("离职原因分类"), reason_type)}
+							${this.detail_item(__("离职原因"), reason)}
+							${this.detail_item(__("详细原因"), reason_detail)}
 							${this.detail_item(__("离职单状态"), row.separation_name ? __("已关联") : __("未建立离职单"))}
 						</div>
 						<div class="hrms-separation-records__interview">
@@ -233,6 +241,7 @@ class EmployeeSeparationRecordsPage {
 		});
 		dialog.$wrapper.find("[data-view-separation]").on("click", () => {
 			dialog.hide();
+			frappe.route_options = { hrms_from: "employee-separation-records" };
 			frappe.set_route("Form", "Employee Separation", row.separation_name);
 		});
 	}

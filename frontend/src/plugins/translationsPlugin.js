@@ -51,11 +51,13 @@ function makeTranslationFunction() {
 
 		let translated_text = "";
 		let key = txt;
-		if (context) {
+		if (context && Object.prototype.hasOwnProperty.call(messages, `${key}:${context}`)) {
 			translated_text = messages[`${key}:${context}`];
 		}
 		if (!translated_text) {
-			translated_text = messages[key] || txt;
+			translated_text = Object.prototype.hasOwnProperty.call(messages, key)
+				? messages[key] || txt
+				: txt;
 		}
 		if (replace && typeof replace === "object") {
 			translated_text = formatTranslationTemplate(translated_text, replace);

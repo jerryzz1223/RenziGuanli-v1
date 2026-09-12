@@ -5,6 +5,7 @@ import inspect
 import sys
 import unittest
 from datetime import date
+from io import BytesIO
 from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
@@ -18,8 +19,10 @@ def apple_tree_center_module():
 	frappe.whitelist = lambda function=None, **_kwargs: (lambda decorated: decorated) if function is None else function
 	frappe.throw = lambda message: (_ for _ in ()).throw(ValueError(message))
 	frappe.get_doc = lambda *_args, **_kwargs: SimpleNamespace(check_permission=lambda *_permission: None, get=lambda field: "001" if field == "custom_employee_code" else None)
+	frappe.get_all = lambda *_args, **_kwargs: []
 	frappe_utils = ModuleType("frappe.utils")
 	frappe_utils.getdate = lambda value: value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
+	frappe_utils.now_datetime = lambda: "2026-09-12 12:00:00"
 	frappe_utils.nowdate = lambda: "2026-09-04"
 	previous = {name: sys.modules.get(name) for name in ("frappe", "frappe.utils")}
 	sys.modules.update({"frappe": frappe, "frappe.utils": frappe_utils})
@@ -38,6 +41,55 @@ def apple_tree_center_module():
 
 
 class AppleTreeCenterContractTest(unittest.TestCase):
+	def test_download_template_matches_new_workbook_and_keeps_employee_code_as_text(self):
+		center = apple_tree_center_module()
+		workbook = center._build_history_import_template()
+		sheet = workbook["苹果树合计"]
+		self.assertEqual(sheet.max_column, 14)
+		self.assertEqual(sheet.freeze_panes, "B4")
+		self.assertEqual(sheet.auto_filter.ref, "B3:N203")
+		self.assertEqual([sheet.cell(3, column).value for column in range(2, 15)], [
+			"序号", "创建时间", "奖/惩日期", "受奖/惩人部门", "受奖/惩人工号", "受奖/惩人",
+			"绿苹果", "红苹果", "奖/惩项目", "备注", "创建人", "签名", "备注",
+		])
+		self.assertEqual(sheet["F4"].number_format, "@")
+		buffer = BytesIO()
+		workbook.save(buffer)
+		sheet_name, header_row, rows = center._history_sheet_rows(buffer.getvalue())
+		self.assertEqual((sheet_name, header_row, rows), ("苹果树合计", 3, []))
+
+	def test_history_employee_prefers_code_and_rejects_name_mismatch(self):
+		center = apple_tree_center_module()
+		filters = []
+		center.frappe.get_all = lambda _doctype, **kwargs: filters.append(kwargs["filters"]) or [{
+			"name": "EMP-001", "employee_name": "张三", "custom_employee_code": "001", "department": "制造",
+		}]
+		employee, error = center._history_employee("永新", "001", "张三")
+		self.assertEqual(employee["name"], "EMP-001")
+		self.assertEqual(error, "")
+		self.assertEqual(filters, [{"company": "永新", "custom_employee_code": "001"}])
+		self.assertIn("工号与姓名不一致", center._history_employee("永新", "001", "李四")[1])
+
+	def test_history_workbook_matches_supplied_third_row_header_format(self):
+		from openpyxl import Workbook
+
+		center = apple_tree_center_module()
+		workbook = Workbook()
+		sheet = workbook.active
+		sheet.title = "苹果树合计"
+		sheet.append([])
+		sheet.append([None, "6月苹果树"])
+		sheet.append([None, "序号", "创建时间", "奖/惩日期", "受奖/惩人部门", "受奖/惩人", "绿苹果", "红苹果", "奖/惩项目", "备注", "创建人", "签名", "备注"])
+		sheet.append([None, 1, "2026-06-08 16:33:11", "2026-06-08", "工程课", "张三", "", 2, "红苹果项目", "处理说明", "管理员"])
+		buffer = BytesIO()
+		workbook.save(buffer)
+		sheet_name, header_row, rows = center._history_sheet_rows(buffer.getvalue())
+		self.assertEqual((sheet_name, header_row, len(rows)), ("苹果树合计", 3, 1))
+		self.assertEqual(rows[0]["__source_row"], 4)
+		self.assertEqual(rows[0]["受奖/惩人"], "张三")
+		self.assertEqual(rows[0]["备注"], "处理说明")
+		self.assertIn("备注_2", rows[0])
+
 	def test_employee_summary_uses_employee_identity_and_the_same_active_final_scope(self):
 		center = apple_tree_center_module()
 		center.get_data = lambda **kwargs: {
@@ -117,7 +169,45 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 			"month": "str",
 			"search": "str",
 			"company": "str",
+			"start_date": "str",
+			"end_date": "str",
 		})
+
+	def test_custom_date_range_validation(self):
+		center = apple_tree_center_module()
+		self.assertEqual(center._parse_custom_date_range("2025-06-01", "2026-08-31"), (date(2025, 6, 1), date(2026, 8, 31)))
+		for values in (("2026-01-01", ""), ("2026-02-01", "2026-01-31"), ("2026/01/01", "2026-01-31")):
+			with self.assertRaises(ValueError):
+				center._parse_custom_date_range(*values)
+
+	def test_history_date_range_filters_source_rows_then_reaggregates_employee_month(self):
+		center = apple_tree_center_module()
+		center._active_history_batch = lambda *_args: {"name": "BATCH-1"}
+		center.frappe.get_all = lambda *_args, **_kwargs: [{
+			"name": "SUM-1", "employee": "EMP-001", "employee_code": "001", "employee_name": "张三",
+			"department": "制造", "green_apples": 9, "red_apples": 4, "reward_amount": 25, "source_row_count": 3,
+			"source_rows_json": '[{"reward_date":"2026-06-01","green_apples":2,"red_apples":0},{"reward_date":"2026-06-15","green_apples":3,"red_apples":1},{"reward_date":"2026-06-30","green_apples":4,"red_apples":3}]',
+		}]
+		rows = center._list_history_month_records("永新", "2026-06", date(2026, 6, 10), date(2026, 6, 20))
+		self.assertEqual(len(rows), 1)
+		self.assertEqual((rows[0]["green_apples"], rows[0]["red_apples"], rows[0]["reward_amount"], rows[0]["source_row_count"]), (3, 1, 10, 1))
+
+	def test_cross_year_date_range_uses_exact_history_and_only_fully_covered_monthly_finals(self):
+		center = apple_tree_center_module()
+		center.frappe.get_list = lambda *_args, **_kwargs: [{"attendance_month": "2025-12"}, {"attendance_month": "2026-01"}]
+		center._available_history_months = lambda _company: {"2025-12"}
+		history_calls = []
+		center._list_history_month_records = lambda company, month, start, end: history_calls.append((company, month, start, end)) or [{
+			"attendance_month": month, "reward_date": f"{month}-01", "employee_code": "001", "employee_name": "张三", "green_apples": 2, "red_apples": 0,
+		}]
+		active_calls = []
+		center._list_active_month_records = lambda company, month: active_calls.append((company, month)) or [{"attendance_month": month, "employee_code": "002", "employee_name": "李四", "green_apples": 3, "red_apples": 0}]
+		partial = center.get_data(year="2026", company="永新", start_date="2025-12-15", end_date="2026-01-31")
+		self.assertEqual(history_calls[0][1:], ("2025-12", date(2025, 12, 15), date(2026, 1, 31)))
+		self.assertEqual(active_calls, [("永新", "2026-01")])
+		self.assertEqual(partial["summary"]["green_apples"], 5)
+		self.assertEqual(partial["filters"]["start_date"], "2025-12-15")
+		self.assertIn("按奖/惩日期精确统计", partial["notice"])
 
 	def test_employee_and_month_statistics_keep_green_red_and_net_separate(self):
 		center = apple_tree_center_module()
@@ -176,3 +266,17 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 		self.assertEqual(result["available_years"], [2026, 2025])
 		self.assertEqual(result["records"][0]["reward_item"], "月度考勤终稿")
 		self.assertEqual(result["records"][0]["approval_status"], "已锁定")
+
+	def test_statistics_only_history_takes_precedence_for_its_month(self):
+		center = apple_tree_center_module()
+		center.frappe.get_list = lambda *_args, **_kwargs: [{"attendance_month": "2026-06"}]
+		center._available_history_months = lambda _company: {"2026-06"}
+		center._list_history_month_records = lambda _company, _month: [{
+			"attendance_month": "2026-06", "reward_date": "2026-06-01",
+			"employee": "EMP-001", "employee_code": "001", "employee_name": "张三",
+			"green_apples": 8, "red_apples": 2, "reward_amount": 30,
+		}]
+		center._list_active_month_records = lambda *_args: self.fail("历史导入月份不应再读取考勤终稿")
+		result = center.get_data(year="2026", month="2026-06", company="永新")
+		self.assertEqual(result["summary"]["net_apples"], 6)
+		self.assertIn("不修改考勤终稿或薪资", result["notice"])

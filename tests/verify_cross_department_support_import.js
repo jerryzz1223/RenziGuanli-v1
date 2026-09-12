@@ -38,6 +38,8 @@ assert(page.includes("frappe.ui.form.make_control"), "Query controls must be cre
 assert(!page.includes("this.page.add_field"), "Page-header controls must not be moved into the query grid");
 assert(page.includes('set_primary_action(__("新建支援")'), "The primary action must be labelled 新建支援");
 assert(!page.includes("set_secondary_action") && !page.includes("维护台账"), "The maintenance-ledger entry point must not be shown");
+assert(page.includes('<th>${__("姓名")}</th><th>${__("工号")}</th>'), "支援人员表必须将姓名和工号分列。");
+assert(!page.includes('<th>${__("姓名 / 工号")}</th>'), "支援人员表不应合并姓名与工号。");
 assert.strictEqual(fields.support_department.fieldtype, "Link", "Support departments must open the Department picker");
 assert.strictEqual(fields.support_department.options, "Department", "Support departments must use the Department picker");
 assert.strictEqual(fields.support_designation.fieldtype, "Link", "Support designations must open the Designation picker");

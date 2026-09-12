@@ -1437,6 +1437,9 @@ def _insert_target(row, data, payroll_month="", attendance_lock_version="", appr
 				"company": row.company,
 				"boarding_begins_on": _date_from(data.get("last_working_date"), _("最后工作日")),
 				"resignation_letter_date": _date_from(data.get("application_date"), _("申请日期")),
+				"separation_reason_type": "自定义",
+				"custom_separation_reason": data.get("reason") or "",
+				"separation_reason_detail": data.get("remarks") or "",
 				"exit_interview": _("离职原因：{0}<br>交接状态：{1}<br>备注：{2}").format(data.get("reason") or "", data.get("handover_status") or "", data.get("remarks") or ""),
 			}
 		).insert(ignore_permissions=True)

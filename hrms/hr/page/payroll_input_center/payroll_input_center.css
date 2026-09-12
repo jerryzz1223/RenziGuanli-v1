@@ -2205,6 +2205,26 @@
 	padding: 0 2px;
 }
 
+/* Keep the column labels and their filters in view while reviewing the
+ * combined salary/social-security register. This table has taller rows than
+ * the generic payroll lists, so use a shorter page as well. */
+.hrms-compensation-register-table-wrap {
+	max-height: calc(100vh - 250px);
+	overflow: auto;
+	overscroll-behavior: contain;
+}
+
+.hrms-compensation-register-table {
+	margin-bottom: 0;
+}
+
+.hrms-compensation-register-table thead th {
+	background: #f8fafc;
+	position: sticky;
+	top: 0;
+	z-index: 2;
+}
+
 .hrms-payroll-upload-box {
 	align-items: center;
 	border: 1px dashed #cbd5e1;

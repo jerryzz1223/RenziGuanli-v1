@@ -1,0 +1,5 @@
+from hrms.utils.employee_form_layout import ensure_employee_identity_number_in_basic_information
+
+
+def execute():
+	ensure_employee_identity_number_in_basic_information()

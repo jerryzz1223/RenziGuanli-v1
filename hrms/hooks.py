@@ -27,17 +27,17 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260910-sidebar-drag-reorder-v1-separation-queue-v1",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260909-roster-column-search",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260912-apple-tree-single-entry-access-center-unified-v1",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260912-hide-frappe-search-access-center-unified-v1",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
-	"/assets/hrms/js/hrms_file_uploader.js?v=20260827a",
-	"/assets/hrms/js/hrms_entry.js?v=20260909-minimal-e",
+	"/assets/hrms/js/hrms_file_uploader.js?v=20260912a",
+	"/assets/hrms/js/hrms_entry.js?v=20260912-intranet-entry-v1",
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260909-roster-sequence",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260912-employee-header-clean-v2",
 	"/assets/hrms/css/hrms_training_learning.css?v=20260827a",
-	"/assets/hrms/css/hrms_entry.css?v=20260909-minimal-d",
+	"/assets/hrms/css/hrms_entry.css?v=20260912-intranet-entry-v1",
 	"/assets/hrms/css/hrms_loading.css?v=20260909-black-loader",
 ]
 
@@ -45,10 +45,10 @@ app_include_css = [
 
 # include js, css files in header of web template
 web_include_css = [
-	"/assets/hrms/css/hrms_login.css?v=20260909-minimal-d",
+	"/assets/hrms/css/hrms_login.css?v=20260912-employee-match-v2",
 	"/assets/hrms/css/hrms_loading.css?v=20260909-black-loader",
 ]
-web_include_js = "/assets/hrms/js/hrms_login.js?v=20260909-minimal-d"
+web_include_js = "/assets/hrms/js/hrms_login.js?v=20260912-employee-match-v2"
 
 # include custom scss in every website theme (without file extension ".scss")
 # website_theme_scss = "hrms/public/scss/website"
@@ -62,6 +62,7 @@ web_include_js = "/assets/hrms/js/hrms_login.js?v=20260909-minimal-d"
 
 # include js in doctype views
 doctype_js = {
+	"Navbar Settings": "public/js/navbar_settings.js",
 	"Employee": "public/js/erpnext/employee.js",
 	"Company": "public/js/erpnext/company.js",
 	"Department": "public/js/erpnext/department.js",
