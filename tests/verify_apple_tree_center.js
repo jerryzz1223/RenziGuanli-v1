@@ -20,7 +20,7 @@ for (const marker of ["_summarize_records", "HRMS Monthly Attendance Summary", "
 	if (!server.includes(marker)) throw new Error(`Apple-tree statistics server contract is missing: ${marker}`);
 }
 
-for (const marker of ["统计年份", "统计期间", "开始日期", "结束日期", "按日期查询", "data-apple-start-date", "data-apple-end-date", "data-apple-date-apply", "个人季度汇总", "个人年度汇总", "每月明细", "苹果树明细", "monthly-detail", "data-employee-detail", "data-apple-table-sort", "data-apple-table-filter", "data-apple-table-page", "data-apple-history-import", "历史数据导入", "openHistoryImport", "preview_history_import", "import_history", "download_history_import_template", "下载填写模板", "受奖/惩人工号", "disable_file_browser: true", "allow_web_link: false", "allow_take_photo: false", "allow_toggle_private: false", "查看明细", "tablePager"]) {
+for (const marker of ["统计年份", "统计期间", "开始日期", "结束日期", "按日期查询", "data-apple-start-date", "data-apple-end-date", "data-apple-date-apply", "个人季度汇总", "个人年度汇总", "每月明细", "苹果树明细", "monthly-detail", "data-employee-detail", "data-apple-table-sort", "data-apple-table-filter", "data-apple-table-page", "data-apple-export", "导出 Excel", "exportCurrentView", "download_export", "column_filters", "sort_key", "data-apple-history-import", "历史数据导入", "openHistoryImport", "preview_history_import", "import_history", "download_history_import_template", "下载填写模板", "受奖/惩人工号", "disable_file_browser: true", "allow_web_link: false", "allow_take_photo: false", "allow_toggle_private: false", "查看明细", "tablePager"]) {
 	if (!script.includes(marker)) throw new Error(`Apple-tree statistics screen is missing: ${marker}`);
 }
 
@@ -53,6 +53,8 @@ let route = ["apple-tree-center", "person", "001", "2025"];
 const context = {
 	frappe: { pages: { "apple-tree-center": {} }, get_route: () => route, utils: { escape_html: String } },
 	__: (text) => text,
+	URLSearchParams,
+	window: { hrmsCompanyContext: { getCurrentCompany: () => "永新" }, open: (url) => { context.openedUrl = url; } },
 };
 vm.createContext(context);
 vm.runInContext(script + "\nthis.Center = AppleTreeCenter;", context);
@@ -75,6 +77,15 @@ assert.equal(center.activePerson, "");
 assert.equal(rendered, true);
 assert.match(center.detailValue(null, true), /—/);
 assert.equal(center.detailValue(0, true), "0");
+center.view = "monthly-detail";
+center.year = "2026";
+center.month = "2026-08";
+center.table = { page: 1, pageSize: 20, sortKey: "net_apples", sortOrder: "desc", filters: { department: "连续课" } };
+center.exportCurrentView();
+assert.match(context.openedUrl, /download_export/);
+assert.match(context.openedUrl, /view=monthly-detail/);
+assert.match(context.openedUrl, /month=2026-08/);
+assert.match(decodeURIComponent(context.openedUrl), /"department":"连续课"/);
 console.log("Employee route, name link, return state and missing-value checks passed.");
 
 center.data = {

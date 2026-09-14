@@ -1596,7 +1596,7 @@ def _can_manage_payroll_rules():
 	if frappe.session.user == "Administrator":
 		return True
 	roles = set(frappe.get_roles(frappe.session.user))
-	return bool({"Administrator", "System Manager", "HR Manager"} & roles)
+	return bool({"Administrator", "System Manager", "HR Manager", "薪酬规则配置"} & roles)
 
 
 def _require_payroll_master_manager():
@@ -3048,11 +3048,18 @@ def _month_end(payroll_month):
 
 
 def _require_company(company):
+	from hrms.access_control import require_any_hrms_capability
+	require_any_hrms_capability(
+		("payroll_view", "payroll_entry_submit", "payroll_change_submit", "contribution_submit", "payroll_approval", "payroll_calculate", "payroll_confirm", "payroll_export", "payroll_rules"),
+		legacy_roles=("HR Manager",),
+		message=_("当前账户没有薪酬板块权限。"),
+	)
 	company = (company or "").strip()
 	if not company:
 		frappe.throw(_("薪资试算必须传入公司，不允许按月份全局读取或删除。"))
 	if not frappe.db.exists("Company", company):
 		frappe.throw(_("公司 {0} 不存在").format(company))
+	frappe.get_doc("Company", company).check_permission("read")
 	return company
 
 
@@ -4022,7 +4029,7 @@ def _employee_salary_change_merge_name(company, employee, employee_code, effecti
 def create_employee_salary_change(**kwargs):
 	data = dict(kwargs)
 	from hrms.payroll.standing_permissions import require_access
-	company = require_access(data.get("company"))
+	company = require_access(data.get("company"), action="entry" if data.get("request_mode") == "initial" else "change")
 	status = "待审核"
 	employee = data.get("employee")
 	if not employee:
@@ -4123,7 +4130,7 @@ def update_employee_salary_change(name: str = "", company: str = "", employee: s
 	updates the salary-adjustment fields that users also maintain in Excel.
 	"""
 	from hrms.payroll.standing_permissions import require_access
-	company = require_access(company)
+	company = require_access(company, action="entry" if request_mode == "initial" else "change")
 	if isinstance(values, str):
 		try:
 			values = json.loads(values or "{}")

@@ -85,6 +85,11 @@ for (const marker of [
 	"待处理异常",
 	"待确认",
 	"已确认",
+	"processing_slot_status",
+	"const statusControl",
+	"supplemental_out_of_month_rows",
+	"out_of_month_supplement",
+	"跨月补充资料",
 	"source_file",
 	"source_sheet",
 	"source_row",
@@ -102,6 +107,9 @@ for (const marker of [
 	"选择或补选文件",
 	"attendance_exception_lines(row)",
 	"attendance_exception_date_text(row)",
+	'["attendance_details", "异常日期"]',
+	'codes.has("ATTENDANCE_MONTH_MISMATCH")',
+	'field === "attendance_details" ? this.attendance_exception_date_text(row)',
 	"render_attendance_exception_lines(lines, recordId",
 	"register_monthly_support_file",
 	"process_monthly_support_file",
@@ -364,7 +372,13 @@ for (const queueControl of ["data-bulk-process", "data-processing-record-select"
 	}
 }
 mustInclude(processingResults, "data-edit-processing-record", "Every processing-result row must provide an audited manual-edit action.");
-mustInclude(attendancePageJs, "data-slot-manual", "Every primary attendance source card must open its manual-edit view.");
+const processingSlotStart = attendancePageJs.indexOf("render_processing_slot(slot");
+const processingSlotEnd = attendancePageJs.indexOf("\n\topen_slot_uploader", processingSlotStart);
+const processingSlot = attendancePageJs.slice(processingSlotStart, processingSlotEnd);
+mustInclude(processingSlot, "data-slot-exceptions", "A source card with pending exceptions must provide a direct exception-processing action.");
+if (processingSlot.includes("data-slot-manual")) {
+	throw new Error("Primary attendance source cards must not duplicate the processing-results manual-edit entry.");
+}
 mustInclude(attendancePageJs, "data-monthly-support-manual", "Every monthly support source card must open its manual-edit view.");
 if (processingResults.includes("data-confirm-source") || processingResults.includes("确认本类结果")) {
 	throw new Error("Source confirmation must be performed on the monthly summary cards, not in processing results.");

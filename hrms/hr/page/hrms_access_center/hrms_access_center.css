@@ -287,6 +287,22 @@
 	padding: 2px;
 }
 
+.hrms-access-center__permission-category {
+	background: var(--subtle-fg, #f5f7fa);
+	border-left: 3px solid #4c9ee8;
+	border-radius: 4px;
+	margin-top: 8px;
+	padding: 7px 10px;
+}
+
+.hrms-access-center__permission-category:first-child {
+	margin-top: 0;
+}
+
+.hrms-access-center__permission-category h5 {
+	margin: 0;
+}
+
 .hrms-access-center__role-card {
 	align-items: flex-start;
 	border: 1px solid var(--border-color, #dfe3e8);
@@ -371,6 +387,47 @@
 	margin-top: 16px;
 }
 
+.hrms-access-capability-dialog .modal-dialog {
+	max-width: min(1180px, calc(100vw - 48px));
+	width: min(1180px, calc(100vw - 48px));
+}
+
+.hrms-access-capability-dialog .modal-body {
+	max-height: calc(100vh - 150px);
+	overflow-y: auto;
+	padding-left: 24px;
+	padding-right: 24px;
+}
+
+.hrms-access-capability-dialog__account {
+	border-bottom: 1px solid var(--border-color, #dfe3e8);
+	color: var(--text-muted, #6b7280);
+	font-size: 13px;
+	margin-bottom: 4px;
+	padding: 0 0 12px;
+}
+
+.hrms-access-capability-dialog .form-section {
+	padding: 12px 0 4px;
+}
+
+.hrms-access-capability-dialog .section-head {
+	margin-bottom: 4px;
+}
+
+.hrms-access-capability-dialog .form-column {
+	padding-left: 12px;
+	padding-right: 12px;
+}
+
+.hrms-access-capability-dialog .form-column:first-child {
+	padding-left: 0;
+}
+
+.hrms-access-capability-dialog .form-column:last-child {
+	padding-right: 0;
+}
+
 @media (max-width: 900px) {
 	.hrms-access-center__guide,
 	.hrms-access-center__actions {
@@ -392,6 +449,16 @@
 }
 
 @media (max-width: 640px) {
+	.hrms-access-capability-dialog .modal-dialog {
+		max-width: calc(100vw - 20px);
+		width: calc(100vw - 20px);
+	}
+
+	.hrms-access-capability-dialog .modal-body {
+		padding-left: 16px;
+		padding-right: 16px;
+	}
+
 	.hrms-access-center__tabs {
 		overflow-x: auto;
 	}

@@ -663,6 +663,13 @@ class AttendanceImportCenter {
 		return `<span class="hrms-attendance-processing-status ${className}">${this.escape(__(normalized))}</span>`;
 	}
 
+	processing_slot_status(slot = {}) {
+		// A source may be confirmed while unresolved rows remain excluded from
+		// downstream calculation. On the card, show the live exception state so
+		// those rows are not mistaken for approved attendance.
+		return Number(slot.exception_count || 0) > 0 ? "待处理异常" : slot.status;
+	}
+
 	review_status_badge(status) {
 		const normalized = String(status || "待审核");
 		const className = {
@@ -760,9 +767,10 @@ class AttendanceImportCenter {
 			this.exception_source_filter = button.dataset.slotOpen;
 			this.set_view(button.dataset.slotTarget || "exceptions");
 		}));
-		body.querySelectorAll("[data-slot-manual]").forEach((button) => button.addEventListener("click", () => {
-			this.selected_source_type = button.dataset.slotManual;
-			this.set_view("processing-results");
+		body.querySelectorAll("[data-slot-exceptions]").forEach((button) => button.addEventListener("click", () => {
+			this.selected_source_type = button.dataset.slotExceptions;
+			this.exception_source_filter = button.dataset.slotExceptions;
+			this.set_view("exceptions");
 		}));
 	}
 
@@ -888,6 +896,8 @@ class AttendanceImportCenter {
 		const mappingText = requiredMapping.map(([target, source]) => `${source} → ${target}`).join("；");
 		const excludedRows = Number(slot.data_quality?.excluded_missing_employee_code_rows || 0);
 		const lifecycleShiftRows = Number(slot.data_quality?.lifecycle_excluded_blank_shift_rows || 0);
+		const supplementalRows = Number(slot.data_quality?.supplemental_out_of_month_rows || 0);
+		const supplementalDates = (slot.data_quality?.supplemental_out_of_month_dates || []).join("、");
 		const sourceRows = Number(slot.row_count || 0);
 		const employeeSourceRows = Number(slot.eligible_employee_source_rows || 0);
 		const employeeSummaries = Number(slot.employee_summary_count || 0);
@@ -895,15 +905,24 @@ class AttendanceImportCenter {
 		const mergeText = merge.parent_batch
 			? __("本次合并：更新 {0} 条，新增 {1} 条", [merge.merged_rows || 0, merge.inserted_rows || 0])
 			: "";
+		const slotStatus = this.processing_slot_status(slot);
+		const statusControl = !loading && Number(slot.exception_count || 0) > 0
+			? `<button type="button" class="hrms-attendance-processing-status hrms-attendance-processing-status__action is-warning" data-slot-exceptions="${this.escape(slot.source_type)}" title="${this.escape(__("处理{0}的待处理异常", [slot.label]))}">${this.escape(__(slotStatus))}</button>`
+			: loading
+				? `<span class="text-muted">${this.escape(__("读取中"))}</span>`
+				: this.status_badge(slotStatus);
 		const qualityNotice = excludedRows
 			? `<div class="hrms-attendance-api-notice"><button type="button" class="hrms-attendance-api-notice__detail" data-data-quality-detail="missing_employee_code" data-data-quality-source="${this.escape(slot.source_type)}"><strong>${this.escape(__("已排除 {0} 条无工号来源行", [excludedRows]))}</strong></button><span>${this.escape(__("按“工号”主匹配；无工号的场地/设备账号不会生成员工异常。点击标题可查看原始明细。"))}</span></div>`
 			: "";
 		const lifecycleNotice = lifecycleShiftRows
 			? `<div class="hrms-attendance-api-notice"><button type="button" class="hrms-attendance-api-notice__detail" data-data-quality-detail="blank_shift" data-data-quality-source="${this.escape(slot.source_type)}"><strong>${this.escape(__("已保留 {0} 条入离职期间空班次", [lifecycleShiftRows]))}</strong></button><span>${this.escape(__("这些行作为数据质量证据留存，不进入员工异常或薪资。点击标题可查看原始明细。"))}</span></div>`
 			: "";
+		const supplementalNotice = supplementalRows
+			? `<div class="hrms-attendance-api-notice"><button type="button" class="hrms-attendance-api-notice__detail" data-data-quality-detail="out_of_month_supplement" data-data-quality-source="${this.escape(slot.source_type)}"><strong>${this.escape(__("已保留 {0} 条跨月补充资料", [supplementalRows]))}</strong></button><span>${this.escape(__("{0}仅用于补全月末跨天班次证据；不参与本月汇总，不计为异常。点击标题可查看原始明细。", [supplementalDates ? `${supplementalDates} ` : ""]))}</span></div>`
+			: "";
 		return `
 			<article class="hrms-attendance-source-card" data-source-slot="${this.escape(slot.source_type)}">
-				<div class="hrms-attendance-source-card__head"><div><strong>${this.escape(__(slot.label))}</strong></div>${loading ? `<span class="text-muted">${this.escape(__("读取中"))}</span>` : this.status_badge(slot.status)}</div>
+				<div class="hrms-attendance-source-card__head"><div><strong>${this.escape(__(slot.label))}</strong></div>${statusControl}</div>
 				<dl>
 					<div><dt>${this.escape(__("文件"))}</dt><dd title="${this.escape(fileName)}">${this.escape(fileName)}</dd></div>
 					<div><dt>${this.escape(__("月份"))}</dt><dd>${this.escape(slot.attendance_month || this.attendance_month || "--")}</dd></div>
@@ -917,11 +936,11 @@ class AttendanceImportCenter {
 				</dl>
 				${qualityNotice}
 				${lifecycleNotice}
+				${supplementalNotice}
 				<div class="hrms-attendance-source-card__actions">
 					<button class="btn btn-default btn-xs" data-slot-upload="${this.escape(slot.source_type)}" ${loading ? "disabled" : ""}>${this.escape(__(slot.source_file ? "重新上传" : "上传"))}</button>
 					<button class="btn btn-default btn-xs" data-slot-download="${this.escape(slot.source_type)}" ${canDownload ? "" : "disabled"}>${this.escape(__("下载加工表"))}</button>
 					<button class="btn btn-default btn-xs" data-slot-open="${this.escape(slot.source_type)}" data-slot-target="${this.escape(openTarget)}" ${loading || !slot.source_file ? "disabled" : ""}>${this.escape(openLabel)}</button>
-					<button class="btn btn-default btn-xs" data-slot-manual="${this.escape(slot.source_type)}" ${loading || !slot.source_file ? "disabled" : ""}>${this.escape(__("手动修改"))}</button>
 				</div>
 			</article>
 		`;
@@ -1019,7 +1038,7 @@ class AttendanceImportCenter {
 			eligible_for_downstream: "计入下游", include_in_downstream: "计入下游",
 			housing_allowance: "住房补贴", full_attendance_award: "全勤奖", special_hours: "特殊工时", special_hours_days: "特殊工时明细",
 			day: "日期", hours: "工时",
-			attendance_details: "涉及日期及打卡详情", attendance_date: "考勤日期", shift: "班次", clock_in: "上班打卡", clock_out: "下班打卡",
+			attendance_details: "异常日期", attendance_date: "考勤日期", shift: "班次", clock_in: "上班打卡", clock_out: "下班打卡",
 			exception_events: "异常事件明细", data_quality_events: "数据质量说明",
 			clock_in_missing: "上班缺卡次数", clock_out_missing: "下班缺卡次数", source_row: "来源行",
 			"工号": "工号", "姓名": "姓名", "部门": "部门", "苹果类型": "苹果类型", "有效苹果数": "有效苹果数",
@@ -1053,7 +1072,7 @@ class AttendanceImportCenter {
 			["holiday_overtime_hours", "节假日加班"], ["large_night_shifts", "大夜班"], ["small_night_shifts", "小夜班"],
 			["personal_leave_hours", "事假"], ["sick_leave_hours", "病假"], ["annual_leave_hours", "特休"], ["work_injury_hours", "工伤"],
 			["rest_arrangement_hours", "排休"], ["absence_hours", "旷工工时"], ["absence_marker_count", "旷工标记"], ["late_count", "迟到"], ["early_count", "早退"],
-			["clock_in_missing_count", "上班漏打卡"], ["clock_out_missing_count", "下班漏打卡"], ["exception_events", "异常事件（员工＋日期）"], ["attendance_details", "涉及日期 / 打卡详情"],
+			["clock_in_missing_count", "上班漏打卡"], ["clock_out_missing_count", "下班漏打卡"], ["exception_events", "异常事件（员工＋日期）"], ["attendance_details", "异常日期"],
 		];
 	}
 
@@ -1091,8 +1110,19 @@ class AttendanceImportCenter {
 
 	attendance_exception_date_text(row) {
 		const lines = this.attendance_exception_lines(row);
-		if (lines.length) return [...new Set(lines.map((line) => line.attendance_date).filter(Boolean))].join("、");
-		if (row.source_type === "attendance_draft") return "--";
+		const dates = lines.map((line) => line.attendance_date).filter(Boolean);
+		if (row.source_type === "attendance_draft") {
+			const codes = new Set(row.exception_codes || []);
+			const details = this.processing_values(row).attendance_details;
+			if (Array.isArray(details) && codes.has("ATTENDANCE_MONTH_MISMATCH")) {
+				details.forEach((detail) => {
+					const date = String(detail?.attendance_date || "").trim();
+					if (date && date.slice(0, 7) !== this.attendance_month) dates.push(date);
+				});
+			}
+			return [...new Set(dates)].join("、") || "--";
+		}
+		if (dates.length) return [...new Set(dates)].join("、");
 		return this.attendance_detail_text(row);
 	}
 
@@ -1105,11 +1135,10 @@ class AttendanceImportCenter {
 		return lines.map((line) => {
 			const flags = (line.exception_codes || []).map(sourceExceptionLabel).join("、") || __("待人工确认");
 			const restdayWithoutOvertime = (line.exception_codes || []).includes("RESTDAY_CLOCKED_WITHOUT_OVERTIME");
-			const clocks = `${__("班次")}：${line.shift || "--"}　${__("上班")}：${line.clock_in || "--"}　${__("下班")}：${line.clock_out || "--"}${restdayWithoutOvertime ? `　${__("日期类型")}：${line.date_type || "休息日"}　${__("当前休息日加班")}：${line.restday_overtime_hours || 0}` : ""}`;
 			const action = includeAction && recordId
 				? `<br><button class="btn ${restdayWithoutOvertime ? "btn-primary" : "btn-default"} btn-xs" data-edit-attendance-daily-row="${this.escape(recordId)}" data-attendance-source-row="${this.escape(line.source_row || "")}" data-restday-overtime-correction="${restdayWithoutOvertime ? "1" : ""}">${this.escape(__(restdayWithoutOvertime ? "填写休息日加班时长" : "修改本日"))}</button>`
 				: "";
-			return `<div class="hrms-attendance-exception-line"><strong>${this.escape(line.attendance_date || "--")}</strong>　${this.escape(flags)}<br><small>${this.escape(clocks)}　${this.escape(__("来源行 {0}", [line.source_row || "--"]))}</small>${action}</div>`;
+			return `<div class="hrms-attendance-exception-line"><strong>${this.escape(line.attendance_date || "--")}</strong>　${this.escape(flags)}${action}</div>`;
 		}).join("");
 	}
 
@@ -1261,7 +1290,7 @@ class AttendanceImportCenter {
 		const values = this.processing_values(row);
 		const exception = row.exception_codes?.length ? this.exception_label_text(row) : "无";
 		const detail = row.exception_detail && row.exception_codes?.length ? `<br><small>${this.escape(row.exception_detail)}</small>` : "";
-		const displayValue = (field) => field === "attendance_details" ? this.attendance_detail_text(row) : field === "exception_events" ? this.attendance_exception_event_text(row) : (values[field] ?? "");
+		const displayValue = (field) => field === "attendance_details" ? this.attendance_exception_date_text(row) : field === "exception_events" ? this.attendance_exception_event_text(row) : (values[field] ?? "");
 		return `<tr><td>${this.escape(index + 1)}</td>${this.attendance_draft_columns().map(([field]) => `<td class="${["attendance_details", "exception_events"].includes(field) ? "hrms-attendance-long-cell" : ""}">${this.escape(displayValue(field))}</td>`).join("")}<td><strong>${this.escape(exception)}</strong>${detail}</td><td>${this.review_status_badge(row.review_status || "待审核")}</td><td><button class="btn btn-default btn-xs" data-edit-processing-record="${this.escape(row.record_id)}" data-edit-processing-source="attendance_draft">${this.escape(this.processing_record_action_label(row))}</button></td></tr>`;
 	}
 

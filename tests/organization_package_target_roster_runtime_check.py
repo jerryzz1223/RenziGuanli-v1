@@ -32,12 +32,16 @@ def run():
 	plan = package.prepare("永新", legacy, target)
 	assert not plan["errors"] and plan["warnings"], plan["errors"]
 	assert plan["_plans"]["AUTO"]["config"]["assigned_employees"] == ["TARGET"]
-	# Explicit manual assignment remains strict, even if its row follows the snapshot.
+	# Explicit manual assignment is retained as a pending business-code rule when
+	# the target roster has not been populated yet.
 	fixed = deepcopy(legacy)
 	fixed["人员任职"].append({**ref, "type": "任职人", "_row": 3})
-	assert any("0001" in error for error in package.prepare("永新", fixed, target)["errors"])
+	plan = package.prepare("永新", fixed, target)
+	assert not plan["errors"] and any("0001" in warning for warning in plan["warnings"])
+	assert plan["_plans"]["AUTO"]["config"]["pending_person_references"][0]["source_code"] == "0001"
 	manual = deepcopy(legacy); manual["组织层级"][0]["roster_auto_sync"] = "0"
-	assert any("0001" in error for error in package.prepare("永新", manual, target)["errors"])
+	plan = package.prepare("永新", manual, target)
+	assert not plan["errors"] and plan["_plans"]["AUTO"]["config"]["pending_person_references"]
 	# A fixed chart placement takes precedence over an automatic bucket.
 	reserved = deepcopy(data)
 	reserved["组织层级"].append({**data["组织层级"][0], "portable_id": "MANUAL", "roster_auto_sync": "0", "_row": 3})
@@ -46,7 +50,7 @@ def run():
 	assert not plan["errors"], plan["errors"]
 	assert plan["_plans"]["AUTO"]["config"]["assigned_employees"] == []
 	assert plan["_plans"]["MANUAL"]["config"]["assigned_employees"] == ["TARGET"]
-	print("PASS: source/target employee IDs differ; automatic rules use target roster; legacy snapshots accepted; manual assignments remain strict; fixed placements win; zero vacancy round trip")
+	print("PASS: source/target employee IDs differ; automatic rules use target roster; legacy snapshots accepted; missing manual assignments remain pending; fixed placements win; zero vacancy round trip")
 
 
 if __name__ == "__main__":

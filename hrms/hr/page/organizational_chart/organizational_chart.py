@@ -1463,6 +1463,12 @@ def _build_manual_organization_tree(company, manual):
 			if proxy:
 				lines.extend(role_lines({"proxy_employee": node.manual_config["proxy_employee"]}, employee_labels))
 		roster_department = node.manual_config.get("department") if kind in ROSTER_UNIT_KINDS else node.manual_config.get("roster_department") or node.manual_config.get("department")
+		pending_items = []
+		for field, label_field, label in (("department", "department_label", _("部门")), ("designation", "designation_label", _("岗位")), ("grade", "grade_label", _("花名册职级"))):
+			if node.manual_config.get(label_field) and not node.manual_config.get(field):
+				pending_items.append(label)
+		if node.manual_config.get("pending_person_references"):
+			pending_items.append(_("人员"))
 		matched_employees = employees_by_department.get(roster_department, [])
 		planned_headcount = cint(node.planned_headcount)
 		vacancy_count = cint(node.vacancy_count)
@@ -1490,11 +1496,17 @@ def _build_manual_organization_tree(company, manual):
 			"node_type": node_type, "organization_node_type": kind, "name": name, "title": kind,
 			"assignment_issues": assignment_warnings.get(node.name, []),
 			"department": node.manual_config.get("department"),
+			"department_label": node.manual_config.get("department_label", ""),
 			"reporting_scope_pending": bool(node.manual_config.get("reporting_scope_pending") and not node.parent_node),
 			"roster_department": roster_department,
 			"designation": node.manual_config.get("designation"),
+			"designation_label": node.manual_config.get("designation_label", ""),
 			"role_title": node.manual_config.get("role_title"),
 			"grade": node.manual_config.get("grade"),
+			"grade_label": node.manual_config.get("grade_label", ""),
+			"configuration_match_status": _("待匹配") if pending_items else _("已匹配"),
+			"configuration_pending_items": pending_items,
+			"pending_person_count": len(node.manual_config.get("pending_person_references", [])),
 			"source_grade_tags": node.manual_config.get("source_grade_tags", source_grades.get(node.name, {}).get("source_grade_tags", "")),
 			"source_grade_status": node.manual_config.get("source_grade_status", source_grades.get(node.name, {}).get("source_grade_status", "")),
 			"chart_grade": chart_grades.get(node.manual_config.get("chart_grade_code"), node.manual_config.get("chart_grade", {})),
@@ -1805,7 +1817,7 @@ def save_manual_organization_node(
 		allowed_departments=allowed_departments,
 	)
 	config = {
-		**{key: previous_config[key] for key in ("assignment_rules_manual", "assignment_reviewed_by", "assignment_reviewed_on", "portable_id", "chart_grade_code", "chart_grade", "roster_department_alias_labels", "portable_proxy_display_only", "roster_initialization", "roster_initialization_complete", "reporting_scope_pending", "navigation_upgrade", "roster_generated", "roster_auto_sync", "template_source_cell", "template_leadership_cell", "template_bindings", "template_source_document", "template_source_vacancies", "template_leadership") if key in previous_config},
+		**{key: previous_config[key] for key in ("assignment_rules_manual", "assignment_reviewed_by", "assignment_reviewed_on", "portable_id", "chart_grade_code", "chart_grade", "roster_department_alias_labels", "portable_proxy_display_only", "roster_initialization", "roster_initialization_complete", "reporting_scope_pending", "navigation_upgrade", "roster_generated", "roster_auto_sync", "template_source_cell", "template_leadership_cell", "template_bindings", "template_source_document", "template_source_vacancies", "template_leadership", "department_label", "designation_label", "grade_label", "pending_person_references") if key in previous_config},
 		"manual_organization": True,
 		"chart_grade_code": chart_grade_code,
 		"chart_grade": chart_grade,
@@ -1821,10 +1833,13 @@ def save_manual_organization_node(
 		"manager_name": manager_name if node_kind in {"管理层", "分管"} else None,
 		"manager_employee": manager_employee if node_kind in {"管理层", "分管"} else None,
 		"department": department,
+		"department_label": department_name if department else previous_config.get("department_label", ""),
 		# This is a read-only reference to the exact linked roster department.
 		"roster_department": selection.get("roster_department") if node_kind not in {"管理层", "分管"} else None,
 		"designation": designation if node_kind == "岗位" else None,
+		"designation_label": designation if designation else previous_config.get("designation_label", ""),
 		"grade": grade if node_kind == "岗位" else None,
+		"grade_label": grade if grade else previous_config.get("grade_label", ""),
 		"employee": employee if node_kind == "员工" else None,
 		# The actual holder is a normal Employee reference. The proxy is the only
 		# display-only substitute and never writes employee, role or workflow data.
@@ -1832,6 +1847,12 @@ def save_manual_organization_node(
 		"proxy_employee": proxy_employee if node_kind != "员工" else None,
 		"assigned_employees": assigned_employees if node_kind not in {"管理层", "分管", "员工"} else [],
 	}
+	selected_fields = {field for field, value in (("manager_employee", manager_employee), ("employee", employee),
+		("primary_employee", primary_employee), ("proxy_employee", proxy_employee)) if value}
+	if assigned_employees:
+		selected_fields.add("assigned_employees")
+	if selected_fields and config.get("pending_person_references"):
+		config["pending_person_references"] = [row for row in config["pending_person_references"] if row.get("field") not in selected_fields]
 	if previous_config.get("assignment_rules_manual"):
 		for key in ("employee", "primary_employee", "proxy_employee", "assigned_employees", "manager_employee", "assignment_mode", "roster_auto_sync"):
 			config[key] = previous_config.get(key)

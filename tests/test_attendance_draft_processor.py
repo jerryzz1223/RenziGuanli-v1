@@ -126,6 +126,37 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(result["processed_rows"][0]["employee_name"], "张三")
 		self.assertEqual(result["data_quality"]["excluded_missing_employee_code_accounts"][0]["source_account_name"], "车间二楼放料")
 
+	def test_non_boundary_out_of_month_rows_remain_exceptions(self):
+		row = processor.process_attendance_draft_rows(
+			[{"姓名": "张三", "工号": "E-001", "日期": "26-08-02", "实际部门": "工程课", "班次": "白班", "source_row": 3}],
+			attendance_month="2026-07", source_file="sample.xlsx", source_sheet="每日统计",
+		)["processed_rows"][0]
+
+		self.assertIn("ATTENDANCE_MONTH_MISMATCH", row["exception_codes"])
+		self.assertEqual(row["review_status"], "待审核")
+
+	def test_next_month_boundary_rows_are_supplemental_and_not_used_or_exceptional(self):
+		rows = [
+			{"姓名": "张三", "工号": "E-001", "日期": "26-07-31", "实际部门": "工程课", "班次": "生产夜班 20:00-次日08:00", "标准工时": 8, "实际出勤（小时）": 8, "source_row": 3},
+			{"姓名": "张三", "工号": "E-001", "日期": "26-08-01", "实际部门": "工程课", "班次": "白班", "标准工时": 8, "实际出勤（小时）": 7, "下班缺卡": 1, "source_row": 4},
+		]
+
+		result = processor.process_attendance_draft_rows(
+			rows, attendance_month="2026-07", source_file="sample.xlsx", source_sheet="每日统计",
+		)
+		row = result["processed_rows"][0]
+
+		self.assertEqual(row["processed_value"]["standard_hours"], 8)
+		self.assertEqual(row["processed_value"]["actual_attendance_hours"], 8)
+		self.assertEqual([detail["attendance_date"] for detail in row["processed_value"]["attendance_details"]], ["2026-07-31"])
+		self.assertNotIn("ATTENDANCE_MONTH_MISMATCH", row["exception_codes"])
+		self.assertNotIn("CLOCK_OUT_MISSING", row["exception_codes"])
+		self.assertEqual(row["review_status"], "无需审核")
+		self.assertTrue(row["eligible_for_downstream"])
+		self.assertEqual(result["data_quality"]["supplemental_out_of_month_rows"], 1)
+		self.assertEqual(result["data_quality"]["supplemental_out_of_month_dates"], ["2026-08-01"])
+		self.assertEqual(result["metrics"]["eligible_employee_source_rows"], 1)
+
 	def test_duplicate_dates_and_identity_conflicts_enter_review_without_loss(self):
 		rows = [
 			{"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课", "班次": "白班", "标准工时": 8, "source_file": "a.xlsx", "source_sheet": "每日明细（钉钉导出）", "source_row": 3},
@@ -383,6 +414,36 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertNotIn("EMPLOYEE_DEPARTMENT_MISMATCH", row["exception_codes"])
 		self.assertEqual(row["review_status"], "无需审核")
 		self.assertTrue(row["eligible_for_downstream"])
+
+	def test_dingtalk_departed_name_suffix_does_not_create_identity_exception(self):
+		rows = [
+			{
+				"姓名": "张朋军（离职）", "工号": "4005", "日期": "26-07-01", "实际部门": "品保课", "班次": "生产夜班 20:00-次日08:00", "标准工时": 8,
+				"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 1029,
+			},
+			{
+				"姓名": "张朋军", "工号": "4005", "日期": "26-07-02", "实际部门": "品保课", "班次": "生产夜班 20:00-次日08:00", "标准工时": 8,
+				"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 1030,
+			},
+		]
+		roster = [{"employee_code": "4005", "employee_name": "张朋军", "department": "品保课", "relieving_date": "2026-08-31"}]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-07", employee_directory=roster)["processed_rows"][0]
+
+		self.assertNotIn("EMPLOYEE_NAME_MISMATCH", row["exception_codes"])
+		self.assertNotIn("EMPLOYEE_CODE_NAME_CONFLICT", row["exception_codes"])
+		self.assertEqual(row["employee_name"], "张朋军")
+		self.assertEqual(row["review_status"], "无需审核")
+
+	def test_genuinely_different_name_still_creates_identity_exception(self):
+		rows = [{
+			"姓名": "王焱伟", "工号": "4051", "日期": "26-07-01", "实际部门": "品保课", "班次": "白班", "标准工时": 8,
+			"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 1022,
+		}]
+		roster = [{"employee_code": "4051", "employee_name": "王腾腾", "department": "品保课"}]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-07", employee_directory=roster)["processed_rows"][0]
+
+		self.assertIn("EMPLOYEE_NAME_MISMATCH", row["exception_codes"])
+		self.assertEqual(row["review_status"], "待审核")
 
 	def test_dingtalk_department_identifier_is_removed_before_matching_and_display(self):
 		rows = [{

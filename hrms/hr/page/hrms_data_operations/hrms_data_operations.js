@@ -10,7 +10,9 @@ frappe.pages["hrms-data-operations"].on_page_load = function (wrapper) {
 		overview: {},
 		context: {},
 		company: "",
+		cleanupMonth: (frappe.datetime?.get_today?.() || new Date().toISOString().slice(0, 10)).slice(0, 7),
 		selected: new Set(),
+		expandedModules: new Set(),
 		preview: null,
 		overviewError: "",
 	};
@@ -31,6 +33,18 @@ frappe.pages["hrms-data-operations"].on_page_load = function (wrapper) {
 
 	function riskLabel(risk) {
 		return risk === "critical" ? __("极高风险") : risk === "high" ? __("高风险") : __("可清除");
+	}
+
+	function canExecuteCleanup() {
+		const preview = state.preview;
+		return Boolean(
+			preview
+			&& preview.company === state.company
+			&& preview.cleanup_month === state.cleanupMonth
+			&& preview.count
+			&& !(preview.blockers || []).length
+			&& !(preview.linked_blockers || []).length
+		);
 	}
 
 	function renderCompanyPanel() {
@@ -64,26 +78,54 @@ frappe.pages["hrms-data-operations"].on_page_load = function (wrapper) {
 	function renderCleanupPanel() {
 		const modules = state.context.modules || [];
 		const protectedItems = state.context.protected || [];
+		const canExecute = canExecuteCleanup();
 		return `
-			<div class="hrms-data-operations__panel hrms-cleanup-panel">
-				<div class="hrms-panel-heading">
-					<div><h4>${__("数据清理中心")}</h4><p>${__("按模块清理演示或分阶段测试数据。所有模块默认不选中，必须先预览。")}</p></div>
-					<button class="btn btn-primary" data-action="preview-cleanup"${state.selected.size ? "" : " disabled"}>${__("预览已选数据")}</button>
-				</div>
-				<div class="hrms-protected-note"><strong>${__("永久保留：")}</strong>${protectedItems.map(escape).join("、")}</div>
-				<div class="hrms-cleanup-grid">
-					${modules.map((module) => `
-						<label class="hrms-cleanup-module is-${escape(module.risk)}${state.selected.has(module.key) ? " is-selected" : ""}">
-							<input type="checkbox" data-module="${escape(module.key)}"${state.selected.has(module.key) ? " checked" : ""}>
-							<span class="hrms-cleanup-module__content">
-								<span class="hrms-cleanup-module__title">${escape(module.label)} <em>${escape(riskLabel(module.risk))}</em></span>
-								<span>${escape(module.description)}</span>
-								<strong>${__("{0} 条记录", [module.count || 0])}</strong>
-							</span>
-						</label>`).join("")}
+				<div class="hrms-data-operations__panel hrms-cleanup-panel">
+					<div class="hrms-panel-heading">
+						<div><h4>${__("数据清理中心")}</h4><p>${__("按公司、月份和模块清理测试数据。所有模块默认不选中，必须先预览。")}</p></div>
+					<div class="hrms-data-operations__actions hrms-cleanup-primary-actions">
+						<button class="btn btn-default" data-action="preview-cleanup"${state.selected.size ? "" : " disabled"}>${state.preview ? __("重新预览") : __("预览已选数据")}</button>
+						<button class="btn btn-danger" data-action="execute-cleanup"${canExecute ? "" : " disabled"}>${__("清除已选数据")}</button>
+					</div>
+					</div>
+					<div class="hrms-protected-note"><strong>${__("永久保留：")}</strong>${protectedItems.map(escape).join("、")}</div>
+					<div class="hrms-cleanup-scope">
+						<label for="hrms-cleanup-month">${__("清理月份")}</label>
+						<input id="hrms-cleanup-month" class="form-control" type="month" data-cleanup-month value="${escape(state.cleanupMonth)}" required>
+						<span>${__("以下数量只统计 {0} 的业务数据；其他月份不会进入预览或删除计划。", [escape(state.cleanupMonth)])}</span>
+					</div>
+					<div class="hrms-cleanup-help"><strong>${__("数量为什么会出现？")}</strong>${__("点击每个模块的“查看构成”，可查看具体数据类型、归属判断和最近样例。")}</div>
+					<div class="hrms-cleanup-grid">
+						${modules.map((module) => `
+							<div class="hrms-cleanup-module is-${escape(module.risk)}${state.selected.has(module.key) ? " is-selected" : ""}${module.monthly_supported ? "" : " is-disabled"}">
+								<label class="hrms-cleanup-module__selector">
+									<input type="checkbox" data-module="${escape(module.key)}"${state.selected.has(module.key) ? " checked" : ""}${module.monthly_supported ? "" : " disabled"}>
+									<span class="hrms-cleanup-module__content">
+										<span class="hrms-cleanup-module__title">${escape(module.label)} <em>${escape(module.monthly_supported ? riskLabel(module.risk) : __("不可按月清除"))}</em></span>
+										<span>${escape(module.description)}</span>
+										<strong>${module.monthly_supported ? __("{0}：{1} 条记录", [escape(state.cleanupMonth), module.count || 0]) : __("持续有效的主数据，按月清理时保留")}</strong>
+								</span>
+							</label>
+							<button class="btn btn-link btn-xs hrms-cleanup-module__explain" type="button" data-explain-module="${escape(module.key)}" aria-expanded="${state.expandedModules.has(module.key) ? "true" : "false"}">${state.expandedModules.has(module.key) ? __("收起构成") : __("查看构成")}</button>
+							${state.expandedModules.has(module.key) ? renderModuleBreakdown(module) : ""}
+						</div>`).join("")}
 				</div>
 				<div data-cleanup-preview>${renderPreview()}</div>
 			</div>`;
+	}
+
+	function renderModuleBreakdown(module) {
+		const rows = module.doctypes || [];
+		return `<div class="hrms-cleanup-module__breakdown">
+			<div class="hrms-cleanup-module__breakdown-title">${__("当前公司的数据构成")}</div>
+			${rows.map((row) => `<div class="hrms-cleanup-record">
+				<div><strong>${escape(row.label || row.doctype)}</strong><span>${__("{0} 条", [row.count || 0])}</span></div>
+				<p>${escape(row.scope_reason || "")}</p>
+				<small>${__("最近样例：")}${escape((row.sample_names || []).join("、") || __("无"))}</small>
+				<code>${escape(row.doctype)}</code>
+			</div>`).join("") || `<div class="text-muted">${module.monthly_supported ? __("当前月份暂无数据，不会执行删除。") : __("该模块没有可靠的业务月份，按月清理时永久保留。")}</div>`}
+			${(module.excluded_doctypes || []).length && module.monthly_supported ? `<div class="text-muted">${__("以下持续性或无可靠月份的数据不会按月删除：")}${escape(module.excluded_doctypes.join("、"))}</div>` : ""}
+		</div>`;
 	}
 
 	function renderPreview() {
@@ -94,14 +136,14 @@ frappe.pages["hrms-data-operations"].on_page_load = function (wrapper) {
 		const blocked = blockers.length || linkedBlockers.length;
 		return `
 			<div class="hrms-cleanup-preview${blocked ? " has-blockers" : ""}">
-				<h5>${__("清理预览：{0} 条", [preview.count || 0])}</h5>
+				<h5>${__("{0} 清理预览：{1} 条", [escape(preview.cleanup_month), preview.count || 0])}</h5>
 				<p>${escape((preview.module_labels || []).join("、"))}</p>
 				${blockers.length ? `<div class="alert alert-warning">${__("员工花名册存在可一起清理的前置数据：")}${blockers.map((row) => `${escape(row.label)}(${escape(row.count)})`).join("、")}<div><button class="btn btn-default btn-xs mt-2" data-action="select-required">${__("一键加入前置模块")}</button></div></div>` : ""}
 				${linkedBlockers.length ? `<div class="alert alert-danger"><strong>${__("仍有其他员工关联数据，暂不能清除花名册：")}</strong><ul>${linkedBlockers.slice(0, 10).map((row) => `<li>${escape(row.label || row.doctype)}：${escape(row.count)} ${__("条")}</li>`).join("")}</ul><small>${__("请先在对应业务页撤回或清理这些记录。")}</small></div>` : ""}
-				<table class="table table-bordered"><thead><tr><th>${__("数据类型")}</th><th>${__("数量")}</th><th>${__("示例")}</th></tr></thead><tbody>
-					${(preview.records || []).map((row) => `<tr><td>${escape(row.doctype)}</td><td>${escape(row.count)}</td><td>${escape((row.sample_names || []).join("、"))}</td></tr>`).join("") || `<tr><td colspan="3" class="text-muted">${__("已选模块暂无数据")}</td></tr>`}
+				<table class="table table-bordered"><thead><tr><th>${__("数据类型")}</th><th>${__("为什么计入")}</th><th>${__("数量")}</th><th>${__("最近样例")}</th></tr></thead><tbody>
+					${(preview.records || []).map((row) => `<tr><td><strong>${escape(row.label || row.doctype)}</strong><br><small class="text-muted">${escape(row.doctype)}</small></td><td>${escape(row.scope_reason || "-")}</td><td>${escape(row.count)}</td><td>${escape((row.sample_names || []).join("、"))}</td></tr>`).join("") || `<tr><td colspan="4" class="text-muted">${__("已选模块暂无数据")}</td></tr>`}
 				</tbody></table>
-				<button class="btn btn-danger" data-action="execute-cleanup"${blocked || !preview.count ? " disabled" : ""}>${__("输入确认文本并执行清理")}</button>
+				<div class="hrms-cleanup-preview__next-step">${blocked ? __("请先解决上述阻断，再重新预览。") : preview.count ? __("预览已通过，可使用本区域右上角的“清除已选数据”继续。") : __("已选模块暂无可清除数据。")}</div>
 			</div>`;
 	}
 
@@ -149,10 +191,18 @@ frappe.pages["hrms-data-operations"].on_page_load = function (wrapper) {
 
 	function bindEvents() {
 		const body = page.body[0] || page.body;
-		body.querySelector("[data-company-selector]")?.addEventListener("change", (event) => loadContext(event.target.value));
+		body.querySelector("[data-company-selector]")?.addEventListener("change", (event) => loadContext(event.target.value, state.cleanupMonth));
+		body.querySelector("[data-cleanup-month]")?.addEventListener("change", (event) => {
+			if (event.target.value) loadContext(state.company, event.target.value);
+		});
 		body.querySelectorAll("[data-module]").forEach((checkbox) => checkbox.addEventListener("change", () => {
 			checkbox.checked ? state.selected.add(checkbox.dataset.module) : state.selected.delete(checkbox.dataset.module);
 			state.preview = null;
+			render();
+		}));
+		body.querySelectorAll("[data-explain-module]").forEach((button) => button.addEventListener("click", () => {
+			const moduleKey = button.dataset.explainModule;
+			state.expandedModules.has(moduleKey) ? state.expandedModules.delete(moduleKey) : state.expandedModules.add(moduleKey);
 			render();
 		}));
 		body.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", () => {
@@ -193,7 +243,7 @@ frappe.pages["hrms-data-operations"].on_page_load = function (wrapper) {
 	function previewCleanup() {
 		return frappe.call({
 			method: "hrms.api.data_operations.preview_company_data_cleanup",
-			args: { company: state.company, modules: selectedModules() },
+			args: { company: state.company, cleanup_month: state.cleanupMonth, modules: selectedModules() },
 			freeze: true,
 			freeze_message: __("正在生成清理预览…"),
 		}).then((response) => {
@@ -208,7 +258,7 @@ frappe.pages["hrms-data-operations"].on_page_load = function (wrapper) {
 		const dialog = new frappe.ui.Dialog({
 			title: __("确认清理公司数据"),
 			fields: [
-				{ fieldtype: "HTML", fieldname: "warning", options: `<div class="alert alert-danger">${__("即将清除 {0} 的 {1} 条数据。此操作不可撤销。", [escape(state.company), preview.count])}<br><strong>${escape(preview.confirmation_text)}</strong></div>` },
+				{ fieldtype: "HTML", fieldname: "warning", options: `<div class="alert alert-danger">${__("即将清除 {0} / {1} 的 {2} 条所选模块数据。其他月份不受影响，此操作不可撤销。", [escape(state.company), escape(preview.cleanup_month), preview.count])}<br><strong>${escape(preview.confirmation_text)}</strong></div>` },
 				{ fieldtype: "Data", fieldname: "confirmation", label: __("输入上方完整确认文本"), reqd: 1 },
 				{ fieldtype: "Check", fieldname: "acknowledge", label: __("我已确认公司和数据范围"), reqd: 1 },
 			],
@@ -220,7 +270,7 @@ frappe.pages["hrms-data-operations"].on_page_load = function (wrapper) {
 				}
 				frappe.call({
 					method: "hrms.api.data_operations.execute_company_data_cleanup",
-					args: { company: state.company, modules: selectedModules(), confirm: values.confirmation, plan_token: preview.plan_token },
+					args: { company: state.company, cleanup_month: preview.cleanup_month, modules: selectedModules(), confirm: values.confirmation, plan_token: preview.plan_token },
 					freeze: true,
 					freeze_message: __("正在清理已选数据…"),
 				}).then((response) => {
@@ -235,11 +285,12 @@ frappe.pages["hrms-data-operations"].on_page_load = function (wrapper) {
 		dialog.show();
 	}
 
-	function loadContext(company) {
+	function loadContext(company, cleanupMonth = state.cleanupMonth) {
 		$(page.body).html(`<div class="text-muted">${__("正在读取公司数据空间…")}</div>`);
-		return frappe.call("hrms.api.data_operations.get_company_data_management_context", { company }).then((response) => {
+		return frappe.call("hrms.api.data_operations.get_company_data_management_context", { company, cleanup_month: cleanupMonth }).then((response) => {
 			state.context = response.message || {};
 			state.company = state.context.company || "";
+			state.cleanupMonth = state.context.cleanup_month || cleanupMonth;
 			state.selected.clear();
 			state.preview = null;
 			render();
@@ -251,13 +302,14 @@ frappe.pages["hrms-data-operations"].on_page_load = function (wrapper) {
 		const currentCompany = window.hrmsCompanyContext?.getCurrentCompany?.() || "";
 		return Promise.allSettled([
 			frappe.call("hrms.api.data_operations.get_data_operations_overview"),
-			frappe.call("hrms.api.data_operations.get_company_data_management_context", { company: currentCompany }),
+			frappe.call("hrms.api.data_operations.get_company_data_management_context", { company: currentCompany, cleanup_month: state.cleanupMonth }),
 		]).then(([overviewResult, contextResult]) => {
 			if (contextResult.status !== "fulfilled") throw contextResult.reason;
 			state.overview = overviewResult.status === "fulfilled" ? overviewResult.value.message || {} : {};
 			state.overviewError = overviewResult.status === "fulfilled" ? "" : __("后台队列状态暂时不可用，不影响公司与数据空间管理。");
 			state.context = contextResult.value.message || {};
 			state.company = state.context.company || "";
+			state.cleanupMonth = state.context.cleanup_month || state.cleanupMonth;
 			state.selected.clear();
 			state.preview = null;
 			render();

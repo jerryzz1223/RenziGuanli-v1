@@ -166,14 +166,20 @@
 		},
 	];
 
-	// More is reserved for low-frequency, cross-module HR services. Settings
-	// and system administration live in the account menu instead.
+	// More is reserved for low-frequency, cross-module HR services and
+	// administrator-only reports that do not belong to a daily business module.
 	const moreItems = [
 		{
 			label: "苹果树统计",
 			description: "按员工、月份和年份查看苹果树数量与明细",
 			route: "/desk/apple-tree-center",
 			roles: HR_SETTINGS_MANAGER_ROLES,
+		},
+		{
+			label: "数据统计",
+			description: "查看业务表使用、更新与操作追溯记录",
+			route: "/desk/hrms-data-statistics",
+			roles: SYSTEM_ADMIN_ROLES,
 		},
 		{
 			label: "钉钉集成",
@@ -586,6 +592,7 @@
 			settings: HR_SETTINGS_MANAGER_ROLES,
 			"user-permissions": SYSTEM_ADMIN_ROLES,
 			"developer-tools": SYSTEM_ADMIN_ROLES,
+			"data-operations": SYSTEM_ADMIN_ROLES,
 		};
 		if (requiredRoles[action] && !hasAnyRole(requiredRoles[action])) {
 			showAccessDenied();
@@ -910,10 +917,31 @@
 		return CONTEXTUAL_ADMIN_PAGES[slug] ? slug : "";
 	}
 
+	function hideNativeUserRolePermissionsTab() {
+		if (contextualPageKey() !== "user") return;
+		const rolesTab = document.getElementById("user-roles_permissions_tab-tab");
+		const rolesPanel = document.getElementById("user-roles_permissions_tab");
+		if (!rolesTab && !rolesPanel) return;
+
+		if (rolesTab?.classList.contains("active")) {
+			document.getElementById("user-user_details_tab-tab")?.click();
+		}
+		if (rolesTab) {
+			rolesTab.hidden = true;
+			rolesTab.style.display = "none";
+			rolesTab.setAttribute("aria-hidden", "true");
+		}
+		if (rolesPanel) {
+			rolesPanel.hidden = true;
+			rolesPanel.style.display = "none";
+		}
+	}
+
 	function renderContextualAdminBar() {
 		const key = contextualPageKey();
 		const context = CONTEXTUAL_ADMIN_PAGES[key];
 		const existing = document.getElementById("hrms-contextual-admin-bar");
+		hideNativeUserRolePermissionsTab();
 		if (!context || !isDeskPage()) {
 			existing?.remove();
 			return;
@@ -1129,7 +1157,7 @@
 	}
 
 	let shellMaintenanceFrame = null;
-	const shellSelector = `.navbar, .page-head, #${NAV_ID}, #hrms-contextual-admin-bar, ${REDUNDANT_FRAMEWORK_CONTROL_SELECTOR}`;
+	const shellSelector = `.navbar, .page-head, .form-tabs, #${NAV_ID}, #hrms-contextual-admin-bar, ${REDUNDANT_FRAMEWORK_CONTROL_SELECTOR}`;
 	function affectsNavigationShell(mutation) {
 		const target = mutation.target;
 		if (target.nodeType === 1 && target.closest?.(".navbar, .page-head")) return true;
@@ -1144,6 +1172,7 @@
 		shellMaintenanceFrame = window.requestAnimationFrame(() => {
 			shellMaintenanceFrame = null;
 			removeRedundantFrameworkControls();
+			hideNativeUserRolePermissionsTab();
 			decoratePageTitle();
 			if (!document.getElementById(NAV_ID) || (contextualPageKey() && !document.getElementById("hrms-contextual-admin-bar"))) {
 				scheduleRender();

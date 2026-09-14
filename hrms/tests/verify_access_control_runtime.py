@@ -3,8 +3,9 @@
 import frappe
 
 from hrms.access_control import (
+	CAPABILITY_DEFINITIONS,
 	READ_ONLY_ROLE,
-	delete_hrms_user_account,
+	disable_hrms_user_account,
 	register_read_only_account,
 	set_hrms_user_capabilities,
 )
@@ -23,9 +24,7 @@ def execute():
 
 	before = frappe.get_doc("User", target_user)
 	before_roles = [row.role for row in before.roles]
-	managed_roles = {
-		"HRMS 基础只读", "薪资经办", "薪资审批", "System Manager",
-	}
+	managed_roles = {item["role"] for item in CAPABILITY_DEFINITIONS}
 	preserved = [role for role in before_roles if role not in managed_roles]
 	frappe.db.savepoint("verify_hrms_access_control")
 	try:
@@ -102,27 +101,35 @@ def verify_employee_registration():
 		frappe.set_user(original_session_user)
 
 
-def verify_account_deletion():
-	"""Create and delete a temporary user inside a transaction, then roll back."""
+def verify_account_disabling():
+	"""Create and disable a temporary user while preserving the record."""
 	original_session_user = frappe.session.user
-	email = f"codex.delete.{frappe.generate_hash(length=10).lower()}@example.com"
+	email = f"codex.disable.{frappe.generate_hash(length=10).lower()}@example.com"
 	frappe.set_user("Administrator")
-	frappe.db.savepoint("verify_hrms_account_deletion")
+	frappe.db.savepoint("verify_hrms_account_disabling")
 	try:
 		frappe.get_doc({
 			"doctype": "User",
 			"email": email,
-			"first_name": "删除回滚测试",
+			"first_name": "停用回滚测试",
 			"enabled": 1,
 			"user_type": "Website User",
 			"send_welcome_email": 0,
 		}).insert(ignore_permissions=True)
 		assert frappe.db.exists("User", email)
-		result = delete_hrms_user_account(email, email)
-		assert result["deleted"] == 1
-		assert not frappe.db.exists("User", email)
-		return {"user": email, "result": "deleted_and_rolled_back"}
+		try:
+			frappe.delete_doc("User", email, ignore_permissions=True)
+		except frappe.PermissionError:
+			pass
+		else:
+			raise AssertionError("User deletion was not blocked by the retention hook.")
+		assert frappe.db.exists("User", email)
+		result = disable_hrms_user_account(email)
+		assert result["disabled"] == 1
+		assert frappe.db.exists("User", email)
+		assert frappe.db.get_value("User", email, "enabled") == 0
+		return {"user": email, "result": "disabled_and_preserved_then_rolled_back"}
 	finally:
-		frappe.db.rollback(save_point="verify_hrms_account_deletion")
+		frappe.db.rollback(save_point="verify_hrms_account_disabling")
 		frappe.clear_cache(user=email)
 		frappe.set_user(original_session_user)

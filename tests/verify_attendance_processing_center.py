@@ -210,6 +210,13 @@ for marker in (
 ):
 	require(confirm_body, marker, f"Pending exceptions must not block source confirmation: {marker}")
 
+for marker in (
+	'"out_of_month_supplement": "跨月补充资料"',
+	'quality_type == "blank_shift"',
+	'attendance_date == boundary_date',
+):
+	require(api, marker, f"Out-of-month attendance rows must remain read-only supplemental evidence: {marker}")
+
 if "if batch.status == \"已确认\":" not in confirm_body:
 	raise AssertionError("Confirmed sources must reject duplicate confirmation and require an auditable correction path.")
 

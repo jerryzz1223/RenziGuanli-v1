@@ -82,6 +82,24 @@ for (const obsolete of [
 	}
 }
 
+for (const marker of [
+	"hideNativeUserRolePermissionsTab",
+	"user-roles_permissions_tab-tab",
+	"user-roles_permissions_tab",
+	"user-user_details_tab-tab",
+	"rolesTab.hidden = true",
+	"rolesPanel.hidden = true",
+	".form-tabs",
+	"20260914-hide-native-user-roles-v1",
+]) {
+	const source = marker.startsWith("20260914") ? hooks : topNav;
+	mustInclude(source, marker, `Native User role editor must stay hidden: ${marker}`);
+}
+
+if (hooks.includes('"User": "public/js/user.js"')) {
+	throw new Error("Unused User doctype_js registration must be removed.");
+}
+
 const moreItemsMatch = topNav.match(/const\s+moreItems\s*=\s*\[([\s\S]*?)\];/);
 if (moreItemsMatch && moreItemsMatch[1].includes("设置中心")) {
 	throw new Error("设置中心 must live in the account menu, not the top 更多 menu.");

@@ -27,8 +27,8 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260912-apple-tree-single-entry-access-center-unified-v1",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260912-hide-frappe-search-access-center-unified-v1",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260914-data-statistics-clean-sidebar-v4",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260914-data-statistics-more-v2&compat=20260914-hide-native-user-roles-v1",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
 	"/assets/hrms/js/hrms_file_uploader.js?v=20260912a",
 	"/assets/hrms/js/hrms_entry.js?v=20260912-intranet-entry-v1",
@@ -200,6 +200,7 @@ doc_events = {
 			"erpnext.setup.doctype.employee.employee.validate_employee_role",
 			"hrms.overrides.employee_master.update_approver_user_roles",
 		],
+		"on_trash": "hrms.access_control.prevent_hrms_user_account_deletion",
 	},
 	"Company": {
 		"validate": "hrms.overrides.company.validate_default_accounts",
@@ -250,6 +251,18 @@ doc_events = {
 		"after_insert": "hrms.overrides.employee_master.update_job_applicant_and_offer",
 		"on_trash": "hrms.overrides.employee_master.update_employee_transfer",
 		"after_delete": ["hrms.overrides.employee_master.publish_update", "hrms.api.organization_roster_sync.roster_changed"],
+	},
+	"Department": {
+		"on_update": "hrms.api.organization_roster_sync.organization_master_changed",
+		"after_delete": "hrms.api.organization_roster_sync.organization_master_changed",
+	},
+	"Designation": {
+		"on_update": "hrms.api.organization_roster_sync.organization_master_changed",
+		"after_delete": "hrms.api.organization_roster_sync.organization_master_changed",
+	},
+	"Employee Grade": {
+		"on_update": "hrms.api.organization_roster_sync.organization_master_changed",
+		"after_delete": "hrms.api.organization_roster_sync.organization_master_changed",
 	},
 	"Project": {"validate": "hrms.controllers.employee_boarding_controller.update_employee_boarding_status"},
 	"Task": {"on_update": "hrms.controllers.employee_boarding_controller.update_task"},

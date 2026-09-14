@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from calendar import monthrange
 from collections import OrderedDict
+from datetime import date
 
 import frappe
 from frappe import _
@@ -26,6 +29,7 @@ DATA_CLEANUP_MODULES = OrderedDict(
 				"doctypes": (
 					"HRMS Attendance Exception",
 					"HRMS Apple Reward Record",
+					"HRMS Apple Tree History Summary",
 					"HRMS Attendance Leave Evidence",
 					"HRMS Monthly Attendance Summary",
 					"HRMS Attendance Department Confirmation",
@@ -51,6 +55,9 @@ DATA_CLEANUP_MODULES = OrderedDict(
 					"HRMS Payroll Input Record",
 					"HRMS Payroll Variable Record",
 					"HRMS Payroll Welfare Source Record",
+					"HRMS Payroll Manual Adjustment",
+					"HRMS Monthly Payroll Participation",
+					"HRMS Employee Contribution Change",
 					"HRMS Employee Salary Change",
 					"HRMS Payroll Variable Import Batch",
 				),
@@ -104,10 +111,10 @@ DATA_CLEANUP_MODULES = OrderedDict(
 			"employees",
 			{
 				"label": "员工花名册",
-				"description": "删除该公司员工主档；组织架构、字段模板与规则仍保留",
+				"description": "员工主档与跨部门支援能力持续有效，不按月份删除",
 				"risk": "critical",
 				"requires": ("attendance", "payroll", "form_intake", "personnel_changes", "dingtalk"),
-				"doctypes": ("Employee",),
+				"doctypes": ("Cross Department Support Capability", "Employee"),
 			},
 		),
 	)
@@ -123,6 +130,7 @@ BULK_CLEANUP_DOCTYPES = frozenset(
 	{
 		"HRMS Attendance Exception",
 		"HRMS Apple Reward Record",
+		"HRMS Apple Tree History Summary",
 		"HRMS Attendance Leave Evidence",
 		"HRMS Monthly Attendance Summary",
 		"HRMS Attendance Department Confirmation",
@@ -135,10 +143,14 @@ BULK_CLEANUP_DOCTYPES = frozenset(
 		"HRMS Payroll Input Record",
 		"HRMS Payroll Variable Record",
 		"HRMS Payroll Welfare Source Record",
+		"HRMS Payroll Manual Adjustment",
+		"HRMS Monthly Payroll Participation",
+		"HRMS Employee Contribution Change",
 		"HRMS Payroll Variable Import Batch",
 		"HRMS Form Import Row",
 		"HRMS Business Process Record",
 		"HRMS Form Import Batch",
+		"Cross Department Support Capability",
 	}
 )
 
@@ -146,6 +158,83 @@ LINKED_COMPANY_FIELDS = {
 	"Job Applicant": ("job_title", "Job Opening"),
 	"Interview": ("job_opening", "Job Opening"),
 	"Interview Feedback": ("interview", "Interview"),
+}
+
+CLEANUP_RECORD_LABELS = {
+	"HRMS Attendance Exception": "考勤异常",
+	"HRMS Apple Reward Record": "苹果树奖励记录",
+	"HRMS Apple Tree History Summary": "苹果树历史汇总",
+	"HRMS Attendance Leave Evidence": "考勤请假依据",
+	"HRMS Monthly Attendance Summary": "考勤月汇总",
+	"HRMS Attendance Department Confirmation": "部门考勤确认",
+	"HRMS Attendance Lock Audit": "考勤锁定审计",
+	"HRMS Attendance Month Lock": "考勤月锁定",
+	"HRMS Attendance Day Check": "考勤日检查",
+	"HRMS Attendance Processing Record": "考勤处理记录",
+	"HRMS Attendance Import Batch": "考勤导入批次",
+	"HRMS Payroll Settlement Record": "薪资结算记录",
+	"HRMS Payroll Input Record": "薪资输入记录",
+	"HRMS Payroll Variable Record": "薪资变动项记录",
+	"HRMS Payroll Welfare Source Record": "福利来源记录",
+	"HRMS Payroll Manual Adjustment": "薪资手工调整",
+	"HRMS Monthly Payroll Participation": "月度计薪范围",
+	"HRMS Employee Contribution Change": "员工社保公积金变更",
+	"HRMS Employee Salary Change": "员工调薪记录",
+	"HRMS Payroll Variable Import Batch": "薪资变动项导入批次",
+	"HRMS Form Import Row": "表单导入明细",
+	"HRMS Business Process Record": "表单生成的业务记录",
+	"HRMS Form Import Batch": "表单导入批次",
+	"Employee Promotion": "员工晋升",
+	"Employee Transfer": "员工调岗",
+	"Employee Separation": "员工离职",
+	"Job Offer": "录用通知",
+	"Interview Feedback": "面试反馈",
+	"Interview": "面试记录",
+	"Job Applicant": "候选人",
+	"Job Opening": "招聘职位",
+	"Job Requisition": "招聘申请",
+	"Staffing Plan": "人员编制计划",
+	"HRMS DingTalk Raw Record": "钉钉原始同步记录",
+	"HRMS DingTalk Sync Log": "钉钉同步日志",
+	"HRMS DingTalk User Map": "钉钉员工映射",
+	"Cross Department Support Capability": "跨部门支援能力",
+	"Employee": "员工主档",
+}
+
+# Every monthly cleanup target has an explicit business-month rule. Persistent
+# master data (Employee and DingTalk user mappings) is intentionally omitted.
+MONTHLY_CLEANUP_SCOPES = {
+	"HRMS Attendance Exception": ("date", "attendance_date"),
+	"HRMS Apple Reward Record": ("linked_month", "import_batch", "HRMS Attendance Import Batch", "attendance_month"),
+	"HRMS Apple Tree History Summary": ("month", "attendance_month"),
+	"HRMS Attendance Leave Evidence": ("linked_month", "import_batch", "HRMS Attendance Import Batch", "attendance_month"),
+	"HRMS Monthly Attendance Summary": ("month", "attendance_month"),
+	"HRMS Attendance Department Confirmation": ("month", "attendance_month"),
+	"HRMS Attendance Lock Audit": ("month", "attendance_month"),
+	"HRMS Attendance Month Lock": ("month", "attendance_month"),
+	"HRMS Attendance Day Check": ("date", "attendance_date"),
+	"HRMS Attendance Processing Record": ("month", "attendance_month"),
+	"HRMS Attendance Import Batch": ("month", "attendance_month"),
+	"HRMS Payroll Settlement Record": ("month", "payroll_month"),
+	"HRMS Payroll Input Record": ("month", "payroll_month"),
+	"HRMS Payroll Variable Record": ("month", "payroll_month"),
+	"HRMS Payroll Welfare Source Record": ("month", "payroll_month"),
+	"HRMS Payroll Manual Adjustment": ("month", "payroll_month"),
+	"HRMS Monthly Payroll Participation": ("month", "payroll_month"),
+	"HRMS Employee Contribution Change": ("date", "effective_date"),
+	"HRMS Employee Salary Change": ("date", "effective_date"),
+	"HRMS Payroll Variable Import Batch": ("month", "payroll_month"),
+	"HRMS Form Import Row": ("date", "business_date"),
+	"HRMS Business Process Record": ("date", "effective_date"),
+	"Employee Promotion": ("date", "promotion_date"),
+	"Employee Transfer": ("date", "transfer_date"),
+	"Employee Separation": ("date", "resignation_letter_date"),
+	"Job Offer": ("date", "offer_date"),
+	"Interview": ("date", "scheduled_on"),
+	"Interview Feedback": ("linked_date", "interview", "Interview", "scheduled_on"),
+	"Job Applicant": ("date", "creation"),
+	"HRMS DingTalk Raw Record": ("date", "business_date"),
+	"HRMS DingTalk Sync Log": ("date", "business_date"),
 }
 
 # The current product is deliberately operated as a single-company system.
@@ -239,6 +328,14 @@ def _parse_module_keys(modules):
 	return keys
 
 
+def _require_cleanup_month(cleanup_month):
+	cleanup_month = str(cleanup_month or "").strip()
+	if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", cleanup_month):
+		frappe.throw(_("请选择有效的清理月份，格式为 YYYY-MM。"))
+	year, month = (int(part) for part in cleanup_month.split("-"))
+	return cleanup_month, f"{cleanup_month}-01", f"{cleanup_month}-{monthrange(year, month)[1]:02d}"
+
+
 def _employee_names(company):
 	return frappe.get_all("Employee", filters={"company": company}, pluck="name")
 
@@ -262,15 +359,69 @@ def _filters_for_company(doctype, company, employees=None):
 	return None
 
 
-def _records_by_module(company, module_keys=None):
+def _record_scope_explanation(doctype, company, cleanup_month=""):
+	"""Explain why a record type belongs to the selected company."""
+	meta = frappe.get_meta(doctype)
+	label = CLEANUP_RECORD_LABELS.get(doctype) or meta.get("label") or doctype
+	if doctype == "Employee":
+		reason = _("员工主档的公司字段等于“{0}”。").format(company)
+	elif meta.has_field("company"):
+		reason = _("记录的公司字段等于“{0}”。").format(company)
+	elif meta.has_field("employee"):
+		reason = _("记录关联的员工属于“{0}”。").format(company)
+	elif doctype in LINKED_COMPANY_FIELDS:
+		fieldname, parent_doctype = LINKED_COMPANY_FIELDS[doctype]
+		parent_label = frappe.get_meta(parent_doctype).get("label") or parent_doctype
+		reason = _("记录通过字段“{0}”关联到“{1}”的{2}。").format(fieldname, company, parent_label)
+	else:
+		reason = _("该记录按当前公司的业务关联范围计入。")
+	if cleanup_month:
+		scope = MONTHLY_CLEANUP_SCOPES.get(doctype) or ()
+		fieldname = scope[1] if len(scope) > 1 else ""
+		if scope and scope[0].startswith("linked_"):
+			fieldname = f"{fieldname} → {scope[3]}"
+		reason = _("{0}；业务月份字段“{1}”属于 {2}。").format(reason.rstrip("。"), fieldname, cleanup_month)
+	return {"label": label, "scope_reason": reason}
+
+
+def _monthly_filters_for_doctype(doctype, company, cleanup_month, employees=None, linked_cache=None):
+	"""Return company + explicit business-month filters, never an all-time fallback."""
+	base_filters = _filters_for_company(doctype, company, employees)
+	scope = MONTHLY_CLEANUP_SCOPES.get(doctype)
+	if base_filters is None or not scope:
+		return None
+	cleanup_month, month_start, month_end = _require_cleanup_month(cleanup_month)
+	mode, fieldname, *linked = scope
+	filters = dict(base_filters)
+	if mode == "month":
+		filters[fieldname] = cleanup_month
+	elif mode == "date":
+		filters[fieldname] = ["between", [month_start, month_end + " 23:59:59"]]
+	elif mode in {"linked_month", "linked_date"}:
+		parent_doctype, parent_field = linked
+		cache_key = (parent_doctype, parent_field, cleanup_month)
+		if linked_cache is not None and cache_key in linked_cache:
+			parent_names = linked_cache[cache_key]
+		else:
+			parent_filters = dict(_filters_for_company(parent_doctype, company, employees) or {})
+			parent_filters[parent_field] = cleanup_month if mode == "linked_month" else ["between", [month_start, month_end + " 23:59:59"]]
+			parent_names = frappe.get_all(parent_doctype, filters=parent_filters, pluck="name", limit_page_length=100000)
+			if linked_cache is not None:
+				linked_cache[cache_key] = parent_names
+		filters[fieldname] = ["in", parent_names or [""]]
+	return filters
+
+
+def _records_by_module(company, module_keys=None, cleanup_month=""):
 	employees = _employee_names(company)
+	linked_cache = {}
 	result = OrderedDict()
 	for module_key, config in DATA_CLEANUP_MODULES.items():
 		if module_keys is not None and module_key not in module_keys:
 			continue
 		rows = OrderedDict()
 		for doctype in config["doctypes"]:
-			filters = _filters_for_company(doctype, company, employees)
+			filters = _monthly_filters_for_doctype(doctype, company, cleanup_month, employees, linked_cache) if cleanup_month else _filters_for_company(doctype, company, employees)
 			if filters is not None:
 				rows[doctype] = frappe.get_all(doctype, filters=filters, pluck="name", order_by="creation desc")
 		result[module_key] = rows
@@ -308,9 +459,10 @@ def _bulk_delete_cleanup_docs(doctype, names):
 	return deleted
 
 
-def _plan_token(company, module_keys, records):
+def _plan_token(company, module_keys, records, cleanup_month=""):
 	payload = {
 		"company": company,
+		"cleanup_month": cleanup_month,
 		"modules": module_keys,
 		"records": [(doctype, sorted(names)) for doctype, names in records.items()],
 	}
@@ -328,23 +480,29 @@ def _employee_cleanup_blockers(all_records, module_keys):
 	return blockers
 
 
-def _catalog(company):
+def _catalog(company, cleanup_month):
 	"""Return counts and small samples without loading every record name."""
+	cleanup_month, _month_start, _month_end = _require_cleanup_month(cleanup_month)
 	employees = _employee_names(company)
+	linked_cache = {}
 	catalog = []
 	for key, config in DATA_CLEANUP_MODULES.items():
 		doctypes = []
 		total = 0
+		excluded_doctypes = []
 		for doctype in config["doctypes"]:
-			filters = _filters_for_company(doctype, company, employees)
+			filters = _monthly_filters_for_doctype(doctype, company, cleanup_month, employees, linked_cache)
 			if filters is None:
+				excluded_doctypes.append(CLEANUP_RECORD_LABELS.get(doctype, doctype))
 				continue
 			count = frappe.db.count(doctype, filters)
 			total += count
 			if count:
+				explanation = _record_scope_explanation(doctype, company, cleanup_month)
 				doctypes.append(
 					{
 						"doctype": doctype,
+						**explanation,
 						"count": count,
 						"sample_names": frappe.get_all(
 							doctype, filters=filters, pluck="name", order_by="creation desc", limit_page_length=3
@@ -359,6 +517,9 @@ def _catalog(company):
 				"risk": config["risk"],
 				"default_selected": False,
 				"requires": list(config.get("requires", ())),
+				"monthly_supported": bool(doctypes or len(excluded_doctypes) < len(config["doctypes"])),
+				"excluded_doctypes": excluded_doctypes,
+				"cleanup_month": cleanup_month,
 				"count": total,
 				"doctypes": doctypes,
 			}
@@ -489,7 +650,7 @@ def get_data_operations_overview():
 
 
 @frappe.whitelist()
-def get_company_data_management_context(company: str = ""):
+def get_company_data_management_context(company: str = "", cleanup_month: str = ""):
 	"""List managed companies and the safe cleanup catalog for one company."""
 	_require_system_manager()
 	companies = frappe.get_all("Company", fields=["name", "company_name", "abbr"], order_by="name asc")
@@ -497,6 +658,8 @@ def get_company_data_management_context(company: str = ""):
 		return {"companies": [], "company": "", "modules": [], "protected": [], "cleanup_logs": []}
 	company_names = {row.name for row in companies}
 	company = company if company in company_names else companies[0].name
+	cleanup_month = cleanup_month or date.today().strftime("%Y-%m")
+	cleanup_month, _month_start, _month_end = _require_cleanup_month(cleanup_month)
 	for row in companies:
 		row["employee_count"] = frappe.db.count("Employee", {"company": row.name})
 		row["department_count"] = frappe.db.count("Department", {"company": row.name})
@@ -505,39 +668,44 @@ def get_company_data_management_context(company: str = ""):
 	return {
 		"companies": companies,
 		"company": company,
-		"modules": _catalog(company),
-		"protected": ["公司主体", "部门与组织架构", "职位/职级", "薪资与考勤规则", "字段与导入模板", "角色与权限", "钉钉密钥设置"],
+		"modules": _catalog(company, cleanup_month),
+		"cleanup_month": cleanup_month,
+		"protected": ["公司主体", "员工花名册及持续主数据", "部门与组织架构", "职位/职级", "薪资与考勤规则", "字段与导入模板", "角色与权限", "钉钉密钥设置"],
 		"cleanup_logs": _latest_cleanup_logs(company),
 	}
 
 
 @frappe.whitelist()
-def preview_company_data_cleanup(company: str, modules: str | list | tuple | None = None):
+def preview_company_data_cleanup(company: str, modules: str | list | tuple | None = None, cleanup_month: str = ""):
 	"""Build a stable deletion preview without changing data."""
 	_require_system_manager()
 	company = _require_company(company)
+	cleanup_month, _month_start, _month_end = _require_cleanup_month(cleanup_month)
 	module_keys = _parse_module_keys(modules)
-	required_keys = set(module_keys)
 	if "employees" in module_keys:
-		required_keys.update(DATA_CLEANUP_MODULES["employees"]["requires"])
-	all_records = _records_by_module(company, required_keys)
+		frappe.throw(_("员工花名册是持续有效的主数据，不能按月份清除。"))
+	all_records = _records_by_module(company, set(module_keys), cleanup_month)
 	records = _selected_records(all_records, module_keys)
-	blockers = _employee_cleanup_blockers(all_records, module_keys)
-	linked_blockers = _employee_link_blockers(company, records) if "employees" in module_keys else []
 	return {
 		"company": company,
+		"cleanup_month": cleanup_month,
 		"modules": module_keys,
 		"module_labels": [DATA_CLEANUP_MODULES[key]["label"] for key in module_keys],
 		"count": sum(len(names) for names in records.values()),
 		"records": [
-			{"doctype": doctype, "count": len(names), "sample_names": names[:5]}
+			{
+				"doctype": doctype,
+				**_record_scope_explanation(doctype, company, cleanup_month),
+				"count": len(names),
+				"sample_names": names[:5],
+			}
 			for doctype, names in records.items()
 			if names
 		],
-		"blockers": blockers,
-		"linked_blockers": linked_blockers,
-		"confirmation_text": f"清除 {company} 已选数据",
-		"plan_token": _plan_token(company, module_keys, records),
+		"blockers": [],
+		"linked_blockers": [],
+		"confirmation_text": f"清除 {company} {cleanup_month} 已选数据",
+		"plan_token": _plan_token(company, module_keys, records, cleanup_month),
 	}
 
 
@@ -545,36 +713,23 @@ def preview_company_data_cleanup(company: str, modules: str | list | tuple | Non
 def execute_company_data_cleanup(
 	company: str,
 	modules: str | list | tuple | None = None,
+	cleanup_month: str = "",
 	confirm: str = "",
 	plan_token: str = "",
 ):
 	"""Delete exactly the previewed company records in dependency-safe order."""
 	_require_system_manager()
 	company = _require_company(company)
+	cleanup_month, _month_start, _month_end = _require_cleanup_month(cleanup_month)
 	module_keys = _parse_module_keys(modules)
-	required_keys = set(module_keys)
 	if "employees" in module_keys:
-		required_keys.update(DATA_CLEANUP_MODULES["employees"]["requires"])
-	all_records = _records_by_module(company, required_keys)
-	blockers = _employee_cleanup_blockers(all_records, module_keys)
-	if blockers:
-		frappe.throw(
-			_("清除员工花名册前，请同时选中并清除：{0}").format(
-				"、".join(f"{row['label']}({row['count']})" for row in blockers)
-			)
-		)
+		frappe.throw(_("员工花名册是持续有效的主数据，不能按月份清除。"))
+	all_records = _records_by_module(company, set(module_keys), cleanup_month)
 	records = _selected_records(all_records, module_keys)
-	linked_blockers = _employee_link_blockers(company, records) if "employees" in module_keys else []
-	if linked_blockers:
-		frappe.throw(
-			_("员工花名册仍被其他业务记录引用，请先处理：{0}").format(
-				"、".join(f"{row['label']}({row['count']})" for row in linked_blockers[:10])
-			)
-		)
-	expected_token = _plan_token(company, module_keys, records)
+	expected_token = _plan_token(company, module_keys, records, cleanup_month)
 	if not plan_token or plan_token != expected_token:
 		frappe.throw(_("数据已变化，请重新预览后再清除。"))
-	expected_confirmation = f"清除 {company} 已选数据"
+	expected_confirmation = f"清除 {company} {cleanup_month} 已选数据"
 	if confirm != expected_confirmation:
 		frappe.throw(_("请输入完整确认文本：{0}").format(expected_confirmation))
 
@@ -606,7 +761,7 @@ def execute_company_data_cleanup(
 					"doctype": "HRMS Data Cleanup Log",
 					"company_code": company,
 					"company_display_name": frappe.db.get_value("Company", company, "company_name") or company,
-					"modules": "、".join(DATA_CLEANUP_MODULES[key]["label"] for key in module_keys),
+					"modules": f"{cleanup_month}：" + "、".join(DATA_CLEANUP_MODULES[key]["label"] for key in module_keys),
 					"record_count": sum(deleted.values()),
 					"executed_by": frappe.session.user,
 					"executed_at": now_datetime(),
@@ -621,9 +776,10 @@ def execute_company_data_cleanup(
 		frappe.in_test = previous_in_test
 	return {
 		"company": company,
+		"cleanup_month": cleanup_month,
 		"count": sum(deleted.values()),
 		"deleted": deleted,
-		"message": _("{0}：已清除 {1} 条已选业务数据，公司与配置数据已保留。").format(company, sum(deleted.values())),
+		"message": _("{0} / {1}：已清除 {2} 条已选模块数据，其他月份及公司与配置数据已保留。").format(company, cleanup_month, sum(deleted.values())),
 	}
 
 

@@ -33,6 +33,21 @@ READ_ONLY_DOCTYPES = (
 	"Job Opening",
 )
 
+def _capability(key, label, role, category, description, risk="medium", permissions=()):
+	return {
+		"key": key,
+		"label": label,
+		"role": role,
+		"category": category,
+		"description": description,
+		"risk": risk,
+		"permissions": permissions,
+	}
+
+
+# Each checkbox maps to one real role.  Do not merge submit and approve roles:
+# independent assignment is the business control requested by HR, and it also
+# makes the effective permission test explainable for auditors.
 CAPABILITY_DEFINITIONS = (
 	{
 		"key": "basic_read_only",
@@ -42,31 +57,53 @@ CAPABILITY_DEFINITIONS = (
 		"description": "只读公司、部门、岗位、假日和公开招聘等非敏感基础资料；无新建、修改、提交或审批权限。",
 		"risk": "low",
 	},
-	{
-		"key": "payroll_entry_submit",
-		"label": "薪资录入与提交",
-		"role": "薪资经办",
-		"category": "薪资",
-		"description": "录入或申请修改薪资、社保公积金数据；不包含最终审批。",
-		"risk": "high",
-	},
-	{
-		"key": "payroll_approval",
-		"label": "薪资审批",
-		"role": "薪资审批",
-		"category": "薪资",
-		"description": "审批薪资和社保公积金的新增或修改申请，与薪资经办分离。",
-		"risk": "critical",
-	},
+	_capability("personnel_view", "花名册与人事查看", "人事查看", "人事", "查看花名册、员工档案及人事记录；不能新增、修改或审批。", "high", (("Employee", "read", "select"),)),
+	_capability("roster_import_submit", "花名册导入提交", "花名册导入提交", "人事", "上传、预览并提交花名册批量导入；不包含审批。", "high", (("Employee", "read", "create", "write", "import"),)),
+	_capability("roster_import_approve", "花名册导入审批", "花名册导入审批", "人事", "审核已提交的花名册导入结果并决定是否生效。", "critical", (("Employee", "read", "write"), ("HRMS Form Import Batch", "read", "write"), ("HRMS Form Import Row", "read", "write", "submit"))),
+	_capability("employee_create", "添加员工", "员工新增", "人事", "创建新员工档案或新增草稿；不包含新增审批。", "high", (("Employee", "read", "create", "write"),)),
+	_capability("employee_create_approve", "添加员工后审批", "员工新增审批", "人事", "审批新增员工及入职资料的生效。", "critical", (("Employee", "read", "write", "submit"), ("Employee Onboarding", "read", "write", "submit"))),
+	_capability("employee_edit", "员工档案修改", "员工档案修改", "人事", "修改现有员工档案；不包含人事异动或离职审批。", "high", (("Employee", "read", "write"),)),
+	_capability("personnel_change_submit", "人事异动提交", "人事异动提交", "人事", "提交调动、转正、晋升等人事异动申请。", "high", (("Employee Transfer", "read", "create", "write", "submit"), ("Employee Promotion", "read", "create", "write", "submit"))),
+	_capability("personnel_change_approve", "人事异动审批", "人事异动审批", "人事", "审批调动、转正、晋升等人事异动。", "critical", (("Employee Transfer", "read", "write", "submit", "cancel"), ("Employee Promotion", "read", "write", "submit", "cancel"))),
+	_capability("separation_submit", "离职申请提交", "离职申请提交", "人事", "创建并提交离职申请；不能审批自己的申请。", "high", (("Employee Separation", "read", "create", "write", "submit"),)),
+	_capability("separation_approve", "离职审批", "离职审批", "人事", "审批或驳回已提交的离职申请。", "critical", (("Employee Separation", "read", "write", "submit", "cancel"),)),
+	_capability("personnel_export", "人事导出", "人事导出", "人事", "导出花名册和人事报表。", "high", (("Employee", "read", "export", "report", "print"),)),
+
+	_capability("attendance_view", "考勤查看", "考勤查看", "考勤", "查看考勤日数据、异常和月度结果。", "high", (("Attendance", "read", "select"), ("HRMS Attendance Import Batch", "read"), ("HRMS Attendance Processing Record", "read"), ("HRMS Monthly Attendance Summary", "read"))),
+	_capability("attendance_import_submit", "考勤导入提交", "考勤导入提交", "考勤", "上传并提交考勤、请假、补卡和月度补充来源。", "high", (("HRMS Attendance Import Batch", "read", "create", "write", "import"),)),
+	_capability("attendance_exception_edit", "考勤异常修改", "考勤异常修改", "考勤", "提交考勤异常的人工更正，保留原值和更改审计。", "high", (("HRMS Attendance Processing Record", "read", "write"), ("HRMS Attendance Exception", "read", "write"))),
+	_capability("attendance_approve", "考勤审批与部门确认", "考勤审批", "考勤", "审核异常、部门确认和考勤结果；不包含月度终稿锁定。", "critical", (("HRMS Attendance Exception", "read", "write", "submit"), ("HRMS Attendance Department Confirmation", "read", "write", "submit"))),
+	_capability("attendance_final_lock", "考勤终稿锁定", "考勤终稿锁定", "考勤", "生成、锁定或按要求解锁月度考勤终稿。", "critical", (("HRMS Attendance Month Lock", "read", "create", "write", "submit", "cancel"), ("HRMS Monthly Attendance Summary", "read", "write"))),
+	_capability("attendance_export", "考勤导出", "考勤导出", "考勤", "导出考勤明细、异常和月度终稿。", "high", (("Attendance", "read", "export", "report", "print"), ("HRMS Monthly Attendance Summary", "read", "export", "report"))),
+
+	_capability("payroll_view", "薪酬查看", "薪酬查看", "薪酬", "只读查看员工定薪、社保公积金和月度薪酬结果。", "critical", (("Salary Structure Assignment", "read"), ("Salary Slip", "read"), ("HRMS Payroll Input Record", "read"), ("HRMS Payroll Settlement Record", "read"), ("HRMS Payroll Welfare Source Record", "read"))),
+	_capability("payroll_entry_submit", "薪资首次录入", "薪资经办", "薪酬", "提交员工首次定薪；不包含审批。", "critical", (("HRMS Employee Salary Change", "read", "create", "write"),)),
+	_capability("payroll_change_submit", "薪资修改申请", "薪资修改提交", "薪酬", "提交已定薪员工的薪资修改申请。", "critical", (("HRMS Employee Salary Change", "read", "create", "write"),)),
+	_capability("contribution_submit", "社保公积金提交", "社保公积金提交", "薪酬", "录入或申请修改社保和公积金标准。", "critical", (("HRMS Employee Contribution Change", "read", "create", "write"),)),
+	_capability("payroll_approval", "薪酬审批", "薪资审批", "薪酬", "审批或驳回薪资、社保和公积金新增或修改申请。", "critical", (("HRMS Employee Salary Change", "read", "write", "submit"), ("HRMS Employee Contribution Change", "read", "write", "submit"))),
+	_capability("payroll_calculate", "薪酬试算", "薪酬试算", "薪酬", "生成薪资试算和计算结果；不能确认发放。", "critical", (("Payroll Entry", "read", "create", "write"), ("HRMS Payroll Input Record", "read", "create", "write"))),
+	_capability("payroll_confirm", "薪酬确认与发放", "薪酬确认发放", "薪酬", "确认月度薪酬结果、生成结算与发放数据。", "critical", (("Payroll Entry", "read", "write", "submit", "cancel"), ("Salary Slip", "read", "write", "submit", "cancel"), ("HRMS Payroll Settlement Record", "read", "write", "submit"))),
+	_capability("payroll_export", "薪酬导出", "薪酬导出", "薪酬", "导出定薪、社保公积金、试算和发放报表。", "critical", (("Salary Slip", "read", "export", "report", "print"), ("HRMS Payroll Settlement Record", "read", "export", "report"))),
+	_capability("payroll_rules", "薪酬规则配置", "薪酬规则配置", "薪酬", "维护薪资架构、计薪规则和字段映射。", "critical", (("Salary Structure", "read", "create", "write", "submit", "cancel"), ("HRMS Payroll Rule", "read", "create", "write"), ("HRMS Payroll Field Mapping", "read", "create", "write"))),
+
+	_capability("recruitment_submit", "招聘录入与提交", "招聘提交", "招聘", "录入职位、候选人、面试和录用申请。", "high", (("Job Opening", "read", "create", "write", "submit"), ("Job Applicant", "read", "create", "write"), ("Interview", "read", "create", "write", "submit"), ("Job Offer", "read", "create", "write", "submit"))),
+	_capability("recruitment_approve", "招聘审批", "招聘审批", "招聘", "审批招聘职位、面试结论和录用通知。", "critical", (("Job Opening", "read", "write", "submit", "cancel"), ("Interview", "read", "write", "submit", "cancel"), ("Job Offer", "read", "write", "submit", "cancel"))),
+	_capability("training_submit", "培训录入与提交", "培训提交", "培训", "创建并提交培训计划、活动、结果和反馈。", "medium", (("Training Program", "read", "create", "write", "submit"), ("Training Event", "read", "create", "write", "submit"), ("Training Result", "read", "create", "write", "submit"), ("Training Feedback", "read", "create", "write", "submit"))),
+	_capability("training_approve", "培训审批", "培训审批", "培训", "审批或取消已提交的培训业务。", "high", (("Training Program", "read", "write", "submit", "cancel"), ("Training Event", "read", "write", "submit", "cancel"), ("Training Result", "read", "write", "submit", "cancel"))),
+	_capability("performance_submit", "绩效录入与提交", "绩效提交", "绩效", "创建并提交目标、考核周期和绩效考核。", "high", (("Goal", "read", "create", "write", "submit"), ("Appraisal Cycle", "read", "create", "write", "submit"), ("Appraisal", "read", "create", "write", "submit"))),
+	_capability("performance_approve", "绩效审批", "绩效审批", "绩效", "审批目标、考核周期和绩效结果。", "critical", (("Goal", "read", "write", "submit", "cancel"), ("Appraisal Cycle", "read", "write", "submit", "cancel"), ("Appraisal", "read", "write", "submit", "cancel"))),
+	_capability("expense_submit", "费用与出差提交", "费用出差提交", "审批", "创建并提交费用报销和出差申请。", "high", (("Expense Claim", "read", "create", "write", "submit"), ("Travel Request", "read", "create", "write", "submit"))),
+	_capability("expense_approve", "费用与出差审批", "费用出差审批", "审批", "审批或驳回费用报销和出差申请。", "critical", (("Expense Claim", "read", "write", "submit", "cancel"), ("Travel Request", "read", "write", "submit", "cancel"))),
 	{
 		"key": "permission_management",
 		"label": "账户与权限管理",
 		"role": "System Manager",
 		"category": "系统",
-		"description": "创建账户、勾选角色、设置数据范围及系统配置；属于最高风险业务权限。",
+		"description": "创建账户、勾选角色、设置数据范围及系统配置。",
 		"risk": "critical",
 	},
 )
+CAPABILITY_BY_KEY = {item["key"]: item for item in CAPABILITY_DEFINITIONS}
 
 
 def _require_system_manager():
@@ -74,12 +111,68 @@ def _require_system_manager():
 		frappe.throw(_("仅系统管理员可修改账户权限。"), frappe.PermissionError)
 
 
+def has_hrms_capability(capability_key: str, user: str | None = None, legacy_roles=()):
+	"""Return whether one user may perform a named business action.
+
+	System Manager and Administrator retain their existing full access.  The
+	legacy role list is deliberately explicit per call so older HR accounts keep
+	working while new accounts can be granted only the narrow checkbox role.
+	"""
+	definition = CAPABILITY_BY_KEY.get(capability_key)
+	if not definition:
+		raise ValueError(f"Unknown HRMS capability: {capability_key}")
+	user = user or frappe.session.user
+	if user == "Administrator":
+		return True
+	roles = set(frappe.get_roles(user))
+	return bool({"System Manager", definition["role"], *legacy_roles} & roles)
+
+
+def require_hrms_capability(capability_key: str, *, legacy_roles=(), message: str = ""):
+	if has_hrms_capability(capability_key, legacy_roles=legacy_roles):
+		return
+	definition = CAPABILITY_BY_KEY[capability_key]
+	frappe.throw(
+		message or _('当前账户没有“{0}”权限。').format(definition["label"]),
+		frappe.PermissionError,
+	)
+
+
+def require_any_hrms_capability(capability_keys, *, legacy_roles=(), message: str = ""):
+	if any(has_hrms_capability(key, legacy_roles=legacy_roles) for key in capability_keys):
+		return
+	frappe.throw(message or _('当前账户没有该板块的任何已授权操作。'), frappe.PermissionError)
+
+
+@frappe.whitelist()
+def get_current_hrms_capabilities():
+	"""Expose only the current user's action keys for button-level UI control."""
+	return {
+		"capabilities": [
+			item["key"] for item in CAPABILITY_DEFINITIONS
+			if has_hrms_capability(item["key"])
+		],
+	}
+
+
 def ensure_hrms_access_roles():
-	"""Create the baseline role and its deliberately narrow read permissions."""
-	if not frappe.db.exists("Role", READ_ONLY_ROLE):
-		frappe.get_doc(
-			{"doctype": "Role", "role_name": READ_ONLY_ROLE, "desk_access": 1, "is_custom": 1}
-		).insert(ignore_permissions=True)
+	"""Create every checkbox role and its actual DocType operation permissions."""
+	for capability in CAPABILITY_DEFINITIONS:
+		role = capability["role"]
+		if not frappe.db.exists("Role", role):
+			frappe.get_doc(
+				{"doctype": "Role", "role_name": role, "desk_access": 1, "is_custom": 1}
+			).insert(ignore_permissions=True)
+		for permission in capability.get("permissions") or ():
+			doctype, *permission_types = permission
+			if not frappe.db.exists("DocType", doctype):
+				continue
+			for permission_type in permission_types:
+				add_permission(doctype, role, ptype=permission_type)
+		# Every business operation is company-scoped.  This read permission is
+		# further narrowed by Company User Permission when one is configured.
+		if role != "System Manager" and frappe.db.exists("DocType", "Company"):
+			add_permission("Company", role, ptype="read")
 	for doctype in READ_ONLY_DOCTYPES:
 		if frappe.db.exists("DocType", doctype):
 			add_permission(doctype, READ_ONLY_ROLE, ptype="read")
@@ -99,14 +192,14 @@ def _normalise_capability_keys(capabilities):
 def get_hrms_capability_catalog():
 	_require_system_manager()
 	return {
-		"capabilities": CAPABILITY_DEFINITIONS,
+		"capabilities": [{key: value for key, value in item.items() if key != "permissions"} for item in CAPABILITY_DEFINITIONS],
 		"managed_roles": [item["role"] for item in CAPABILITY_DEFINITIONS],
 		"design_notes": [
 			"公开注册只授予非敏感基础资料的只读权限。",
-			"当前清单只展示已完成并验证的基础只读、薪资经办、薪资审批和权限管理。",
-			"请假审批、费用审批、招聘面试和通用人事角色暂不作为可勾选能力，待对应业务链路验收后再开放。",
+			"每个勾选项对应一个独立系统角色，提交和审批不捆绑。",
+			"人事、考勤、薪酬、招聘、培训、绩效、费用出差均可按业务动作独立分配。",
 			"角色决定可执行的操作；User Permission 继续限定公司、部门或员工数据范围。",
-			"导入、导出、打印、分享等细粒度权限仍由角色权限管理器按单据类型设置。",
+			"导入、导出、打印和报表权限也由对应勾选项进入实际权限引擎。",
 		],
 	}
 
@@ -148,28 +241,40 @@ def set_hrms_user_capabilities(user: str, capabilities=None):
 	}
 
 
-@frappe.whitelist()
-def delete_hrms_user_account(user: str, confirmation: str):
-	"""Delete one account after an exact typed confirmation.
+def prevent_hrms_user_account_deletion(doc=None, method=None):
+	"""Keep account identities available for historical business records."""
+	frappe.throw(
+		_("账号不允许删除。请停用账号，以保留历史单据中的操作人和审计记录。"),
+		frappe.PermissionError,
+	)
 
-	Frappe's normal link checks remain enabled.  Accounts referenced by business
-	records therefore cannot be silently removed and should be disabled instead.
-	"""
+
+@frappe.whitelist()
+def disable_hrms_user_account(user: str):
+	"""Disable one account without deleting its identity or linked history."""
 	_require_system_manager()
 	user = str(user or "").strip()
-	confirmation = str(confirmation or "").strip()
 	if not user or not frappe.db.exists("User", user):
-		frappe.throw(_("账户不存在或已被删除。"))
+		frappe.throw(_("账户不存在。"))
 	if user in {"Administrator", "Guest"}:
-		frappe.throw(_("系统内置账户不能删除。"), frappe.PermissionError)
+		frappe.throw(_("系统内置账户不能停用。"), frappe.PermissionError)
 	if user == frappe.session.user:
-		frappe.throw(_("不能删除当前正在登录的账户。"), frappe.PermissionError)
-	if confirmation != user:
-		frappe.throw(_("删除确认与账户不一致，请输入完整账户：{0}").format(user))
+		frappe.throw(_("不能停用当前正在登录的账户。"), frappe.PermissionError)
 
-	frappe.delete_doc("User", user, ignore_permissions=True)
+	target = frappe.get_doc("User", user)
+	if not target.enabled:
+		return {"user": user, "disabled": 1, "message": _("账户已停用。")}
+	target.enabled = 0
+	target.save(ignore_permissions=True)
 	frappe.clear_cache(user=user)
-	return {"user": user, "deleted": 1, "message": _("账户已删除。")}
+	return {"user": user, "disabled": 1, "message": _("账户已停用，历史记录已保留。")}
+
+
+@frappe.whitelist()
+def delete_hrms_user_account(user: str, confirmation: str = ""):
+	"""Reject legacy deletion requests kept by stale clients."""
+	_require_system_manager()
+	prevent_hrms_user_account_deletion()
 
 
 def _validate_registration_password(password):

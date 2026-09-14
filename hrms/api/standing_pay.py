@@ -107,16 +107,19 @@ def _build_compensation_export_rows(employees, salary_rows, contribution_rows, s
 	return result
 
 
-def _access(company, approve=False):
+def _access(company, approve=False, action='view'):
 	from hrms.payroll.standing_permissions import require_access
-	return require_access(company, approve=approve)
+	return require_access(company, approve=approve, action=action)
 
 
 @frappe.whitelist()
 def permissions(company: str):
 	company = _access(company)
-	from hrms.payroll.standing_permissions import can_approve
-	return {'company': company, 'can_submit': True, 'can_approve': can_approve()}
+	from hrms.payroll.standing_permissions import can_approve, can_submit
+	return {'company': company, 'can_submit': can_submit('entry') or can_submit('change') or can_submit('contribution'),
+		'can_enter_salary': can_submit('entry'), 'can_change_salary': can_submit('change'),
+		'can_submit_contribution': can_submit('contribution'), 'can_export': can_submit('export'),
+		'can_approve': can_approve()}
 
 
 def _register_key(row, doctype):
@@ -256,7 +259,7 @@ def list_register(company: str):
 
 @frappe.whitelist()
 def initial_salary_rows(company: str):
-	company = _access(company)
+	company = _access(company, action='entry')
 	from hrms.api.payroll_input import list_employee_salary_change_grid
 	rows = list_employee_salary_change_grid(company, payroll_month='', page_length=100000)['rows']
 	initialized = set(frappe.get_all(SALARY, filters={'company': company,
@@ -267,7 +270,7 @@ def initial_salary_rows(company: str):
 @frappe.whitelist()
 def submit_contribution(company: str, employee: str, contribution_type: str, effective_date: str, personal_amount: float = 0,
 	company_amount: float = 0, enabled: int = 1, remarks: str = '', request_mode: str = 'change'):
-	company = _access(company)
+	company = _access(company, action='contribution')
 	if request_mode == 'initial' and frappe.db.exists(CONTRIBUTION, {
 		'company': company, 'employee': employee, 'contribution_type': contribution_type,
 		'status': ['in', ['待审核', '已批准']]}):
@@ -373,7 +376,7 @@ def export_compensation_register(company: str, start_date: str, end_date: str, s
 	from hrms.api.payroll_input import _safe_fields, _salary_contribution_defaults
 	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
-	company = _access(company)
+	company = _access(company, action='export')
 	start, end = getdate(start_date), getdate(end_date)
 	if end < start:
 		frappe.throw(_('结束日期不能早于开始日期。'))

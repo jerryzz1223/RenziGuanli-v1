@@ -7,9 +7,81 @@ import json
 from collections import defaultdict
 
 import frappe
-from frappe.utils import cint
+from frappe.utils import cint, cstr
 
 SYNC_FIELDS = ("primary_employee", "proxy_employee", "assigned_employees")
+
+
+def resolve_pending_master_links(config, departments, designations=(), grades=()):
+	"""Bind portable labels when their target master records become available."""
+	result = dict(config)
+	issues = []
+	department_label = cstr(result.get("department_label")).strip()
+	if result.get("department") not in departments:
+		result["department"] = None
+		result["roster_department"] = None
+	if department_label and not result.get("department"):
+		matches = [row.name for row in departments.values() if cstr(row.department_name).strip() == department_label]
+		if len(matches) == 1:
+			result.update(department=matches[0], roster_department=matches[0])
+		elif len(matches) > 1:
+			issues.append(f"待匹配部门名称重复：{department_label}")
+	for field, label_field, masters, label in (
+		("designation", "designation_label", set(designations), "岗位"),
+		("grade", "grade_label", set(grades), "花名册职级"),
+	):
+		value = cstr(result.get(label_field)).strip()
+		if result.get(field) not in masters:
+			result[field] = None
+		if value and not result.get(field) and value in masters:
+			result[field] = value
+	return result, issues
+
+
+def resolve_pending_person_references(config, staff, allowed_departments=None):
+	"""Resolve saved business-code references without guessing by employee name."""
+	result = dict(config)
+	pending = []
+	issues = []
+	by_code = defaultdict(list)
+	for person in staff:
+		by_code[cstr(person.get("custom_employee_code")).strip()].append(person)
+	allowed_departments = set(allowed_departments or ())
+	assigned = list(result.get("assigned_employees") or [])
+	for reference in result.get("pending_person_references", []):
+		entry = dict(reference)
+		code = cstr(entry.get("source_code")).strip()
+		matches = by_code.get(code, []) if code else []
+		person = matches[0] if len(matches) == 1 else None
+		field = entry.get("field")
+		within_scope = bool(person) and (
+			entry.get("display_only") or result.get("node_kind") in {"管理层", "分管"} or person.department in allowed_departments
+		)
+		entry.pop("issue", None)
+		if not person:
+			entry["issue"] = "工号未唯一匹配在职花名册"
+		elif not within_scope:
+			entry["issue"] = "花名册部门与节点配置不一致"
+		elif field == "assigned_employees":
+			assigned.append(person.name)
+		elif field in {"manager_employee", "employee", "primary_employee", "proxy_employee"}:
+			if result.get(field) not in (None, "", person.name):
+				entry["issue"] = "该任职位置已有其他人员"
+			else:
+				result[field] = person.name
+				if field == "manager_employee":
+					result["manager_name"] = person.employee_name
+				if field == "proxy_employee" and entry.get("display_only"):
+					result["portable_proxy_display_only"] = True
+		else:
+			entry["issue"] = "任职引用类型无效"
+		if entry.get("issue"):
+			pending.append(entry)
+			issues.append({"employee_code": code, "reason": entry["issue"]})
+	result["assigned_employees"] = list(dict.fromkeys(assigned))
+	if pending or "pending_person_references" in result:
+		result["pending_person_references"] = pending
+	return result, issues
 
 
 def enabled_companies():
@@ -29,7 +101,20 @@ def roster_changed(doc, method=None):
 	if before and not any(doc.has_value_changed(key) for key in ("company", "department", "designation", "status", "employee_name")):
 		return
 	companies = {doc.company, before.company if before else None}
-	for company in companies & set(enabled_companies()):
+	queue_companies(companies)
+
+
+def organization_master_changed(doc, method=None):
+	"""Retry pending configuration when a Department, Designation or Grade changes."""
+	before = doc.get_doc_before_save() if method != "after_delete" else None
+	companies = {getattr(doc, "company", None), getattr(before, "company", None) if before else None}
+	queue_companies(companies or enabled_companies(), all_enabled=not any(companies))
+
+
+def queue_companies(companies, all_enabled=False):
+	enabled = set(enabled_companies())
+	targets = enabled if all_enabled else set(companies) & enabled
+	for company in targets:
 		# One task per company, after the entire import transaction has committed.
 		queued = frappe.flags.setdefault("organization_roster_queued", set())
 		if company in queued:
@@ -87,6 +172,7 @@ def sync_current_organization(company: str):
 def reconcile(company):
 	from hrms.hr.page.organizational_chart import organizational_chart as chart
 	from hrms.api.organization_roster import get_candidates
+	from hrms.api.organization_package import automatic_roster_position
 	frappe.db.sql("select name from tabCompany where name=%s for update", company)
 	versions = frappe.db.sql("select name from `tabOrganization Structure Version` where company=%s and source_reference=%s and status!='已归档' for update",
 		(company, chart._manual_organization_reference(company)))
@@ -99,11 +185,29 @@ def reconcile(company):
 	departments = {d.name: d for d in frappe.get_list("Department", filters={"company": company, "disabled": 0},
 		fields=["name", "department_name"], limit_page_length=0)}
 	staff = get_candidates(company, allow_company=True)["employees"]
+	changed = 0
+	def update(node, values):
+		nonlocal changed
+		config = node.manual_config
+		if all(config.get(key) == value for key, value in values.items()):
+			return
+		doc = frappe.get_doc("Organization Node", node.name, for_update=True)
+		config = {**chart._manual_node_config(doc.source_text), **values}
+		doc.source_text = json.dumps(config, ensure_ascii=False)
+		doc.save()
+		node.manual_config = config
+		changed += 1
+	issues = []
+	designations = frappe.get_all("Designation", pluck="name", limit_page_length=0)
+	grades = frappe.get_all("Employee Grade", pluck="name", limit_page_length=0)
+	for node in manual["nodes"]:
+		resolved, master_issues = resolve_pending_master_links(node.manual_config, departments, designations, grades)
+		update(node, resolved)
+		issues.extend({"node": node.name, "reason": reason} for reason in master_issues)
 	from hrms.utils.organization_scope import department_scopes
 	scopes = department_scopes({n.name: {"config": n.manual_config, "parent": n.parent_node} for n in manual["nodes"]}, departments.values())
 	groups = defaultdict(list)
 	by_department = defaultdict(list)
-	issues = []
 	for employee in staff:
 		if employee.department not in departments:
 			issues.append({"employee": employee.name, "reason": "待完善部门" if not employee.department else "部门已停用或不属于当前公司，待确认"})
@@ -117,29 +221,21 @@ def reconcile(company):
 		members.sort()
 	units = {}
 	positions = defaultdict(list)
-	changed = 0
-	def update(node, values):
-		nonlocal changed
-		config = node.manual_config
-		if all(config.get(key) == value for key, value in values.items()):
-			return
-		doc = frappe.get_doc("Organization Node", node.name, for_update=True)
-		config = {**chart._manual_node_config(doc.source_text), **values}
-		doc.source_text = json.dumps(config, ensure_ascii=False)
-		doc.save()
-		node.manual_config = config
-		changed += 1
 	for node in manual["nodes"]:
 		kind = chart._manual_node_kind(node)
 		if node.manual_config.get("roster_subset"):
 			continue
 		if kind in chart.ROSTER_UNIT_KINDS:
 			department = node.manual_config.get("department")
+			if not department:
+				continue
 			if department in units:
 				frappe.throw(f"部门 {department} 存在重复节点，请先合并。")
 			units[department] = node
 		elif kind == "岗位":
 			key = (node.manual_config.get("department"), node.manual_config.get("designation"))
+			if not all(key):
+				continue
 			positions[key].append(node)
 			if "roster_auto_sync" not in node.manual_config:
 				# Adopt only untouched initial allocations. Other custom positions stay manual.
@@ -182,6 +278,10 @@ def reconcile(company):
 	# Explicit manual selections take precedence over the default roster buckets.
 	reserved = set()
 	staff_by_name = {employee.name: employee for employee in staff}
+	for node in manual["nodes"]:
+		resolved, pending_issues = resolve_pending_person_references(node.manual_config, staff, scopes.get(node.name))
+		update(node, resolved)
+		issues.extend({**issue, "node": node.name} for issue in pending_issues)
 	from hrms.api.organization_template import reconcile_bindings
 	for node in manual["nodes"]:
 		config = node.manual_config
@@ -218,7 +318,7 @@ def reconcile(company):
 					update(node, {"assigned_employees": [], "primary_employee": None, "proxy_employee": None})
 			continue
 		members = [name for name in groups.get(key, []) if name not in reserved]
-		automatic = [n for n in positions[key] if n.manual_config.get("roster_auto_sync")]
+		automatic = [n for n in positions[key] if automatic_roster_position(n.manual_config)]
 		if len(automatic) > 1:
 			issues.append({"department": department, "reason": f"同名岗位 {designation} 有多个节点，新增人员归属需手动确认"})
 			# Keep only previously unique placements; never choose a branch by order.

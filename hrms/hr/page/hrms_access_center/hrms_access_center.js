@@ -16,24 +16,38 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 	function open_capability_editor(account) {
 		const capabilities = state.data?.capabilities || [];
 		const assigned = new Set(account.assigned_roles || []);
+		const categories = [...new Set(capabilities.map((capability) => capability.category))];
+		const capability_field = (capability) => ({
+			fieldname: `capability_${capability.key}`,
+			fieldtype: "Check",
+			label: capability.label,
+			default: assigned.has(capability.role) ? 1 : 0,
+			description: `${capability.description}<br><code>${escape(capability.role)}</code>`,
+		});
+		const permissionFields = categories.flatMap((category) => {
+			const categoryCapabilities = capabilities.filter((capability) => capability.category === category);
+			const splitAt = Math.ceil(categoryCapabilities.length / 2);
+			return [
+				{
+					fieldname: `section_${category}`,
+					fieldtype: "Section Break",
+					label: __(`${category}权限`),
+					description: __("发起/提交与审批可以分配给不同账户。"),
+				},
+				...categoryCapabilities.slice(0, splitAt).map(capability_field),
+				...(categoryCapabilities.length > 1 ? [{ fieldtype: "Column Break" }] : []),
+				...categoryCapabilities.slice(splitAt).map(capability_field),
+			];
+		});
 		const dialog = new frappe.ui.Dialog({
 			title: __("设置 {0} 的业务权限", [account.full_name || account.user]),
 			fields: [
 				{
 					fieldname: "permission_notice",
 					fieldtype: "HTML",
-					options: `<div class="alert alert-info">
-						<strong>${escape(account.user)}</strong><br>
-						${__("勾选会直接分配系统真实角色。薪资和权限管理属于高风险权限，保存后请再用“验证权限”检查具体单据。")}
-					</div>`,
+					options: `<div class="hrms-access-capability-dialog__account">${escape(account.user)}</div>`,
 				},
-				...capabilities.map((capability) => ({
-					fieldname: `capability_${capability.key}`,
-					fieldtype: "Check",
-					label: `${capability.label}${["high", "critical"].includes(capability.risk) ? " · 高风险" : ""}`,
-					default: assigned.has(capability.role) ? 1 : 0,
-					description: `${capability.description}<br><code>${escape(capability.role)}</code>`,
-				})),
+				...permissionFields,
 			],
 			primary_action_label: __("保存权限"),
 			primary_action(values) {
@@ -52,47 +66,36 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 			},
 		});
 		dialog.show();
+		dialog.$wrapper.addClass("hrms-access-capability-dialog");
 	}
 
-	function open_delete_account_dialog(account) {
+	function open_disable_account_dialog(account) {
 		const dialog = new frappe.ui.Dialog({
-			title: __("删除账号：{0}", [account.full_name || account.user]),
+			title: __("停用账号：{0}", [account.full_name || account.user]),
 			fields: [
 				{
-					fieldname: "delete_notice",
+					fieldname: "disable_notice",
 					fieldtype: "HTML",
-					options: `<div class="alert alert-danger">
-						<strong>${__("此操作不可恢复。")}</strong><br>
-						${__("若账号已被业务单据引用，系统将阻止删除；这种情况请在“账户资料”中停用账号。")}
+					options: `<div class="alert alert-warning">
+						<strong>${__("停用后该账号将无法登录。")}</strong><br>
+						${__("账号及其角色、数据范围和历史操作记录都会保留；需要时可在“账户资料”中重新启用。")}
 					</div>`,
 				},
-				{
-					fieldname: "confirmation",
-					fieldtype: "Data",
-					label: __("输入完整账户以确认"),
-					description: `<code>${escape(account.user)}</code>`,
-					reqd: 1,
-				},
 			],
-			primary_action_label: __("永久删除账号"),
-			primary_action(values) {
-				if ((values.confirmation || "").trim() !== account.user) {
-					frappe.msgprint(__("请输入完整账户：{0}", [account.user]));
-					return;
-				}
+			primary_action_label: __("确认停用"),
+			primary_action() {
 				dialog.disable_primary_action();
-				frappe.call("hrms.access_control.delete_hrms_user_account", {
+				frappe.call("hrms.access_control.disable_hrms_user_account", {
 					user: account.user,
-					confirmation: values.confirmation,
 				}).then(() => {
 					dialog.hide();
-					frappe.show_alert({ message: __("账户已删除"), indicator: "green" });
+					frappe.show_alert({ message: __("账户已停用，历史记录已保留"), indicator: "green" });
 					load();
 				}).finally(() => dialog.enable_primary_action());
 			},
 		});
 		dialog.show();
-		dialog.get_primary_btn().removeClass("btn-primary").addClass("btn-danger");
+		dialog.get_primary_btn().removeClass("btn-primary").addClass("btn-warning");
 	}
 
 	function assigned_roles(account) {
@@ -182,15 +185,7 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 				<nav class="hrms-access-center__tabs" role="tablist" aria-label="${__("账户与权限管理视图")}">
 					<button type="button" role="tab" aria-selected="${state.active_tab === "accounts"}" class="${state.active_tab === "accounts" ? "is-active" : ""}" data-access-tab="accounts">${__("用户与权限")}<span>${escape((data.accounts || []).length)}</span></button>
 					<button type="button" role="tab" aria-selected="${state.active_tab === "roles"}" class="${state.active_tab === "roles" ? "is-active" : ""}" data-access-tab="roles">${__("角色与业务权限")}<span>${escape(project_role_count)}</span></button>
-					<button type="button" role="tab" aria-selected="${state.active_tab === "guide"}" class="${state.active_tab === "guide" ? "is-active" : ""}" data-access-tab="guide">${__("权限逻辑说明")}</button>
 				</nav>
-
-				<section class="hrms-access-center__permission-model ${state.active_tab === "guide" ? "" : "is-hidden"}" aria-label="权限层级说明">
-					<article><span>1</span><div><strong>${__("账户与角色分配")}</strong><p>${__("回答“这个人是谁、能登录吗、拥有哪些岗位角色”。在管理账户中改姓名、重置密码、启停和勾选角色。")}</p></div></article>
-					<article><span>2</span><div><strong>${__("角色操作权限")}</strong><p>${__("回答“这个角色能对哪些业务对象执行读、写、创建、提交等操作”。同一角色的规则会复用于所有成员。")}</p></div></article>
-					<article><span>3</span><div><strong>${__("用户数据范围")}</strong><p>${__("回答“这个账户只能看哪家公司、部门或员工记录”。它是额外收窄范围，不代替角色权限。")}</p></div></article>
-					<article class="is-result"><span>=</span><div><strong>${__("实际有效权限")}</strong><p>${__("角色允许的操作 ∩ 用户数据范围 ∩ 具体记录所有权/共享。使用“测试实际权限”查看最终结果。")}</p></div></article>
-				</section>
 
 				<section class="hrms-access-center__panel ${state.active_tab === "accounts" ? "" : "is-hidden"}">
 					<div class="hrms-access-center__panel-head">
@@ -212,7 +207,7 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 										<button class="btn btn-default btn-sm" data-action="edit-account" data-user="${escape(account.user)}">${__("账户资料")}</button>
 										<button class="btn btn-default btn-sm" data-action="scope" data-user="${escape(account.user)}">${__("管理数据范围")}</button>
 										<button class="btn btn-default btn-sm" data-action="test-user" data-user="${escape(account.user)}">${__("验证权限")}</button>
-										${protected_accounts.has(account.user) ? "" : `<button class="btn btn-danger btn-sm" data-action="delete-account" data-user="${escape(account.user)}">${__("删除账号")}</button>`}
+										${protected_accounts.has(account.user) || !account.enabled ? "" : `<button class="btn btn-warning btn-sm" data-action="disable-account" data-user="${escape(account.user)}">${__("停用账号")}</button>`}
 									</td>
 							</tr>`).join("") || `<tr><td colspan="5" class="text-muted">${__("没有符合条件的账户")}</td></tr>`}</tbody>
 						</table>
@@ -221,15 +216,17 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 
 				<section class="hrms-access-center__panel ${state.active_tab === "roles" ? "" : "is-hidden"}">
 					<div class="hrms-access-center__panel-head">
-						<div><h4>${__("已开放的权限")}</h4><p>${__("只展示已完成业务链路验收的权限。其他 Frappe 预置角色保留在系统中，但暂不在此处开放勾选。")}</p></div>
+					<div><h4>${__("可勾选的业务动作权限")}</h4><p>${__("每一项都是独立真实角色；提交人和审批人可分开配置。")}</p></div>
 					</div>
 					<div class="hrms-access-center__role-list">
-						${(data.capabilities || []).map((capability) => `<article class="hrms-access-center__role-card">
+					${[...new Set((data.capabilities || []).map((capability) => capability.category))].map((category) => `
+						<div class="hrms-access-center__permission-category"><h5>${escape(category)}</h5></div>
+						${(data.capabilities || []).filter((capability) => capability.category === category).map((capability) => `<article class="hrms-access-center__role-card">
 							<div class="hrms-access-center__role-copy">
-								<div class="hrms-access-center__role-title"><strong>${escape(capability.label)}</strong><span>${escape(capability.category)}${["high", "critical"].includes(capability.risk) ? ` · ${__("高风险")}` : ""}</span></div>
+								<div class="hrms-access-center__role-title"><strong>${escape(capability.label)}</strong><span>${escape(capability.category)}</span></div>
 								<p>${escape(capability.description)}</p><code>${escape(capability.role)}</code>
 							</div>
-						</article>`).join("")}
+						</article>`).join("")}`).join("")}
 					</div>
 					<ul>${(data.design_notes || []).map((note) => `<li>${escape(note)}</li>`).join("")}</ul>
 				</section>
@@ -259,9 +256,6 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 					</div>
 				</section>
 
-				<section class="hrms-access-center__password-note alert alert-info ${state.active_tab === "guide" ? "" : "is-hidden"}">
-					<strong>${__("密码与业务权限说明")}</strong>：${__("管理员可以重设密码，但系统不会保存可查看的明文密码。权限勾选保存后会直接进入实际权限引擎，无需修改代码；请用真实账户和具体记录再次验证。")}
-				</section>
 			</div>
 		`);
 
@@ -296,9 +290,9 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 		$(page.body).find("[data-action='test-user']").on("click", function () {
 			open_permission_tester(this.dataset.user);
 		});
-		$(page.body).find("[data-action='delete-account']").on("click", function () {
+		$(page.body).find("[data-action='disable-account']").on("click", function () {
 			const account = (state.data.accounts || []).find((item) => item.user === this.dataset.user);
-			if (account) open_delete_account_dialog(account);
+			if (account) open_disable_account_dialog(account);
 		});
 		$(page.body).find("[data-action='edit-role']").on("click", function () {
 			frappe.set_route("Form", "Role", this.dataset.role);

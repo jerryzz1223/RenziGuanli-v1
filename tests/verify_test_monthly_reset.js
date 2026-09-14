@@ -24,16 +24,21 @@ for (const marker of [
 ]) mustInclude(api, marker);
 
 const payroll = read("hrms/hr/page/payroll_input_center/payroll_input_center.js");
+for (const marker of ["data-test-monthly-reset", "open_test_monthly_reset_dialog", "测试清空本月全部薪酬"]) {
+	if (payroll.includes(marker)) throw new Error(`Payroll business page must not expose destructive reset: ${marker}`);
+}
+mustInclude(payroll, "永久清理请前往数据处理中心");
+
+const dataOperations = read("hrms/hr/page/hrms_data_operations/hrms_data_operations.js");
 for (const marker of [
-	"data-test-monthly-reset",
-	"open_test_monthly_reset_dialog",
-	"测试清空本月全部薪酬",
-	"点击“预览影响”后查看全公司本月将删除的数据",
-	"department: \"\", area: \"payroll\"",
-	"preview_test_monthly_data_reset",
-	"reset_test_monthly_data",
-	"我确认这是测试数据，允许永久删除",
-]) mustInclude(payroll, marker);
+	"data-cleanup-month",
+	"cleanup_month: state.cleanupMonth",
+	"cleanup_month: preview.cleanup_month",
+	"其他月份不受影响",
+]) mustInclude(dataOperations, marker);
+for (const marker of ["data-action=\"monthly-payroll-reset\"", "openMonthlyPayrollResetDialog"]) {
+	if (dataOperations.includes(marker)) throw new Error(`Data center must use one unified monthly module cleanup: ${marker}`);
+}
 
 const attendance = read("hrms/hr/page/attendance_import_center/attendance_import_center.js");
 for (const marker of [

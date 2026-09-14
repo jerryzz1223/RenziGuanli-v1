@@ -801,6 +801,18 @@
 	white-space: nowrap;
 }
 
+.hrms-attendance-processing-status__action {
+	border: 0;
+	cursor: pointer;
+	font-family: inherit;
+}
+
+.hrms-attendance-processing-status__action:hover,
+.hrms-attendance-processing-status__action:focus-visible {
+	box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 24%, transparent);
+	outline: 0;
+}
+
 .hrms-attendance-processing-status.is-empty,
 .hrms-attendance-processing-status.is-neutral {
 	background: #f3f4f6;

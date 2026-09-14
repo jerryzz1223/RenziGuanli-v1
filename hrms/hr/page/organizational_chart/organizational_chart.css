@@ -1047,3 +1047,18 @@
 .page-container:has(.hrms-org-page) #full-search-button { display: none !important; }
 .hrms-org-page .hrms-org-toolbar--search-only { flex-wrap: wrap; gap: 8px; }
 .hrms-org-zoom-controls { display: flex; flex-shrink: 0; gap: 6px; }
+
+.hrms-org-config-pending { color: #b54708 !important; font-weight: 600; }
+.hrms-config-map-summary { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 8px; }
+.hrms-config-map { max-height: 62vh; overflow: auto; padding: 14px; border: 1px solid #e4e8ee; background: #f8fafc; }
+.hrms-config-map ul { list-style: none; margin: 0; padding-left: 28px; }
+.hrms-config-map > ul { padding-left: 0; }
+.hrms-config-map li { position: relative; margin: 10px 0; }
+.hrms-config-map li::before { content: ""; position: absolute; left: -17px; top: -11px; bottom: 50%; width: 14px; border-left: 1px solid #a8b4c4; border-bottom: 1px solid #a8b4c4; }
+.hrms-config-map > ul > li::before { display: none; }
+.hrms-config-node { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(90px, .6fr) minmax(180px, 1.4fr) auto; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid #d8e0ea; border-radius: 7px; background: #fff; }
+.hrms-config-node small, .hrms-config-node span { color: #667085; }
+.hrms-config-node.is-pending { border-color: #f2b36d; background: #fffaf3; }
+.hrms-config-node .hrms-config-state { justify-self: end; color: #1f7a4d; font-weight: 600; }
+.hrms-config-node.is-pending .hrms-config-state { color: #b54708; }
+@media(max-width: 780px) { .hrms-config-node { grid-template-columns: 1fr; } .hrms-config-node .hrms-config-state { justify-self: start; } }

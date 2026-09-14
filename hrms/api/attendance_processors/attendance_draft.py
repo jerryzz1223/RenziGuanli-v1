@@ -428,15 +428,27 @@ def process_attendance_draft_rows(
 	structure = precheck_attendance_draft_structure(_ordered_headers(input_rows))
 	employee_index = _build_employee_index(employee_directory)
 	policy = {**DEFAULT_EXCEPTION_POLICY, **{key: bool(value) for key, value in (exception_policy or {}).items() if key in DEFAULT_EXCEPTION_POLICY}}
-	date_counts = Counter()
+	# DingTalk monthly exports can include the first day of the following month
+	# so a cross-midnight shift on the last day remains understandable. Keep
+	# those rows in the immutable source workbook as supplemental boundary
+	# evidence, but do not aggregate them into this month or create exceptions.
+	processing_rows: list[dict[str, Any]] = []
+	supplemental_rows: list[dict[str, Any]] = []
 	for row in input_rows:
+		parsed_date = _parse_date(_value(row, IDENTITY_FIELDS["attendance_date"]), attendance_month)
+		if parsed_date and _is_next_month_boundary_date(parsed_date, attendance_month):
+			supplemental_rows.append(row)
+		else:
+			processing_rows.append(row)
+	date_counts = Counter()
+	for row in processing_rows:
 		code = _value(row, IDENTITY_FIELDS["employee_code"])
 		date_key = _parse_date(_value(row, IDENTITY_FIELDS["attendance_date"]), attendance_month)
 		if code and date_key:
 			date_counts[(code, date_key)] += 1
 	groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
 	missing_code_rows: list[dict[str, Any]] = []
-	for row in input_rows:
+	for row in processing_rows:
 		code = _value(row, IDENTITY_FIELDS["employee_code"])
 		if code:
 			groups[code].append(row)
@@ -464,6 +476,11 @@ def process_attendance_draft_rows(
 	exception_rows = sum(1 for row in processed_rows if row["review_status"] == REVIEW_PENDING)
 	exception_events = sum(len(row.get("exception_events") or []) for row in processed_rows)
 	lifecycle_excluded_shift_rows = sum(len(row.get("data_quality_events") or []) for row in processed_rows)
+	supplemental_dates = sorted({
+		parsed_date
+		for row in supplemental_rows
+		if (parsed_date := _parse_date(_value(row, IDENTITY_FIELDS["attendance_date"]), attendance_month))
+	})
 	return {
 		"status": "待处理异常" if exception_rows else "待确认",
 		"structure_precheck": structure,
@@ -472,11 +489,14 @@ def process_attendance_draft_rows(
 			"excluded_missing_employee_code_rows": len(missing_code_rows),
 			"excluded_missing_employee_code_accounts": _source_account_summaries(missing_code_rows),
 			"lifecycle_excluded_blank_shift_rows": lifecycle_excluded_shift_rows,
-			"notice": "工号为空的来源行不作为员工考勤处理；已保留为来源数据质量统计。",
+			"supplemental_out_of_month_rows": len(supplemental_rows),
+			"supplemental_out_of_month_dates": supplemental_dates,
+			"notice": "工号为空的来源行不作为员工考勤处理；跨月边界行仅作补充证据，不参与当月汇总且不进入异常。",
 		},
 		"metrics": {
 			"source_rows": len(input_rows),
-			"eligible_employee_source_rows": len(input_rows) - len(missing_code_rows),
+			"eligible_employee_source_rows": len(processing_rows) - len(missing_code_rows),
+			"supplemental_out_of_month_rows": len(supplemental_rows),
 			"excluded_missing_employee_code_rows": len(missing_code_rows),
 			"excluded_missing_employee_code_accounts": len(_source_account_summaries(missing_code_rows)),
 			"processed_rows": len(processed_rows),
@@ -497,7 +517,7 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		_add_code(codes, "STRUCTURE_MISSING_REQUIRED_FIELD")
 	if not raw_code:
 		_add_code(codes, "EMPLOYEE_CODE_MISSING")
-	if len(names) > 1:
+	if len({_name_key(value) for value in names}) > 1:
 		_add_code(codes, "EMPLOYEE_CODE_NAME_CONFLICT")
 	if len({_department_key(value) for value in departments}) > 1:
 		_add_code(codes, "EMPLOYEE_DEPARTMENT_CONFLICT")
@@ -875,6 +895,16 @@ def _parse_date(value, attendance_month):
 		return ""
 
 
+def _is_next_month_boundary_date(parsed_date: str, attendance_month: str) -> bool:
+	"""Accept only the immediate first day after the processing month as context."""
+	try:
+		year, month = (int(part) for part in attendance_month.split("-", 1))
+		next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
+		return parsed_date == date(next_year, next_month, 1).isoformat()
+	except (TypeError, ValueError):
+		return False
+
+
 def _decimal(value):
 	if isinstance(value, bool):
 		return None
@@ -911,7 +941,13 @@ def _text(value):
 
 
 def _name_key(value):
-	return re.sub(r"\s+", "", _text(value)).casefold()
+	# DingTalk may append a lifecycle label to the display name, for example
+	# ``张三（离职）``.  The employee code remains the authoritative identity,
+	# so this known presentation-only suffix must not create a name mismatch.
+	# Keep every other name difference reviewable.
+	text = re.sub(r"\s+", "", _text(value))
+	text = re.sub(r"(?:[\(（](?:已)?离职[\)）])+$", "", text)
+	return text.casefold()
 
 
 _DINGTALK_DEPARTMENT_IDENTIFIER_RE = re.compile(r"\s*[-－—–]\s*\d+\s*$")

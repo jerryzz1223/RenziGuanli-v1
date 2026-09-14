@@ -58,6 +58,51 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 		sheet_name, header_row, rows = center._history_sheet_rows(buffer.getvalue())
 		self.assertEqual((sheet_name, header_row, rows), ("苹果树合计", 3, []))
 
+	def test_export_workbook_uses_current_view_filters_and_sort_without_formula_cells(self):
+		center = apple_tree_center_module()
+		data = {"people": [
+			{"department": "连续课", "employee_name": "=CMD()", "employee_code": "001", "green_apples": 3, "red_apples": 1, "net_apples": 2, "reward_amount": 10, "record_count": 2},
+			{"department": "连续课", "employee_name": "李四", "employee_code": "002", "green_apples": 8, "red_apples": 1, "net_apples": 7, "reward_amount": 35, "record_count": 3},
+			{"department": "品管课", "employee_name": "王五", "employee_code": "003", "green_apples": 99, "red_apples": 0, "net_apples": 99, "reward_amount": 495, "record_count": 1},
+		]}
+		workbook = center._build_export_workbook(
+			"annual-summary", data, "2026年 苹果树个人汇总", '{"department":"连续课"}', "net_apples", "desc",
+		)
+		sheet = workbook["苹果树统计"]
+		self.assertEqual(sheet["A1"].value, "2026年 苹果树个人汇总")
+		self.assertEqual(sheet.freeze_panes, "A3")
+		self.assertEqual(sheet.auto_filter.ref, "A2:H4")
+		self.assertEqual([sheet.cell(2, column).value for column in range(1, 9)], ["部门", "姓名", "工号", "绿苹果", "红苹果", "净苹果", "苹果金额", "记录数"])
+		self.assertEqual(sheet["C3"].value, "002")
+		self.assertEqual(sheet["B4"].value, "'=CMD()")
+
+	def test_monthly_export_derives_net_apples_and_final_status(self):
+		center = apple_tree_center_module()
+		columns, rows = center._export_rows("monthly-detail", {"records": [{
+			"reward_date": "2026-08-12", "employee_code": "001", "green_apples": 4, "red_apples": 2,
+			"approval_result": "已确认", "approval_status": "已锁定",
+		}]})
+		self.assertEqual(columns[0], ("attendance_month", "月份"))
+		self.assertEqual(rows[0]["attendance_month"], "2026-08")
+		self.assertEqual(rows[0]["net_apples"], 2)
+		self.assertEqual(rows[0]["final_status"], "已确认 / 已锁定")
+
+	def test_person_export_keeps_all_twelve_months_and_total_at_the_bottom(self):
+		center = apple_tree_center_module()
+		columns, rows = center._export_rows("person", {
+			"year": "2026", "person": {"department": "连续课", "employee_name": "张三", "employee_code": "001"},
+			"rows": [{"attendance_month": "2026-08", "employee_code": "001", "green_apples": 4}],
+			"totals": {"green_apples": 4},
+		})
+		self.assertEqual(len(columns), 21)
+		self.assertEqual(len(rows), 13)
+		self.assertEqual(rows[0]["attendance_month"], "2026-01")
+		self.assertEqual(rows[7]["green_apples"], 4)
+		self.assertEqual(rows[-1]["attendance_month"], "合计")
+		self.assertEqual(rows[-1]["green_apples"], 4)
+		filtered = center._filtered_export_rows(columns, rows, sort_key="green_apples", sort_order="desc")
+		self.assertEqual(filtered[-1]["attendance_month"], "合计")
+
 	def test_history_employee_prefers_code_and_rejects_name_mismatch(self):
 		center = apple_tree_center_module()
 		filters = []

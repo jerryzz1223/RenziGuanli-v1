@@ -28,6 +28,11 @@ NODE_COLUMNS = {
 	"原表职级标签": "source_grade_tags", "原表职级来源": "source_grade_reference", "原表职级确认状态": "source_grade_status",
 }
 OPTIONAL_NODE_FIELDS = {"source_grade_tags", "source_grade_reference", "source_grade_status"}
+PENDING_MASTER_LABELS = {
+	"department": "department_label",
+	"designation": "designation_label",
+	"grade": "grade_label",
+}
 PERSON_COLUMNS = {
 	"节点编号": "node", "引用类型": "type", "工号": "code", "姓名": "name",
 	"图中职务": "role", "负责人位置": "slot", "仅展示代理": "display_only", "人工确认": "manual_confirmed", "原表职务": "source_role", "任职性质": "assignment_type",
@@ -48,6 +53,7 @@ def automatic_roster_position(config):
 	"""A plain automatic post carries a roster rule, not fixed source members."""
 	return (config.get("node_kind") == "岗位" and config.get("roster_auto_sync")
 		and not config.get("roster_subset") and not config.get("assignment_rules_manual")
+		and not config.get("pending_person_references")
 		and "template_bindings" not in config
 		and not config.get("primary_employee") and not config.get("proxy_employee"))
 
@@ -96,7 +102,9 @@ def workbook_bytes(company, state=None):
 		row = {**cfg, "portable_id": ids[node.name], "parent": ids.get(node.parent_node, ""),
 			"display_name": node.display_name, "planned_headcount": node.planned_headcount or 0,
 			"template_source_vacancies": cfg.get("template_source_vacancies") or 0,
-			"department": departments.get(cfg.get("department"), cfg.get("department") or ""),
+			"department": departments.get(cfg.get("department"), cfg.get("department_label") or cfg.get("department") or ""),
+			"designation": cfg.get("designation") or cfg.get("designation_label") or "",
+			"grade": cfg.get("grade") or cfg.get("grade_label") or "",
 			"has_template_bindings": "template_bindings" in cfg,
 			"roster_department_alias_labels": "\n".join(cfg.get("roster_department_alias_labels", []))}
 		rows.append(row)
@@ -117,6 +125,13 @@ def workbook_bytes(company, state=None):
 					"role": binding.get("role", ""), "slot": binding.get("slot", ""), "manual_confirmed": bool(binding.get("manual_confirmed")), "source_role": binding.get("source_role", ""), "assignment_type": binding_assignment_type(binding) if binding else "",
 					"display_only": bool(binding.get("display_only") or (field == "proxy_employee" and (
 						cfg.get("portable_proxy_display_only") or any(b.get("employee") == value and b.get("display_only") for b in cfg.get("template_bindings", [])))))})
+		for reference in cfg.get("pending_person_references", []):
+			people.append({"node": ids[node.name], "type": reference.get("type") or next(
+				(label for label, field in REFERENCES.items() if field == reference.get("field")), ""),
+				"code": reference.get("source_code", ""), "name": reference.get("source_name", ""),
+				"role": reference.get("role", ""), "slot": reference.get("slot", ""),
+				"display_only": bool(reference.get("display_only")), "manual_confirmed": False,
+				"source_role": reference.get("source_role", ""), "assignment_type": reference.get("assignment_type", "")})
 	book = Workbook()
 	info = book.active
 	info.title = "说明"
@@ -134,7 +149,8 @@ def workbook_bytes(company, state=None):
 		["代理", "引用类型代理人保留代理身份；原表人员的负责人位置填 primary 或 proxy。跨部门代理须勾选仅展示代理。"],
 		["多人任职", "同一工号可在多个节点或同节点不同职务出现，汇总人数去重；唯一正式职位需人工确认，同一公司不允许多个已确认正式职位。未确认的原表任职保留待确认。图中职务保留（代）、（兼）；代理任职不等于代理人。人工确认与逐人确认任职随文件保留。仅展示代理也适用于明确的跨部门兼任。"],
 		["布尔值", "所有开关填写 1 或 0。合并关联部门每行一个部门名称。"],
-		["部署", "目标服务器需要安装包含组织配置导入功能的系统版本，并先导入花名册、部门和岗位。"],
+		["导入顺序", "组织配置可先于花名册导入。暂不存在的部门、岗位、职级和工号会作为待匹配配置保留；花名册补齐后自动重建人员关系。"],
+		["部署", "目标服务器需要安装包含组织配置导入和待匹配重建功能的系统版本。"],
 	]: info.append(row)
 	for title, columns, data in [("组织层级", NODE_COLUMNS, rows), ("人员任职", PERSON_COLUMNS, people),
 		("职级定义", GRADE_COLUMNS, state["options"].get("chart_grades", []))]:
@@ -310,12 +326,17 @@ def prepare(company, package, state=None):
 		cfg["roster_department_alias_labels"] = list(dict.fromkeys(filter(None, row["roster_department_alias_labels"].splitlines())))
 		if boolean(row, "has_template_bindings"): cfg["template_bindings"] = []
 		matches = departments.get(row["department"], [])
-		if row["department"] and len(matches) != 1 or kind in chart.MANUAL_ORGANIZATION_DEPARTMENT_KINDS and not row["department"]:
-			problem(row, f"关联部门未唯一匹配：{row['department'] or '未填写'}；请先导入目标花名册和部门")
+		if len(matches) > 1 or kind in chart.MANUAL_ORGANIZATION_DEPARTMENT_KINDS and not row["department"]:
+			problem(row, f"关联部门未唯一匹配：{row['department'] or '未填写'}")
+		elif row["department"] and not matches:
+			warnings.append(f"关联部门 {row['department']} 尚未建立；组织层级先保留，花名册建立该部门后自动匹配。")
 		cfg["department"] = matches[0].name if len(matches) == 1 else None
 		cfg["roster_department"] = cfg["department"]
+		cfg["department_label"] = row["department"]
 		if row["designation"] and row["designation"] not in state["designations"]:
-			problem(row, f"关联岗位不存在：{row['designation']}")
+			warnings.append(f"关联岗位 {row['designation']} 尚未建立；岗位规则先保留，花名册建立该岗位后自动匹配。")
+			cfg["designation"] = None
+		cfg["designation_label"] = row["designation"]
 		if kind == "岗位" and not cfg["roster_subset"] and not row["designation"]:
 			problem(row, "岗位节点必须填写关联岗位")
 		if cfg["roster_subset"] and kind not in {"室", "组", "线", "岗位"}:
@@ -323,7 +344,10 @@ def prepare(company, package, state=None):
 		if cfg["roster_subset"] and cfg["roster_auto_sync"] and "template_bindings" not in cfg:
 			problem(row, "自动分组必须有原表人员规则，不能从职位猜测组线归属")
 		if cfg["assignment_mode"] not in {"自动", "正式", "代理"}: problem(row, "任职方式无效")
-		if cfg["grade"] and cfg["grade"] not in state["grades"]: problem(row, f"花名册职级不存在：{cfg['grade']}")
+		if cfg["grade"] and cfg["grade"] not in state["grades"]:
+			warnings.append(f"花名册职级 {cfg['grade']} 尚未建立；职级引用先保留，创建后自动匹配。")
+			cfg["grade"] = None
+		cfg["grade_label"] = row["grade"]
 		if cfg["chart_grade_code"] and cfg["chart_grade_code"] not in grades: problem(row, f"职级定义缺少：{cfg['chart_grade_code']}")
 		cfg["chart_grade"] = {k: v for k, v in grades.get(cfg["chart_grade_code"], {}).items() if k != "_row"}
 		plans[key] = {"config": cfg, "parent": row["parent"], "name": row["display_name"], "planned": integer(row, "planned_headcount"), "_row": row["_row"]}
@@ -342,7 +366,7 @@ def prepare(company, package, state=None):
 		if chart.whole_department(cfg) and dept:
 			if dept in units: errors.append(f"同一部门存在两个组织节点：{dept}；请先合并")
 			units[dept] = key
-		if cfg.get("node_kind") == "岗位" and not cfg.get("roster_subset") and cfg.get("roster_auto_sync"):
+		if cfg.get("node_kind") == "岗位" and not cfg.get("roster_subset") and cfg.get("roster_auto_sync") and dept and cfg.get("designation"):
 			position = (dept, cfg.get("designation"))
 			if position in auto_positions: errors.append(f"同一部门岗位存在重复自动节点：{position}")
 			auto_positions[position] = key
@@ -397,9 +421,11 @@ def prepare(company, package, state=None):
 		if key in seen_refs: problem(row, "同一节点的人员引用重复")
 		seen_refs.add(key)
 		matches = staff.get(row["code"], []) if row["code"] else []
-		person = matches[0] if len(matches) == 1 else None
-		if row["code"] and (not person or person.status != "Active"):
-			problem(row, f"工号 {row['code']} 未唯一匹配目标公司在职员工")
+		person = matches[0] if len(matches) == 1 and matches[0].status == "Active" else None
+		if row["code"] and len(matches) > 1:
+			problem(row, f"工号 {row['code']} 在目标公司存在重复，无法唯一匹配")
+		elif row["code"] and (not person or person.status != "Active"):
+			warnings.append(f"工号 {row['code']} 尚未匹配目标公司在职员工；任职规则先保留，花名册补齐后自动匹配。")
 		elif not row["code"] and (field != "template_bindings" or not row["name"]):
 			problem(row, "人员必须填写工号；仅原表人员注释允许无工号")
 		elif not row["code"]:
@@ -432,9 +458,12 @@ def prepare(company, package, state=None):
 			cfg.setdefault("template_bindings", []).append(binding)
 		elif field == "assigned_employees":
 			if person: cfg[field].append(person.name)
+			else: cfg.setdefault("pending_person_references", []).append({"field": field, "type": row["type"], "source_code": row["code"], "source_name": row["name"], "display_only": display_only})
 		else:
 			if cfg.get(field): problem(row, f"{row['type']} 只能有一人")
 			cfg[field] = person.name if person else None
+			if not person:
+				cfg.setdefault("pending_person_references", []).append({"field": field, "type": row["type"], "source_code": row["code"], "source_name": row["name"], "display_only": display_only})
 			if field == "manager_employee" and person: cfg["manager_name"] = person.employee_name
 			if field == "proxy_employee" and display_only and person:
 				cfg["portable_proxy_display_only"] = True
@@ -449,8 +478,8 @@ def prepare(company, package, state=None):
 		cfg = plan["config"]
 		if automatic_roster_position(cfg):
 			cfg["assigned_employees"] = sorted(e.name for e in state["employees"]
-				if e.status == "Active" and e.department in scopes[key]
-				and e.designation == cfg.get("designation") and e.name not in reserved)
+				if cfg.get("department") and cfg.get("designation") and e.status == "Active"
+				and e.department in scopes[key] and e.designation == cfg.get("designation") and e.name not in reserved)
 	# Validate the resulting graph including nodes retained on the target server.
 	from hrms.api.organization_assignment_review import formal_conflicts
 	resulting_nodes = [n for key, n in current.items() if key not in plans]
@@ -458,7 +487,8 @@ def prepare(company, package, state=None):
 	errors.extend(formal_conflicts(resulting_nodes))
 	for key, plan in plans.items():
 		cfg = plan["config"]
-		if cfg.get("node_kind") == "员工" and not cfg.get("employee"): errors.append(f"员工节点 {key} 必须填写员工节点任职工号")
+		pending_employee = any(r.get("field") == "employee" for r in cfg.get("pending_person_references", []))
+		if cfg.get("node_kind") == "员工" and not cfg.get("employee") and not pending_employee: errors.append(f"员工节点 {key} 必须填写员工节点任职工号")
 		if cfg.get("node_kind") == "员工" and cfg.get("employee"):
 			parent, visited = plan["parent"], set()
 			department = None
@@ -490,6 +520,8 @@ def prepare(company, package, state=None):
 		"preview": [{"id": key, "name": plans[key]["name"], "parent": plans[key]["parent"],
 			"parent_name": plans.get(plans[key]["parent"], {}).get("name") or (current[plans[key]["parent"]].display_name if plans[key]["parent"] in current else "公司"),
 			"node_kind": plans[key]["config"].get("node_kind", ""),
+			"match_status": "待匹配" if any(plans[key]["config"].get(label_field) and not plans[key]["config"].get(field) for field, label_field in PENDING_MASTER_LABELS.items()) or plans[key]["config"].get("pending_person_references") else "已匹配",
+			"pending_items": [label for field, label_field, label in (("department", "department_label", "部门"), ("designation", "designation_label", "岗位"), ("grade", "grade_label", "花名册职级")) if plans[key]["config"].get(label_field) and not plans[key]["config"].get(field)] + (["人员"] if plans[key]["config"].get("pending_person_references") else []),
 			"role": plans[key]["config"].get("role_title") or plans[key]["config"].get("designation", ""),
 			"source_grade_tags": plans[key]["config"].get("source_grade_tags", ""),
 			"source_grade_status": plans[key]["config"].get("source_grade_status", ""),

@@ -59,6 +59,16 @@ def _cell_text(value):
 	return str(value).strip()
 
 
+def _excel_value(value):
+	"""Keep numbers numeric and prevent spreadsheet formulas in exported text."""
+	if value is None:
+		return ""
+	if isinstance(value, (int, float, date, datetime)):
+		return value
+	text = str(value)
+	return f"'{text}" if text.startswith(("=", "+", "-", "@")) else text
+
+
 def _normalise_header(value):
 	return re.sub(r"\s+", "", _cell_text(value).replace("\n", ""))
 
@@ -578,6 +588,130 @@ def download_history_import_template():
 	output = BytesIO()
 	_build_history_import_template().save(output)
 	frappe.local.response.filename = "苹果树合计填写模板.xlsx"
+	frappe.local.response.filecontent = output.getvalue()
+	frappe.local.response.type = "binary"
+
+
+EXPORT_VIEWS = {"annual-summary", "monthly-detail", "person"}
+
+
+def _export_rows(view, data):
+	if view == "person":
+		columns = [(field, label) for field, label, _numeric in PERSON_COLUMNS]
+		source = {str(row.get("attendance_month") or ""): dict(row) for row in data.get("rows", [])}
+		person = data.get("person", {})
+		year = str(data.get("year") or "")
+		first_row = next(iter(source.values()), {})
+		rows = [source.get(f"{year}-{month:02d}", {
+			"attendance_month": f"{year}-{month:02d}", "department": person.get("department"),
+			"employee_name": person.get("employee_name"), "employee_code": person.get("employee_code"),
+			"date_of_joining": first_row.get("date_of_joining"),
+		}) for month in range(1, 13)]
+		total = {"attendance_month": "合计", "department": person.get("department"), "employee_name": person.get("employee_name"), "employee_code": person.get("employee_code"), "date_of_joining": first_row.get("date_of_joining"), "__total": True}
+		total.update(data.get("totals", {}))
+		return columns, [*rows, total]
+	if view == "monthly-detail":
+		columns = [
+			("attendance_month", "月份"), ("department", "部门"), ("employee_name", "姓名"),
+			("employee_code", "工号"), ("green_apples", "绿苹果"), ("red_apples", "红苹果"),
+			("net_apples", "净苹果"), ("reward_amount", "苹果金额"), ("reward_item", "来源"),
+			("final_status", "终稿状态"),
+		]
+		rows = []
+		for source in data.get("records", []):
+			row = dict(source)
+			row["attendance_month"] = row.get("attendance_month") or str(row.get("reward_date") or "")[:7]
+			row["net_apples"] = _display_number(_number(row.get("green_apples")) - _number(row.get("red_apples")))
+			row["final_status"] = (
+				f"{row.get('approval_result') or '-'} / {row.get('approval_status') or '-'}"
+				if row.get("approval_result") or row.get("approval_status") else "未提供"
+			)
+			rows.append(row)
+		return columns, rows
+	columns = [
+		("department", "部门"), ("employee_name", "姓名"), ("employee_code", "工号"),
+		("green_apples", "绿苹果"), ("red_apples", "红苹果"), ("net_apples", "净苹果"),
+		("reward_amount", "苹果金额"), ("record_count", "记录数"),
+	]
+	return columns, data.get("people", [])
+
+
+def _filtered_export_rows(columns, rows, column_filters="", sort_key="", sort_order="desc"):
+	try:
+		filters = json.loads(column_filters) if isinstance(column_filters, str) and column_filters else (column_filters or {})
+	except (TypeError, ValueError):
+		filters = {}
+	allowed = {field for field, _label in columns}
+	filters = {field: str(value or "").strip().lower() for field, value in filters.items() if field in allowed and str(value or "").strip()}
+	total_rows = [row for row in rows if row.get("__total")]
+	result = [row for row in rows if not row.get("__total") and all(query in str(row.get(field) or "").lower() for field, query in filters.items())]
+	if sort_key not in allowed:
+		return result + total_rows
+	numeric_fields = {"green_apples", "red_apples", "net_apples", "reward_amount", "record_count"} | {field for field, _label, numeric in PERSON_COLUMNS if numeric}
+	reverse = str(sort_order or "desc").lower() != "asc"
+	def key(row):
+		value = row.get(sort_key)
+		return _number(value) if sort_key in numeric_fields else str(value or "")
+	present = [row for row in result if row.get(sort_key) not in (None, "")]
+	empty = [row for row in result if row.get(sort_key) in (None, "")]
+	return sorted(present, key=key, reverse=reverse) + empty + total_rows
+
+
+def _build_export_workbook(view, data, title, column_filters="", sort_key="", sort_order="desc"):
+	from openpyxl import Workbook
+	from openpyxl.styles import Alignment, Font, PatternFill
+	from openpyxl.utils import get_column_letter
+
+	columns, rows = _export_rows(view, data)
+	rows = _filtered_export_rows(columns, rows, column_filters, sort_key, sort_order)
+	workbook = Workbook()
+	sheet = workbook.active
+	sheet.title = "苹果树统计"
+	sheet.append([title])
+	sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(columns))
+	sheet["A1"].font = Font(size=16, bold=True)
+	sheet["A1"].alignment = Alignment(horizontal="center")
+	sheet.append([label for _field, label in columns])
+	for cell in sheet[2]:
+		cell.font = Font(bold=True, color="FFFFFF")
+		cell.fill = PatternFill("solid", fgColor="4472C4")
+		cell.alignment = Alignment(horizontal="center")
+	for row in rows:
+		sheet.append([_excel_value(row.get(field)) for field, _label in columns])
+	sheet.freeze_panes = "A3"
+	sheet.auto_filter.ref = f"A2:{get_column_letter(len(columns))}{max(2, sheet.max_row)}"
+	for index, (field, label) in enumerate(columns, start=1):
+		values = [label, *[str(row.get(field) or "") for row in rows[:500]]]
+		sheet.column_dimensions[get_column_letter(index)].width = min(40, max(10, max(map(len, values)) + 2))
+	return workbook
+
+
+@frappe.whitelist()
+def download_export(view: str = "annual-summary", year: str = "", month: str = "", search: str = "", company: str = "", start_date: str = "", end_date: str = "", person: str = "", column_filters: str = "", sort_key: str = "", sort_order: str = "desc"):
+	"""Download the currently selected Apple-tree statistics view as Excel."""
+	view = str(view or "annual-summary").strip()
+	if view not in EXPORT_VIEWS:
+		frappe.throw("不支持的苹果树导出视图。")
+	if view == "person":
+		if not str(person or "").strip():
+			frappe.throw("请先选择要导出的员工。")
+		data = get_person_detail(person=str(person).strip(), year=year, company=company)
+		if not data.get("available"):
+			frappe.throw(data.get("reason") or "当前员工没有可导出的苹果树记录。")
+		person_name = data.get("person", {}).get("employee_name") or str(person).strip()
+		title = f"{data.get('year')}年 {person_name} 苹果树明细"
+		filename = f"苹果树统计_{data.get('year')}_{person_name}.xlsx"
+	else:
+		data = get_data(year=year, month=month, search=search, company=company, start_date=start_date, end_date=end_date)
+		period = data["filters"].get("month") or (
+			f"{data['filters'].get('start_date')}_{data['filters'].get('end_date')}" if data["filters"].get("start_date") else f"{data['filters'].get('year')}年"
+		)
+		view_label = "每月明细" if view == "monthly-detail" else "个人汇总"
+		title = f"{period} 苹果树{view_label}"
+		filename = f"苹果树统计_{period}_{view_label}.xlsx"
+	output = BytesIO()
+	_build_export_workbook(view, data, title, column_filters, sort_key, sort_order).save(output)
+	frappe.local.response.filename = re.sub(r'[\\/:*?"<>|]', "_", filename)
 	frappe.local.response.filecontent = output.getvalue()
 	frappe.local.response.type = "binary"
 

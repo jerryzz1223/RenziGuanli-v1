@@ -650,11 +650,18 @@ def _month_bounds(attendance_month):
 
 
 def _require_company(company):
+	from hrms.access_control import require_any_hrms_capability
+	require_any_hrms_capability(
+		("attendance_view", "attendance_import_submit", "attendance_exception_edit", "attendance_approve", "attendance_final_lock", "attendance_export"),
+		legacy_roles=("HR Manager",),
+		message=_("当前账户没有考勤板块权限。"),
+	)
 	company = (company or "").strip()
 	if not company:
 		frappe.throw(_("请先选择公司。"))
 	if not frappe.db.exists("Company", company):
 		frappe.throw(_("公司 {0} 不存在").format(company))
+	frappe.get_doc("Company", company).check_permission("read")
 	return company
 
 
@@ -1388,7 +1395,7 @@ def download_attendance_export(company: str, attendance_month: str, export_profi
 	from openpyxl import Workbook
 	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
-	_require_attendance_reviewer()
+	_require_attendance_capability("attendance_export")
 	company = _require_company(company)
 	attendance_month = attendance_month or datetime.today().strftime("%Y-%m")
 	_month_bounds(attendance_month)
@@ -1886,6 +1893,7 @@ def _record_import_preview_metadata(batch_name, preview):
 
 @frappe.whitelist()
 def import_attendance_workbook(file_url: str, attendance_month: str = "", company: str = ""):
+	_require_attendance_capability("attendance_import_submit")
 	company = _require_company(company)
 	workbook = _load_workbook(file_url)
 	preview = preview_attendance_workbook(file_url)
@@ -2360,8 +2368,13 @@ def _prefer_manual_daily_rows(rows):
 	return list(selected.values())
 
 
+def _require_attendance_capability(capability_key):
+	from hrms.access_control import require_hrms_capability
+	require_hrms_capability(capability_key, legacy_roles=("HR Manager",))
+
+
 def _require_attendance_reviewer():
-	frappe.only_for(("System Manager", "HR Manager"))
+	_require_attendance_capability("attendance_approve")
 
 
 def _month_batch_ids(company, attendance_month):
@@ -2510,6 +2523,7 @@ def _calculate_monthly_values(values):
 
 @frappe.whitelist()
 def generate_monthly_attendance_summary(company: str, attendance_month: str):
+	_require_attendance_capability("attendance_final_lock")
 	company = _require_company(company)
 	_month_bounds(attendance_month)
 	lock = _prepare_month_lock_for_generation(company, attendance_month)
@@ -2644,6 +2658,7 @@ def generate_monthly_attendance_summary(company: str, attendance_month: str):
 
 @frappe.whitelist()
 def lock_attendance_month(company: str, attendance_month: str, reason: str = ""):
+	_require_attendance_capability("attendance_final_lock")
 	company = _require_company(company)
 	_month_bounds(attendance_month)
 	lock = _get_or_create_month_lock(company, attendance_month)
@@ -2678,6 +2693,7 @@ def lock_attendance_month(company: str, attendance_month: str, reason: str = "")
 
 @frappe.whitelist()
 def unlock_attendance_month(company: str, attendance_month: str, reason: str):
+	_require_attendance_capability("attendance_final_lock")
 	company = _require_company(company)
 	_month_bounds(attendance_month)
 	reason = (reason or "").strip()
@@ -2967,7 +2983,7 @@ def _manual_adjustment_fields():
 @frappe.whitelist()
 def create_attendance_manual_adjustment(name: str, changes: str | dict, reason: str):
 	"""Create an auditable correction version; raw imports are never overwritten."""
-	_require_attendance_reviewer()
+	_require_attendance_capability("attendance_exception_edit")
 	if not (reason or "").strip():
 		frappe.throw(_("人工更正必须填写原因。"))
 	if isinstance(changes, str):
@@ -3078,7 +3094,7 @@ def _attendance_import_revoke_blocker(batch_doc):
 @frappe.whitelist()
 def list_attendance_import_batches(company: str, attendance_month: str = "", include_revoked: int = 0, page_length: int = 100):
 	"""List import batches with their removable impact before a user can clear test data."""
-	_require_attendance_reviewer()
+	_require_attendance_capability("attendance_import_submit")
 	company = _require_company(company)
 	filters = {"company": company}
 	if attendance_month:
@@ -3117,7 +3133,7 @@ def revoke_attendance_import_batch(batch: str, reason: str = "", enforce_role: b
 	evidence are removed.
 	"""
 	if enforce_role:
-		_require_attendance_reviewer()
+		_require_attendance_capability("attendance_import_submit")
 	batch_doc = frappe.get_doc(ATTENDANCE_BATCH_DOCTYPE, batch)
 	blocker = _attendance_import_revoke_blocker(batch_doc)
 	if batch_doc.status == "已撤销":

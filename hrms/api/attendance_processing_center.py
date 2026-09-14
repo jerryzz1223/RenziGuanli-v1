@@ -108,6 +108,12 @@ def _daily_attendance_date(value: Any) -> str:
 		return ""
 
 
+def _next_month_boundary_date(attendance_month: str) -> str:
+	year, month = (int(part) for part in attendance_month.split("-", 1))
+	next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
+	return date(next_year, next_month, 1).isoformat()
+
+
 # These identifiers deliberately remain stable in the database and in the
 # processors.  They are implementation details though, not wording that an
 # attendance administrator should have to interpret on the review screen.
@@ -2382,6 +2388,7 @@ def get_attendance_data_quality_details(
 	quality_labels = {
 		"missing_employee_code": "无工号来源行",
 		"blank_shift": "入离职期间空班次",
+		"out_of_month_supplement": "跨月补充资料",
 	}
 	if quality_type not in quality_labels:
 		frappe.throw(_("不支持的数据质量明细类型。"))
@@ -2398,13 +2405,20 @@ def get_attendance_data_quality_details(
 			row for row in rows
 			if not _attendance_draft_data_quality_value(row, "工号", "员工工号", "employee_code")
 		]
-	else:
+	elif quality_type == "blank_shift":
 		# This is intentionally the same rule used by the processor: every
 		# employee-code row with a blank shift is retained as a quality event.
 		matched_rows = [
 			row for row in rows
 			if _attendance_draft_data_quality_value(row, "工号", "员工工号", "employee_code")
 			and not _attendance_draft_data_quality_value(row, "班次", "shift")
+		]
+	else:
+		boundary_date = _next_month_boundary_date(attendance_month)
+		matched_rows = [
+			row for row in rows
+			if (attendance_date := _daily_attendance_date(_attendance_draft_data_quality_value(row, "日期", "考勤日期", "attendance_date")))
+			and attendance_date == boundary_date
 		]
 	columns = list(dict.fromkeys(
 		fieldname
@@ -2416,11 +2430,11 @@ def get_attendance_data_quality_details(
 	page_length = min(max(cint(page_length), 1), 500)
 	return {
 		"title": quality_labels[quality_type],
-		"description": (
-			"以下为工号为空、未进入员工异常的原始来源行。"
-			if quality_type == "missing_employee_code"
-			else "以下为有工号但班次为空、仅作为数据质量证据保留的原始来源行。"
-		),
+		"description": {
+			"missing_employee_code": "以下为工号为空、未进入员工异常的原始来源行。",
+			"blank_shift": "以下为有工号但班次为空、仅作为数据质量证据保留的原始来源行。",
+			"out_of_month_supplement": "以下为来源文件附带的跨月边界行；仅作补充证据，不参与当月汇总且不进入异常。",
+		}[quality_type],
 		"source_file_name": Path(batch.source_file).name,
 		"source_sheet": sheet.title,
 		"total_count": len(matched_rows),

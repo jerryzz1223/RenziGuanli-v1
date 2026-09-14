@@ -207,6 +207,16 @@
 
 	var HRMS_SIDEBAR_MODULES = [
 		{
+			label: "更多服务",
+			route: "/desk/hrms-data-statistics",
+			icon: "更",
+			contextual: true,
+			keys: ["hrms-data-statistics"],
+			items: [
+				{ type: "link", label: "数据统计", route: "/desk/hrms-data-statistics", slug: "hrms-data-statistics" },
+			],
+		},
+		{
 			label: "账户与权限",
 			route: "/desk/hrms-access-center",
 			icon: "权",

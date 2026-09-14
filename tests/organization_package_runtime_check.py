@@ -35,12 +35,13 @@ def run():
 		assert reconcile("永新")["changed"] == 0
 		new_cards = chart._build_manual_organization_tree("永新", chart._get_manual_organization_records("永新"))
 		assert people(new_cards) == before_people, (len(people(new_cards)), len(before_people))
-		assert new_cards["current_headcount"] == old_cards["current_headcount"] == 199
+		expected_active = frappe.db.count("Employee", {"company": "永新", "status": "Active"})
+		assert new_cards["current_headcount"] == old_cards["current_headcount"] == expected_active
 		plan = package.preview_configuration("永新", file["file_url"])
 		package.apply_configuration("永新", file["file_url"], plan["fingerprint"])
 		assert len(chart._get_manual_organization_records("永新")["nodes"]) == len(data["组织层级"])
 		assert frappe.get_all("Employee", fields=list(before[0]), order_by="name") == before
-		print("PASS: full XLSX round trip, all 199 people, acting/proxy references, manual flags, repeat upsert, no Employee writes")
+		print(f"PASS: full XLSX round trip, all {expected_active} active people, acting/proxy references, manual flags, repeat upsert, no Employee writes")
 
 		dept = frappe.get_doc({"doctype": "Department", "department_name": "配置迁移测试课", "company": "永新", "parent_department": "All Departments"}).insert()
 		job = frappe.get_doc({"doctype": "Designation", "designation_name": "配置迁移测试岗位"}).insert()
@@ -88,11 +89,16 @@ def run():
 			bad = copy.deepcopy(portable); mutator(bad)
 			errors = package.prepare("永新", bad)["errors"]
 			assert any(text in error for error in errors), errors
+		def retained_pending(mutator, text):
+			pending = copy.deepcopy(portable); mutator(pending)
+			pending_plan = package.prepare("永新", pending)
+			assert not pending_plan["errors"], pending_plan["errors"]
+			assert any(text in warning for warning in pending_plan["warnings"]), pending_plan["warnings"]
 		rejected(lambda p: p["组织层级"][0].update(parent="SOURCE-JOB"), "循环")
 		rejected(lambda p: p["组织层级"][0].update(parent="MISSING"), "上级不存在")
 		rejected(lambda p: p["组织层级"].append(p["组织层级"][0].copy()), "重复")
-		rejected(lambda p: p["组织层级"][0].update(department="不存在的课"), "未唯一匹配")
-		rejected(lambda p: p["人员任职"][0].update(code="UNMATCHED"), "未唯一匹配")
+		retained_pending(lambda p: p["组织层级"][0].update(department="不存在的课"), "尚未建立")
+		retained_pending(lambda p: p["人员任职"][0].update(code="UNMATCHED"), "尚未匹配")
 		rejected(lambda p: p["组织层级"][0].update(chart_grade_code="MISSING"), "职级定义缺少")
 		rejected(lambda p: p["职级定义"][0].update(parent="M2"), "循环")
 		rejected(lambda p: p["职级定义"][1].update(rank="0"), "等级顺序")
@@ -105,7 +111,7 @@ def run():
 		else: raise AssertionError("stale preview accepted")
 		# Duplicate business codes cannot be resolved by choosing the first row.
 		frappe.db.set_value("Employee", before[0].name, "custom_employee_code", code)
-		assert any("未唯一匹配" in e for e in package.prepare("永新", portable)["errors"])
+		assert any("存在重复" in e for e in package.prepare("永新", portable)["errors"])
 		frappe.db.set_value("Employee", before[0].name, "custom_employee_code", before[0].custom_employee_code)
 		# File reader rejects formulas and arbitrary URLs.
 		book["组织层级"]["C2"] = "=1+1"
@@ -120,7 +126,7 @@ def run():
 		except frappe.PermissionError: pass
 		else: raise AssertionError("guest export accepted")
 		finally: frappe.set_user("Administrator")
-		print("PASS: missing/duplicate keys, cycles, invalid grades, unmatched/duplicate employee codes, stale preview, formula rejection, permissions")
+		print("PASS: missing master records stay pending; duplicate keys/codes, cycles and invalid grades still fail; stale preview, formula rejection and permissions hold")
 		# Future employees in the roster Business department join the canonical subgroup.
 		frappe.db.set_value("Employee", emp.name, {"department": "业务组", "employee_name": "配置迁移测试"})
 		result = reconcile("永新")

@@ -5550,6 +5550,8 @@ def preview_employee_roster_import(
 	manual_mappings: str = "{}",
 	row_overrides: str = "{}",
 ):
+	from hrms.access_control import require_hrms_capability
+	require_hrms_capability("roster_import_submit", legacy_roles=HR_SETTINGS_MANAGER_ROLES)
 	result, _planned_rows, _meta_fields = _build_employee_roster_import_plan(
 		file_url, mode, match_by, manual_mappings, row_overrides
 	)
@@ -5566,6 +5568,8 @@ def import_employee_roster(
 	manual_mappings: str = "{}",
 	row_overrides: str = "{}",
 ):
+	from hrms.access_control import require_hrms_capability
+	require_hrms_capability("roster_import_submit", legacy_roles=HR_SETTINGS_MANAGER_ROLES)
 	preview_result, planned_rows, meta_fields = _build_employee_roster_import_plan(
 		file_url, mode, match_by, manual_mappings, row_overrides
 	)
@@ -6042,6 +6046,8 @@ def download_employee_roster_export(
 	export_scope: str = "all",
 	current_filters: str = "{}",
 ):
+	from hrms.access_control import require_hrms_capability
+	require_hrms_capability("personnel_export", legacy_roles=HR_SETTINGS_MANAGER_ROLES)
 	from frappe.desk.utils import provide_binary_file
 
 	doc = _get_template_doc()

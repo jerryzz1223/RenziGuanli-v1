@@ -7,16 +7,14 @@ const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
 const api = read("hrms/api/employee_field_template.py");
 const accessPage = read("hrms/hr/page/hrms_access_center/hrms_access_center.js");
+const accessPageStyles = read("hrms/hr/page/hrms_access_center/hrms_access_center.css");
 const developerPage = read("hrms/hr/page/hrms_developer_center/hrms_developer_center.js");
 const modelPage = read("hrms/hr/page/hrms_model_center/hrms_model_center.js");
 const sidebarShell = read("hrms/public/js/hrms_home_redirect_v6.js");
 const accessControl = read("hrms/access_control.py");
+const hooks = read("hrms/hooks.py");
 
 for (const marker of [
-	"账户与角色分配",
-	"角色操作权限",
-	"用户数据范围",
-	"实际有效权限",
 	"全部已创建账户",
 	"仅显示已开放角色",
 	"配置业务权限",
@@ -25,13 +23,21 @@ for (const marker of [
 	"data-action=\"test-user\"",
 	"data-access-tab=\"accounts\"",
 	"data-access-tab=\"roles\"",
-	"data-access-tab=\"guide\"",
 	"管理数据范围",
 	"assigned_scopes",
 	"员工必须填公司工号",
 	"员工仅显示公司工号",
 ]) {
 	assert(accessPage.includes(marker), `Account-first access center contract missing: ${marker}`);
+}
+
+for (const removedGuideMarker of [
+	"权限逻辑说明",
+	"data-access-tab=\"guide\"",
+	"hrms-access-center__permission-model",
+	"密码与业务权限说明",
+]) {
+	assert(!accessPage.includes(removedGuideMarker), `Permission guide must stay removed: ${removedGuideMarker}`);
 }
 
 for (const marker of [
@@ -54,34 +60,66 @@ for (const marker of [
 	"勾选权限",
 	"open_capability_editor",
 	"hrms.access_control.set_hrms_user_capabilities",
-	"已开放的权限",
+	"可勾选的业务动作权限",
+	"permissionFields",
+	"发起/提交与审批可以分配给不同账户",
+	"Column Break",
+	"hrms-access-capability-dialog",
 ]) {
 	assert(accessPage.includes(marker), `Business capability editor contract missing: ${marker}`);
 }
 
-for (const marker of [
-	"删除账号",
-	"open_delete_account_dialog",
-	"hrms.access_control.delete_hrms_user_account",
-	"data-action=\"delete-account\"",
-]) {
-	assert(accessPage.includes(marker), `Account deletion UI contract missing: ${marker}`);
+for (const marker of [".hrms-access-capability-dialog .modal-dialog", "1180px", "calc(100vw - 48px)"]) {
+	assert(accessPageStyles.includes(marker), `Wide capability editor styling missing: ${marker}`);
 }
 
+assert(!accessPage.includes("高风险"), "Capability screens should not show high-risk badges or warning copy.");
+assert(!accessControl.includes("最高风险业务权限"), "Capability descriptions should stay concise and omit risk warning copy.");
+
 for (const marker of [
-	"def delete_hrms_user_account(",
-	'if user in {"Administrator", "Guest"}',
-	"if user == frappe.session.user",
-	'frappe.delete_doc("User", user, ignore_permissions=True)',
+	"停用账号",
+	"open_disable_account_dialog",
+	"hrms.access_control.disable_hrms_user_account",
+	"data-action=\"disable-account\"",
+	"历史记录已保留",
 ]) {
-	assert(accessControl.includes(marker), `Account deletion backend contract missing: ${marker}`);
+	assert(accessPage.includes(marker), `Account disabling UI contract missing: ${marker}`);
 }
+
+assert(!accessPage.includes("删除账号"), "Account management must not expose account deletion.");
+assert(!accessPage.includes('data-action="delete-account"'), "Deletion action must not remain in the account table.");
+
+for (const marker of [
+	"def disable_hrms_user_account(",
+	"target.enabled = 0",
+	"def prevent_hrms_user_account_deletion(",
+	"账号不允许删除",
+	"def delete_hrms_user_account(",
+]) {
+	assert(accessControl.includes(marker), `Account retention backend contract missing: ${marker}`);
+}
+
+assert(!accessControl.includes('frappe.delete_doc("User"'), "HRMS must never delete User records.");
+assert(
+	hooks.includes('"on_trash": "hrms.access_control.prevent_hrms_user_account_deletion"'),
+	"User deletion must be blocked from standard forms and APIs as well as the access center.",
+);
 
 for (const marker of [
 	"basic_read_only",
+	"roster_import_submit",
+	"roster_import_approve",
+	"employee_create",
+	"employee_create_approve",
+	"attendance_import_submit",
+	"attendance_approve",
+	"attendance_final_lock",
 	"payroll_entry_submit",
+	"payroll_change_submit",
 	"payroll_approval",
+	"payroll_confirm",
 	"permission_management",
+	"def require_hrms_capability(",
 	"def set_hrms_user_capabilities(",
 	"preserved_roles",
 ]) {
