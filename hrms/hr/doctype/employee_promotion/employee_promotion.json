@@ -10,7 +10,6 @@
   "employee_code_display",
   "employee_name",
   "department",
-  "salary_currency",
   "column_break_3",
   "promotion_date",
   "company",
@@ -139,28 +138,20 @@
    "fieldtype": "Column Break"
   },
   {
-   "fetch_from": "employee.salary_currency",
-   "fieldname": "salary_currency",
-   "fieldtype": "Link",
-   "label": "Salary Currency",
-   "options": "Currency",
-   "read_only": 1
-  },
-  {
    "fetch_from": "employee.ctc",
    "fetch_if_empty": 1,
    "fieldname": "current_ctc",
    "fieldtype": "Currency",
    "label": "Current CTC",
    "mandatory_depends_on": "revised_ctc",
-   "options": "salary_currency"
+   "options": "Company:company:default_currency"
   },
   {
    "depends_on": "current_ctc",
    "fieldname": "revised_ctc",
    "fieldtype": "Currency",
    "label": "Revised CTC",
-   "options": "salary_currency"
+   "options": "Company:company:default_currency"
   }
  ],
  "is_submittable": 1,

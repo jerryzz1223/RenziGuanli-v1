@@ -495,7 +495,7 @@ class AttendanceImportCenter {
 			["missing_card", "忘打卡"],
 			["apple_reward", "苹果树奖惩表"],
 			["monthly_draft", "考勤初稿"],
-			["monthly_signed", "考勤终稿（签字版）"],
+			["monthly_signed", "考勤终稿（第二次签字版）"],
 			["monthly_finance", "考勤终稿（财务版）"],
 		];
 		const defaults = {
@@ -601,6 +601,8 @@ class AttendanceImportCenter {
 			status: data.status || (slots.every((slot) => slot.status === "未上传") ? "未上传" : "待加工"),
 			slots,
 			finalization_inputs: data.finalization_inputs || data.snapshot_sources || [],
+			first_signed_inputs: data.first_signed_inputs || [],
+			first_signed_outputs: data.first_signed_outputs || {},
 			final_outputs: data.final_outputs || {},
 		};
 	}
@@ -1026,6 +1028,7 @@ class AttendanceImportCenter {
 	}
 
 	processing_field_label(fieldName) {
+		if (String(fieldName || "").startsWith("__daily_exception_decision__:")) return __("按日确认休息日打卡");
 		const labels = {
 			employee_code: "工号", employee_name: "姓名", department: "部门", standard_hours: "标准工时", actual_attendance_hours: "实际出勤工时",
 			created_at: "创建时间", punch_time: "补卡时间", punch_type: "补卡类型", reason: "补卡理由", approval_result: "审批结果", approval_status: "审批状态",
@@ -1038,7 +1041,7 @@ class AttendanceImportCenter {
 			eligible_for_downstream: "计入下游", include_in_downstream: "计入下游",
 			housing_allowance: "住房补贴", full_attendance_award: "全勤奖", special_hours: "特殊工时", special_hours_days: "特殊工时明细",
 			day: "日期", hours: "工时",
-			attendance_details: "异常日期", attendance_date: "考勤日期", shift: "班次", clock_in: "上班打卡", clock_out: "下班打卡",
+			attendance_details: "异常日期", attendance_date: "考勤日期", decision: "处理决定", shift: "班次", clock_in: "上班打卡", clock_out: "下班打卡",
 			exception_events: "异常事件明细", data_quality_events: "数据质量说明",
 			clock_in_missing: "上班缺卡次数", clock_out_missing: "下班缺卡次数", source_row: "来源行",
 			"工号": "工号", "姓名": "姓名", "部门": "部门", "苹果类型": "苹果类型", "有效苹果数": "有效苹果数",
@@ -1135,9 +1138,10 @@ class AttendanceImportCenter {
 		return lines.map((line) => {
 			const flags = (line.exception_codes || []).map(sourceExceptionLabel).join("、") || __("待人工确认");
 			const restdayWithoutOvertime = (line.exception_codes || []).includes("RESTDAY_CLOCKED_WITHOUT_OVERTIME");
-			const action = includeAction && recordId
-				? `<br><button class="btn ${restdayWithoutOvertime ? "btn-primary" : "btn-default"} btn-xs" data-edit-attendance-daily-row="${this.escape(recordId)}" data-attendance-source-row="${this.escape(line.source_row || "")}" data-restday-overtime-correction="${restdayWithoutOvertime ? "1" : ""}">${this.escape(__(restdayWithoutOvertime ? "填写休息日加班时长" : "修改本日"))}</button>`
-				: "";
+			const action = includeAction && recordId ? `<br>
+				<button class="btn ${restdayWithoutOvertime ? "btn-primary" : "btn-default"} btn-xs" data-edit-attendance-daily-row="${this.escape(recordId)}" data-attendance-source-row="${this.escape(line.source_row || "")}" data-restday-overtime-correction="${restdayWithoutOvertime ? "1" : ""}">${this.escape(__(restdayWithoutOvertime ? "填写休息日加班时长" : "修改本日"))}</button>
+				${restdayWithoutOvertime ? `<button class="btn btn-default btn-xs" data-confirm-attendance-daily-no-overtime="${this.escape(recordId)}" data-attendance-source-row="${this.escape(line.source_row || "")}" data-attendance-date="${this.escape(line.attendance_date || "")}">${this.escape(__("确认本日不计加班"))}</button>` : ""}
+			` : "";
 			return `<div class="hrms-attendance-exception-line"><strong>${this.escape(line.attendance_date || "--")}</strong>　${this.escape(flags)}${action}</div>`;
 		}).join("");
 	}
@@ -1503,8 +1507,14 @@ class AttendanceImportCenter {
 								{
 									freeze: true,
 									freeze_message: __("正在保存每日修改并重新汇总..."),
-									on_success: () => { dialog.hide(); frappe.show_alert({ message: __("已保存每日修改，并已更新该员工的下游汇总。"), indicator: "green" }); this.load_processing_exceptions(); },
-									on_error: (message) => frappe.msgprint(message),
+									on_success: (data) => {
+										dialog.hide();
+										frappe.show_alert({
+											message: __(data.review_status === "待审核" ? "已保存本日修改；该员工其他异常日期仍待处理。" : "已保存本日修改，并已更新该员工的下游汇总。"),
+											indicator: data.review_status === "待审核" ? "orange" : "green",
+										});
+										this.load_processing_exceptions();
+									},
 								},
 							);
 						},
@@ -1516,7 +1526,66 @@ class AttendanceImportCenter {
 		);
 	}
 
+	confirm_attendance_daily_no_overtime(recordId, sourceRow, attendanceDate = "") {
+		const dialog = new frappe.ui.Dialog({
+			title: __("确认本日不计加班：{0}", [attendanceDate || "--"]),
+			fields: [
+				{ fieldtype: "HTML", options: `<div class="hrms-attendance-dialog-note">${this.escape(__("本次只处理 {0} 这一天；同一员工的其他异常日期会继续保留在待处理列表中。", [attendanceDate || "--"]))}</div>` },
+				{ fieldtype: "Small Text", fieldname: "reason", label: __("确认原因"), reqd: 1, default: __("已核对该休息日打卡，本日不计入休息日加班。") },
+			],
+			primary_action_label: __("确认本日不计加班并留痕"),
+			primary_action: (values) => {
+				this.call_processing_api(
+					"review_attendance_draft_daily_exception",
+					{
+						company: this.company,
+						attendance_month: this.attendance_month,
+						record_id: recordId,
+						source_row: sourceRow,
+						exception_code: "RESTDAY_CLOCKED_WITHOUT_OVERTIME",
+						reason: values.reason,
+					},
+					{
+						freeze: true,
+						freeze_message: __("正在记录本日处理决定..."),
+						on_success: (data) => {
+							dialog.hide();
+							frappe.show_alert({
+								message: __(data.review_status === "待审核" ? "已处理本日；该员工其他异常日期仍待处理。" : "已处理本日，该员工已无待处理异常日期。"),
+								indicator: data.review_status === "待审核" ? "orange" : "green",
+							});
+							this.load_processing_exceptions();
+						},
+					},
+				);
+			},
+		});
+		dialog.show();
+	}
+
 	show_processing_record_dialog(record) {
+		const dailyLines = record.source_type === "attendance_draft" ? this.attendance_exception_lines(record) : [];
+		if (dailyLines.some((line) => (line.exception_codes || []).includes("RESTDAY_CLOCKED_WITHOUT_OVERTIME"))) {
+			const dailyDialog = new frappe.ui.Dialog({
+				title: __("按日期处理：{0} {1}", [record.employee_code || "", record.employee_name || ""]),
+				fields: [{
+					fieldtype: "HTML",
+					options: `<div class="hrms-attendance-dialog-note">${this.escape(__("同一员工有多个异常日期时，每天分别处理和留痕；未处理的日期不会被一起通过。"))}<div class="hrms-attendance-exception-lines">${this.render_attendance_exception_lines(dailyLines, record.record_id || record.name || "")}</div></div>`,
+				}],
+			});
+			dailyDialog.show();
+			dailyDialog.$wrapper.find("[data-edit-attendance-daily-row]").on("click", (event) => {
+				dailyDialog.hide();
+				const button = event.currentTarget;
+				this.open_attendance_daily_row_editor(button.dataset.editAttendanceDailyRow, button.dataset.attendanceSourceRow, button.dataset.restdayOvertimeCorrection === "1");
+			});
+			dailyDialog.$wrapper.find("[data-confirm-attendance-daily-no-overtime]").on("click", (event) => {
+				dailyDialog.hide();
+				const button = event.currentTarget;
+				this.confirm_attendance_daily_no_overtime(button.dataset.confirmAttendanceDailyNoOvertime, button.dataset.attendanceSourceRow, button.dataset.attendanceDate);
+			});
+			return;
+		}
 		const resolvedRecord = record.review_status && record.review_status !== "待审核";
 		const editableFields = (record.editable_fields || []).map((field) => typeof field === "string" ? { fieldname: field, label: field, value: record[field] } : field);
 		if (!editableFields.length) {
@@ -1564,7 +1633,6 @@ class AttendanceImportCenter {
 						freeze: true,
 						freeze_message: __("正在记录原值、新值和调整原因..."),
 						on_success: () => { dialog.hide(); this.load_processing_results(); },
-						on_error: (message) => frappe.msgprint(message),
 					},
 				);
 			},
@@ -1653,13 +1721,16 @@ class AttendanceImportCenter {
 			const issueCell = dailyLines.length
 				? this.render_attendance_exception_lines(dailyLines, recordId)
 				: `<strong>${this.escape(__("问题日期：{0}", [this.attendance_exception_date_text(row)]))}</strong><br><strong>${this.escape(__("问题：{0}", [this.exception_label_text(row)]))}</strong><br><small>${this.escape(row.exception_detail || row.exception_message || "")}</small>`;
+			const operation = row.source_type === "attendance_draft" && dailyLines.length
+				? `<small>${this.escape(__("请按异常日期分别处理"))}</small>`
+				: `<button class="btn btn-default btn-xs" data-edit-exception="${this.escape(row.record_id || row.source_id || row.name || "")}" data-exception-source-type="${this.escape(row.source_type || "")}">${this.escape(__("处理异常"))}</button>`;
 			return `<tr>
 				<td><input type="checkbox" data-exception-record-select="${this.escape(recordId)}" ${canBulkProcess && recordId ? "" : "disabled"} ${this.select_all_filtered_exceptions ? "checked" : ""} title="${this.escape(canBulkProcess ? __("选择后可批量处理") : __("请先按来源筛选，再进行批量处理"))}"></td>
 				<td>${this.escape(`${row.employee_code || "--"} ${row.employee_name || ""}`)}</td>
 				<td>${this.escape(row.source_label || this.processing_source_label(row.source_type))}</td>
 				<td class="hrms-attendance-long-cell">${issueCell}</td>
 				<td>${this.review_status_badge(row.review_status || "待审核")}<br><small>${this.escape(`${row.reviewer || "--"} ${row.reviewed_on || ""}`)}</small><br><small>${this.escape(row.review_note || "")}</small></td>
-				<td><button class="btn btn-default btn-xs" data-edit-exception="${this.escape(row.record_id || row.source_id || row.name || "")}" data-exception-source-type="${this.escape(row.source_type || "")}">${this.escape(__("处理异常"))}</button></td>
+				<td>${operation}</td>
 			</tr>`;
 		};
 		return `<div class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("异常处理"))}</h3><small>${this.escape(__("按员工集中显示，但仅展开该员工存在异常的钉钉原始日期行。缺卡、迟到、早退与旷工均直接采用钉钉字段；确认后保留人员参与终稿与薪资，缺勤对策仍由薪资规则计算。"))}</small></div><div><strong>${this.escape(scopeSummary)}</strong><br><button class="btn btn-default btn-sm" data-bulk-exception-process ${canBulkProcess && selectedCount ? "" : "disabled"}>${this.escape(__(this.select_all_filtered_exceptions ? "处理当前筛选全部（{0}）" : "处理已勾选（{0}）", [selectedCount]))}</button></div></div><div class="hrms-attendance-result-controls">${this.render_exception_source_filter()}${canBulkProcess && currentPending ? `<button class="btn btn-default btn-sm" data-select-all-filtered-exceptions>${this.escape(__("全选当前筛选 {0} 条", [currentPending]))}</button>` : ""}${!canBulkProcess ? `<small class="text-muted">${this.escape(__("请选择一个来源后，可全选并批量处理该来源的异常。"))}</small>` : ""}</div>${filterNotice}${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}${pagination}<div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr><th><input type="checkbox" data-select-exception-all ${canBulkProcess && rows.length ? "" : "disabled"} ${this.select_all_filtered_exceptions ? "checked" : ""} title="${this.escape(__("全选当前筛选来源的全部待处理异常"))}"></th><th>${this.escape(__("员工"))}</th><th>${this.escape(__("来源"))}</th><th>${this.escape(__("异常日期及原因"))}</th><th>${this.escape(__("处理状态"))}</th><th>${this.escape(__("操作"))}</th></tr></thead><tbody>${loading ? `<tr><td colspan="6" class="text-muted">${this.escape(__("正在读取统一异常队列..."))}</td></tr>` : rows.length ? rows.map(renderRow).join("") : `<tr><td colspan="6" class="text-muted">${this.escape(__("当前筛选下没有待处理异常；已处理记录可在加工结果和人工调整记录中查看。"))}</td></tr>`}</tbody></table></div>${pagination}</div>`;
@@ -1717,6 +1788,7 @@ class AttendanceImportCenter {
 		body.querySelector("[data-bulk-exception-process]")?.addEventListener("click", () => this.show_bulk_processing_dialog(this.exception_source_filter));
 		body.querySelectorAll("[data-edit-exception]").forEach((button) => button.addEventListener("click", () => this.open_processing_record_editor(button.dataset.editException, button.dataset.exceptionSourceType)));
 		body.querySelectorAll("[data-edit-attendance-daily-row]").forEach((button) => button.addEventListener("click", () => this.open_attendance_daily_row_editor(button.dataset.editAttendanceDailyRow, button.dataset.attendanceSourceRow, button.dataset.restdayOvertimeCorrection === "1")));
+		body.querySelectorAll("[data-confirm-attendance-daily-no-overtime]").forEach((button) => button.addEventListener("click", () => this.confirm_attendance_daily_no_overtime(button.dataset.confirmAttendanceDailyNoOvertime, button.dataset.attendanceSourceRow, button.dataset.attendanceDate)));
 	}
 
 	load_processing_ledger(kind) {
@@ -1868,6 +1940,20 @@ class AttendanceImportCenter {
 		});
 	}
 
+	get_first_signed_source_checks(batch = {}) {
+		const supplied = new Map((batch.first_signed_inputs || []).map((item) => [item.source_type || item.key, item]));
+		const slots = new Map((batch.slots || []).map((slot) => [slot.source_type, slot]));
+		return [
+			{ key: "attendance_draft", label: "考勤初稿" },
+			{ key: "missing_card", label: "忘打卡" },
+		].map((source) => {
+			const external = supplied.get(source.key);
+			const slot = slots.get(source.key);
+			const status = external?.status || slot?.status || "未就绪";
+			return { ...source, ...(external || {}), ready: Boolean(external?.ready ?? slot?.status === "已确认"), status };
+		});
+	}
+
 	render_monthly_support_imports(checks) {
 		const supportByKey = new Map(checks.map((check) => [check.key, check]));
 		return `
@@ -1891,22 +1977,28 @@ class AttendanceImportCenter {
 
 	render_monthly_final_markup(batch = this.processing_batch, checks = this.get_final_source_checks(batch || {})) {
 		const lockedSnapshot = batch?.locked_snapshot_version || batch?.final_outputs?.locked_snapshot_version || "";
+		const firstSignedChecks = this.get_first_signed_source_checks(batch || {});
+		const firstSignedReady = firstSignedChecks.length > 0 && firstSignedChecks.every((check) => check.ready);
+		const firstSignedOutputs = batch?.first_signed_outputs || {};
 		const sourcesReady = checks.length > 0 && checks.every((check) => check.ready);
 		// `snapshot_ready` is a derived, cached server hint and can be stale after
 		// a source is confirmed.  The six current source checks are the actual
 		// gate, and the server recomputes them again before generating files.
 		const ready = sourcesReady;
 		const outputs = batch?.final_outputs || {};
+		const secondSignedFileUrl = outputs.second_signed_file_url || outputs.signed_file_url;
 		const recognition = batch?.employee_recognition || {};
 		const recognitionCards = [
 			["初稿识别员工", recognition.draft_recognized_employee_count, "按初稿唯一工号汇总"],
 			["花名册员工", recognition.roster_employee_count, "已填工号，可参与匹配"],
 			["成功识别员工", recognition.successful_employee_count, "已通过校验，可进入终稿"],
 		];
-		return `<section class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("月度终稿"))}</h3></div><button class="btn btn-primary btn-sm" data-generate-final ${ready ? "" : "disabled"}>${this.escape(__("锁定并生成终稿"))}</button></div><section class="hrms-attendance-final-checklist"><div class="hrms-attendance-final-checklist__head"><strong>${this.escape(__("来源完备性 / 锁定快照"))}</strong></div><div class="hrms-attendance-final-recognition">${recognitionCards.map(([label, count]) => `<div><strong>${this.escape(__("{0} 人", [count || 0]))}</strong><span>${this.escape(__(label))}</span></div>`).join("")}</div><div class="hrms-attendance-final-readiness">${checks.map((check) => `<div><strong>${this.escape(__(check.label))}</strong>${this.status_badge(check.status)}<em>${this.escape(lockedSnapshot ? __("锁定快照：{0}", [lockedSnapshot]) : __("生成时锁定"))}</em></div>`).join("")}</div></section><div class="hrms-attendance-final-grid"><article><strong>${this.escape(__("员工签字版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="signed" ${outputs.signed_file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-edit-final="signed" ${outputs.signed_file_url ? "" : "disabled"}>${this.escape(__("网页编辑"))}</button> <button class="btn btn-default btn-sm" data-download-final="signed" ${outputs.signed_file_url ? "" : "disabled"}>${this.escape(__("下载员工签字版"))}</button></article><article><strong>${this.escape(__("财务版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-edit-final="signed" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("网页编辑"))}</button> <button class="btn btn-default btn-sm" data-download-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("下载财务版"))}</button></article></div><div class="hrms-attendance-process-footnote">${this.escape(__(outputs.locked_version ? `当前锁定版本：${outputs.locked_version}` : "尚未生成锁定版本。"))}</div></section>`;
+		const firstSignedMarkup = `<section class="hrms-attendance-first-signed"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("一次签字版"))}</h3><small>${this.escape(__("版式与提供的第一次签字 Excel 完全一致；来源为考勤初稿 + 忘打卡，已确认的特殊工时按原表列带入。"))}</small></div><button class="btn btn-primary btn-sm" data-generate-first-signed ${firstSignedReady ? "" : "disabled"}>${this.escape(__("生成一次签字版"))}</button></div><div class="hrms-attendance-first-signed-readiness">${firstSignedChecks.map((check) => `<div><strong>${this.escape(__(check.label))}</strong>${this.status_badge(check.status)}<em>${this.escape(firstSignedOutputs.locked_snapshot_version ? __("锁定快照：{0}", [firstSignedOutputs.locked_snapshot_version]) : __("生成时锁定"))}</em></div>`).join("")}</div><div class="hrms-attendance-first-signed-actions"><button class="btn btn-default btn-sm" data-preview-final="first_signed" ${firstSignedOutputs.file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button><button class="btn btn-default btn-sm" data-download-final="first_signed" ${firstSignedOutputs.file_url ? "" : "disabled"}>${this.escape(__("下载一次签字版"))}</button>${firstSignedOutputs.employee_count ? `<span>${this.escape(__("已生成 {0} 人", [firstSignedOutputs.employee_count]))}</span>` : ""}</div></section>`;
+		return `<section class="hrms-attendance-section">${firstSignedMarkup}<div class="hrms-attendance-list-head"><div><h3>${this.escape(__("月度终稿"))}</h3></div><button class="btn btn-primary btn-sm" data-generate-final ${ready ? "" : "disabled"}>${this.escape(__("锁定并生成终稿"))}</button></div><section class="hrms-attendance-final-checklist"><div class="hrms-attendance-final-checklist__head"><strong>${this.escape(__("来源完备性 / 锁定快照"))}</strong></div><div class="hrms-attendance-final-recognition">${recognitionCards.map(([label, count]) => `<div><strong>${this.escape(__("{0} 人", [count || 0]))}</strong><span>${this.escape(__(label))}</span></div>`).join("")}</div><div class="hrms-attendance-final-readiness">${checks.map((check) => `<div><strong>${this.escape(__(check.label))}</strong>${this.status_badge(check.status)}<em>${this.escape(lockedSnapshot ? __("锁定快照：{0}", [lockedSnapshot]) : __("生成时锁定"))}</em></div>`).join("")}</div></section><div class="hrms-attendance-final-grid"><article><strong>${this.escape(__("第二次员工签字版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="signed" ${secondSignedFileUrl ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-edit-final="signed" ${secondSignedFileUrl ? "" : "disabled"}>${this.escape(__("网页编辑"))}</button> <button class="btn btn-default btn-sm" data-download-final="signed" ${secondSignedFileUrl ? "" : "disabled"}>${this.escape(__("下载第二次员工签字版"))}</button></article><article><strong>${this.escape(__("财务版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-edit-final="signed" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("网页编辑"))}</button> <button class="btn btn-default btn-sm" data-download-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("下载财务版"))}</button></article></div><div class="hrms-attendance-process-footnote">${this.escape(__(outputs.locked_version ? `当前锁定版本：${outputs.locked_version}` : "尚未生成锁定版本。"))}</div></section>`;
 	}
 
 	bind_monthly_final_events(body) {
+		body.querySelector("[data-generate-first-signed]")?.addEventListener("click", () => this.generate_first_signed_file());
 		body.querySelector("[data-generate-final]")?.addEventListener("click", () => this.generate_monthly_final_files());
 		body.querySelectorAll("[data-download-final]").forEach((button) => button.addEventListener("click", () => this.download_final_file(button.dataset.downloadFinal)));
 		body.querySelectorAll("[data-preview-final]").forEach((button) => button.addEventListener("click", () => this.open_monthly_final_preview(button.dataset.previewFinal)));
@@ -2033,14 +2125,14 @@ class AttendanceImportCenter {
 			{ company: this.company, attendance_month: this.attendance_month, snapshot_version: this.processing_batch?.locked_snapshot_version || this.processing_batch?.final_outputs?.locked_snapshot_version || "" },
 			{
 				freeze: true,
-				freeze_message: __("正在锁定同源数据并生成两个终稿版本..."),
+			freeze_message: __("正在锁定同源数据并生成第二次员工签字版与财务版..."),
 			on_success: (data) => {
 				if (data?.blocked) {
 					frappe.msgprint({ title: __("终稿尚不能生成"), indicator: "orange", message: this.escape(data.reason || __("来源未完备或锁定快照不一致。")) });
 					this.load_monthly_final();
 					return;
 				}
-				frappe.show_alert({ message: __("终稿已从同一锁定版本生成。"), indicator: "green" });
+				frappe.show_alert({ message: __("第二次员工签字版与财务版已从同一锁定版本生成。"), indicator: "green" });
 				this.load_monthly_final();
 			},
 				on_error: (message) => frappe.msgprint(message),
@@ -2048,9 +2140,31 @@ class AttendanceImportCenter {
 		);
 	}
 
+	generate_first_signed_file() {
+		this.call_processing_api(
+			"generate_first_signed_file",
+			{ company: this.company, attendance_month: this.attendance_month, snapshot_version: this.processing_batch?.first_signed_outputs?.locked_snapshot_version || "" },
+			{
+				freeze: true,
+				freeze_message: __("正在锁定考勤初稿与忘打卡并生成一次签字版..."),
+				on_success: (data) => {
+					if (data?.blocked) {
+						frappe.msgprint({ title: __("一次签字版尚不能生成"), indicator: "orange", message: this.escape(data.reason || __("考勤初稿或忘打卡尚未确认。")) });
+						this.load_monthly_final();
+						return;
+					}
+					frappe.show_alert({ message: __("一次签字版已从考勤初稿与忘打卡的同一锁定版本生成。"), indicator: "green" });
+					this.load_monthly_final();
+				},
+				on_error: (message) => frappe.msgprint(message),
+			},
+		);
+	}
+
 	download_final_file(kind) {
 		const outputs = this.processing_batch?.final_outputs || {};
-		const fileUrl = kind === "signed" ? outputs.signed_file_url : outputs.finance_file_url;
+		const firstSignedOutputs = this.processing_batch?.first_signed_outputs || {};
+		const fileUrl = kind === "first_signed" ? firstSignedOutputs.file_url : kind === "signed" ? outputs.signed_file_url : outputs.finance_file_url;
 		if (!fileUrl) return frappe.msgprint(__("该终稿文件尚未生成。"));
 		window.open(fileUrl, "_blank");
 	}
@@ -2104,9 +2218,9 @@ class AttendanceImportCenter {
 				};
 				const table = `<div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr>${columns.map((column) => `<th>${this.escape(__(column.label))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${editableFields.has(column.field) ? editableCell(row, column) : this.escape(row[column.field] ?? "")}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${columns.length || 1}" class="text-muted">${this.escape(__("当前锁定版本没有可编辑的数据。"))}</td></tr>`}</tbody></table></div>`;
 				const dialog = new frappe.ui.Dialog({
-					title: __("编辑员工签字版（会同步重生成财务版）"),
+					title: __("编辑第二次员工签字版（会同步重生成财务版）"),
 					fields: [
-						{ fieldtype: "HTML", fieldname: "final_editor", options: `<div class="hrms-attendance-dialog-note">${this.escape(__("此处修改的是员工签字版的同源数据。保存后会记录原值和操作人，当前锁定版将不再作为有效版本；请重新锁定生成两个版本。平日、周末、节假日特殊工时必须按日期在“特殊工时 → 手动修改”中维护，以保留倍率依据。"))}</div>${table}` },
+						{ fieldtype: "HTML", fieldname: "final_editor", options: `<div class="hrms-attendance-dialog-note">${this.escape(__("此处修改的是第二次员工签字版的同源数据。保存后会记录原值和操作人，当前锁定版将不再作为有效版本；请重新锁定生成第二次员工签字版与财务版。平日、周末、节假日特殊工时必须按日期在“特殊工时 → 手动修改”中维护，以保留倍率依据。"))}</div>${table}` },
 					],
 					size: "extra-large",
 					primary_action_label: __("保存修改并重新锁定"),
@@ -3054,20 +3168,22 @@ class AttendanceImportCenter {
 				<div class="hrms-attendance-list-head">
 					<h3>${this.escape(__("钉钉集成"))}</h3>
 					<div>
-						<button class="btn btn-default btn-sm" data-action="dingtalk-settings">${this.escape(__("配置钉钉"))}</button>
+						<button class="btn btn-default btn-sm" data-action="dingtalk-settings">${this.escape(__("连接设置"))}</button>
 						<button class="btn btn-default btn-sm" data-action="dingtalk-test-connection">${this.escape(__("测试连接"))}</button>
 						<button class="btn btn-default btn-sm" data-action="dingtalk-directory">${this.escape(__("同步组织和员工"))}</button>
+						<button class="btn btn-default btn-sm" data-action="dingtalk-preentry">${this.escape(__("同步扫码入职"))}</button>
+						<button class="btn btn-default btn-sm" data-action="dingtalk-full-roster">${this.escape(__("首次全量档案同步"))}</button>
 						<button class="btn btn-primary btn-sm" data-action="dingtalk-local-pilot">${this.escape(__("本地考勤试运行"))}</button>
 						<button class="btn btn-default btn-sm" data-action="dingtalk-manual-sync">${this.escape(__("手动拉取指定日期"))}</button>
 						<button class="btn btn-default btn-sm" data-action="open-sync-logs">${this.escape(__("同步记录"))}</button>
 					</div>
 				</div>
-				<div class="alert alert-info">${this.escape(__("钉钉数据不会直接改员工主档、月度锁定记录或薪资。先同步组织与员工并核对映射，再对指定日期和最多 5 名员工进行本地试运行，系统才会生成可复核的每日考勤草稿。"))}</div>
+				<div class="alert alert-info">${this.escape(__("钉钉扫码入职提交后，系统可拉取待入职人员并保留原始记录；首次全量档案同步会拉取在职和待入职员工的全部花名册字段及附件元数据。只有公司工号完全匹配时才自动绑定员工档案，其余记录进入待匹配，不按姓名或手机号猜测合并。"))}</div>
 				<div class="hrms-dingtalk-sync-progress" data-dingtalk-progress hidden></div>
 				<div class="hrms-attendance-quick-grid" data-dingtalk-status><div class="text-muted">${this.escape(__("正在读取钉钉同步状态..."))}</div></div>
 				<div class="hrms-attendance-import-panel mt-3">
 					<h4>${this.escape(__("使用顺序"))}</h4>
-					<p>${this.escape(__("1. 配置并测试连接 → 2. 同步组织和员工 → 3. 在员工映射中处理待匹配/冲突 → 4. 对指定日期和最多 5 人试运行 → 5. 查看草稿和异常；确认无误后才进入月度终稿。"))}</p>
+					<p>${this.escape(__("1. 打开连接设置并测试连接 → 2. 同步组织和员工 → 3. 首次点击“首次全量档案同步” → 4. 在员工导入审批中核对字段和附件 → 5. 扫码入职需要时点击“同步扫码入职” → 6. 对指定日期和最多 5 人试运行。"))}</p>
 					<div>
 						<button class="btn btn-default btn-sm" data-action="open-mappings">${this.escape(__("查看员工映射"))}</button>
 						<button class="btn btn-default btn-sm" data-action="open-logs">${this.escape(__("刷新同步状态"))}</button>
@@ -3081,6 +3197,8 @@ class AttendanceImportCenter {
 		this.body().querySelector("[data-action='dingtalk-settings']").addEventListener("click", () => this.open_dingtalk_configuration());
 		this.body().querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => this.set_view(button.dataset.view)));
 		this.body().querySelector("[data-action='dingtalk-test-connection']").addEventListener("click", () => this.test_dingtalk_connection());
+		this.body().querySelector("[data-action='dingtalk-preentry']").addEventListener("click", () => this.sync_dingtalk_preentries());
+		this.body().querySelector("[data-action='dingtalk-full-roster']").addEventListener("click", () => this.sync_dingtalk_full_roster());
 		this.body().querySelector("[data-action='dingtalk-local-pilot']").addEventListener("click", () => this.open_dingtalk_local_pilot_dialog());
 		this.body().querySelector("[data-action='dingtalk-manual-sync']").addEventListener("click", () => this.sync_dingtalk_attendance_for_date());
 		this.body().querySelector("[data-action='dingtalk-directory']").addEventListener("click", () => this.sync_dingtalk_directory());
@@ -3099,16 +3217,19 @@ class AttendanceImportCenter {
 				const settings = result.settings || {};
 				const defaults = result.defaults || {};
 				const dialog = new frappe.ui.Dialog({
-					title: __("配置钉钉集成"),
-					fields: [
-						{ fieldtype: "HTML", options: `<div class="alert alert-info">${this.escape(__("本地试运行只需内网服务器主动访问钉钉；不会开放公网端口。Client Secret 仅保存到服务器密码字段，已保存时可留空。手动试运行成功并核对异常后，才勾选每日自动同步。"))}</div>` },
+					 title: __("钉钉连接设置（扫码入职 + 考勤共用）"),
+					 fields: [
+						{ fieldtype: "HTML", options: `<div class="alert alert-info">${this.escape(__("这里配置一套钉钉连接：扫码入职和后续考勤拉取共用同一个 AppKey/AppSecret。两类数据只是在钉钉后台申请不同读取权限，系统内仍分别点击“同步扫码入职”和“手动拉取指定日期”。扫码入职不会自动拉取。"))}</div>` },
 						{ fieldname: "company", fieldtype: "Link", options: "Company", label: __("同步公司"), default: settings.company || "", reqd: 1 },
 						{ fieldname: "enabled", fieldtype: "Check", label: __("启用钉钉集成"), default: settings.enabled ? 1 : 0 },
-						{ fieldname: "sync_mode", fieldtype: "Select", label: __("同步模式"), options: "Excel导入（默认）\n内网服务器主动拉取API", default: settings.sync_mode || defaults.sync_mode || "内网服务器主动拉取API", reqd: 1 },
-						{ fieldname: "daily_sync_enabled", fieldtype: "Check", label: __("每日自动同步（02:30）"), description: __("同步昨天并回补最近 N 天；请在手动拉取核对通过后再启用。"), default: settings.daily_sync_enabled ? 1 : 0 },
+						{ fieldname: "sync_mode", fieldtype: "Select", label: __("数据连接方式"), options: "内网服务器主动拉取API\nExcel导入（不调用钉钉）", default: settings.sync_mode || "内网服务器主动拉取API", description: __("选择 API 后，扫码入职和考勤按钮使用同一套钉钉连接。"), reqd: 1 },
+						{ fieldname: "daily_sync_enabled", fieldtype: "Check", label: __("考勤每日自动同步（02:30，可选）"), description: __("只影响考勤；扫码入职始终不会自动拉取。默认关闭。"), default: settings.daily_sync_enabled ? 1 : 0 },
 						{ fieldname: "sync_lookback_days", fieldtype: "Int", label: __("考勤回补天数"), description: __("可填 1–31，推荐 7。"), default: settings.sync_lookback_days || 7, depends_on: "eval:doc.daily_sync_enabled" },
-						{ fieldname: "client_id", fieldtype: "Data", label: __("Client ID / AppKey"), default: settings.client_id || defaults.client_id || "", reqd: 1 },
-						{ fieldname: "client_secret", fieldtype: "Password", label: __("Client Secret / AppSecret"), description: result.client_secret_saved ? __("已保存；留空可保持不变。") : __("首次连接必填；不会显示、不会写入代码。") },
+						{ fieldtype: "Section Break", label: __("钉钉企业内部应用凭证") },
+						{ fieldname: "client_id", fieldtype: "Data", label: __("AppKey / Client ID（必填）"), description: __("从钉钉开发者后台的企业内部应用复制。"), default: settings.client_id || defaults.client_id || "", reqd: 1 },
+						{ fieldname: "client_secret", fieldtype: "Password", label: __("AppSecret / Client Secret（必填）"), description: result.client_secret_saved ? __("已保存；留空可保持不变。") : __("首次连接必填；只保存到服务器密码字段，不要发到聊天。") },
+						{ fieldname: "agent_id", fieldtype: "Data", label: __("应用 AgentId（扫码入职必填）"), description: __("钉钉开发者后台企业内部应用的 AgentId；用于读取扫码填写的智能人事花名册字段。"), default: settings.agent_id || "", reqd: 1 },
+						{ fieldtype: "HTML", options: `<div class="text-muted small">${this.escape(__("钉钉后台至少申请：智能人事—待入职员工管理权限、智能人事—个人信息读权限、考勤数据读权限。扫码入职使用智能人事花名册接口，不调用通讯录用户详情接口；无需回调地址或 Webhook。"))}</div>` },
 					],
 					primary_action_label: __("保存本地试运行配置"),
 					primary_action: (values) => {
@@ -3134,6 +3255,47 @@ class AttendanceImportCenter {
 				dialog.show();
 			},
 			error: (error) => frappe.msgprint({ title: __("无法读取钉钉配置"), indicator: "red", message: this.read_dingtalk_error(error) }),
+		});
+	}
+
+	sync_dingtalk_preentries() {
+		if (!this.ensure_company()) return;
+		frappe.call({
+			method: "hrms.api.dingtalk_integration.sync_preentry_employees_from_dingtalk",
+			args: { company: this.company },
+			freeze: true,
+			freeze_message: __("正在拉取钉钉扫码入职记录..."),
+			callback: (response) => {
+				const result = response.message || {};
+				frappe.show_alert({
+					message: __("扫码入职同步完成：接收 {0}，已匹配 {1}，待匹配 {2}，失败 {3}", [result.received || 0, result.matched || 0, result.pending || 0, result.failed || 0]),
+					indicator: result.failed ? "orange" : "green",
+				});
+				this.load_dingtalk_status();
+			},
+			error: (error) => frappe.msgprint({ title: __("扫码入职同步失败"), indicator: "red", message: this.read_dingtalk_error(error) }),
+		});
+	}
+
+	sync_dingtalk_full_roster() {
+		if (!this.ensure_company()) return;
+		frappe.call({
+			method: "hrms.api.dingtalk_integration.sync_all_employee_rosters_from_dingtalk",
+			args: { company: this.company },
+			freeze: true,
+			freeze_message: __("正在拉取钉钉全部员工档案和附件元数据..."),
+			callback: (response) => {
+				const result = response.message || {};
+				const attachmentMessage = result.attachment_count
+					? __("附件元数据 {0} 项；下载能力以钉钉返回的地址为准。", [result.attachment_count])
+					: __("未返回附件。请检查钉钉 HRM 花名册字段权限。");
+				frappe.show_alert({
+					message: __("全量档案同步完成：员工 {0}，待审批 {1}，待匹配 {2}，失败 {3}。{4}", [result.employee_count || 0, result.pending_approval || 0, result.pending_match || 0, result.failed || 0, attachmentMessage]),
+					indicator: result.failed ? "orange" : "green",
+				});
+				this.load_dingtalk_status();
+			},
+			error: (error) => frappe.msgprint({ title: __("全量档案同步失败"), indicator: "red", message: this.read_dingtalk_error(error) }),
 		});
 	}
 
@@ -3235,6 +3397,8 @@ class AttendanceImportCenter {
 		const cards = [
 			[connection.enabled && connection.api_mode ? "已连接" : "未启用", "连接状态", connection.configured ? "已保存应用凭证" : "请先完成钉钉配置"],
 			[`${raw.department || 0} / ${raw.user || 0}`, "组织 / 员工原始记录", `已映射 ${mappings.matched || 0}，待处理 ${mappings.pending || 0}`],
+			[raw.employee_roster || 0, "员工档案原始记录", "含全部返回字段和附件元数据"],
+			[raw.preentry || 0, "扫码入职原始记录", "仅在点击“同步扫码入职”后拉取"],
 			[raw.attendance || 0, "钉钉考勤原始记录", `本月草稿 ${attendance.daily_drafts || 0} 条`],
 			[attendance.exceptions || 0, "本月考勤异常", connection.daily_sync_enabled ? "每日自动同步已启用" : "每日自动同步未启用"],
 		];

@@ -27,6 +27,8 @@ from frappe.utils import cint, flt, now_datetime
 
 from hrms.api.attendance_processors.apple_tree import AppleTreeRules, preflight_apple_tree_rows, process_apple_tree_rows
 from hrms.api.attendance_processors.attendance_draft import (
+	EXCEPTION_MESSAGES as ATTENDANCE_DRAFT_EXCEPTION_MESSAGES,
+	NON_BLOCKING_ATTENDANCE_EVENT_CODES,
 	dingtalk_daily_header_location,
 	exception_lines_from_attendance_details,
 	find_dingtalk_daily_sheet,
@@ -41,6 +43,7 @@ IMPORT_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
 PROCESSING_RECORD_DOCTYPE = "HRMS Attendance Processing Record"
 DEPARTMENT_MAPPING_DOCTYPE = "HRMS Attendance Department Mapping"
 SOURCE_TYPES = ("attendance_draft", "apple_tree", "missing_card")
+FIRST_SIGNED_SOURCE_TYPES = ("attendance_draft", "missing_card")
 # These three sources are independent monthly facts used to produce the locked
 # attendance final.  In particular, housing allowance is no longer a payroll
 # monthly-variable upload: it is imported, checked and frozen with attendance.
@@ -579,6 +582,12 @@ def _batch_notes(batch) -> dict[str, Any]:
 
 
 def _save_batch_notes(batch, updates: dict[str, Any]):
+	# A single attendance action can save the batch more than once: for example,
+	# invalidating a signed output updates the same attendance-draft batch before
+	# the refreshed export URL is written below.  Reload the document so the
+	# optimistic-concurrency check compares against that latest save instead of
+	# the object captured at the start of the request.
+	batch.reload()
 	notes = _batch_notes(batch)
 	notes.setdefault("attendance_processing_center", {}).update(updates)
 	batch.notes = _json(notes)
@@ -1525,6 +1534,74 @@ def _daily_row_overrides(values: dict[str, Any]) -> dict[str, dict[str, Any]]:
 	return overrides if isinstance(overrides, dict) else {}
 
 
+def _daily_exception_decisions(values: dict[str, Any]) -> dict[str, dict[str, bool]]:
+	"""Return date-row decisions without treating them as source-data edits."""
+	decisions = values.get("_daily_exception_decisions", {}) if isinstance(values, dict) else {}
+	if not isinstance(decisions, dict):
+		return {}
+	return {
+		str(source_row): {str(code): bool(resolved) for code, resolved in codes.items()}
+		for source_row, codes in decisions.items()
+		if isinstance(codes, dict)
+	}
+
+
+def _apply_daily_exception_decisions(row: dict[str, Any], decisions: dict[str, dict[str, bool]]) -> dict[str, Any]:
+	"""Remove only reviewed employee/date exceptions from a rebuilt draft row."""
+	result = deepcopy_json(row)
+	proposed = result.get("proposed_value") if isinstance(result.get("proposed_value"), dict) else {}
+
+	def is_resolved(source_row: Any, code: Any) -> bool:
+		return bool(decisions.get(str(source_row), {}).get(str(code)))
+
+	events = [
+		event for event in proposed.get("exception_events") or []
+		if not (isinstance(event, dict) and is_resolved(event.get("source_row"), event.get("code")))
+	]
+	lines = []
+	for line in proposed.get("exception_lines") or []:
+		if not isinstance(line, dict):
+			continue
+		active_codes = [code for code in line.get("exception_codes") or [] if not is_resolved(line.get("source_row"), code)]
+		if active_codes:
+			lines.append({**line, "exception_codes": active_codes})
+	active_daily_codes = {
+		str(item.get("code")) for item in events if isinstance(item, dict) and item.get("code")
+	} | {
+		str(code) for line in lines for code in line.get("exception_codes") or []
+	}
+	decided_codes = {code for codes in decisions.values() for code, resolved in codes.items() if resolved}
+	codes = [
+		code for code in result.get("exception_codes") or []
+		if code not in decided_codes or code in active_daily_codes
+	]
+	proposed = {**proposed, "exception_events": events, "exception_lines": lines}
+	result["proposed_value"] = proposed
+	result["processed_value"] = deepcopy_json(proposed)
+	result["exception_events"] = events
+	result["exception_codes"] = codes
+	result["exception_message"] = "；".join(
+		ATTENDANCE_DRAFT_EXCEPTION_MESSAGES.get(code, EXCEPTION_LABELS.get(code, "待人工确认")) for code in codes
+	)
+	return result
+
+
+def _has_daily_exception(row: dict[str, Any], source_row: int | str, exception_code: str) -> bool:
+	return any(
+		str(event.get("code") or "") == exception_code
+		and str(event.get("source_row") or "") == str(source_row)
+		for event in (row.get("proposed_value") or {}).get("exception_events") or []
+		if isinstance(event, dict)
+	)
+
+
+def _attendance_draft_review_status(exception_codes: list[str], requested_status: str) -> str:
+	"""Keep the employee pending until every blocking daily exception is handled."""
+	if requested_status == "已通过" and set(exception_codes or []) - set(NON_BLOCKING_ATTENDANCE_EVENT_CODES):
+		return "待审核"
+	return requested_status
+
+
 def _effective_daily_source_rows(row: dict[str, Any]) -> list[dict[str, Any]]:
 	"""Return the source rows with approved in-system corrections overlaid."""
 	original = row.get("original_value") or {}
@@ -1925,17 +2002,31 @@ def _refresh_batch_review_status(batch):
 def _invalidate_monthly_final_after_source_change(batch, reason: str):
 	"""Require a fresh signed/finance final after an editable source changes."""
 	anchor = _latest_batch(batch.company, batch.attendance_month, "attendance_draft")
-	if not anchor or not _processing_meta(anchor).get("monthly_final_outputs"):
+	if not anchor:
 		return
-	_save_batch_notes(anchor, {
-		"monthly_final_outputs": {},
-		"source_data_change": {
-			"source_type": batch.source_type,
-			"reason": reason,
-			"changed_by": frappe.session.user,
-			"changed_on": now_datetime().isoformat(),
-		},
-	})
+	updates = {}
+	if batch.source_type in FIRST_SIGNED_SOURCE_TYPES:
+		updates.update({
+			"first_signed_outputs": {},
+			"first_signed_source_data_change": {
+				"source_type": batch.source_type,
+				"reason": reason,
+				"changed_by": frappe.session.user,
+				"changed_on": now_datetime().isoformat(),
+			},
+		})
+	if _processing_meta(anchor).get("monthly_final_outputs"):
+		updates.update({
+			"monthly_final_outputs": {},
+			"source_data_change": {
+				"source_type": batch.source_type,
+				"reason": reason,
+				"changed_by": frappe.session.user,
+				"changed_on": now_datetime().isoformat(),
+			},
+		})
+	if updates:
+		_save_batch_notes(anchor, updates)
 
 
 def _monthly_final_employee_recognition(company: str, attendance_month: str) -> dict[str, int]:
@@ -1987,6 +2078,8 @@ def get_processing_batch(company: str, attendance_month: str):
 	finalization_inputs = _finalization_inputs(company, attendance_month, slots)
 	anchor_batch = _latest_batch(company, attendance_month, "attendance_draft")
 	anchor_meta = _processing_meta(anchor_batch) if anchor_batch else {}
+	first_signed_inputs = _first_signed_inputs(company, attendance_month, slots)
+	first_signed_outputs = anchor_meta.get("first_signed_outputs", {})
 	final_outputs = anchor_meta.get("monthly_final_outputs", {})
 	return {
 		"batch_id": f"{company}:{attendance_month}",
@@ -1995,6 +2088,8 @@ def get_processing_batch(company: str, attendance_month: str):
 		"status": status,
 		"slots": slots,
 		"finalization_inputs": finalization_inputs,
+		"first_signed_inputs": first_signed_inputs,
+		"first_signed_outputs": first_signed_outputs,
 		"final_outputs": final_outputs,
 		"signed_final_reconciliation": anchor_meta.get("signed_final_reconciliation", {}),
 		"employee_recognition": _monthly_final_employee_recognition(company, attendance_month),
@@ -2495,6 +2590,10 @@ def update_processing_record(company: str, attendance_month: str, source_type: s
 	proposed = _loads(doc.proposed_value_json, {})
 	confirmed = _loads(doc.confirmed_value_json, None) or dict(proposed)
 	decision_only = field_name == "__review_decision__"
+	if decision_only and source_type == "attendance_draft":
+		daily_lines = _serialize_record(doc.as_dict()).get("daily_exception_lines") or []
+		if any("RESTDAY_CLOCKED_WITHOUT_OVERTIME" in (line.get("exception_codes") or []) for line in daily_lines):
+			frappe.throw(_("休息日打卡异常必须按具体日期分别处理；请在对应日期选择“填写休息日加班时长”或“确认本日不计加班”。"))
 	if decision_only and review_status == doc.review_status:
 		frappe.throw(_("该记录已经完成相同处理；如需更正，请选择具体字段后提交新的调整。"))
 	if not decision_only and field_name not in proposed and field_name not in confirmed:
@@ -2755,6 +2854,7 @@ def update_attendance_draft_daily_row(
 	old_effective_row = dict(target["source_values"])
 	confirmed_before = _loads(doc.confirmed_value_json, None) or {}
 	overrides = _daily_row_overrides(confirmed_before)
+	decisions = _daily_exception_decisions(confirmed_before)
 	overrides[str(source_row)] = {**overrides.get(str(source_row), {}), **changes}
 
 	# Rebuild this employee from its original rows plus the approved overlay. The
@@ -2779,10 +2879,14 @@ def update_attendance_draft_daily_row(
 	replacement = next((row for row in rebuilt["processed_rows"] if str(row.get("employee_code") or "") == str(doc.employee_code or "")), None)
 	if not replacement:
 		frappe.throw(_("更正后无法重新生成该员工的考勤汇总。"))
-	if review_status == "已通过" and "RESTDAY_CLOCKED_WITHOUT_OVERTIME" in (replacement.get("exception_codes") or []):
+	replacement = _apply_daily_exception_decisions(replacement, decisions)
+	target_still_missing_overtime = _has_daily_exception(replacement, source_row, "RESTDAY_CLOCKED_WITHOUT_OVERTIME")
+	if review_status == "已通过" and target_still_missing_overtime:
 		frappe.throw(_("该休息日打卡仍未填写有效的休息日加班工时；请填写大于 0 的实际时长，或使用“确认打卡不计加班”仅记录处理决定。"))
+	effective_review_status = _attendance_draft_review_status(replacement.get("exception_codes") or [], review_status)
 	confirmed = dict(replacement["proposed_value"])
 	confirmed["_daily_row_overrides"] = overrides
+	confirmed["_daily_exception_decisions"] = decisions
 	history = _loads(doc.review_history_json, [])
 	history.append({
 		"old_value": old_effective_row,
@@ -2799,12 +2903,12 @@ def update_attendance_draft_daily_row(
 	doc.confirmed_value_json = _json(confirmed)
 	doc.exception_codes = _json(replacement["exception_codes"])
 	doc.exception_message = replacement["exception_message"]
-	doc.review_status = review_status
+	doc.review_status = effective_review_status
 	doc.reviewer = frappe.session.user
 	doc.reviewed_on = now_datetime()
 	doc.review_note = (reason or "").strip()
 	doc.review_history_json = _json(history)
-	doc.eligible_for_downstream = 1 if review_status == "已通过" and _confirmed_downstream_eligible(confirmed) else 0
+	doc.eligible_for_downstream = 1 if effective_review_status == "已通过" and _confirmed_downstream_eligible(confirmed) else 0
 	doc.save(ignore_permissions=True)
 	batch_status = _refresh_batch_review_status(batch)
 	processed_result = _export_processed_result(batch)
@@ -2813,6 +2917,101 @@ def update_attendance_draft_daily_row(
 		"processed_result": processed_result,
 		"processed_result_refreshed_on": now_datetime().isoformat(),
 		"processed_result_refresh_reason": "daily_source_row_manual_update",
+	})
+	result = _serialize_record(doc.as_dict())
+	result["batch_status"] = batch_status
+	result["processed_result"] = processed_result
+	frappe.db.commit()
+	return result
+
+
+@frappe.whitelist()
+def review_attendance_draft_daily_exception(
+	company: str,
+	attendance_month: str,
+	record_id: str,
+	source_row: int | str,
+	exception_code: str,
+	reason: str = "",
+):
+	"""Resolve one dated attendance exception without resolving sibling dates."""
+	_require_processing_manager()
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	if exception_code != "RESTDAY_CLOCKED_WITHOUT_OVERTIME":
+		frappe.throw(_("当前仅支持按日确认“休息日打卡不计加班”。"))
+	if not (reason or "").strip():
+		frappe.throw(_("按日处理考勤异常必须填写原因。"))
+	try:
+		source_row = int(source_row)
+	except (TypeError, ValueError):
+		frappe.throw(_("来源行号无效。"))
+	doc = frappe.get_doc(PROCESSING_RECORD_DOCTYPE, record_id)
+	if doc.company != company or doc.attendance_month != attendance_month or doc.source_type != "attendance_draft":
+		frappe.throw(_("无权修改该钉钉考勤记录。"))
+	serialized = _serialize_record(doc.as_dict())
+	target = next(
+		(
+			line for line in serialized.get("daily_exception_lines") or []
+			if str(line.get("source_row") or "") == str(source_row)
+			and exception_code in (line.get("exception_codes") or [])
+		),
+		None,
+	)
+	if not target:
+		frappe.throw(_("该日期异常已完成处理，请刷新后查看当前待处理日期。"))
+	confirmed_before = _loads(doc.confirmed_value_json, None) or {}
+	overrides = _daily_row_overrides(confirmed_before)
+	decisions = _daily_exception_decisions(confirmed_before)
+	decisions[str(source_row)] = {**decisions.get(str(source_row), {}), exception_code: True}
+
+	batch = frappe.get_doc(IMPORT_BATCH_DOCTYPE, doc.import_batch)
+	rebuilt = process_attendance_draft_rows(
+		_effective_daily_source_rows(serialized),
+		attendance_month=attendance_month,
+		source_file=doc.source_file or batch.source_file,
+		source_sheet=doc.source_sheet or "每日统计",
+		employee_directory=_employee_directory(company) or None,
+		exception_policy=_attendance_draft_exception_policy(),
+	)
+	replacement = next((row for row in rebuilt["processed_rows"] if str(row.get("employee_code") or "") == str(doc.employee_code or "")), None)
+	if not replacement:
+		frappe.throw(_("处理后无法重新生成该员工的考勤汇总。"))
+	replacement = _apply_daily_exception_decisions(replacement, decisions)
+	effective_review_status = _attendance_draft_review_status(replacement.get("exception_codes") or [], "已通过")
+	confirmed = dict(replacement["proposed_value"])
+	confirmed["_daily_row_overrides"] = overrides
+	confirmed["_daily_exception_decisions"] = decisions
+	processed_at = now_datetime()
+	history = _loads(doc.review_history_json, [])
+	history.append({
+		"old_value": {"attendance_date": target.get("attendance_date") or "", "decision": "待处理"},
+		"new_value": {"attendance_date": target.get("attendance_date") or "", "decision": "确认本日不计加班"},
+		"field_name": f"__daily_exception_decision__:{source_row}:{exception_code}",
+		"original_value": target,
+		"reason": reason.strip(),
+		"review_status": "已通过",
+		"reviewer": frappe.session.user,
+		"reviewed_on": processed_at.isoformat(),
+		"source_row": source_row,
+	})
+	doc.processed_value_json = _json(confirmed)
+	doc.confirmed_value_json = _json(confirmed)
+	doc.exception_codes = _json(replacement["exception_codes"])
+	doc.exception_message = replacement["exception_message"]
+	doc.review_status = effective_review_status
+	doc.reviewer = frappe.session.user
+	doc.reviewed_on = processed_at
+	doc.review_note = reason.strip()
+	doc.review_history_json = _json(history)
+	doc.eligible_for_downstream = 1 if effective_review_status == "已通过" and _confirmed_downstream_eligible(confirmed) else 0
+	doc.save(ignore_permissions=True)
+	batch_status = _refresh_batch_review_status(batch)
+	processed_result = _export_processed_result(batch)
+	_invalidate_monthly_final_after_source_change(batch, "daily_exception_review")
+	_save_batch_notes(batch, {
+		"processed_result": processed_result,
+		"processed_result_refreshed_on": processed_at.isoformat(),
+		"processed_result_refresh_reason": "daily_exception_review",
 	})
 	result = _serialize_record(doc.as_dict())
 	result["batch_status"] = batch_status
@@ -3502,6 +3701,24 @@ def _finalization_inputs(company, attendance_month, slots):
 	return inputs
 
 
+def _first_signed_inputs(company, attendance_month, slots):
+	"""Build the narrower gate for the first-signature attendance form."""
+	by_source = {slot["source_type"]: slot for slot in slots}
+	inputs = []
+	for source_type in FIRST_SIGNED_SOURCE_TYPES:
+		slot = by_source.get(source_type)
+		ready = bool(slot and slot["status"] == "已确认")
+		inputs.append({
+			"key": source_type,
+			"source_type": source_type,
+			"label": SOURCE_LABELS[source_type],
+			"status": "已就绪" if ready else slot["status"] if slot else "未就绪",
+			"ready": ready,
+			"snapshot_version": "",
+		})
+	return inputs
+
+
 FINAL_SIGNED_COLUMNS = (
 	("employee_code", "工号"), ("employee_name", "姓名"), ("department", "部门"),
 	("standard_hours", "标准工时"), ("actual_attendance_hours", "实际出勤"),
@@ -3525,6 +3742,21 @@ FINAL_FINANCE_COLUMNS = (
 	("full_attendance_award", "全勤奖"),
 )
 
+# The first-signature form intentionally mirrors the narrow ``工时汇总`` sheet
+# in HR's supplied first-signature workbook.  Attendance draft + missing-card
+# are the required sources; confirmed special-hours data is carried into the
+# same three visible special-hours columns when available.
+FIRST_SIGNED_COLUMNS = (
+	("sequence", "序号"), ("department", "部门"), ("employee_name", "姓名"), ("employee_code", "工号"),
+	("date_of_joining", "入职时间"), ("standard_hours", "标准工时（小时）"), ("actual_attendance_hours", "实际出勤（小时）"),
+	("special_workday_hours", "平特"), ("special_restday_hours", "周特"), ("special_holiday_hours", "节假日特"),
+	("workday_overtime_hours", "工作日加班（小时）"), ("restday_overtime_hours", "休息日加班（小时）"), ("holiday_overtime_hours", "节假日加班（小时）"),
+	("large_night_shifts", "大夜班（55元）"), ("large_night_shifts_45", "大夜班（45元）"), ("small_night_shifts", "小夜班"),
+	("personal_leave_hours", "事假(小时)"), ("sick_leave_hours", "病假(小时)"), ("annual_leave_hours", "特休(小时)"),
+	("work_injury_hours", "工伤(小时)"), ("rest_arrangement_hours", "排休(小时)"), ("absence_hours", "旷工(小时)"),
+	("reunion_leave_hours", "团圆假(小时)"), ("employee_signature", "签名"), ("review_note", "备注"),
+)
+
 # A web edit is an explicit signed-final correction layer.  Rate-specific
 # special hours stay date-level because changing a monthly total would lose the
 # weekday/rest-day/holiday multiplier evidence used by both finance and payroll.
@@ -3546,13 +3778,13 @@ SIGNED_FINAL_FIELD_LAYOUT = (
 	("employee_code", "工号", "", "来源字段"),
 	("employee_name", "姓名", "", "来源字段"),
 	("date_of_joining", "入职时间", "", "来源字段"),
-	("standard_hours", "标准工时\n（小时）", "", "来源字段"),
-	("actual_attendance_hours", "钉钉导出\n实际出勤\n（小时）", "", "来源字段"),
+	("standard_hours", "标准工时（小时）", "", "来源字段"),
+	("actual_attendance_hours", "钉钉导出实际出勤（小时）", "", "来源字段"),
 	("actual_checked", "实际打卡出勤A(验算）", "", "计算字段"),
 	("special_workday_hours", "1.5倍加班工时C", "平特", "来源字段"),
 	("workday_overtime_hours", "1.5倍加班工时C", "工作日加班（小时）", "来源字段"),
-	("special_restday_hours", "2倍加班工时D", "周特", "来源字段"),
-	("restday_overtime_hours", "2倍加班工时D", "休息日加班(小时)", "来源字段"),
+	("special_restday_hours", "2倍加班工\n时D", "周特", "来源字段"),
+	("restday_overtime_hours", "2倍加班工\n时D", "休息日加班(小时)", "来源字段"),
 	("special_holiday_hours", "3倍加班工时", "节假日特", "来源字段"),
 	("holiday_overtime_hours", "3倍加班工时", "节假日加班(小时)", "来源字段"),
 	("personal_leave_hours", "请假钉钉条", "事假(小时)", "来源字段"),
@@ -3563,7 +3795,7 @@ SIGNED_FINAL_FIELD_LAYOUT = (
 	("absence_hours", "请假钉钉条", "旷工(小时)", "来源字段"),
 	("bereavement_leave_hours", "请假钉钉条", "丧假\n(小时)", "来源字段"),
 	("marriage_leave_half_days", "请假钉钉条", "婚假\n(半天)", "来源字段"),
-	("public_leave_half_days", "请假钉钉条", "公假\n(半天)", "人工填写"),
+	("reunion_leave_hours", "请假钉钉条", "团圆假\n(半天)", "来源字段"),
 	("maternity_leave_days", "请假钉钉条", "产假（天）", "人工填写"),
 	("sick_leave_credit", "应补1倍工时B", "病假补工时50%", "计算字段"),
 	("annual_leave_credit", "应补1倍工时B", "特休\n(小时)", "计算字段"),
@@ -3572,6 +3804,7 @@ SIGNED_FINAL_FIELD_LAYOUT = (
 	("marriage_credit", "应补1倍工时B", "婚假\n(半天)", "计算字段"),
 	("sick_leave_deduction", "应扣2倍工时F", "病假扣工时50%", "计算字段"),
 	("personal_leave_deduction", "应扣2倍工时F", "事假\n工时", "计算字段"),
+	("reunion_leave_deduction", "应扣2倍工时F", "团圆假\n工时", "计算字段"),
 	("rest_arrangement_deduction", "工作日排休应扣1.5倍工时E", "", "计算字段"),
 	("settlement_one_pre", "调整前工时", "1倍结算工时=A+B", "计算字段"),
 	("settlement_15_pre", "调整前工时", "1.5倍结算工时=C", "计算字段"),
@@ -3588,7 +3821,7 @@ SIGNED_FINAL_FIELD_LAYOUT = (
 	("settlement_20", "调整后工时", "2倍结算工时=周特+休息日加班", "计算字段"),
 	("standard_hours_check", "调整后工时", "（验算用）标准工时=1倍结算工时+1.5倍缺勤工时+2倍缺勤工时", "计算字段"),
 	("settlement_30_check", "调整后工时", "3倍节假日加班\n工时", "计算字段"),
-	("deep_night_shifts", "深\n夜\n班", "", "计算字段"),
+	("deep_night_shifts", "深夜班", "", "计算字段"),
 	("large_night_shifts", "大\n夜\n班", "", "来源字段"),
 	("small_night_shifts", "小\n夜\n班", "", "来源字段"),
 	("absence_deduction", "旷工(小时)工时扣3倍", "", "计算字段"),
@@ -3672,7 +3905,8 @@ def _attendance_final_excel_config_hash() -> str:
 
 # Version ten invalidates previous files and also fingerprints heading changes,
 # so an edited Settings table cannot accidentally keep an old export.
-MONTHLY_FINAL_LAYOUT_VERSION = 10
+MONTHLY_FINAL_LAYOUT_VERSION = 11
+FIRST_SIGNED_LAYOUT_VERSION = 1
 
 
 # The employee-facing file deliberately follows the paper confirmation form
@@ -3847,6 +4081,15 @@ def _final_snapshot_batches(company: str, attendance_month: str):
 	return {source_type: _latest_batch(company, attendance_month, source_type) for source_type in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES}
 
 
+def _first_signed_snapshot_batches(company: str, attendance_month: str):
+	"""Use the two required sources and carry over confirmed special hours."""
+	batches = {source_type: _latest_batch(company, attendance_month, source_type) for source_type in FIRST_SIGNED_SOURCE_TYPES}
+	special_hours = _latest_batch(company, attendance_month, "special_hours")
+	if special_hours and special_hours.status == "已确认":
+		batches["special_hours"] = special_hours
+	return batches
+
+
 def _legacy_final_snapshot_batches(company: str, attendance_month: str):
 	return {source_type: _latest_batch(company, attendance_month, source_type) for source_type in SOURCE_TYPES + LEGACY_MONTHLY_SUPPORT_SOURCE_TYPES}
 
@@ -3934,6 +4177,60 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = ""):
 				field = MONTHLY_SUPPORT_SOURCE_CONFIG[source_type]["value_field"]
 				output[field] = _as_number(output.get(field)) + _as_number(values.get(field))
 	return sorted(rows_by_employee.values(), key=lambda row: (str(row.get("department") or ""), str(row.get("employee_code") or ""), str(row.get("employee_name") or "")))
+
+
+def _monthly_first_signed_rows(batches: dict[str, Any], employee_code: str = ""):
+	"""Build first-signature rows in the supplied narrow workbook's shape."""
+	rows = _monthly_final_rows(batches, employee_code=employee_code) if employee_code else _monthly_final_rows(batches)
+	company = next((batch.company for batch in batches.values() if batch), "")
+	joining_dates = {
+		str(employee.get("employee_code") or "").strip(): employee.get("date_of_joining") or ""
+		for employee in _employee_directory(company)
+	}
+	for sequence, row in enumerate(rows, start=1):
+		row["sequence"] = sequence
+		row["date_of_joining"] = joining_dates.get(str(row.get("employee_code") or "").strip(), "")
+		# The supplied first-signature form has a 45-yuan column, but the current
+		# attendance source does not distinguish that rate at this stage.
+		row["large_night_shifts_45"] = ""
+		for field in ("special_workday_hours", "special_restday_hours", "special_holiday_hours"):
+			row.setdefault(field, "")
+	return rows
+
+
+def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
+	"""Project retained daily source rows into the supplied detail-sheet shape."""
+	batch = batches.get("attendance_draft")
+	if not batch:
+		return []
+	items = []
+	for record in _result_rows(batch, 5000):
+		if not record.get("eligible_for_downstream"):
+			continue
+		values = _effective_result_values(record)
+		for raw in _effective_daily_source_rows(record):
+			if not isinstance(raw, dict):
+				continue
+
+			def pick(*keys):
+				for key in keys:
+					if raw.get(key) not in (None, ""):
+						return raw.get(key)
+				return ""
+
+			items.append([
+				pick("姓名", "员工姓名") or values.get("employee_name") or "",
+				pick("工号", "员工工号", "员工编号") or values.get("employee_code") or "",
+				pick("日期", "考勤日期"), pick("实际部门", "部门") or values.get("department") or "",
+				pick("日期类型"), pick("班次"), pick("上班时间", "上班打卡", "上班打卡时间"), pick("下班时间", "下班打卡", "下班打卡时间"),
+				pick("上班缺卡", "上班未打卡次数"), pick("下班缺卡", "下班未打卡次数"), pick("旷工"), pick("标准工时", "标准工时（小时）"),
+				pick("实际出勤（小时）", "实际出勤工时"), pick("关联审批单", "审批单"), pick("工作日加班（小时）"), pick("休息日加班（小时）"), pick("节假日加班（小时）"),
+				pick("大夜班"), pick("小夜班"), pick("事假(小时)", "请假/事假(小时)"), pick("病假(小时)"), pick("婚假(天)"), pick("特休(小时)"),
+				pick("丧假(小时)"), pick("工伤(小时)"), pick("公假(天)"), pick("产假(天)"), pick("团圆假(天)"), pick("排休(小时)"), pick("旷工(小时)"),
+				pick("婚假"), pick("丧假"), pick("公假"), pick("产假"), pick("团圆假"), pick("旷工"),
+				pick("上班未打卡次数", "上班缺卡"), pick("下班未打卡次数", "下班缺卡"), pick("迟到次数"), pick("早退次数"),
+			])
+	return items
 
 
 def _finance_final_preview_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -4089,6 +4386,149 @@ def _save_monthly_finance_confirmation_file(attendance_month: str, rows):
 	return {"file_url": file.file_url, "file_name": file.file_name}
 
 
+def _save_monthly_first_signed_confirmation_file(attendance_month: str, rows, daily_rows=None):
+	"""Create the narrow first-signature ``工时汇总`` workbook supplied by HR."""
+	from openpyxl import Workbook
+	from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+	from openpyxl.utils import get_column_letter
+	from frappe.utils.file_manager import save_file
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+
+	book = Workbook()
+	sheet = book.active
+	sheet.title = "每日统计"
+	thin = Side(style="thin", color="000000")
+	center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+	daily_headers = [
+		"姓名", "工号", "日期", "实际部门", "日期类型", "班次", "上班时间", "下班时间", "上班缺卡", "下班缺卡", "旷工", "标准工时",
+		"实际出勤（小时）", "关联审批单", "工作日加班（小时）", "休息日加班（小时）", "节假日加班（小时）", "大夜班", "小夜班", "请假",
+		None, None, None, None, None, None, None, None, None, None, "请假", None, None, None, None, "旷工", "上班未打卡次数", "下班未打卡次数", "迟到次数", "早退次数",
+	]
+	daily_subheaders = [None for _ in daily_headers]
+	daily_subheaders[19:30] = ["事假(小时)", "病假(小时)", "婚假(天)", "特休(小时)", "丧假(小时)", "工伤(小时)", "公假(天)", "产假(天)", "团圆假(天)", "排休(小时)", "旷工(小时)"]
+	daily_subheaders[30:35] = ["婚假", "丧假", "公假", "产假", "团圆假"]
+	for column, value in enumerate(daily_headers, start=1):
+		sheet.cell(row=1, column=column, value=value)
+	for column, value in enumerate(daily_subheaders, start=1):
+		sheet.cell(row=2, column=column, value=value or None)
+	for column in list(range(1, 20)) + list(range(36, 41)):
+		sheet.merge_cells(start_row=1, start_column=column, end_row=2, end_column=column)
+	# The source form groups the first leave block and the final derived block.
+	sheet.merge_cells("T1:AD1")
+	sheet.merge_cells("AE1:AI1")
+
+	white_fill = PatternFill("solid", fgColor="FFFFFF")
+	daily_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	for row in sheet.iter_rows(min_row=1, max_row=2, min_col=1, max_col=40):
+		for cell in row:
+			cell.font = Font(name="宋体", size=10, bold=True)
+			cell.alignment = center
+			cell.border = daily_border
+			cell.fill = white_fill
+	for excel_row, values in enumerate(daily_rows or [], start=3):
+		for column, value in enumerate(values, start=1):
+			cell = sheet.cell(row=excel_row, column=column, value=value)
+			cell.font = Font(name="宋体", size=10)
+			cell.alignment = center
+			cell.border = daily_border
+			cell.fill = white_fill
+		sheet.row_dimensions[excel_row].height = 30.6
+	sheet.row_dimensions[1].height = 51.2
+	sheet.row_dimensions[2].height = 51.2
+	sheet.column_dimensions["A"].width = 15
+	sheet.freeze_panes = "B3"
+	sheet.sheet_view.showGridLines = False
+	sheet.page_setup.orientation = "landscape"
+
+	sheet = book.create_sheet("工时汇总")
+	sheet.merge_cells("B2:Z2")
+	month_label = f"{int(attendance_month.split('-')[1])}月" if "-" in attendance_month else attendance_month
+	sheet["B2"] = f"{month_label}工时汇总"
+
+	# Match the two header rows and grouped cells in the original first-signature
+	# workbook, including the special-hours group and its three visible columns.
+	top_headers = {
+		"B3": "序号", "C3": "部门", "D3": "姓名", "E3": "工号", "F3": "入职时间",
+		"G3": "标准工时\n（小时）", "H3": "实际出勤\n（小时）", "I3": "特殊工时",
+		"L3": "工作日加班\n（小时）", "M3": "休息日加班\n（小时）", "N3": "节假日加班\n（小时）",
+		"O3": "大夜班\n（55元）", "P3": "大夜班\n（45元）", "Q3": "小夜班",
+		"R3": "请假", "Y3": "签名", "Z3": "备注",
+	}
+	for coordinate, value in top_headers.items():
+		sheet[coordinate] = value
+	for coordinate, value in {
+		"I4": "平特", "J4": "周特", "K4": "节假日特", "R4": "事假(小时)", "S4": "病假(小时)",
+		"T4": "特休(小时)", "U4": "工伤(小时)", "V4": "排休(小时)", "W4": "旷工(小时)", "X4": "团圆假(小时)",
+	}.items():
+		sheet[coordinate] = value
+	for start, end in (("B3", "B4"), ("C3", "C4"), ("D3", "D4"), ("E3", "E4"), ("F3", "F4"), ("G3", "G4"), ("H3", "H4"), ("I3", "K3"), ("L3", "L4"), ("M3", "M4"), ("N3", "N4"), ("O3", "O4"), ("P3", "P4"), ("Q3", "Q4"), ("R3", "X3"), ("Y3", "Y4"), ("Z3", "Z4")):
+		sheet.merge_cells(f"{start}:{end}")
+
+	thin = Side(style="thin", color="000000")
+	border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	header_fill = PatternFill("solid", fgColor="FFFFCC")
+	code_fill = PatternFill("solid", fgColor="F4CCCC")
+	center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+	left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+	for row in sheet.iter_rows(min_row=2, max_row=4, min_col=2, max_col=26):
+		for cell in row:
+			cell.font = Font(name="宋体", size=10, bold=cell.row >= 3)
+			cell.alignment = center
+			cell.border = border
+			cell.fill = header_fill
+	for cell in sheet["E"]:
+		if 3 <= cell.row:
+			cell.fill = code_fill
+
+	sheet["B2"].font = Font(name="等线", size=22)
+	sheet["B2"].alignment = center
+	sheet["B2"].border = Border(bottom=thin)
+	sheet.row_dimensions[2].height = 27.75
+	sheet.row_dimensions[3].height = 34.5
+	sheet.row_dimensions[4].height = 24
+	sheet.column_dimensions["A"].width = 3.875
+	for column, width in {2: 3.25, 3: 5.875, 4: 7.375, 5: 6.375, 6: 10.5, 7: 6.25, 9: 4.875, 15: 4.375, 18: 6.375, 25: 12.625, 26: 9.75, 27: 9.0, 28: 9.0, 29: 9.0}.items():
+		sheet.column_dimensions[get_column_letter(column)].width = width
+
+	def export_number(value):
+		number = _as_number(value)
+		return "" if number == 0 else number
+
+	for excel_row, row in enumerate(rows, start=5):
+		values = [
+			row.get("sequence", excel_row - 4), _display_department(row.get("department")), row.get("employee_name") or "", row.get("employee_code") or "", row.get("date_of_joining") or "",
+			export_number(row.get("standard_hours")), export_number(row.get("actual_attendance_hours")),
+			export_number(row.get("special_workday_hours")), export_number(row.get("special_restday_hours")), export_number(row.get("special_holiday_hours")), export_number(row.get("workday_overtime_hours")), export_number(row.get("restday_overtime_hours")), export_number(row.get("holiday_overtime_hours")),
+			export_number(row.get("large_night_shifts")), "", export_number(row.get("small_night_shifts")), export_number(row.get("personal_leave_hours")), export_number(row.get("sick_leave_hours")),
+			export_number(row.get("annual_leave_hours")), export_number(row.get("work_injury_hours")), export_number(row.get("rest_arrangement_hours")), export_number(row.get("absence_hours")), export_number(row.get("reunion_leave_hours")),
+			row.get("employee_signature") or "", row.get("review_note") or "",
+		]
+		for column, value in enumerate(values, start=2):
+			cell = sheet.cell(row=excel_row, column=column, value=value)
+			cell.border = border
+			cell.alignment = left if column in {3, 4, 5, 25, 26} else center
+			cell.font = Font(name="宋体", size=10)
+			if column in {6} and value:
+				cell.number_format = "yyyy/m/d;@"
+			elif 7 <= column <= 24:
+				cell.number_format = "0.0"
+		for column in range(27, 30):
+			cell = sheet.cell(row=excel_row, column=column)
+			cell.border = border
+			cell.font = Font(name="宋体", size=11)
+		sheet.row_dimensions[excel_row].height = 31.5
+
+	sheet.freeze_panes = "C5"
+	sheet.sheet_view.showGridLines = False
+	sheet.page_setup.orientation = "portrait"
+	sheet.page_setup.paperSize = sheet.PAPERSIZE_A4
+	sheet.print_area = "B2:Z" + str(max(4, len(rows) + 4))
+	output = BytesIO()
+	save_workbook_with_logo_watermark(book, output)
+	file = save_file(f"{attendance_month}_一次签字版.xlsx", output.getvalue(), None, None, is_private=1)
+	return {"file_url": file.file_url, "file_name": file.file_name}
+
+
 def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 	"""Create the complete multi-band employee sign-off form supplied by HR."""
 	from openpyxl import Workbook
@@ -4099,7 +4539,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 
 	book = Workbook()
 	sheet = book.active
-	sheet.title = "员工签字版"
+	sheet.title = "第二次员工签字版"
 	# Labels and two-level groups come from HR Settings.  Formula positions stay
 	# stable, while visible Excel wording can evolve with HR's monthly form.
 	excel_fields = _attendance_final_excel_fields()
@@ -4127,7 +4567,9 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 			sheet.merge_cells(start_row=2, start_column=form_start + start, end_row=3, end_column=form_start + start)
 		start = end
 
-	field_codes = [1, 2, "", 4, "", 5, 6, "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", 7, 8, 9, 10, "", 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, "", "", ""]
+	field_codes = [""] * len(excel_fields)
+	for field_index, code in {0: 1, 1: 2, 2: "  ", 3: 4, 5: 5, 6: 6, 42: 7, 43: 8, 44: 9, 45: 10, 47: 11, 48: 12, 50: 13, 51: 14, 53: 15, 54: 16, 55: 17, 56: 18, 57: 19, 58: 20}.items():
+		field_codes[field_index] = code
 	for column, code in enumerate(field_codes, start=form_start):
 		sheet.cell(row=4, column=column, value=code)
 
@@ -4159,14 +4601,18 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 	sheet["D1"] = f"{month_label}工时奖惩确认表"
 	sheet["D1"].font = Font(name="宋体", size=20)
 	sheet["D1"].alignment = Alignment(horizontal="center", vertical="center")
-	sheet.row_dimensions[1].height = 42
-	sheet.row_dimensions[2].height = 32
-	sheet.row_dimensions[3].height = 72
-	sheet.row_dimensions[4].height = 30
-	sheet.column_dimensions["A"].width = 2
-	for column in range(form_start, form_end + 1): sheet.column_dimensions[get_column_letter(column)].width = 9
-	for column in (3, 5, form_end - 1, form_end): sheet.column_dimensions[get_column_letter(column)].width = 13
-	for column in (4, 7, 8, 9, 47): sheet.column_dimensions[get_column_letter(column)].width = 11
+	sheet.row_dimensions[1].height = 54.75
+	sheet.row_dimensions[2].height = 30
+	sheet.row_dimensions[3].height = 78
+	sheet.row_dimensions[4].height = 35.25
+	second_signed_widths = {
+		"A": 2.5, "B": 3.75, "C": 6.125, "D": 7.0, "E": 6.5, "F": 9.625, "G": 5.375, "H": 6.5, "I": 8.375, "J": 6.375, "K": 5.5, "L": 5.875, "M": 7.375, "N": 6.0,
+		"P": 6.5, "Q": 5.875, "R": 5.75, "S": 5.875, "U": 5.25, "V": 4.875, "Z": 6.125, "AA": 5.625, "AB": 6.25, "AC": 6.125,
+		"AE": 6.75, "AF": 5.375, "AH": 5.25, "AI": 6.25, "AJ": 5.75, "AK": 5.625, "AN": 6.5, "AP": 13.75, "AR": 5.625, "AS": 6.0, "AT": 6.875, "AU": 7.25, "AV": 13.75, "AW": 6.125,
+		"AX": 6.625, "AY": 5.125, "AZ": 5.125, "BA": 5.125, "BB": 6.125, "BC": 5.375, "BD": 5.125, "BE": 8.0, "BF": 5.625, "BG": 7.5, "BH": 7.375, "BI": 11.625, "BJ": 8.0, "BK": 13.75,
+	}
+	for column, width in second_signed_widths.items():
+		sheet.column_dimensions[column].width = width
 
 	for excel_row, row in enumerate(rows, start=5):
 		special = _final_calculation(row)
@@ -4174,12 +4620,13 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 		standard = _as_number(row.get("standard_hours"))
 		workday, restday, holiday = (_as_number(row.get("workday_overtime_hours")), _as_number(row.get("restday_overtime_hours")), _as_number(row.get("holiday_overtime_hours")))
 		personal, sick, annual, injury, rest, absence = (_as_number(row.get("personal_leave_hours")), _as_number(row.get("sick_leave_hours")), _as_number(row.get("annual_leave_hours")), _as_number(row.get("work_injury_hours")), _as_number(row.get("rest_arrangement_hours")), _as_number(row.get("absence_hours")))
+		bereavement, marriage, reunion = (_as_number(row.get("bereavement_leave_hours")), _as_number(row.get("marriage_leave_half_days")), _as_number(row.get("reunion_leave_hours")))
 		values = [excel_row - 4, _display_department(row.get("department")), row.get("employee_code") or "", row.get("employee_name") or "", "", standard, actual,
 			f"=H{excel_row}-Q{excel_row}/2-R{excel_row}-S{excel_row}-V{excel_row}-W{excel_row}", special["special_workday_hours"], workday, special["special_restday_hours"], restday, special["special_holiday_hours"], holiday,
-			personal, sick, annual, injury, rest, absence, 0, 0, 0, 0,
-			f"=Q{excel_row}*0.5", f"=R{excel_row}", f"=S{excel_row}", f"=V{excel_row}", f"=W{excel_row}", f"=Q{excel_row}*0.5", f"=P{excel_row}", f"=T{excel_row}",
-			f"=I{excel_row}+Z{excel_row}+AA{excel_row}+AB{excel_row}+AC{excel_row}+AD{excel_row}", f"=J{excel_row}+K{excel_row}", f"=L{excel_row}+M{excel_row}", f"=N{excel_row}+O{excel_row}", f"=AG{excel_row}", f"=AE{excel_row}+AF{excel_row}", 0,
-			f"=IF(AL{excel_row}-AI{excel_row}>0,AL{excel_row}-AI{excel_row},0)", f"=IF(AM{excel_row}-AJ{excel_row}>0,AM{excel_row}-AJ{excel_row},0)", f"=AH{excel_row}+AL{excel_row}+AM{excel_row}-AO{excel_row}-AP{excel_row}", f"=G{excel_row}-AQ{excel_row}", f"=IF(AI{excel_row}-AL{excel_row}>0,AI{excel_row}-AL{excel_row},0)", f"=IF(AJ{excel_row}-AM{excel_row}>0,AJ{excel_row}-AM{excel_row},0)", f"=AQ{excel_row}+AN{excel_row}+AO{excel_row}", f"=AK{excel_row}",
+			personal, sick, annual, injury, rest, absence, bereavement, marriage, reunion, 0,
+			f"=Q{excel_row}*0.5", f"=R{excel_row}", f"=S{excel_row}", f"=V{excel_row}", f"=W{excel_row}", f"=Q{excel_row}*0.5", f"=P{excel_row}", f"=X{excel_row}", f"=T{excel_row}",
+			f"=I{excel_row}+Z{excel_row}+AA{excel_row}+AC{excel_row}+AD{excel_row}+AB{excel_row}", f"=J{excel_row}+K{excel_row}", f"=L{excel_row}+M{excel_row}", f"=N{excel_row}+O{excel_row}", f"=AH{excel_row}", f"=AE{excel_row}+AG{excel_row}+AF{excel_row}", 0,
+			f"=IF(AM{excel_row}-AJ{excel_row}>0,AM{excel_row}-AJ{excel_row},0)", f"=IF(AN{excel_row}-AK{excel_row}>0,AN{excel_row}-AK{excel_row},0)", f"=AI{excel_row}+AM{excel_row}+AN{excel_row}-AP{excel_row}-AQ{excel_row}", f"=G{excel_row}-AR{excel_row}", f"=IF(AJ{excel_row}-AM{excel_row}>0,AJ{excel_row}-AM{excel_row},0)", f"=IF(AK{excel_row}-AN{excel_row}>0,AK{excel_row}-AN{excel_row},0)", f"=AI{excel_row}+AM{excel_row}+AN{excel_row}", f"=AL{excel_row}",
 			_as_number(row.get("deep_night_shifts")), _as_number(row.get("large_night_shifts")), _as_number(row.get("small_night_shifts")), absence, 0, 0, 0, _as_number(row.get("green_apple_amount")), _as_number(row.get("red_apple_amount")), _as_number(row.get("housing_allowance")), _as_number(row.get("full_attendance_award")), row.get("employee_signature") or "", row.get("review_note") or ""]
 		for column, value in enumerate(values, start=form_start):
 			cell = sheet.cell(row=excel_row, column=column, value=value)
@@ -4187,17 +4634,84 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 			cell.alignment = Alignment(horizontal="center" if column not in {3, 5, form_end - 1, form_end} else "left", vertical="center", wrap_text=True)
 			cell.font = Font(name="宋体", size=10)
 			if 7 <= column <= form_end - 2: cell.number_format = "0.0"
-		sheet.row_dimensions[excel_row].height = 26
+		sheet.row_dimensions[excel_row].height = 36
 
-	for row in sheet.iter_rows(min_row=1, max_row=max(4, len(rows) + 4), min_col=form_start, max_col=form_end):
+	# The second-signature source has a fixed total line followed by the four
+	# approval/signature labels.  Keep those rows in the exported workbook so it
+	# can be printed and signed without manual reconstruction.
+	total_row = len(rows) + 5
+	sheet.merge_cells(f"B{total_row}:H{total_row}")
+	sheet[f"B{total_row}"] = "合计："
+	for column in range(2, form_end + 1):
+		cell = sheet.cell(row=total_row, column=column)
+		cell.border = border
+		cell.font = Font(name="宋体", size=10, bold=True)
+		cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+	for column in (10, 11, 12, 13, 34, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60):
+		letter = get_column_letter(column)
+		sheet[f"{letter}{total_row}"] = f"=SUM({letter}5:{letter}{total_row - 1})"
+	sheet[f"AH{total_row}"] = f"=T{total_row}"
+	sheet.row_dimensions[total_row].height = 36
+	footer_row = total_row + 4
+	for coordinate, value in {
+		f"R{footer_row}": "审核：", f"AS{footer_row}": "审核：", f"BA{footer_row}": "复核：", f"BH{footer_row}": "制表：李微微2026.6.11",
+	}.items():
+		cell = sheet[coordinate]
+		cell.value = value
+		cell.font = Font(name="宋体", size=10)
+		cell.alignment = Alignment(horizontal="left", vertical="center")
+	sheet.row_dimensions[footer_row].height = 30
+
+	for row in sheet.iter_rows(min_row=1, max_row=max(4, footer_row), min_col=form_start, max_col=form_end):
 		row[0].border = Border(left=blue_side, top=row[0].border.top, right=row[0].border.right, bottom=row[0].border.bottom)
 		row[-1].border = Border(left=row[-1].border.left, top=row[-1].border.top, right=blue_side, bottom=row[-1].border.bottom)
-	sheet.freeze_panes = "B5"
+	sheet.freeze_panes = "J4"
 	sheet.sheet_view.showGridLines = False
+	sheet.page_setup.orientation = "landscape"
+	sheet.page_margins.left = 0
+	sheet.page_margins.right = 0
+	sheet.print_area = f"A1:BK{footer_row}"
 	output = BytesIO()
 	save_workbook_with_logo_watermark(book, output)
-	file = save_file(f"{attendance_month}_员工签字版.xlsx", output.getvalue(), None, None, is_private=1)
+	file = save_file(f"{attendance_month}_第二次员工签字版.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
+
+
+@frappe.whitelist()
+def generate_first_signed_file(company: str, attendance_month: str, snapshot_version: str = ""):
+	"""Generate the first-signature workbook from draft plus missing-card only."""
+	_require_processing_manager()
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	state = get_processing_batch(company, attendance_month)
+	readiness = state["first_signed_inputs"]
+	blocked = [item for item in readiness if not item["ready"]]
+	if blocked:
+		return {"blocked": True, "reason": _("第一次签字版来源未完备，尚未生成文件。"), "readiness": readiness, "missing_sources": [item["label"] for item in blocked]}
+	batches = _first_signed_snapshot_batches(company, attendance_month)
+	if any(not batch for batch in batches.values()):
+		return {"blocked": True, "reason": _("第一次签字版来源不完整，尚未生成文件。"), "readiness": readiness}
+	locked_snapshot_version = _monthly_snapshot_version(batches)
+	anchor_batch = batches["attendance_draft"]
+	existing_outputs = _processing_meta(anchor_batch).get("first_signed_outputs", {})
+	if existing_outputs.get("locked_snapshot_version") == locked_snapshot_version and existing_outputs.get("layout_version") == FIRST_SIGNED_LAYOUT_VERSION and existing_outputs.get("file_url"):
+		return {"blocked": False, "readiness": readiness, "first_signed_outputs": existing_outputs, "snapshot_version": locked_snapshot_version}
+	rows = _monthly_first_signed_rows(batches)
+	if not rows:
+		return {"blocked": True, "reason": _("没有可进入第一次签字版的员工数据，尚未生成文件。"), "readiness": readiness}
+	daily_rows = _monthly_first_signed_daily_rows(batches)
+	file = _save_monthly_first_signed_confirmation_file(attendance_month, rows, daily_rows)
+	first_signed_outputs = {
+		"locked_version": locked_snapshot_version,
+		"locked_snapshot_version": locked_snapshot_version,
+		"file_url": file["file_url"],
+		"file_name": file["file_name"],
+		"generated_on": now_datetime().isoformat(),
+		"employee_count": len(rows),
+		"layout_version": FIRST_SIGNED_LAYOUT_VERSION,
+	}
+	_save_batch_notes(anchor_batch, {"first_signed_outputs": first_signed_outputs})
+	frappe.db.commit()
+	return {"blocked": False, "readiness": readiness, "first_signed_outputs": first_signed_outputs, "snapshot_version": locked_snapshot_version}
 
 
 @frappe.whitelist()
@@ -4228,6 +4742,8 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 		"locked_snapshot_version": locked_snapshot_version,
 		"signed_file_url": signed["file_url"],
 		"signed_file_name": signed["file_name"],
+		"second_signed_file_url": signed["file_url"],
+		"second_signed_file_name": signed["file_name"],
 		"finance_file_url": finance["file_url"],
 		"finance_file_name": finance["file_name"],
 		"generated_on": now_datetime().isoformat(),
@@ -4250,37 +4766,38 @@ def get_locked_final_outputs(company: str, attendance_month: str):
 
 @frappe.whitelist()
 def get_monthly_final_preview(company: str, attendance_month: str, kind: str = "signed", employee_code: str = ""):
-	"""Return the exact current locked-final table for in-system review."""
+	"""Return the exact locked table for in-system review."""
 	_require_processing_manager()
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
-	if kind not in {"signed", "finance"}:
+	if kind not in {"first_signed", "signed", "finance"}:
 		frappe.throw(_("终稿预览类型不正确。"))
-	outputs = get_locked_final_outputs(company, attendance_month)
+	anchor = _latest_batch(company, attendance_month, "attendance_draft")
+	outputs = (_processing_meta(anchor).get("first_signed_outputs", {}) if kind == "first_signed" else get_locked_final_outputs(company, attendance_month))
 	if not outputs.get("locked_snapshot_version"):
-		return {"available": False, "reason": _("请先锁定并生成月度终稿。")}
-	batches = _final_snapshot_batches(company, attendance_month)
+		return {"available": False, "reason": _("请先生成第一次签字版。") if kind == "first_signed" else _("请先锁定并生成月度终稿。")}
+	batches = (_first_signed_snapshot_batches(company, attendance_month) if kind == "first_signed" else _final_snapshot_batches(company, attendance_month))
 	if any(not batch for batch in batches.values()):
-		return {"available": False, "reason": _("终稿来源不完整，无法提供预览。")}
+		return {"available": False, "reason": _("第一次签字版来源不完整，无法提供预览。") if kind == "first_signed" else _("终稿来源不完整，无法提供预览。")}
 	locked_version = str(outputs.get("locked_snapshot_version") or "")
 	current_version = _monthly_snapshot_version(batches)
 	preview_batches = batches
-	if current_version != locked_version:
+	if current_version != locked_version and kind != "first_signed":
 		legacy_batches = _legacy_final_snapshot_batches(company, attendance_month)
 		legacy_matches = bool(all(legacy_batches.values())) and _monthly_snapshot_version(legacy_batches) == locked_version
 		if not legacy_matches:
 			return {"available": False, "stale": True, "reason": _("来源或人工处理已变化，请重新锁定并生成终稿后再查看。")}
 		preview_batches = legacy_batches
-	rows = _monthly_final_rows(preview_batches, employee_code=employee_code) if employee_code else _monthly_final_rows(preview_batches)
-	columns = FINAL_SIGNED_COLUMNS if kind == "signed" else FINAL_FINANCE_COLUMNS
+	rows = (_monthly_first_signed_rows(preview_batches, employee_code=employee_code) if employee_code else _monthly_first_signed_rows(preview_batches)) if kind == "first_signed" else (_monthly_final_rows(preview_batches, employee_code=employee_code) if employee_code else _monthly_final_rows(preview_batches))
+	columns = FIRST_SIGNED_COLUMNS if kind == "first_signed" else FINAL_SIGNED_COLUMNS if kind == "signed" else FINAL_FINANCE_COLUMNS
 	return {
 		"available": True,
 		"kind": kind,
-		"title": _("员工签字版") if kind == "signed" else _("财务版"),
+		"title": _("一次签字版") if kind == "first_signed" else _("第二次员工签字版") if kind == "signed" else _("财务版"),
 		"locked_snapshot_version": locked_version,
 		"columns": [{"field": field, "label": label} for field, label in columns],
 		"web_editable_fields": list(MONTHLY_FINAL_WEB_EDITABLE_FIELDS) if kind == "signed" else [],
 		"special_hours_fields": list(MONTHLY_FINAL_SPECIAL_HOURS_FIELDS) if kind == "signed" else [],
-		"rows": rows if kind == "signed" else _finance_final_preview_rows(rows),
+		"rows": rows if kind in {"first_signed", "signed"} else _finance_final_preview_rows(rows),
 	}
 
 
@@ -4429,5 +4946,5 @@ def update_monthly_final_rows(company: str, attendance_month: str, changes: str 
 	frappe.db.commit()
 	return {
 		"updated_rows": len(changed_codes),
-		"notice": _("已保存网页修改。原锁定版已保留为审计证据，请重新锁定并生成员工签字版和财务版。"),
+		"notice": _("已保存网页修改。原锁定版已保留为审计证据，请重新锁定并生成员工签字版和财务版（员工签字版即第二次员工签字版）。"),
 	}

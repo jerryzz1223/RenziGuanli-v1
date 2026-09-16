@@ -14,7 +14,7 @@ function expect(condition, message) {
 	"function clear_roster_search_and_filters",
 ].forEach((needle) => expect(!source.includes(needle), `Obsolete roster action remains: ${needle}`));
 
-["添加员工", "表单导入", "导出", "allowed_labels", "input[placeholder*='搜索']"].forEach((needle) =>
+["钉钉同步新员工", "表单导入", "导出", "allowed_labels", "input[placeholder*='搜索']"].forEach((needle) =>
 	expect(source.includes(needle), `Roster toolbar must retain only the approved actions: ${needle}`),
 );
 

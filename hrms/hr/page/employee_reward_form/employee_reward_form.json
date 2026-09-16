@@ -1,0 +1,30 @@
+{
+ "content": null,
+ "creation": "2026-09-16 11:05:37.720643",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "file-text",
+ "idx": 0,
+ "modified": "2026-09-16 11:05:37.720643",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "employee-reward-form",
+ "owner": "Administrator",
+ "page_name": "employee-reward-form",
+ "roles": [
+  {
+   "role": "HR User"
+  },
+  {
+   "role": "HR Manager"
+  },
+  {
+   "role": "System Manager"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "\u5956\u60e9\u63d0\u62a5\u5355"
+}

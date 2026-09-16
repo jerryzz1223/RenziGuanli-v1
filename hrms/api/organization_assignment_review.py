@@ -16,6 +16,7 @@ def assignment_issues(nodes, staff):
 	for node in nodes:
 		cfg = node.manual_config
 		reasons = []
+		multiple_position_employees = {}
 		bindings = cfg.get("template_bindings", [])
 		for binding in bindings:
 			if binding.get("issue"):
@@ -31,6 +32,14 @@ def assignment_issues(nodes, staff):
 			positions = placements.get(employee, [])
 			formal = [p for p in positions if p["formal"]]
 			pending_here = any(p["node_name"] == node.name and p["assignment_type"] == "待确认" for p in positions)
+			if len(positions) > 1:
+				person = people.get(employee)
+				multiple_position_employees[employee] = {
+					"employee": employee,
+					"employee_name": person.employee_name if person else employee,
+					"employee_code": cstr(person.custom_employee_code).strip() if person else "",
+					"position_count": len(positions),
+				}
 			if len(positions) > 1 and not formal:
 				reasons.append(f"{people[employee].employee_name if employee in people else employee}有多处任职，唯一正式职位尚未人工确认：" + "、".join(dict.fromkeys(p["name"] for p in positions)))
 			elif pending_here and (len(positions) > 1 or any(b.get("employee") == employee and b.get("assignment_type") == "待确认" for b in bindings)):
@@ -53,7 +62,8 @@ def assignment_issues(nodes, staff):
 				reasons.append(f"任职记录 {key} 已离职或不可用，需人工处理")
 		if reasons:
 			issues.append({"node_name": node.name, "node_id": f"organization_node:{node.name}", "name": node.display_name,
-				"department": cfg.get("department"), "source_cell": cfg.get("template_source_cell") or cfg.get("template_leadership_cell", ""), "reasons": list(dict.fromkeys(reasons))})
+				"department": cfg.get("department"), "source_cell": cfg.get("template_source_cell") or cfg.get("template_leadership_cell", ""),
+				"reasons": list(dict.fromkeys(reasons)), "multiple_position_employees": list(multiple_position_employees.values())})
 	return issues
 
 
@@ -78,6 +88,26 @@ def placement_index(nodes):
 	return placements
 
 
+def multiple_position_rows(nodes, employee):
+	rows = []
+	for node in nodes:
+		for reference_index, binding in enumerate(node.manual_config.get("template_bindings", [])):
+			if binding.get("employee") != employee or binding.get("issue"):
+				continue
+			rows.append({
+				"position_id": f"{node.name}::{reference_index}",
+				"node_name": node.name,
+				"node_id": f"organization_node:{node.name}",
+				"name": node.display_name,
+				"role": base_role(binding.get("role")) or "任职人",
+				"assignment_type": binding_assignment_type(binding),
+				"formal": bool(binding.get("manual_confirmed") and binding_assignment_type(binding) == "正式"),
+				"reference_index": reference_index,
+				"modified": cstr(node.get("modified")),
+			})
+	return rows
+
+
 def formal_conflicts(nodes, employees=None):
 	owners, conflicts = {}, []
 	for node in nodes:
@@ -88,6 +118,136 @@ def formal_conflicts(nodes, employees=None):
 			if key in owners: conflicts.append(f"员工 {key} 的正式职位不唯一：{owners[key]}、{label}；请先将其他任职调整为兼任、代理任职或待确认")
 			else: owners[key] = label
 	return conflicts
+
+
+def _apply_review_config(cfg, bindings, staff, allowed_departments):
+	from hrms.api.organization_template import reconcile_bindings
+
+	cfg.update(template_bindings=bindings, assignment_rules_manual=bool(bindings),
+		assignment_reviewed_by=frappe.session.user, assignment_reviewed_on=now())
+	cfg["roster_auto_sync"] = bool(cfg.get("roster_subset") or whole_department(cfg))
+	if whole_department(cfg):
+		cfg["template_leadership"] = True
+	resolved = reconcile_bindings(cfg, staff, allowed_departments=allowed_departments)
+	cfg.update(resolved)
+	valid = [binding for binding in resolved["template_bindings"] if binding.get("employee") and not binding.get("issue")]
+	primaries = {binding["employee"] for binding in valid if binding.get("slot") == "primary"}
+	proxies = {binding["employee"] for binding in valid if binding.get("slot") == "proxy"}
+	if whole_department(cfg) or cfg.get("node_kind") in {"管理层", "分管", "员工"}:
+		cfg["assigned_employees"] = []
+	cfg["primary_employee"] = next(iter(primaries)) if len(primaries) == 1 else None
+	cfg["proxy_employee"] = next(iter(proxies)) if len(proxies) == 1 else None
+	if cfg.get("node_kind") in {"管理层", "分管"}:
+		cfg["manager_employee"] = cfg["primary_employee"]
+		cfg["assigned_employees"] = []
+	if cfg.get("node_kind") == "员工":
+		if len(resolved["assigned_employees"]) != 1:
+			frappe.throw("员工节点必须且只能绑定一名员工。")
+		cfg["employee"] = resolved["assigned_employees"][0]
+	return resolved
+
+
+@frappe.whitelist()
+def get_multiple_position_review(company: str, employee: str):
+	from hrms.api.organization_package import chart_module
+	from hrms.api.organization_roster import get_candidates
+
+	frappe.get_doc("Company", company).check_permission("read")
+	staff = get_candidates(company, allow_company=True)["employees"]
+	person = next((row for row in staff if row.name == employee), None)
+	if not person:
+		frappe.throw("请选择当前公司有权查看的在职员工。")
+	manual = chart_module()._get_manual_organization_records(company)
+	positions = multiple_position_rows(manual["nodes"], employee)
+	if len(positions) < 2:
+		frappe.throw("当前未发现该员工的多职位记录，请刷新页面后重试。")
+	for position in positions:
+		frappe.get_doc("Organization Node", position["node_name"]).check_permission("read")
+	return {
+		"employee": employee,
+		"employee_name": person.employee_name,
+		"employee_code": cstr(person.custom_employee_code).strip(),
+		"positions": positions,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def save_multiple_position_review(company: str, employee: str, primary_position: str, positions: list[dict] | str):
+	from hrms.api.organization_package import chart_module
+	from hrms.api.organization_roster import get_candidates
+	from hrms.utils.organization_scope import department_scopes
+
+	positions = frappe.parse_json(positions) if isinstance(positions, str) else positions
+	if not isinstance(positions, list) or not positions or len(positions) > 1000:
+		frappe.throw("多职位记录格式不正确或超过 1000 行。")
+	frappe.db.sql("select name from tabCompany where name=%s for update", company)
+	version = chart_module()._get_manual_organization_version(company)
+	if not version:
+		frappe.throw("当前公司尚未建立有效组织架构。")
+	frappe.db.sql("select name from `tabOrganization Structure Version` where name=%s for update", version)
+	locked = frappe.db.sql(
+		"select name, display_name, parent_node, source_text, modified from `tabOrganization Node` "
+		"where structure_version=%s and confirmation_status='已确认' order by name for update",
+		version,
+		as_dict=True,
+	)
+	for node in locked:
+		node.manual_config = chart_module()._manual_node_config(node.source_text)
+	current = multiple_position_rows(locked, employee)
+	if len(current) < 2:
+		frappe.throw("当前未发现该员工的多职位记录，请刷新页面后重试。")
+	expected = {
+		cstr(row.get("position_id")): cstr(row.get("modified"))
+		for row in positions if isinstance(row, dict)
+	}
+	actual = {row["position_id"]: row["modified"] for row in current}
+	if expected != actual:
+		frappe.throw("多职位记录已变化，请刷新页面后重新选择。")
+	if primary_position not in actual:
+		frappe.throw("请选择一个正职。")
+	staff = get_candidates(company, allow_company=True)["employees"]
+	person = next((row for row in staff if row.name == employee), None)
+	if not person:
+		frappe.throw("请选择当前公司有权查看的在职员工。")
+	manual_nodes = {node.name: {"config": node.manual_config, "parent": node.parent_node} for node in locked}
+	scopes = department_scopes(manual_nodes, chart_module()._get_departments(company))
+	locked_by_name = {node.name: node for node in locked}
+	by_node = defaultdict(list)
+	for position in current:
+		by_node[position["node_name"]].append(position)
+	for node_name in sorted(by_node):
+		doc = frappe.get_doc("Organization Node", node_name, for_update=True)
+		doc.check_permission("write")
+		cfg = chart_module()._manual_node_config(doc.source_text)
+		bindings = list(cfg.get("template_bindings", []))
+		allowed_departments = scopes.get(node_name, {cfg.get("department")})
+		for position in by_node[node_name]:
+			binding = dict(bindings[position["reference_index"]])
+			is_primary = position["position_id"] == primary_position
+			if is_primary and cfg.get("node_kind") not in {"管理层", "分管"} and cfg.get("department") and person.department not in allowed_departments:
+				frappe.throw(f"{doc.display_name} 不属于该员工花名册部门，不能设为正职。")
+			kind = "正式" if is_primary else "兼任"
+			role = base_role(binding.get("role")) or "任职人"
+			binding.update(
+				assignment_type=kind,
+				manual_confirmed=True,
+				no_auto_match=True,
+				role=role + ("" if is_primary else "（兼）"),
+				slot="" if binding.get("slot") == "proxy" else binding.get("slot", ""),
+				display_only=False if is_primary else bool(binding.get("display_only") or (
+					cfg.get("node_kind") not in {"管理层", "分管"} and cfg.get("department") and person.department not in allowed_departments
+				)),
+			)
+			binding.pop("issue", None)
+			bindings[position["reference_index"]] = binding
+		_apply_review_config(cfg, bindings, staff, allowed_departments)
+		doc.source_text = json.dumps(cfg, ensure_ascii=False, sort_keys=True)
+		doc.save()
+		locked_by_name[node_name].manual_config = cfg
+	conflicts = formal_conflicts(locked, employees={employee})
+	if conflicts:
+		frappe.throw("；".join(conflicts))
+	return {"employee": employee, "primary_position": primary_position, "formal": 1, "secondary": len(current) - 1}
 
 
 @frappe.whitelist()
@@ -128,7 +288,6 @@ def get_review(company: str, node_name: str):
 @frappe.whitelist(methods=["POST"])
 def save_review(company: str, node_name: str, modified: str, rows: list[dict] | str):
 	from hrms.api.organization_package import chart_module
-	from hrms.api.organization_template import reconcile_bindings
 	from hrms.api.organization_roster import get_candidates
 	frappe.db.sql("select name from tabCompany where name=%s for update", company)
 	frappe.db.sql("select name from `tabOrganization Structure Version` where company=%s and source_reference=%s for update", (company, chart_module()._manual_organization_reference(company)))
@@ -188,22 +347,9 @@ def save_review(company: str, node_name: str, modified: str, rows: list[dict] | 
 	for other in others: other.manual_config = chart_module()._manual_node_config(other.source_text)
 	conflicts = formal_conflicts([*others, frappe._dict(name=doc.name, display_name=doc.display_name, manual_config={"template_bindings": bindings})], employees={b["employee"] for b in confirmed_formal_bindings({"template_bindings": bindings})})
 	if conflicts: frappe.throw("；".join(conflicts))
-	cfg.update(template_bindings=bindings, assignment_rules_manual=bool(bindings), assignment_reviewed_by=frappe.session.user, assignment_reviewed_on=now())
 	# Explicit identities remain fixed. Automatic refresh checks their status and
 	# department; it cannot replace them with a same-name or same-title employee.
-	cfg["roster_auto_sync"] = bool(cfg.get("roster_subset") or whole_department(cfg))
-	if whole_department(cfg): cfg["template_leadership"] = True
-	resolved = reconcile_bindings(cfg, staff, allowed_departments=allowed_departments)
-	cfg.update(resolved)
-	if whole_department(cfg) or cfg.get("node_kind") in {"管理层", "分管", "员工"}: cfg["assigned_employees"] = []
-	cfg["primary_employee"] = next(iter(primaries)) if len(primaries) == 1 else None
-	cfg["proxy_employee"] = next(iter(proxies)) if len(proxies) == 1 else None
-	if cfg.get("node_kind") in {"管理层", "分管"}:
-		cfg["manager_employee"] = cfg["primary_employee"]
-		cfg["assigned_employees"] = []
-	if cfg.get("node_kind") == "员工":
-		if len(resolved["assigned_employees"]) != 1: frappe.throw("员工节点必须且只能绑定一名员工。")
-		cfg["employee"] = resolved["assigned_employees"][0]
+	resolved = _apply_review_config(cfg, bindings, staff, allowed_departments)
 	doc.source_text = json.dumps(cfg, ensure_ascii=False, sort_keys=True)
 	doc.save()
 	return {"node_name": doc.name, "assigned": len(resolved["assigned_employees"]), "pending": sum(bool(b.get("issue")) or binding_assignment_type(b) == "待确认" for b in bindings)}

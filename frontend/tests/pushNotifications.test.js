@@ -22,6 +22,14 @@ test("ignores notifications while the service worker is not registered", (t) => 
 	assert.doesNotThrow(() => showNotification({ data: { title: "待审批" } }))
 })
 
+test("ignores notifications when the push client is unavailable", (t) => {
+	mockBrowser(t, "Chrome/128", undefined)
+	delete window.frappePushNotification
+	assert.doesNotThrow(() => showNotification({ data: { title: "待审批" } }))
+	window.frappePushNotification = null
+	assert.doesNotThrow(() => showNotification({ data: { title: "待审批" } }))
+})
+
 test("Chrome notifications carry the destination in data and preserve message fields", (t) => {
 	const calls = []
 	mockBrowser(t, "Mozilla/5.0 Chrome/128.0.0.0 Safari/537.36", {

@@ -60,6 +60,7 @@ CAPABILITY_DEFINITIONS = (
 	_capability("personnel_view", "花名册与人事查看", "人事查看", "人事", "查看花名册、员工档案及人事记录；不能新增、修改或审批。", "high", (("Employee", "read", "select"),)),
 	_capability("roster_import_submit", "花名册导入提交", "花名册导入提交", "人事", "上传、预览并提交花名册批量导入；不包含审批。", "high", (("Employee", "read", "create", "write", "import"),)),
 	_capability("roster_import_approve", "花名册导入审批", "花名册导入审批", "人事", "审核已提交的花名册导入结果并决定是否生效。", "critical", (("Employee", "read", "write"), ("HRMS Form Import Batch", "read", "write"), ("HRMS Form Import Row", "read", "write", "submit"))),
+	_capability("dingtalk_employee_import_approve", "钉钉员工导入审批", "钉钉员工导入审批", "人事", "查看钉钉花名册待导入资料，并在核对无误后批准写入员工主表。", "critical", (("Employee", "read", "create", "write"), ("HRMS DingTalk Employee Import", "read", "write"))),
 	_capability("employee_create", "添加员工", "员工新增", "人事", "创建新员工档案或新增草稿；不包含新增审批。", "high", (("Employee", "read", "create", "write"),)),
 	_capability("employee_create_approve", "添加员工后审批", "员工新增审批", "人事", "审批新增员工及入职资料的生效。", "critical", (("Employee", "read", "write", "submit"), ("Employee Onboarding", "read", "write", "submit"))),
 	_capability("employee_edit", "员工档案修改", "员工档案修改", "人事", "修改现有员工档案；不包含人事异动或离职审批。", "high", (("Employee", "read", "write"),)),
@@ -67,6 +68,7 @@ CAPABILITY_DEFINITIONS = (
 	_capability("personnel_change_approve", "人事异动审批", "人事异动审批", "人事", "审批调动、转正、晋升等人事异动。", "critical", (("Employee Transfer", "read", "write", "submit", "cancel"), ("Employee Promotion", "read", "write", "submit", "cancel"))),
 	_capability("separation_submit", "离职申请提交", "离职申请提交", "人事", "创建并提交离职申请；不能审批自己的申请。", "high", (("Employee Separation", "read", "create", "write", "submit"),)),
 	_capability("separation_approve", "离职审批", "离职审批", "人事", "审批或驳回已提交的离职申请。", "critical", (("Employee Separation", "read", "write", "submit", "cancel"),)),
+	_capability("separation_effective", "实际离职办理", "实际离职办理", "人事", "填写唯一实际离职时间；时间到达后员工才正式归类为已离职。", "critical", (("Employee Separation", "read", "write"), ("Employee", "read", "write"))),
 	_capability("personnel_export", "人事导出", "人事导出", "人事", "导出花名册和人事报表。", "high", (("Employee", "read", "export", "report", "print"),)),
 
 	_capability("attendance_view", "考勤查看", "考勤查看", "考勤", "查看考勤日数据、异常和月度结果。", "high", (("Attendance", "read", "select"), ("HRMS Attendance Import Batch", "read"), ("HRMS Attendance Processing Record", "read"), ("HRMS Monthly Attendance Summary", "read"))),
@@ -155,6 +157,27 @@ def get_current_hrms_capabilities():
 	}
 
 
+def _ensure_docperm_operations(doctype, role, permission_types):
+	"""Merge all operations into one Custom DocPerm row for the role."""
+	if not permission_types:
+		return
+	filters = {"parent": doctype, "role": role, "permlevel": 0, "if_owner": 0}
+	permission_name = frappe.db.get_value("Custom DocPerm", filters, "name")
+	if not permission_name:
+		add_permission(doctype, role, ptype=permission_types[0])
+		permission_name = frappe.db.get_value("Custom DocPerm", filters, "name")
+	if not permission_name:
+		return
+	docperm = frappe.get_doc("Custom DocPerm", permission_name)
+	changed = False
+	for permission_type in permission_types:
+		if not docperm.get(permission_type):
+			docperm.set(permission_type, 1)
+			changed = True
+	if changed:
+		docperm.save(ignore_permissions=True)
+
+
 def ensure_hrms_access_roles():
 	"""Create every checkbox role and its actual DocType operation permissions."""
 	for capability in CAPABILITY_DEFINITIONS:
@@ -167,15 +190,14 @@ def ensure_hrms_access_roles():
 			doctype, *permission_types = permission
 			if not frappe.db.exists("DocType", doctype):
 				continue
-			for permission_type in permission_types:
-				add_permission(doctype, role, ptype=permission_type)
+			_ensure_docperm_operations(doctype, role, permission_types)
 		# Every business operation is company-scoped.  This read permission is
 		# further narrowed by Company User Permission when one is configured.
 		if role != "System Manager" and frappe.db.exists("DocType", "Company"):
-			add_permission("Company", role, ptype="read")
+			_ensure_docperm_operations("Company", role, ("read",))
 	for doctype in READ_ONLY_DOCTYPES:
 		if frappe.db.exists("DocType", doctype):
-			add_permission(doctype, READ_ONLY_ROLE, ptype="read")
+			_ensure_docperm_operations(doctype, READ_ONLY_ROLE, ("read",))
 	frappe.clear_cache()
 
 

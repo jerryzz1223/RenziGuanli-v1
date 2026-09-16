@@ -65,6 +65,8 @@ for (const marker of [
 	'"current_file":',
 	'"history_files":',
 	"def _get_employee_materials(doc):",
+	"confirmation_material",
+	"转正",
 	"def upload_employee_material(employee: str, material_type: str, file_url: str):",
 	'file_doc.db_set("attached_to_field", material["fieldname"])',
 	"def delete_employee_material(employee: str, file_name: str):",

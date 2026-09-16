@@ -41,7 +41,7 @@ GRADE_COLUMNS = {"职级编码": "code", "职级名称": "label", "等级顺序"
 BOOL_FIELDS = {"roster_subset", "roster_auto_sync", "planned_headcount_set", "leadership_from_roster",
 	"template_leadership", "reporting_scope_pending", "roster_generated", "has_template_bindings", "assignment_rules_manual", "manual_confirmed"}
 REFERENCES = {"分管人员": "manager_employee", "员工节点": "employee", "任职人": "primary_employee",
-	"代理人": "proxy_employee", "岗位成员": "assigned_employees", "原表人员": "template_bindings"}
+	"代理人": "proxy_employee", "岗位成员": "assigned_employees", "原表人员": "template_bindings", "组织位置": "organization_placements"}
 
 
 def chart_module():
@@ -111,7 +111,7 @@ def workbook_bytes(company, state=None):
 		for label, field in REFERENCES.items():
 			if field == "assigned_employees" and cfg.get("node_kind") != "岗位" and not cfg.get("roster_subset"): continue
 			if field == "assigned_employees" and automatic_roster_position(cfg): continue
-			values = cfg.get(field, []) if field in {"assigned_employees", "template_bindings"} else [cfg.get(field)]
+			values = cfg.get(field, []) if field in {"assigned_employees", "template_bindings", "organization_placements"} else [cfg.get(field)]
 			for value in values:
 				if not value:
 					continue
@@ -122,9 +122,19 @@ def workbook_bytes(company, state=None):
 					frappe.throw(f"员工 {person.employee_name} 缺少工号，请先补齐再导出。")
 				people.append({"node": ids[node.name], "type": label, "code": code,
 					"name": person.employee_name if person else binding.get("source_name", ""),
-					"role": binding.get("role", ""), "slot": binding.get("slot", ""), "manual_confirmed": bool(binding.get("manual_confirmed")), "source_role": binding.get("source_role", ""), "assignment_type": binding_assignment_type(binding) if binding else "",
-					"display_only": bool(binding.get("display_only") or (field == "proxy_employee" and (
-						cfg.get("portable_proxy_display_only") or any(b.get("employee") == value and b.get("display_only") for b in cfg.get("template_bindings", [])))))})
+					"role": binding.get("role", ""), "slot": binding.get("slot", ""), "manual_confirmed": bool(binding.get("manual_confirmed")), "source_role": binding.get("source_role", ""), "assignment_type": "组织位置" if field == "organization_placements" else binding_assignment_type(binding) if binding else "",
+					"display_only": bool(
+						binding.get("display_only")
+						or (
+							field == "proxy_employee"
+							and (
+								cfg.get("portable_proxy_display_only")
+								or any(b.get("employee") == value and b.get("display_only") for b in cfg.get("template_bindings", []))
+							)
+						)
+						or field == "organization_placements"
+					),
+				})
 		for reference in cfg.get("pending_person_references", []):
 			people.append({"node": ids[node.name], "type": reference.get("type") or next(
 				(label for label, field in REFERENCES.items() if field == reference.get("field")), ""),
@@ -385,7 +395,7 @@ def prepare(company, package, state=None):
 			# Never retire nodes present in the file or discard people, children or plans.
 			empty = (key in plans and duplicate not in plans and source is not None
 				and not source.planned_headcount and not cfg.get("planned_headcount_set")
-				and not any(cfg.get(k) for k in ("employee", "primary_employee", "proxy_employee", "manager_employee", "assigned_employees", "template_bindings", "roster_department_alias_labels", "template_source_cell", "template_leadership_cell"))
+				and not any(cfg.get(k) for k in ("employee", "primary_employee", "proxy_employee", "manager_employee", "assigned_employees", "template_bindings", "organization_placements", "roster_department_alias_labels", "template_source_cell", "template_leadership_cell"))
 				and not any(p["parent"] == duplicate for p in graph.values())
 				and not any(e.status == "Active" and e.department == matches[0].name for e in state["employees"]))
 			if empty:
@@ -415,9 +425,10 @@ def prepare(company, package, state=None):
 			or field == "employee" and kind != "员工"
 			or field == "primary_employee" and kind not in {"室", "课", "组", "线", "岗位"}
 			or field == "proxy_employee" and kind == "员工"
-			or field == "assigned_employees" and kind != "岗位" and not cfg.get("roster_subset")):
+			or field == "assigned_employees" and kind != "岗位" and not cfg.get("roster_subset")
+			or field == "organization_placements" and kind != "岗位"):
 			problem(row, f"{row['type']} 不适用于 {kind} 节点")
-		key = (row["node"], field, row["code"] or row["name"], row["role"] if field == "template_bindings" else "", row["slot"] if field == "template_bindings" else "")
+		key = (row["node"], field, row["code"] or row["name"], row["role"] if field in {"template_bindings", "organization_placements"} else "", row["slot"] if field == "template_bindings" else "")
 		if key in seen_refs: problem(row, "同一节点的人员引用重复")
 		seen_refs.add(key)
 		matches = staff.get(row["code"], []) if row["code"] else []
@@ -434,7 +445,7 @@ def prepare(company, package, state=None):
 			warnings.append(f"工号 {row['code']} 姓名不同，采用服务器花名册姓名 {person.employee_name}。")
 		display_only = boolean(row, "display_only")
 		if row["slot"] not in {"", "primary", "proxy"}: problem(row, "负责人位置只能填 primary 或 proxy")
-		if display_only and field not in {"proxy_employee", "template_bindings"}: problem(row, "仅展示代理只能用于代理或原表人员引用")
+		if display_only and field not in {"proxy_employee", "template_bindings", "organization_placements"}: problem(row, "仅展示代理只能用于代理、原表人员或组织位置引用")
 		if person and cfg.get("department") and person.department not in scopes[row["node"]] and not display_only:
 			allowed = "、".join(sorted(department_labels.get(d, d) for d in scopes[row["node"]]))
 			problem(row, f"工号 {row['code']} 花名册部门与节点不一致：花名册为 {department_labels.get(person.department, person.department) or '未填写'}，节点 {plans[row['node']]['name']} 允许部门为 {allowed}；请核对归属")
@@ -456,6 +467,18 @@ def prepare(company, package, state=None):
 			if person: binding["employee"] = person.name
 			else: binding["issue"] = "未提供工号，待确认"
 			cfg.setdefault("template_bindings", []).append(binding)
+		elif field == "organization_placements":
+			placement = {
+				"source_code": row["code"],
+				"source_name": row["name"] or (person.employee_name if person else ""),
+				"role": row["role"] or plans[row["node"]]["name"],
+				"placement_type": "组织位置",
+			}
+			if person:
+				placement["employee"] = person.name
+			else:
+				placement["issue"] = "工号待匹配"
+			cfg.setdefault("organization_placements", []).append(placement)
 		elif field == "assigned_employees":
 			if person: cfg[field].append(person.name)
 			else: cfg.setdefault("pending_person_references", []).append({"field": field, "type": row["type"], "source_code": row["code"], "source_name": row["name"], "display_only": display_only})

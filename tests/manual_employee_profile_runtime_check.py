@@ -11,7 +11,7 @@ def main():
 	try:
 		from hrms.api.employee_field_template import CHINA_ETHNICITY_VALUES, _normalise_import_value
 		from hrms.overrides.employee_master import EmployeeMaster
-		from hrms.utils.employee_profile import NATIVE_PLACE_ALIASES
+		from hrms.utils.employee_profile import NATIVE_PLACE_ALIASES, NATIVE_PLACE_CITY_TO_PROVINCE
 
 		meta = frappe.get_meta("Employee")
 		checks = 0
@@ -60,8 +60,19 @@ def main():
 				pass
 			else:
 				raise AssertionError("Unknown profile value must still fail Select validation")
+
+		city_field = meta.get_field("custom_native_place")
+		for city, province in (
+			("常熟", "江苏省"),
+			("常熟市", "江苏省"),
+			("苏州", "江苏省"),
+			("东莞市", "广东省"),
+			("库尔勒市", "新疆维吾尔自治区"),
+		):
+			assert NATIVE_PLACE_CITY_TO_PROVINCE.get(city.removesuffix("市")) == province
+			assert _normalise_import_value("custom_native_place", city, city_field.as_dict()) == province
 		print(json.dumps({"import_checks": checks, "employee_validation_checks": 3,
-			"unknown_values_rejected": 2, "employee_records_written": 0}))
+			"city_province_checks": 5, "unknown_values_rejected": 2, "employee_records_written": 0}))
 	finally:
 		frappe.db.rollback()
 		frappe.destroy()

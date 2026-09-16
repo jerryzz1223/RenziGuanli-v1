@@ -45,7 +45,8 @@ def reconcile_bindings(config, staff, allow_name_match=False, allowed_department
 
 def card_people(config, labels, active_ids):
 	"""All allocated people, plus explicit unresolved source references, without truncation."""
-	members = list(dict.fromkeys(chart_assigned_employees(config)))
+	placements = [row for row in config.get("organization_placements", []) if row.get("employee")]
+	members = list(dict.fromkeys([*chart_assigned_employees(config), *(row["employee"] for row in placements)]))
 	leadership = config.get("template_leadership") and config.get("roster_auto_sync")
 	if leadership:
 		members = list(dict.fromkeys(b.get("employee") for b in config.get("template_bindings", []) if not b.get("issue") and b.get("employee")))
@@ -62,6 +63,8 @@ def card_people(config, labels, active_ids):
 			if binding.get("manual_confirmed") and binding_assignment_type(binding) == "正式": role += "（正式）"
 			elif binding.get("assignment_type") == "待确认": role += "（任职待确认）"
 			roles[binding.get("employee")].append(role)
+	for placement in placements:
+		roles[placement["employee"]].append(placement.get("role") or config.get("role_title") or config.get("designation") or "组织位置")
 	if config.get("assignment_rules_manual"):
 		members = list(dict.fromkeys([*members, *(b.get("employee") for b in config.get("template_bindings", []) if b.get("employee") and not b.get("issue"))]))
 	if config.get("proxy_employee") and not leadership:
@@ -75,6 +78,7 @@ def card_people(config, labels, active_ids):
 		people.append({"employee": employee, "employee_route": employee,
 			"employee_name": person.employee_name, "employee_code": person.custom_employee_code,
 			"designation": person.designation, "department": person.department,
+			"image": person.get("image"), "reports_to": person.get("reports_to"),
 			"role": role,
 			"matched_employee": True})
 	if config.get("roster_auto_sync") or config.get("assignment_rules_manual"):

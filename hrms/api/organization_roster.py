@@ -10,7 +10,16 @@ def _get_employee_rows(filters):
 		page = frappe.get_list(
 			"Employee",
 			filters=filters,
-			fields=["name", "employee_name", "custom_employee_code", "department", "designation", "grade"],
+			fields=[
+				"name",
+				"employee_name",
+				"custom_employee_code",
+				"department",
+				"designation",
+				"grade",
+				"image",
+				"reports_to",
+			],
 			order_by="name asc",
 			limit_start=len(employees),
 			limit_page_length=500,

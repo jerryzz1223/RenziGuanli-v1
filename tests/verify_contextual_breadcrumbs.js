@@ -14,6 +14,7 @@ for (const marker of [
 	'Object.assign({ current: true }, item)',
 	"function separation_breadcrumb_parent(route)",
 	"function current_breadcrumb_label(route, parent, label_override)",
+	"hrmsEmployeeDetailBreadcrumbLabel",
 	"function apply_contextual_breadcrumbs(label_override)",
 	'{ label: "主页", route: "/desk/hrms-workbench", slug: "hrms-workbench" }',
 	'if (module.label !== "主页")',
@@ -31,7 +32,7 @@ for (const marker of [
 }
 
 assert.ok(
-	hooks.includes("/assets/hrms/js/hrms_home_redirect_v6.js?v=20260912-context-breadcrumbs-v4"),
+	hooks.includes("/assets/hrms/js/hrms_home_redirect_v6.js?v=20260916e"),
 	"导航脚本变更后必须刷新静态资源版本。",
 );
 

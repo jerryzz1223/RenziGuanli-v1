@@ -71,7 +71,7 @@ class EmployeeSeparationRecordsPage {
 				.hrms-separation-records { padding: 0 2px 24px; }
 				.hrms-separation-records__toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; max-width: 520px; }
 				.hrms-separation-records__table-wrap { overflow-x: auto; border-top: 1px solid var(--border-color); }
-				.hrms-separation-records__table { min-width: 980px; margin-bottom: 0; }
+				.hrms-separation-records__table { min-width: 1280px; margin-bottom: 0; }
 				.hrms-separation-records__table tbody tr { cursor: pointer; }
 				.hrms-separation-records__table tbody tr:hover { background: var(--subtle-fg); }
 				.hrms-separation-records__empty { padding: 56px 16px; text-align: center; }
@@ -93,12 +93,16 @@ class EmployeeSeparationRecordsPage {
 				<div class="hrms-separation-records__table-wrap">
 					<table class="table hrms-separation-records__table">
 						<thead><tr>
-							<th>${frappe.utils.escape_html(__("离职日期"))}</th>
+							<th>${frappe.utils.escape_html(__("拟离职日期"))}</th>
+							<th>${frappe.utils.escape_html(__("离职申请时间"))}</th>
+							<th>${frappe.utils.escape_html(__("离职审批时间"))}</th>
+							<th>${frappe.utils.escape_html(__("实际离职时间"))}</th>
 							<th>${frappe.utils.escape_html(__("员工姓名"))}</th>
 							<th>${frappe.utils.escape_html(__("工号"))}</th>
 							<th>${frappe.utils.escape_html(__("部门"))}</th>
 							<th>${frappe.utils.escape_html(__("岗位"))}</th>
-							<th>${frappe.utils.escape_html(__("离职原因"))}</th>
+							<th>${frappe.utils.escape_html(__("员工自述原因"))}</th>
+							<th>${frappe.utils.escape_html(__("审批确认原因"))}</th>
 							<th>${frappe.utils.escape_html(__("离职面谈"))}</th>
 						</tr></thead>
 						<tbody data-rows></tbody>
@@ -178,12 +182,16 @@ class EmployeeSeparationRecordsPage {
 			.map(
 				(row, index) => `
 					<tr data-row-index="${index}">
-						<td>${frappe.utils.escape_html(row.departure_date ? frappe.datetime.str_to_user(row.departure_date) : "-")}</td>
+						<td>${frappe.utils.escape_html(row.planned_departure_date ? frappe.datetime.str_to_user(row.planned_departure_date) : "-")}</td>
+						<td>${frappe.utils.escape_html(row.application_time ? frappe.datetime.str_to_user(row.application_time) : "-")}</td>
+						<td>${frappe.utils.escape_html(row.approval_time ? frappe.datetime.str_to_user(row.approval_time) : "-")}</td>
+						<td>${frappe.utils.escape_html(row.actual_departure_time ? frappe.datetime.str_to_user(row.actual_departure_time) : "-")}</td>
 						<td><strong>${frappe.utils.escape_html(row.employee_name || "-")}</strong></td>
 						<td>${frappe.utils.escape_html(row.employee_code || "-")}</td>
 						<td>${frappe.utils.escape_html(row.department_display || "-")}</td>
 						<td>${frappe.utils.escape_html(row.designation || "-")}</td>
 						<td>${frappe.utils.escape_html(row.separation_reason_display || __("未填写"))}</td>
+						<td>${frappe.utils.escape_html(row.approver_reason_display || __("未确认"))}</td>
 						<td>${frappe.utils.escape_html(row.exit_interview ? __("查看面谈") : __("未填写"))}</td>
 					</tr>`,
 			)
@@ -200,10 +208,24 @@ class EmployeeSeparationRecordsPage {
 
 	show_record_details(row) {
 		const escape = frappe.utils.escape_html;
-		const date = row.departure_date ? frappe.datetime.str_to_user(row.departure_date) : __("未填写");
+		const planned_date = row.planned_departure_date
+			? frappe.datetime.str_to_user(row.planned_departure_date)
+			: __("未填写");
+		const application_time = row.application_time
+			? frappe.datetime.str_to_user(row.application_time)
+			: __("未记录");
+		const approval_time = row.approval_time
+			? frappe.datetime.str_to_user(row.approval_time)
+			: __("未记录");
+		const actual_departure_time = row.actual_departure_time
+			? frappe.datetime.str_to_user(row.actual_departure_time)
+			: __("未记录");
 		const reason_type = row.separation_reason_type || __("未填写");
 		const reason = row.separation_reason_display || __("未填写");
 		const reason_detail = row.separation_reason_detail || __("未填写");
+		const approver_reason_type = row.approver_reason_type || __("未确认");
+		const approver_reason = row.approver_reason_display || __("未确认");
+		const approver_reason_detail = row.approver_reason_detail || __("未记录");
 		const interview = this.plain_text(row.exit_interview) || __("暂无离职面谈记录");
 		const dialog = new frappe.ui.Dialog({
 			title: `${row.employee_code || __("未设置工号")} · ${row.employee_name || __("未命名员工")}`,
@@ -215,13 +237,30 @@ class EmployeeSeparationRecordsPage {
 						<div class="hrms-separation-records__detail-grid">
 							${this.detail_item(__("员工姓名"), row.employee_name)}
 							${this.detail_item(__("工号"), row.employee_code)}
-							${this.detail_item(__("离职日期"), date)}
+							${this.detail_item(__("拟离职日期"), planned_date)}
+							${this.detail_item(__("离职申请时间"), application_time)}
+							${this.detail_item(__("离职审批时间"), approval_time)}
+							${this.detail_item(__("实际离职时间"), actual_departure_time)}
 							${this.detail_item(__("部门"), row.department_display)}
 							${this.detail_item(__("岗位"), row.designation)}
-							${this.detail_item(__("离职原因分类"), reason_type)}
-							${this.detail_item(__("离职原因"), reason)}
-							${this.detail_item(__("详细原因"), reason_detail)}
+							${this.detail_item(__("员工自述原因分类"), reason_type)}
+							${this.detail_item(__("员工自述离职原因"), reason)}
+							${this.detail_item(__("员工自述详细原因"), reason_detail)}
+							${this.detail_item(__("审批确认原因分类"), approver_reason_type)}
+							${this.detail_item(__("审批确认离职原因"), approver_reason)}
+							${this.detail_item(__("审批确认详细原因"), approver_reason_detail)}
 							${this.detail_item(__("离职单状态"), row.separation_name ? __("已关联") : __("未建立离职单"))}
+						</div>
+						<div class="hrms-separation-records__interview">
+							<strong>${escape(__("流程操作记录"))}</strong>
+							<div class="hrms-separation-records__detail-grid">
+								${this.detail_item(__("申请操作人"), row.application_operator)}
+								${this.detail_item(__("离职申请时间"), application_time)}
+								${this.detail_item(__("审批操作人"), row.approval_operator)}
+								${this.detail_item(__("离职审批时间"), approval_time)}
+								${this.detail_item(__("实际离职操作人"), row.actual_departure_operator)}
+								${this.detail_item(__("实际离职时间"), actual_departure_time)}
+							</div>
 						</div>
 						<div class="hrms-separation-records__interview">
 							<strong>${escape(__("离职面谈"))}</strong>

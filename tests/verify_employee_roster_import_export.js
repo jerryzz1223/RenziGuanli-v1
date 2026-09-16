@@ -232,6 +232,10 @@ for (const marker of [
 	"仅显示需要人工校正的数据",
 	"render_result",
 	"查看 {0} 条其他非阻塞提示",
+	"render_import_progress",
+	"hide_import_progress",
+	"data-import-progress",
+	"正在整理导入结果...",
 ]) {
 	mustInclude(importJs, marker, `Import page missing behavior: ${marker}`);
 }
@@ -346,6 +350,8 @@ for (const marker of [
 	".hrms-import-landing",
 	".hrms-upload-box",
 	".hrms-import-steps",
+	".hrms-import-progress",
+	".hrms-import-progress__bar",
 	".hrms-export-layout",
 	".hrms-export-field-grid",
 	".hrms-export-repeat-section",

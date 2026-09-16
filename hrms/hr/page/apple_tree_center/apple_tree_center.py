@@ -18,6 +18,7 @@ MONTHLY_SUMMARY_DOCTYPE = "HRMS Monthly Attendance Summary"
 ATTENDANCE_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
 HISTORY_SUMMARY_DOCTYPE = "HRMS Apple Tree History Summary"
 HISTORY_SOURCE_TYPE = "apple_tree_history"
+APPLE_RECORD_DOCTYPE = "HRMS Apple Reward Record"
 APPLE_UNIT_AMOUNT = 5
 HISTORY_REQUIRED_HEADERS = {"奖/惩日期", "受奖/惩人", "绿苹果", "红苹果"}
 
@@ -34,6 +35,15 @@ PERSON_COLUMNS = [
 	("cross_department_support", "支援奖金", True), ("maintenance_bonus", "保养奖金", True),
 	("reported_reward", "奖惩提报（奖）", True), ("reported_penalty", "奖惩提报（罚）", True),
 	("missing_card_count", "忘打卡（次）", True), ("review_note", "备注", False),
+]
+
+# A personal Apple-tree page is a reward/penalty ledger, not an attendance
+# detail page. Keep this order identical to the latest requested table.
+APPLE_DETAIL_COLUMNS = [
+	("sequence", "序号", False), ("created_at", "创建时间", False), ("reward_date", "奖/惩日期", False),
+	("department", "受奖/惩人部门", False), ("employee_name", "受奖/惩人", False),
+	("green_apples", "绿苹果", True), ("red_apples", "红苹果", True), ("reward_item", "奖/惩项目", False),
+	("note", "备注", False), ("created_by_name", "创建人", False), ("signature", "签名", False), ("note_2", "备注", False),
 ]
 
 
@@ -254,6 +264,8 @@ def _history_preview_data(file_url, company):
 		months.add(month)
 		accepted.append({
 			"source_row": source_row,
+			"sequence": _history_row_value(row, "序号") or source_row,
+			"created_at": _history_row_value(row, "创建时间"),
 			"reward_date": reward_date.isoformat(),
 			"employee": employee.get("name"),
 			"employee_code": str(employee.get("custom_employee_code") or "").strip(),
@@ -265,6 +277,8 @@ def _history_preview_data(file_url, company):
 			"reward_item": _history_row_value(row, "奖/惩项目"),
 			"note": _history_row_value(row, "备注"),
 			"created_by_name": _history_row_value(row, "创建人"),
+			"signature": _history_row_value(row, "签名"),
+			"note_2": _history_row_value(row, "备注_2", "备注2"),
 		})
 	if len(months) > 1:
 		issues.append({"row": 0, "employee_name": "", "message": f"单个文件只能导入一个月份，当前包含：{'、'.join(sorted(months))}"})
@@ -372,7 +386,8 @@ def _month_bounds(attendance_month):
 
 
 def _record_key(row):
-	return str(row.get("employee") or row.get("employee_code") or row.get("employee_name") or "未匹配员工").strip()
+	# Company employee code is the stable business identity for Apple-tree rows.
+	return str(row.get("employee_code") or row.get("employee") or row.get("employee_name") or "未匹配员工").strip()
 
 
 def _matches_search(row, search):
@@ -496,7 +511,74 @@ def _active_history_batch(company, attendance_month):
 	return rows[0] if rows else None
 
 
-def _list_history_month_records(company, attendance_month, start_date=None, end_date=None):
+def _record_value(row, field, default=""):
+	if isinstance(row, dict):
+		return row.get(field, default)
+	return getattr(row, field, default)
+
+
+def _source_value(row, *keys):
+	for key in keys:
+		value = row.get(key) if isinstance(row, dict) else None
+		if value not in (None, ""):
+			return value
+	return ""
+
+
+def _apple_detail_from_source(raw, record=None, sequence=1):
+	record = record or {}
+	return {
+		"sequence": _source_value(raw, "序号", "sequence") or sequence,
+		"created_at": _source_value(raw, "创建时间", "created_at") or _record_value(record, "creation", ""),
+		"reward_date": _source_value(raw, "奖/惩日期", "reward_date") or _record_value(record, "reward_date", "") or _record_value(record, "attendance_month", ""),
+		"department": _source_value(raw, "受奖/惩人部门", "部门", "source_department", "department") or _record_value(record, "department", ""),
+		"employee_code": _source_value(raw, "受奖/惩人工号", "工号", "employee_code") or _record_value(record, "employee_code", ""),
+		"employee_name": _source_value(raw, "受奖/惩人", "employee_name") or _record_value(record, "employee_name", ""),
+		"green_apples": _display_number(_source_value(raw, "绿苹果", "green_apples") or _record_value(record, "green_apples", 0)),
+		"red_apples": _display_number(_source_value(raw, "红苹果", "red_apples") or _record_value(record, "red_apples", 0)),
+		"reward_item": _source_value(raw, "奖/惩项目", "reward_item") or _record_value(record, "reward_item", ""),
+		"note": _source_value(raw, "备注", "note"),
+		"created_by_name": _source_value(raw, "创建人", "created_by_name") or _record_value(record, "created_by_name", ""),
+		"signature": _source_value(raw, "签名", "signature"),
+		"note_2": _source_value(raw, "备注_2", "备注2", "note_2"),
+	}
+
+
+def _apple_detail_from_record(row, sequence=1):
+	"""Project a stored Apple reward record onto the workbook detail columns."""
+	raw = _record_value(row, "raw_row_json", "")
+	try:
+		raw = json.loads(raw or "{}") if isinstance(raw, str) else (raw or {})
+	except (TypeError, ValueError):
+		raw = {}
+	return _apple_detail_from_source(raw, row, sequence)
+
+
+def _active_apple_detail_rows(company, attendance_month, employee_code, start_date=None, end_date=None):
+	"""Read valid current-version Apple rows for one employee and month."""
+	batches = frappe.get_all(ATTENDANCE_BATCH_DOCTYPE, filters={"company": company}, pluck="name")
+	if not batches:
+		return []
+	rows = frappe.get_all(
+		APPLE_RECORD_DOCTYPE,
+		filters={"import_batch": ["in", batches], "reward_date": ["between", list(_month_bounds(attendance_month))]},
+		fields=["name", "creation", "import_batch", "reward_date", "employee_code", "employee_name", "department", "reward_item", "green_apples", "red_apples", "is_valid_approval", "created_by_name", "raw_row_json"],
+		order_by="reward_date asc, creation asc", limit_page_length=MAX_VISIBLE_RECORDS,
+	)
+	result = []
+	for index, row in enumerate(rows, start=1):
+		if not _record_value(row, "is_valid_approval", 0):
+			continue
+		detail = _apple_detail_from_record(row, index)
+		if _history_employee_code(detail.get("employee_code", "")) != employee_code:
+			continue
+		if not _apple_detail_matches(detail, start_date, end_date):
+			continue
+		result.append(detail)
+	return result
+
+
+def _list_history_month_records(company, attendance_month, start_date=None, end_date=None, include_detail=False):
 	batch = _active_history_batch(company, attendance_month)
 	if not batch:
 		return []
@@ -513,11 +595,12 @@ def _list_history_month_records(company, attendance_month, start_date=None, end_
 		red_apples = row.get("red_apples")
 		reward_amount = row.get("reward_amount")
 		source_row_count = row.get("source_row_count") or 0
+		try:
+			source_rows = json.loads(row.get("source_rows_json") or "[]")
+		except (TypeError, ValueError):
+			source_rows = []
+		detail_source_rows = source_rows
 		if start_date and end_date:
-			try:
-				source_rows = json.loads(row.get("source_rows_json") or "[]")
-			except (TypeError, ValueError):
-				source_rows = []
 			matching_rows = []
 			for source_row in source_rows:
 				try:
@@ -532,6 +615,7 @@ def _list_history_month_records(company, attendance_month, start_date=None, end_
 			red_apples = sum(_number(item.get("red_apples")) for item in matching_rows)
 			reward_amount = (green_apples - red_apples) * APPLE_UNIT_AMOUNT
 			source_row_count = len(matching_rows)
+			detail_source_rows = matching_rows
 		result.append({
 		"name": row.get("name") or "",
 		"reward_date": f"{attendance_month}-01",
@@ -550,6 +634,7 @@ def _list_history_month_records(company, attendance_month, start_date=None, end_
 		"is_valid_approval": 1,
 		"created_by_name": "",
 		"source_row_count": source_row_count,
+		"detail_rows": [_apple_detail_from_source(item, sequence=index + 1) for index, item in enumerate(detail_source_rows)] if include_detail else [],
 		})
 	return result
 
@@ -597,17 +682,13 @@ EXPORT_VIEWS = {"annual-summary", "monthly-detail", "person"}
 
 def _export_rows(view, data):
 	if view == "person":
-		columns = [(field, label) for field, label, _numeric in PERSON_COLUMNS]
-		source = {str(row.get("attendance_month") or ""): dict(row) for row in data.get("rows", [])}
+		columns = [(field, label) for field, label, _numeric in APPLE_DETAIL_COLUMNS]
+		rows = [dict(row) for row in data.get("rows", [])]
 		person = data.get("person", {})
-		year = str(data.get("year") or "")
-		first_row = next(iter(source.values()), {})
-		rows = [source.get(f"{year}-{month:02d}", {
-			"attendance_month": f"{year}-{month:02d}", "department": person.get("department"),
-			"employee_name": person.get("employee_name"), "employee_code": person.get("employee_code"),
-			"date_of_joining": first_row.get("date_of_joining"),
-		}) for month in range(1, 13)]
-		total = {"attendance_month": "合计", "department": person.get("department"), "employee_name": person.get("employee_name"), "employee_code": person.get("employee_code"), "date_of_joining": first_row.get("date_of_joining"), "__total": True}
+		total = {
+			"sequence": "合计", "department": person.get("department"),
+			"employee_name": person.get("employee_name"), "employee_code": person.get("employee_code"), "__total": True,
+		}
 		total.update(data.get("totals", {}))
 		return columns, [*rows, total]
 	if view == "monthly-detail":
@@ -687,7 +768,7 @@ def _build_export_workbook(view, data, title, column_filters="", sort_key="", so
 
 
 @frappe.whitelist()
-def download_export(view: str = "annual-summary", year: str = "", month: str = "", search: str = "", company: str = "", start_date: str = "", end_date: str = "", person: str = "", column_filters: str = "", sort_key: str = "", sort_order: str = "desc"):
+def download_export(view: str = "annual-summary", year: str = "", month: str = "", search: str = "", company: str = "", start_date: str = "", end_date: str = "", person: str = "", column_filters: str = "", sort_key: str = "", sort_order: str = "desc", detail_start_date: str = "", detail_end_date: str = "", detail_search: str = ""):
 	"""Download the currently selected Apple-tree statistics view as Excel."""
 	view = str(view or "annual-summary").strip()
 	if view not in EXPORT_VIEWS:
@@ -695,7 +776,7 @@ def download_export(view: str = "annual-summary", year: str = "", month: str = "
 	if view == "person":
 		if not str(person or "").strip():
 			frappe.throw("请先选择要导出的员工。")
-		data = get_person_detail(person=str(person).strip(), year=year, company=company)
+		data = get_person_detail(person=str(person).strip(), year=year, company=company, month=month, search=search, start_date=start_date, end_date=end_date, detail_start_date=detail_start_date, detail_end_date=detail_end_date, detail_search=detail_search)
 		if not data.get("available"):
 			frappe.throw(data.get("reason") or "当前员工没有可导出的苹果树记录。")
 		person_name = data.get("person", {}).get("employee_name") or str(person).strip()
@@ -793,6 +874,30 @@ def _person_totals(rows):
 	}
 
 
+def _apple_detail_totals(rows):
+	return {
+		"green_apples": _display_number(sum(_number(row.get("green_apples")) for row in rows)),
+		"red_apples": _display_number(sum(_number(row.get("red_apples")) for row in rows)),
+	}
+
+
+def _apple_detail_matches(row, start_date=None, end_date=None, search=""):
+	date_text = str(row.get("reward_date") or "")[:10]
+	if start_date and (not date_text or date_text < start_date.isoformat()):
+		return False
+	if end_date and (not date_text or date_text > end_date.isoformat()):
+		return False
+	if search:
+		haystack = " ".join(str(row.get(field) or "") for field, _label, _numeric in APPLE_DETAIL_COLUMNS).casefold()
+		if search.casefold() not in haystack:
+			return False
+	return True
+
+
+def _filter_apple_detail_rows(rows, start_date=None, end_date=None, search=""):
+	return [row for row in rows if _apple_detail_matches(row, start_date, end_date, str(search or "").strip())]
+
+
 def _locked_detail_extras(company, attendance_month, employee_code=""):
 	from hrms.api.attendance_processing_center import get_monthly_final_preview
 
@@ -829,9 +934,12 @@ def get_employee_summary(employee: str, year: str = "", company: str = ""):
 
 
 @frappe.whitelist()
-def get_person_detail(person: str, year: str = "", company: str = ""):
-	"""Employee drilldown uses the same company and active-version scope as totals."""
-	data = get_data(year=year, company=company)
+def get_person_detail(person: str, year: str = "", company: str = "", month: str = "", search: str = "", start_date: str = "", end_date: str = "", detail_start_date: str = "", detail_end_date: str = "", detail_search: str = ""):
+	"""Return the employee's raw Apple-tree reward/penalty ledger."""
+	data = get_data(year=year, month=month, search=search, company=company, start_date=start_date, end_date=end_date)
+	outer_start = _history_date(data["filters"].get("start_date")) if data["filters"].get("start_date") else None
+	outer_end = _history_date(data["filters"].get("end_date")) if data["filters"].get("end_date") else None
+	detail_start, detail_end = _parse_custom_date_range(detail_start_date, detail_end_date)
 	key = str(person or "").strip()
 	employee = next(
 		(row for row in data["people"] if str(row.get("employee_code") or "") == key or _record_key(row) == key),
@@ -840,25 +948,36 @@ def get_person_detail(person: str, year: str = "", company: str = ""):
 	if not employee:
 		return {"available": False, "reason": "所选年度内没有该员工可查看的苹果树记录。"}
 	person_code = str(employee.get("employee_code") or "")
-	rows = [dict(row) for row in data["records"] if str(row.get("employee_code") or "") == person_code]
-	for row in rows:
-		standard, actual = row.get("standard_hours"), row.get("actual_attendance_hours")
-		# Reference workbook: 缺勤 = 标准工时 - 实际出勤工时.
-		row["missing_hours"] = round(_number(standard) - _number(actual), 4) if standard not in (None, "") and actual not in (None, "") else None
-		if row.get("employee_code") and str(row.get("approval_no") or "").startswith("处理终稿:"):
-			preview = _locked_detail_extras(data["filters"]["company"], row["attendance_month"], str(row.get("employee_code") or ""))
-			if preview.get("available") and row["approval_no"] == f"处理终稿:{preview.get('locked_snapshot_version')}":
-				matches = [item for item in preview.get("rows", []) if row.get("employee_code") and str(item.get("employee_code") or "") == str(row["employee_code"])]
-				if len(matches) == 1:
-					for field in ("bereavement_leave_hours", "cross_department_support", "maintenance_bonus", "reported_reward", "reported_penalty", "missing_card_count", "review_note"):
-						if field in matches[0]:
-							row[field] = matches[0][field]
-	rows.sort(key=lambda row: row["attendance_month"])
+	summary_rows = [dict(row) for row in data["records"] if str(row.get("employee_code") or "") == person_code]
+	year_text = str(data["filters"]["year"])
+	history_months = _available_history_months(data["filters"]["company"])
+	months = sorted({str(row.get("attendance_month") or row.get("reward_date") or "")[:7] for row in summary_rows if str(row.get("attendance_month") or row.get("reward_date") or "")[:4] == year_text})
+	rows = []
+	for attendance_month in months:
+		if attendance_month in history_months:
+			history_rows = _list_history_month_records(data["filters"]["company"], attendance_month, outer_start, outer_end, include_detail=True)
+			detail_rows = [detail for item in history_rows if str(item.get("employee_code") or "") == person_code for detail in item.get("detail_rows", [])]
+		else:
+			detail_rows = _active_apple_detail_rows(data["filters"]["company"], attendance_month, person_code, outer_start, outer_end)
+		if detail_rows:
+			rows.extend(detail_rows)
+			continue
+		# A monthly final can contain a manually entered aggregate without a raw
+		# Apple record. Keep that value visible and label it as an aggregate.
+		for summary in summary_rows:
+			if str(summary.get("attendance_month") or summary.get("reward_date") or "")[:7] != attendance_month:
+				continue
+			if _number(summary.get("green_apples")) or _number(summary.get("red_apples")):
+				fallback = _apple_detail_from_record({**summary, "reward_item": summary.get("reward_item") or "月度考勤终稿"}, len(rows) + 1)
+				rows.append(fallback)
+	rows = _filter_apple_detail_rows(rows, detail_start, detail_end, detail_search)
+	rows.sort(key=lambda row: (str(row.get("reward_date") or ""), _number(row.get("sequence"))))
 	return {
 		"available": True, "person": employee, "year": data["filters"]["year"],
 		"available_years": data.get("available_years", [data["filters"]["year"]]),
-		"company": data["filters"]["company"], "rows": rows, "totals": _person_totals(rows),
-		"columns": [{"field": field, "label": label, "numeric": numeric} for field, label, numeric in PERSON_COLUMNS],
+		"company": data["filters"]["company"], "rows": rows, "totals": _apple_detail_totals(rows),
+		"filters": {"month": data["filters"].get("month", ""), "search": data["filters"].get("search", ""), "start_date": data["filters"].get("start_date", ""), "end_date": data["filters"].get("end_date", ""), "detail_start_date": detail_start.isoformat() if detail_start else "", "detail_end_date": detail_end.isoformat() if detail_end else "", "detail_search": str(detail_search or "").strip()},
+		"columns": [{"field": field, "label": label, "numeric": numeric} for field, label, numeric in APPLE_DETAIL_COLUMNS],
 	}
 
 

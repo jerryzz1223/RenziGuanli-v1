@@ -1655,7 +1655,7 @@ def _insert_apple_record(batch_name, row):
 		return None
 	green = _float_value(row, "绿苹果")
 	red = _float_value(row, "红苹果")
-	employee_code = _first_value(row, "工号")
+	employee_code = _first_value(row, "受奖/惩人工号", "工号")
 	valid = _is_valid_approval(row)
 	doc = frappe.get_doc(
 		{

@@ -3,7 +3,7 @@ import json
 import os
 import re
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from xml.etree import ElementTree
 
@@ -43,6 +43,16 @@ CHINA_ETHNICITY_VALUES = (
 	"塔吉克族", "怒族", "乌孜别克族", "俄罗斯族", "鄂温克族", "德昂族", "保安族", "裕固族", "京族", "塔塔尔族",
 	"独龙族", "鄂伦春族", "赫哲族", "门巴族", "珞巴族", "基诺族",
 )
+EDUCATION_LEVEL_OPTIONS = (
+	"初中",
+	"高中",
+	"中专",
+	"大专",
+	"本科",
+	"研究生",
+)
+RETIRED_EDUCATION_FIELDNAMES = ("custom_education_category", "custom_study_mode")
+RETIRED_EMPLOYEE_FIELDNAMES = ("custom_probation_months",)
 # Older roster workbooks commonly omit the suffix.  Keep stored values on the
 # official selector values so an unrelated edit cannot be blocked by a legacy
 # value such as "汉" after the field becomes a Select.
@@ -68,12 +78,14 @@ EMPLOYEE_MATERIAL_GROUPS = [
 	},
 	{
 		"label": "员工档案资料",
-		"description": "劳动合同、入职简历、体检单、入职记录等档案材料。",
+		"description": "劳动合同、入职简历、体检单、入职记录、转正等档案材料。",
 		"types": [
 			("labor_contract", "劳动合同"),
 			("onboarding_resume", "入职简历"),
 			("onboarding_record", "入职记录"),
 			("onboarding_health_check", "入职体检单"),
+			("confirmation_material", "转正"),
+			("dingtalk_other_material", "钉钉其他材料"),
 		],
 	},
 	{
@@ -84,6 +96,15 @@ EMPLOYEE_MATERIAL_GROUPS = [
 			("separation_certificate", "离职证明"),
 			("separation_application", "离职申请"),
 			("handover_form", "工作交接表"),
+		],
+	},
+	{
+		"label": "员工表单资料",
+		"description": "员工谈话表、员工职务调动申请表、奖惩提报单等人事表单材料。",
+		"types": [
+			("employee_talk_form", "员工谈话表"),
+			("employee_transfer_application", "员工职务调动申请表"),
+			("reward_punishment_report", "奖惩提报单"),
 		],
 	},
 ]
@@ -134,9 +155,34 @@ PERSONNEL_PAGE_DEFINITIONS = [
 	{"name": "attendance-import-center", "title": "考勤导入中心", "icon": "upload"},
 	{"name": "payroll-input-center", "title": "薪资输入中心", "icon": "database"},
 	{"name": "form-data-intake", "title": "人资表单导入中心", "icon": "upload"},
+	{
+		"name": "employee-form-entry",
+		"title": "员工表单录入",
+		"icon": "file-text",
+		"roles": ["HR User", "HR Manager", "System Manager"],
+	},
+	{
+		"name": "employee-talk-form",
+		"title": "员工谈话表",
+		"icon": "file-text",
+		"roles": ["HR User", "HR Manager", "System Manager"],
+	},
+	{
+		"name": "employee-duty-change",
+		"title": "员工职务调动申请表",
+		"icon": "file-text",
+		"roles": ["HR User", "HR Manager", "System Manager"],
+	},
+	{
+		"name": "employee-reward-form",
+		"title": "奖惩提报单",
+		"icon": "file-text",
+		"roles": ["HR User", "HR Manager", "System Manager"],
+	},
 ]
 LEGACY_PERSONNEL_PAGE_SLUGS = {
 	"employee-property-history": "employee-property-hi",
+	"employee-duty-change": "employee-transfer-fo",
 }
 
 
@@ -192,7 +238,7 @@ EMPLOYEE_DETAIL_BLOCK_TABS = {
 }
 DEFAULT_DETAIL_BLOCK_DESCRIPTIONS = {
 	"任职记录": "记录员工部门、岗位、职级、工作地点、任职起止日期等历史变化。",
-	"教育经历": "记录学历、毕业院校、专业、学习形式、毕业时间等教育背景。",
+	"教育经历": "记录学历、毕业院校、专业科系、毕业时间等教育背景。",
 	"工作经历": "记录入职前工作单位、岗位、起止时间和工作内容。",
 	"语言能力": "记录语种、熟练程度、证书和备注。",
 	"工作技能": "记录技能名称、熟练程度、证书和备注。",
@@ -459,27 +505,12 @@ COMPANY_ROSTER_CUSTOM_FIELDS = [
 	},
 	{
 		"category": "教育信息",
-		"field_label": "学历类别",
-		"fieldname": "custom_education_category",
-		"fieldtype": "Data",
-		"description": "学历取得类别",
-		"insert_after": "date_of_birth",
-	},
-	{
-		"category": "教育信息",
-		"field_label": "学习形式",
-		"fieldname": "custom_study_mode",
-		"fieldtype": "Data",
-		"description": "全日制、函授、自考等学习形式",
-		"insert_after": "custom_education_category",
-	},
-	{
-		"category": "教育信息",
 		"field_label": "学历",
 		"fieldname": "custom_education_level",
-		"fieldtype": "Data",
+		"fieldtype": "Select",
+		"options": "\n".join(EDUCATION_LEVEL_OPTIONS),
 		"description": "最高学历",
-		"insert_after": "custom_study_mode",
+		"insert_after": "date_of_birth",
 	},
 	{
 		"category": "教育信息",
@@ -491,7 +522,7 @@ COMPANY_ROSTER_CUSTOM_FIELDS = [
 	},
 	{
 		"category": "教育信息",
-		"field_label": "科系",
+		"field_label": "专业科系",
 		"fieldname": "custom_major",
 		"fieldtype": "Data",
 		"description": "专业或科系",
@@ -504,14 +535,6 @@ COMPANY_ROSTER_CUSTOM_FIELDS = [
 		"fieldtype": "Data",
 		"description": "员工日常通勤交通工具",
 		"insert_after": "current_address",
-	},
-	{
-		"category": "在职信息",
-		"field_label": "试用期",
-		"fieldname": "custom_probation_months",
-		"fieldtype": "Int",
-		"description": "试用期月数",
-		"insert_after": "date_of_joining",
 	},
 	{
 		"category": "在职信息",
@@ -617,8 +640,6 @@ COMPANY_ROSTER_FIELD_ORDER = [
 	"date_of_birth",
 	"custom_age",
 	"gender",
-	"custom_education_category",
-	"custom_study_mode",
 	"custom_education_level",
 	"custom_graduation_school",
 	"custom_major",
@@ -626,7 +647,6 @@ COMPANY_ROSTER_FIELD_ORDER = [
 	"custom_transport",
 	"person_to_be_contacted",
 	"emergency_phone_number",
-	"custom_probation_months",
 	"final_confirmation_date",
 	"custom_is_confirmed",
 	"custom_contract_sign_date",
@@ -664,16 +684,13 @@ EMPLOYEE_BASIC_TEMPLATE_COLUMNS = (
 	("date_of_birth", "出生年月"),
 	("custom_age", "年龄"),
 	("gender", "性别"),
-	("custom_education_category", "学历类别"),
-	("custom_study_mode", "学习形式"),
 	("custom_education_level", "学历"),
 	("custom_graduation_school", "毕业院校"),
-	("custom_major", "科系"),
+	("custom_major", "专业科系"),
 	("current_address", "当前地址"),
 	("custom_transport", "交通工具"),
 	("person_to_be_contacted", "紧急联系"),
 	("emergency_phone_number", "紧急联系人电话"),
-	("custom_probation_months", "试用期"),
 	("final_confirmation_date", "转正日期"),
 	("custom_is_confirmed", "是否转正"),
 	("custom_contract_sign_date", "合同-签订日期"),
@@ -766,11 +783,9 @@ FIELD_GOVERNANCE_DEFAULTS = {
 	"custom_social_insurance_status": {"aliases": "社保参保状态\n参保状态"},
 	"custom_social_insurance_start_date": {"aliases": "社保起缴日期\n社保开始缴纳日期"},
 	"custom_social_insurance_end_date": {"aliases": "社保停缴日期\n社保停止缴纳日期"},
-	"custom_education_category": {"aliases": "学历类别\n学历取得类别", "detail_block": "教育经历", "record_type": "单行资料块"},
-	"custom_study_mode": {"aliases": "学习形式\n学习方式", "detail_block": "教育经历", "record_type": "单行资料块"},
 	"custom_education_level": {"aliases": "学历\n最高学历\n文化程度", "detail_block": "教育经历", "record_type": "单行资料块"},
 	"custom_graduation_school": {"aliases": "毕业院校\n学校\n院校名称", "detail_block": "教育经历", "record_type": "单行资料块"},
-	"custom_major": {"aliases": "科系\n专业\n专业或科系", "detail_block": "教育经历", "record_type": "单行资料块"},
+	"custom_major": {"aliases": "专业科系\n科系\n专业\n专业或科系", "detail_block": "教育经历", "record_type": "单行资料块"},
 	"custom_contract_no": {"aliases": "合同编号\n劳动合同编号", "detail_block": "合同记录", "record_type": "单行资料块"},
 	"custom_contract_sign_date": {"aliases": "合同签订日期\n劳动合同签订日期", "detail_block": "合同记录", "record_type": "单行资料块"},
 	"custom_contract_sign_count": {"aliases": "合同签订次数\n劳动合同签订次数", "detail_block": "合同记录", "record_type": "单行资料块"},
@@ -1044,6 +1059,8 @@ def _get_template_doc():
 	_sync_company_roster_fields(doc)
 	_apply_field_governance_defaults(doc)
 	_apply_company_roster_defaults(doc)
+	_retire_education_fields(doc)
+	_retire_employee_fields(doc)
 	_apply_employee_required_defaults(doc)
 	_apply_employee_internal_field_policy(doc)
 	ensure_required_roster_columns(doc)
@@ -1224,7 +1241,7 @@ def _sync_company_roster_fields(doc, fieldnames=None):
 		if supports_required:
 			row_values["required"] = 1 if item["fieldname"] in required_fieldnames else 0
 		if row:
-			managed_fields = ["fieldtype", "options", "insert_after", "source"]
+			managed_fields = ["field_label", "fieldtype", "options", "insert_after", "source"]
 			for fieldname in managed_fields:
 				value = row_values.get(fieldname)
 				if row.get(fieldname) != value:
@@ -3236,11 +3253,16 @@ def get_employee_import_export_schema():
 
 EMPLOYEE_ROSTER_STATUS_CARDS = [
 	{"label": "在职 · 正式", "filters": {"custom_work_nature": "在职·正式"}},
-	{"label": "在职 · 试用期", "filters": {"custom_work_nature": "在职·试用期"}},
+	{"label": "1-7日试用期", "filters": {"custom_work_nature": "在职·试用期"}},
+	{"label": "8-14日试用期", "filters": {"custom_work_nature": "在职·试用期"}},
+	{"label": "15以上试用期", "filters": {"custom_work_nature": "在职·试用期"}},
 	{"label": "退休返聘", "filters": {"custom_work_nature": "退休返聘"}},
 	{"label": "待离职", "filters": {"custom_work_nature": "待离职"}},
 	{"label": "离职", "filters": {"custom_work_nature": "离职"}},
 ]
+
+EMPLOYEE_ROSTER_PROBATION_STAGE_FILTER = "_hrms_probation_stage"
+EMPLOYEE_ROSTER_MATURE_PROBATION_STAGE = "15_plus"
 
 EMPLOYEE_ROSTER_SORT_OPTIONS = {
 	"date_of_joining": "date_of_joining",
@@ -3354,6 +3376,68 @@ def _retire_personnel_status_field(doc):
 	return doc
 
 
+def _retire_education_fields(doc):
+	"""Hide the superseded education fields without deleting historical values."""
+	changed = False
+	rows_by_fieldname = {row.fieldname: row for row in doc.template_items}
+	for fieldname in RETIRED_EDUCATION_FIELDNAMES:
+		row = rows_by_fieldname.get(fieldname)
+		if not row:
+			continue
+		for flag in ("enabled", "search_enabled", "import_enabled", "export_enabled", "form_visible", "detail_visible", "roster_visible"):
+			if _template_item_supports_field(flag) and _template_row_int(row, flag) != 0:
+				row.set(flag, 0)
+				changed = True
+
+	for fieldname in RETIRED_EDUCATION_FIELDNAMES:
+		custom_field_name = f"{EMPLOYEE_DOCTYPE}-{fieldname}"
+		if not frappe.db.exists("Custom Field", custom_field_name):
+			continue
+		if frappe.db.get_value("Custom Field", custom_field_name, "hidden") != 1:
+			frappe.db.set_value("Custom Field", custom_field_name, "hidden", 1, update_modified=False)
+			changed = True
+
+	if changed:
+		doc.save(ignore_permissions=True)
+		frappe.clear_cache(doctype=EMPLOYEE_DOCTYPE)
+	return doc
+
+
+def _retire_employee_fields(doc):
+	"""Hide retired Employee fields while preserving any historical values."""
+	changed = False
+	rows_by_fieldname = {row.fieldname: row for row in doc.template_items}
+	for fieldname in RETIRED_EMPLOYEE_FIELDNAMES:
+		row = rows_by_fieldname.get(fieldname)
+		if not row:
+			continue
+		for flag in (
+			"enabled",
+			"search_enabled",
+			"import_enabled",
+			"export_enabled",
+			"form_visible",
+			"detail_visible",
+			"roster_visible",
+		):
+			if _template_item_supports_field(flag) and _template_row_int(row, flag) != 0:
+				row.set(flag, 0)
+				changed = True
+
+	for fieldname in RETIRED_EMPLOYEE_FIELDNAMES:
+		custom_field_name = f"{EMPLOYEE_DOCTYPE}-{fieldname}"
+		if not frappe.db.exists("Custom Field", custom_field_name):
+			continue
+		if frappe.db.get_value("Custom Field", custom_field_name, "hidden") != 1:
+			frappe.db.set_value("Custom Field", custom_field_name, "hidden", 1, update_modified=False)
+			changed = True
+
+	if changed:
+		doc.save(ignore_permissions=True)
+		frappe.clear_cache(doctype=EMPLOYEE_DOCTYPE)
+	return doc
+
+
 def _backfill_employee_work_nature():
 	"""Persist the existing displayed value before roster filters become direct."""
 	frappe.clear_cache(doctype=EMPLOYEE_DOCTYPE)
@@ -3421,6 +3505,7 @@ def _build_employee_roster_filters(filters=None):
 		"custom_work_nature",
 		"custom_social_insurance_status",
 		"custom_is_confirmed",
+		"date_of_joining",
 		"department",
 		"designation",
 		"company",
@@ -3474,6 +3559,7 @@ def _get_roster_fetch_fields(columns):
 		"custom_is_confirmed",
 		"final_confirmation_date",
 		"date_of_joining",
+		"contract_end_date",
 		"relieving_date",
 	]:
 		fetch_fields.add(fieldname)
@@ -3559,8 +3645,49 @@ def _count_employee_rows(filters, or_filters=None):
 	return frappe.utils.cint(rows[0].get("count")) if rows else 0
 
 
+def _get_probation_age_days(row, today):
+	joining_date = row.get("date_of_joining")
+	if not joining_date:
+		return None
+	try:
+		return (today - frappe.utils.getdate(joining_date)).days + 1
+	except Exception:
+		return None
+
+
+def _is_mature_probation_employee(row, today):
+	if row.get("custom_work_nature") != "在职·试用期":
+		return False
+	if (_get_probation_age_days(row, today) or 0) < 15:
+		return False
+	confirmation_date = row.get("final_confirmation_date")
+	if not confirmation_date:
+		return True
+	try:
+		return today < frappe.utils.getdate(confirmation_date)
+	except Exception:
+		return False
+
+
+def _get_probation_card_label(row, today):
+	if row.get("custom_work_nature") != "在职·试用期":
+		return None
+	age_days = _get_probation_age_days(row, today)
+	if age_days is None:
+		return None
+	if 1 <= age_days <= 7:
+		return "1-7日试用期"
+	if 8 <= age_days <= 14:
+		return "8-14日试用期"
+	if _is_mature_probation_employee(row, today):
+		return "15以上试用期"
+	return None
+
+
 @frappe.whitelist()
-def get_employee_by_business_code(employee_code: str, company: str = ""):
+def get_employee_by_business_code(
+	employee_code: str, company: str = "", include_pending: int | str = 0
+):
 	"""Resolve the public company work number to the internal Employee link value."""
 	if not frappe.has_permission(EMPLOYEE_DOCTYPE, "read"):
 		frappe.throw(_("无权查询员工信息"), frappe.PermissionError)
@@ -3569,7 +3696,7 @@ def get_employee_by_business_code(employee_code: str, company: str = ""):
 	if not employee_code:
 		return None
 
-	filters = {"status": "Active"}
+	filters = {"status": ["!=", "Left"]} if cint(include_pending) else {"status": "Active"}
 	if company:
 		filters["company"] = company
 
@@ -3582,7 +3709,7 @@ def get_employee_by_business_code(employee_code: str, company: str = ""):
 	if not rows:
 		return None
 	if len(rows) > 1:
-		frappe.throw(_("工号 {0} 匹配到多名在职员工，请先在员工花名册中处理重复工号。").format(employee_code))
+		frappe.throw(_("工号 {0} 匹配到多名员工，请先在员工花名册中处理重复工号。").format(employee_code))
 
 	employee = rows[0]
 	return {
@@ -3605,7 +3732,9 @@ def get_employee_roster(
 	# page_length
 	# dynamic_columns
 	columns = _get_employee_roster_columns()
-	employee_filters = _build_employee_roster_filters(filters)
+	raw_filters = _parse_json(filters, {}) or {}
+	probation_stage = raw_filters.pop(EMPLOYEE_ROSTER_PROBATION_STAGE_FILTER, "")
+	employee_filters = _build_employee_roster_filters(raw_filters)
 	or_filters = _build_employee_roster_or_filters(search)
 	sort_field = EMPLOYEE_ROSTER_SORT_OPTIONS.get(sort_by) or "modified"
 	sort_order = "asc" if str(sort_order).lower() == "asc" else "desc"
@@ -3614,7 +3743,24 @@ def get_employee_roster(
 	start = (page - 1) * page_length
 	fields = _get_roster_fetch_fields(columns)
 
-	if sort_field == "custom_employee_code":
+	if probation_stage == EMPLOYEE_ROSTER_MATURE_PROBATION_STAGE:
+		today = frappe.utils.getdate(frappe.utils.nowdate())
+		employee_filters["date_of_joining"] = ["<=", today - timedelta(days=14)]
+		query_kwargs = {
+			"filters": employee_filters,
+			"or_filters": or_filters,
+			"fields": fields,
+			"limit_page_length": 0,
+		}
+		if sort_field != "custom_employee_code":
+			query_kwargs["order_by"] = f"{sort_field} {sort_order}"
+		all_rows = frappe.get_list(EMPLOYEE_DOCTYPE, **query_kwargs)
+		all_rows = [row for row in all_rows if _is_mature_probation_employee(row, today)]
+		total = len(all_rows)
+		if sort_field == "custom_employee_code":
+			all_rows = _sort_employee_roster_by_business_code(all_rows, sort_order)
+		rows = all_rows[start : start + page_length]
+	elif sort_field == "custom_employee_code":
 		all_rows = frappe.get_list(
 			EMPLOYEE_DOCTYPE,
 			filters=employee_filters,
@@ -3658,20 +3804,34 @@ def get_employee_roster(
 @frappe.whitelist()
 def get_employee_roster_summary(filters: str = "{}", include_all: int = 0):
 	employee_filters = _build_employee_roster_filters(filters)
-	# Each card replaces the selected work nature, while retaining company and
-	# permission filters. One grouped query replaces six independent counts.
+	# Keep the query permission-aware and calculate the three probation buckets
+	# from the same date basis used by the roster cards.
 	employee_filters.pop("custom_work_nature", None)
 	rows = frappe.get_list(
 		EMPLOYEE_DOCTYPE,
 		filters=employee_filters,
-		fields=["custom_work_nature", {"COUNT": "*", "as": "count"}],
-		group_by="custom_work_nature",
-		order_by="custom_work_nature asc",
+		fields=["custom_work_nature", "date_of_joining", "final_confirmation_date"],
 		limit_page_length=0,
 	)
-	counts = {row.get("custom_work_nature"): frappe.utils.cint(row.get("count")) for row in rows}
+	today = frappe.utils.getdate(frappe.utils.nowdate())
+	counts = {card["label"]: 0 for card in EMPLOYEE_ROSTER_STATUS_CARDS}
+	all_count = 0
+	for row in rows:
+		nature = row.get("custom_work_nature") or ""
+		if nature != "离职":
+			all_count += 1
+		label = {
+			"在职·正式": "在职 · 正式",
+			"退休返聘": "退休返聘",
+			"待离职": "待离职",
+			"离职": "离职",
+		}.get(nature)
+		if nature == "在职·试用期":
+			label = _get_probation_card_label(row, today)
+		if label in counts:
+			counts[label] += 1
 	summary = [
-		{**card, "count": counts.get(card["filters"]["custom_work_nature"], 0)}
+		{**card, "count": counts.get(card["label"], 0)}
 		for card in EMPLOYEE_ROSTER_STATUS_CARDS
 	]
 	if frappe.utils.cint(include_all):
@@ -3680,7 +3840,7 @@ def get_employee_roster_summary(filters: str = "{}", include_all: int = 0):
 			{
 				"label": "全部",
 				"filters": {"custom_work_nature": ["!=", "离职"]},
-				"count": sum(count for nature, count in counts.items() if nature != "离职"),
+				"count": all_count,
 			},
 		)
 	return summary
@@ -4055,11 +4215,9 @@ def _get_employee_related_records(doc):
 	) + _get_employee_flat_related_item(
 		doc,
 		[
-			("学历类别", "custom_education_category"),
-			("学习形式", "custom_study_mode"),
 			("学历", "custom_education_level"),
 			("毕业院校", "custom_graduation_school"),
-			("科系", "custom_major"),
+			("专业科系", "custom_major"),
 		],
 	)
 	contract_items = _get_employee_flat_related_item(
@@ -4134,8 +4292,8 @@ def _get_employee_related_records(doc):
 		"个人信息": [
 			_make_related_record(
 				"教育经历",
-				"记录学历、毕业院校、专业、学习形式、毕业时间等教育背景。",
-				["学历类别", "学习形式", "学历", "毕业院校", "科系", "毕业时间"],
+				"记录学历、毕业院校、专业科系、毕业时间等教育背景。",
+				["学历", "毕业院校", "专业科系", "毕业时间"],
 				education_items,
 			),
 			_make_related_record(
@@ -4173,8 +4331,9 @@ def _get_employee_related_records(doc):
 		],
 		"材料附件": [
 			_make_related_record("员工基本资料", "身份证、学历证明、个人证件照等入职基础材料。", ["身份证照片", "学历证明", "个人证件照", "身份证复印件"], []),
-			_make_related_record("员工档案资料", "劳动合同、入职简历、体检单、入职记录等档案材料。", ["劳动合同", "入职简历", "入职记录", "入职体检单"], []),
+			_make_related_record("员工档案资料", "劳动合同、入职简历、体检单、入职记录、转正等档案材料。", ["劳动合同", "入职简历", "入职记录", "入职体检单", "转正"], []),
 			_make_related_record("员工离职资料", "离职审批、离职证明、离职申请、工作交接表等材料。", ["离职审批", "离职证明", "离职申请", "工作交接表"], []),
+			_make_related_record("员工表单资料", "员工谈话表、员工职务调动申请表、奖惩提报单等人事表单材料。", ["员工谈话表", "员工职务调动申请表", "奖惩提报单"], []),
 		],
 		"背景调查": [
 			_make_related_record("人事异动记录", "展示员工转岗、调薪、转正、离职等关键人事动作。", ["类型", "日期", "办理人", "结果"], transfer_items + promotion_items + separation_items, "Employee Transfer", "办理人事异动"),
@@ -4432,7 +4591,9 @@ def _get_employee_material_type_map():
 	}
 
 
-def _employee_file_payload(file, *, is_current=False):
+def _employee_file_payload(file, *, is_current=False, submitted_by_name=None):
+	owner = file.get("owner") if hasattr(file, "get") else getattr(file, "owner", "")
+	owner = str(owner or "").strip()
 	return {
 		"name": file.name,
 		"file_name": file.file_name,
@@ -4440,6 +4601,8 @@ def _employee_file_payload(file, *, is_current=False):
 		"is_private": file.is_private,
 		"modified": file.modified,
 		"creation": file.creation,
+		"submitted_by": owner,
+		"submitted_by_name": str(submitted_by_name or owner).strip(),
 		"is_current": is_current,
 	}
 
@@ -4482,13 +4645,32 @@ def _get_employee_materials(doc):
 			"is_private",
 			"modified",
 			"creation",
+			"owner",
 		],
 		order_by="modified desc, creation desc, name desc",
 	)
+	owners = sorted({str(file.get("owner") or "").strip() for file in files if file.get("owner")})
+	users = frappe.get_all(
+		"User",
+		filters={"name": ["in", owners]},
+		fields=["name", "full_name"],
+		limit_page_length=0,
+	) if owners else []
+	user_names = {user.name: (user.full_name or user.name) for user in users}
 	for file in files:
-		if file.attached_to_field not in files_by_fieldname:
-			continue
-		files_by_fieldname[file.attached_to_field].append(_employee_file_payload(file))
+		attached_to_field = file.attached_to_field
+		if attached_to_field not in files_by_fieldname:
+			# Employee form entry used an unprefixed field name before the
+			# canonical material field prefix was applied. Keep those files visible.
+			legacy_key = str(attached_to_field or "").removeprefix(EMPLOYEE_MATERIAL_FIELD_PREFIX)
+			canonical_field = f"{EMPLOYEE_MATERIAL_FIELD_PREFIX}{legacy_key}"
+			if canonical_field not in files_by_fieldname:
+				continue
+			attached_to_field = canonical_field
+		owner = str(file.get("owner") or "").strip()
+		files_by_fieldname[attached_to_field].append(
+			_employee_file_payload(file, submitted_by_name=user_names.get(owner) or owner)
+		)
 
 	return [
 		{
@@ -5604,6 +5786,7 @@ def import_employee_roster(
 				result["updated"] += 1
 			elif planned_row["action"] == "insert":
 				doc = frappe.new_doc(EMPLOYEE_DOCTYPE)
+				doc.flags.hrms_employee_roster_import = True
 				for fieldname, value in values.items():
 					if fieldname in meta_fields:
 						doc.set(fieldname, value)

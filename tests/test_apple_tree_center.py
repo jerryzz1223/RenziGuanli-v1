@@ -87,21 +87,40 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 		self.assertEqual(rows[0]["net_apples"], 2)
 		self.assertEqual(rows[0]["final_status"], "已确认 / 已锁定")
 
-	def test_person_export_keeps_all_twelve_months_and_total_at_the_bottom(self):
+	def test_person_export_uses_apple_reward_headers_and_total_at_the_bottom(self):
 		center = apple_tree_center_module()
 		columns, rows = center._export_rows("person", {
 			"year": "2026", "person": {"department": "连续课", "employee_name": "张三", "employee_code": "001"},
-			"rows": [{"attendance_month": "2026-08", "employee_code": "001", "green_apples": 4}],
-			"totals": {"green_apples": 4},
+			"rows": [{"sequence": 1, "created_at": "2026-08-01 09:00:00", "reward_date": "2026-08-01", "employee_code": "001", "green_apples": 4, "red_apples": 1}],
+			"totals": {"green_apples": 4, "red_apples": 1},
 		})
-		self.assertEqual(len(columns), 21)
-		self.assertEqual(len(rows), 13)
-		self.assertEqual(rows[0]["attendance_month"], "2026-01")
-		self.assertEqual(rows[7]["green_apples"], 4)
-		self.assertEqual(rows[-1]["attendance_month"], "合计")
+		self.assertEqual(len(columns), 12)
+		self.assertEqual([label for _field, label in columns], [
+			"序号", "创建时间", "奖/惩日期", "受奖/惩人部门", "受奖/惩人",
+			"绿苹果", "红苹果", "奖/惩项目", "备注", "创建人", "签名", "备注",
+		])
+		self.assertEqual(len(rows), 2)
+		self.assertEqual(rows[0]["sequence"], 1)
+		self.assertEqual(rows[-1]["sequence"], "合计")
 		self.assertEqual(rows[-1]["green_apples"], 4)
+		self.assertEqual(rows[-1]["red_apples"], 1)
 		filtered = center._filtered_export_rows(columns, rows, sort_key="green_apples", sort_order="desc")
-		self.assertEqual(filtered[-1]["attendance_month"], "合计")
+		self.assertEqual(filtered[-1]["sequence"], "合计")
+
+	def test_person_detail_maps_monthly_workbook_fields_without_attendance_columns(self):
+		center = apple_tree_center_module()
+		detail = center._apple_detail_from_source({
+			"sequence": 9, "created_at": "2026-06-02 20:00:23", "reward_date": "2026-06-02",
+			"source_department": "连续课", "employee_code": "388", "employee_name": "孔红西",
+			"green_apples": 5, "red_apples": 0, "reward_item": "连续课/绿苹果/保养",
+			"note": "保养Y线", "created_by_name": "李鑫", "signature": "", "note_2": "",
+		})
+		self.assertEqual(detail["sequence"], 9)
+		self.assertEqual(detail["created_at"], "2026-06-02 20:00:23")
+		self.assertEqual(detail["department"], "连续课")
+		self.assertEqual(detail["employee_code"], "388")
+		self.assertEqual(detail["green_apples"], 5)
+		self.assertNotIn("actual_attendance_hours", detail)
 
 	def test_history_employee_prefers_code_and_rejects_name_mismatch(self):
 		center = apple_tree_center_module()
@@ -165,6 +184,55 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 		self.assertTrue(result["available"])
 		self.assertEqual([row["employee_code"] for row in result["rows"]], ["001"])
 
+	def test_person_detail_forwards_outer_filters_and_applies_detail_filter(self):
+		center = apple_tree_center_module()
+		calls = []
+		records = [{
+			"employee": "EMP-001", "employee_code": "001", "employee_name": "张三", "department": "制造",
+			"attendance_month": "2026-06", "green_apples": 3, "red_apples": 0,
+			"reward_item": "月度考勤终稿",
+		}]
+		def fake_get_data(**kwargs):
+			calls.append(kwargs)
+			return {
+				"filters": {"company": "永新", "year": "2026", "month": "2026-06", "search": "保养", "start_date": "2026-06-10", "end_date": "2026-06-18"},
+				"available_years": [2026], "people": records, "records": records,
+			}
+		center.get_data = fake_get_data
+		result = center.get_person_detail(
+			"001", "2026", "永新", month="2026-06", search="保养",
+			start_date="2026-06-10", end_date="2026-06-18", detail_search="终稿",
+		)
+		self.assertEqual(calls[0], {
+			"year": "2026", "month": "2026-06", "search": "保养", "company": "永新",
+			"start_date": "2026-06-10", "end_date": "2026-06-18",
+		})
+		self.assertEqual(len(result["rows"]), 1)
+		self.assertEqual(result["filters"]["month"], "2026-06")
+		self.assertEqual(result["filters"]["detail_search"], "终稿")
+
+	def test_person_export_forwards_both_outer_and_detail_filters(self):
+		center = apple_tree_center_module()
+		calls = []
+		center.frappe.local = SimpleNamespace(response=SimpleNamespace())
+		center.get_person_detail = lambda **kwargs: calls.append(kwargs) or {
+			"available": True, "year": "2026", "person": {"employee_name": "张三"}, "rows": [], "totals": {},
+		}
+		class ExportWorkbook:
+			def save(self, output):
+				output.write(b"xlsx")
+		center._build_export_workbook = lambda *_args: ExportWorkbook()
+		center.download_export(
+			view="person", year="2026", month="2026-06", search="张三", company="永新",
+			start_date="2026-06-01", end_date="2026-06-30", person="001",
+			detail_start_date="2026-06-10", detail_end_date="2026-06-18", detail_search="保养Y",
+		)
+		self.assertEqual(calls[0], {
+			"person": "001", "year": "2026", "company": "永新", "month": "2026-06", "search": "张三",
+			"start_date": "2026-06-01", "end_date": "2026-06-30",
+			"detail_start_date": "2026-06-10", "detail_end_date": "2026-06-18", "detail_search": "保养Y",
+		})
+
 	def test_quarters_select_only_the_three_months_in_the_chosen_year(self):
 		center = apple_tree_center_module()
 		center.frappe.get_list = lambda *_args, **_kwargs: [{"attendance_month": f"2026-{month:02d}"} for month in range(1, 13)] + [{"attendance_month": "2025-12"}]
@@ -191,19 +259,12 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 			{"employee": "001", "employee_code": "001", "employee_name": "同名", "attendance_month": "2026-07", "standard_hours": 184, "actual_attendance_hours": 180, "green_apples": 5, "red_apples": 2, "approval_no": "处理终稿:current"},
 		]
 		center.get_data = lambda **kwargs: {"filters": {"company": kwargs["company"], "year": kwargs["year"]}, "people": records[:2], "records": records}
-		detail_calls = []
-		def detail_extras(company, month, employee_code):
-			detail_calls.append((company, month, employee_code))
-			return {"available": True, "locked_snapshot_version": "current", "rows": [{"employee_code": "001", "maintenance_bonus": 20, "bereavement_leave_hours": 0}]}
-		center._locked_detail_extras = detail_extras
 		result = center.get_person_detail("001", "2026", "永新")
-		self.assertEqual([row["attendance_month"] for row in result["rows"]], ["2026-07", "2026-08"])
+		self.assertEqual([row["green_apples"] for row in result["rows"]], [5, 3])
 		self.assertEqual(result["totals"]["green_apples"], 8)
-		self.assertEqual(detail_calls, [("永新", "2026-08", "001"), ("永新", "2026-07", "001")])
-		self.assertEqual(result["totals"]["missing_hours"], 12)
-		self.assertEqual(result["rows"][0]["maintenance_bonus"], 20)
-		self.assertIsNone(result["totals"]["maintenance_bonus"])
-		self.assertIsNone(result["totals"]["reported_reward"])
+		self.assertEqual(result["totals"]["red_apples"], 2)
+		self.assertEqual(len(result["columns"]), 12)
+		self.assertNotIn("actual_attendance_hours", result["rows"][0])
 		self.assertFalse(center.get_person_detail("missing", "2026", "永新")["available"])
 
 	def test_rpc_arguments_have_string_annotations_for_frappe_type_validation(self):

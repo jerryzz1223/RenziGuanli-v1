@@ -87,11 +87,13 @@ for (const marker of [
 	"表头联想筛选",
 	"员工花名册",
 	"在职 · 正式",
-	"在职 · 试用期",
+	"1-7日试用期",
+	"8-14日试用期",
+	"15以上试用期",
 	"退休返聘",
 	"待离职",
 	"离职",
-	"添加员工",
+	"钉钉同步新员工",
 	"导入",
 	"导出",
 	"hide_unused_roster_toolbar_controls",
@@ -166,6 +168,7 @@ for (const marker of [
 	"filter_area.clear_filters()",
 	"update_roster_filter_status",
 	"当前筛选",
+	"get_roster_probation_filters",
 ]) {
 	mustInclude(employeeList, marker, `Employee list view is missing roster behavior marker: ${marker}`);
 }

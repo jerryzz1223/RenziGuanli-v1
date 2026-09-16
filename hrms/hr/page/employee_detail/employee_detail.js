@@ -50,12 +50,14 @@ class EmployeeDetailPage {
 	}
 
 	set_breadcrumb() {
+		const header = this.detail?.header || {};
+		const employee_label = String(header.employee_name || header.employee_code || header.custom_employee_code || "").trim();
+		// The global shell reapplies contextual breadcrumbs after route changes.
+		// Keep the loaded employee name available so that delayed shell refreshes
+		// cannot collapse this page back to the generic roster label.
+		window.hrmsEmployeeDetailBreadcrumbLabel = employee_label || __("员工档案");
 		if (window.hrmsApplyContextualBreadcrumbs) {
-			const header = this.detail?.header || {};
-			const employee_label = [header.employee_code || header.custom_employee_code, header.employee_name]
-				.filter(Boolean)
-				.join(" · ");
-			window.hrmsApplyContextualBreadcrumbs(employee_label || __("员工档案"));
+			window.hrmsApplyContextualBreadcrumbs(window.hrmsEmployeeDetailBreadcrumbLabel);
 			return;
 		}
 		const breadcrumbs = frappe.breadcrumbs;
@@ -70,7 +72,11 @@ class EmployeeDetailPage {
 		// the current page in the next frame so that rebuild cannot remove it.
 		const append_current_page = () => {
 			if (breadcrumbs.$breadcrumbs?.find?.(".hrms-employee-detail-current").length) return;
-			breadcrumbs.append_breadcrumb_element("", __("员工档案"), "hrms-employee-detail-current");
+			breadcrumbs.append_breadcrumb_element(
+				"",
+				window.hrmsEmployeeDetailBreadcrumbLabel || __("员工档案"),
+				"hrms-employee-detail-current",
+			);
 			breadcrumbs.$breadcrumbs?.find?.("li").last().addClass("disabled");
 		};
 		if (window.requestAnimationFrame) window.requestAnimationFrame(append_current_page);
@@ -638,19 +644,20 @@ class EmployeeDetailPage {
 					background: #fff;
 					color: #2563eb;
 				}
-				.hrms-employee-material-file__preview {
-					display: inline-flex;
-					min-width: 0;
-					align-items: center;
+		.hrms-employee-material-file__preview {
+				display: inline-flex;
+				min-width: 0;
+				align-items: center;
 					gap: 7px;
 					padding: 0;
 					border: 0;
 					background: transparent;
 					color: inherit;
 					text-align: left;
-					cursor: zoom-in;
-				}
-				.hrms-employee-material-file__image,
+				cursor: zoom-in;
+			}
+			.hrms-employee-material-file__content { display: grid; gap: 2px; min-width: 0; }
+			.hrms-employee-material-file__image,
 				.hrms-employee-material-file__placeholder {
 					width: 30px;
 					height: 30px;
@@ -659,7 +666,8 @@ class EmployeeDetailPage {
 					background: #eef2f7;
 				}
 				.hrms-employee-material-file__placeholder { display: inline-flex; align-items: center; justify-content: center; color: #667085; font-size: 10px; font-weight: 600; }
-				.hrms-employee-material-file__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+			.hrms-employee-material-file__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+			.hrms-employee-material-file__meta { color: #667085; font-size: 11px; line-height: 1.35; white-space: normal; }
 				.hrms-employee-material-file__delete {
 					padding: 0 0 0 2px;
 					border: 0;
@@ -1186,11 +1194,15 @@ class EmployeeDetailPage {
 	render_material_file(file) {
 		const name = frappe.utils.escape_html(file.file_name || __("未命名材料"));
 		const url = frappe.utils.escape_html(file.file_url || "");
+		const submitted_by = frappe.utils.escape_html(file.submitted_by_name || file.submitted_by || __("未记录"));
+		const submitted_at = frappe.utils.escape_html(frappe.datetime.str_to_user(file.creation || file.modified || "") || "-");
+		const meta = `<span class="hrms-employee-material-file__meta">${__("提交人")}：${submitted_by} · ${__("提交时间")}：${submitted_at}</span>`;
+		const content = `<span class="hrms-employee-material-file__content"><span class="hrms-employee-material-file__name">${name}</span>${meta}</span>`;
 		const image = /\.(?:jpe?g|png|webp)(?:\?.*)?$/i.test(file.file_url || "");
 		if (!image) {
-			return `<a class="hrms-employee-material-file" href="${url}" target="_blank" rel="noopener" title="${name}"><span class="hrms-employee-material-file__placeholder">PDF</span><span class="hrms-employee-material-file__name">${name}</span></a>`;
+			return `<a class="hrms-employee-material-file" href="${url}" target="_blank" rel="noopener" title="${name}"><span class="hrms-employee-material-file__placeholder">PDF</span>${content}</a>`;
 		}
-		return `<div class="hrms-employee-material-file"><button class="hrms-employee-material-file__preview" type="button" data-action="preview-material-image" data-file-url="${url}" data-file-name="${name}" title="${__("点击放大查看")}"><img class="hrms-employee-material-file__image" src="${url}" alt=""><span class="hrms-employee-material-file__name">${name}</span></button>${this.can_edit_employee_detail() ? `<button class="hrms-employee-material-file__delete" type="button" data-action="delete-material" data-file-name="${frappe.utils.escape_html(file.name || "")}" data-display-name="${name}">${__("删除")}</button>` : ""}</div>`;
+		return `<div class="hrms-employee-material-file"><button class="hrms-employee-material-file__preview" type="button" data-action="preview-material-image" data-file-url="${url}" data-file-name="${name}" title="${__("点击放大查看")}"><img class="hrms-employee-material-file__image" src="${url}" alt="">${content}</button>${this.can_edit_employee_detail() ? `<button class="hrms-employee-material-file__delete" type="button" data-action="delete-material" data-file-name="${frappe.utils.escape_html(file.name || "")}" data-display-name="${name}">${__("删除")}</button>` : ""}</div>`;
 	}
 
 	render_related_blocks(tab_label) {
@@ -1638,7 +1650,8 @@ class EmployeeDetailPage {
 			? `<button class="hrms-employee-upload-history-item__preview" type="button" data-action="preview-history-image" data-file-url="${url}" data-file-name="${name}"><img src="${url}" alt=""></button>`
 			: `<a class="hrms-employee-upload-history-item__preview hrms-employee-material-file__placeholder" href="${url}" target="_blank" rel="noopener">PDF</a>`;
 		const timestamp = frappe.datetime.str_to_user(file.creation || file.modified || "");
-		return `<div class="hrms-employee-upload-history-item">${preview}<div class="hrms-employee-upload-history-item__meta"><strong title="${name}">${name}</strong><span class="text-muted">${frappe.utils.escape_html(timestamp || "-")}</span></div><span class="hrms-employee-upload-history-item__status${file.is_current ? " is-current" : ""}">${file.is_current ? __("当前使用") : __("历史版本")}</span></div>`;
+		const submitted_by = frappe.utils.escape_html(file.submitted_by_name || file.submitted_by || __("未记录"));
+		return `<div class="hrms-employee-upload-history-item">${preview}<div class="hrms-employee-upload-history-item__meta"><strong title="${name}">${name}</strong><span class="text-muted">${__("提交人")}：${submitted_by}</span><span class="text-muted">${__("提交时间")}：${frappe.utils.escape_html(timestamp || "-")}</span></div><span class="hrms-employee-upload-history-item__status${file.is_current ? " is-current" : ""}">${file.is_current ? __("当前使用") : __("历史版本")}</span></div>`;
 	}
 
 	upload_employee_material(material_type) {

@@ -11,6 +11,10 @@ function mustInclude(source, marker, message) {
 }
 
 mustInclude(list, '{ fieldname: "relieving_date", label: "离职日期" }', "花名册必须定义离职日期列。");
+mustInclude(list, '{ fieldname: "suggested_confirmation_date", label: "建议转正日期", filterable: false, sortable: false }', "花名册必须定义试用期建议转正日期列。");
+mustInclude(list, 'shift_roster_date(String(employee.date_of_joining).slice(0, 10), 90)', "建议转正日期必须由入职日期顺延90天计算。");
+mustInclude(list, 'column.fieldname === "suggested_confirmation_date" && employee.date_of_joining', "建议转正日期必须标记为仅供参考。");
+mustInclude(list, 'show_suggested_confirmation_date = active_card.filters.custom_work_nature === "在职·试用期"', "建议转正日期只应在试用期栏目显示。");
 mustInclude(list, '"relieving_date",', "花名册请求必须包含 Employee.relieving_date。");
 mustInclude(list, 'get_active_roster_card().filters.custom_work_nature === "离职"', "离职日期只应在已离职工作性质显示。");
 mustInclude(list, "get_visible_roster_columns", "表头必须随离职状态切换日期列。");

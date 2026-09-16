@@ -27,18 +27,21 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260914-data-statistics-clean-sidebar-v4",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260914-data-statistics-more-v2&compat=20260914-hide-native-user-roles-v1",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260916e",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260916-employee-form-pages-v4&compat=20260914-hide-native-user-roles-v1",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
 	"/assets/hrms/js/hrms_file_uploader.js?v=20260912a",
 	"/assets/hrms/js/hrms_entry.js?v=20260912-intranet-entry-v1",
+	"/assets/hrms/js/hrms_employee_registration_entry.js?v=20260915-qr-entry-v1",
+	"/assets/hrms/js/hrms_employee_form_entry.js?v=20260916-three-form-pages-v7-current-employee-info-copy",
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260912-employee-header-clean-v2",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260915-contract-expiry-probation-buckets-v1",
 	"/assets/hrms/css/hrms_training_learning.css?v=20260827a",
 	"/assets/hrms/css/hrms_entry.css?v=20260912-intranet-entry-v1",
 	"/assets/hrms/css/hrms_loading.css?v=20260909-black-loader",
+	"/assets/hrms/css/hrms_employee_registration.css?v=20260915a",
 ]
 
 # website
@@ -72,6 +75,7 @@ doctype_js = {
 	"Delivery Trip": "public/js/erpnext/delivery_trip.js",
 	"Bank Transaction": "public/js/erpnext/bank_transaction.js",
 	"HRMS Form Import Row": "public/js/hrms_form_import_review.js",
+	"HRMS Employee Registration": "public/js/hrms_employee_registration.js",
 }
 doctype_list_js = {
 	"Department": "public/js/erpnext/department_list.js",

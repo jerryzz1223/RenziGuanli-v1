@@ -300,7 +300,7 @@ class StandingPayTests(unittest.TestCase):
         self.assertEqual(later_change.previous_standard.name, 'first-change')
         self.assertIsNone(baseline.previous_standard)
 
-    def test_compensation_export_keeps_opening_snapshot_and_equal_valued_changes(self):
+    def test_compensation_export_combines_latest_salary_social_and_housing_per_employee(self):
         employee = Row(name='e1', employee_name='员工甲', custom_employee_code='E1',
             department_label='工程课', work_nature='在职·正式')
         salary = lambda name, effective, amount: Row(
@@ -311,18 +311,24 @@ class StandingPayTests(unittest.TestCase):
         contribution = Row(name='social-change', employee='e1', contribution_type='社保',
             effective_date='2026-03-01', approved_on='2026-03-01', creation='2026-03-01',
             enabled=1, personal_amount=120, company_amount=240, remarks='社保调整')
+        housing = Row(name='housing-change', employee='e1', contribution_type='公积金',
+            effective_date='2026-03-15', approved_on='2026-03-15', creation='2026-03-15',
+            enabled=1, personal_amount=80, company_amount=80, remarks='公积金调整')
         rows = self.api._build_compensation_export_rows(
             [employee],
             [salary('opening-salary', '2025-12-01', 3000), salary('equal-salary', '2026-02-01', 3000), salary('raise', '2026-04-01', 3200)],
-            [contribution],
+            [contribution, housing],
             '2026-01-01', '2026-08-10',
-            ['base_salary', 'social_personal'],
+            ['base_salary', 'social_personal', 'housing_personal', 'remarks'],
         )
-        self.assertEqual([row['change_type'] for row in rows], ['期初沿用', '定薪', '社保', '定薪'])
-        self.assertEqual([str(row['period_start']) for row in rows], ['2026-01-01', '2026-02-01', '2026-03-01', '2026-04-01'])
-        self.assertEqual([str(row['period_end']) for row in rows], ['2026-01-31', '2026-02-28', '2026-03-31', '2026-08-10'])
-        self.assertEqual(rows[0]['base_salary'], rows[1]['base_salary'])
-        self.assertEqual(rows[2]['social_personal'], 120)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['base_salary'], 3200)
+        self.assertEqual(rows[0]['social_personal'], 120)
+        self.assertEqual(rows[0]['housing_personal'], 80)
+        self.assertEqual(str(rows[0]['salary_effective_date']), '2026-04-01')
+        self.assertEqual(str(rows[0]['social_effective_date']), '2026-03-01')
+        self.assertEqual(str(rows[0]['housing_effective_date']), '2026-03-15')
+        self.assertEqual(rows[0]['remarks'], '定薪：raise；社保：社保调整；公积金：公积金调整')
 
     def test_compensation_export_only_emits_events_for_selected_content(self):
         employee = Row(name='e1', employee_name='员工甲', employee_code='E1')
@@ -332,8 +338,9 @@ class StandingPayTests(unittest.TestCase):
             approved_on='2026-02-01', creation='2026-02-01', enabled=1, personal_amount=100, company_amount=200)
         rows = self.api._build_compensation_export_rows(
             [employee], [salary], [social], '2026-01-01', '2026-03-31', ['base_salary'])
-        self.assertEqual([row['change_type'] for row in rows], ['定薪'])
-        self.assertEqual(str(rows[0]['period_end']), '2026-03-31')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['base_salary'], 3000)
+        self.assertEqual(str(rows[0]['salary_effective_date']), '2026-01-01')
 
     def test_compensation_export_creates_typed_filtered_xlsx(self):
         try:
@@ -347,10 +354,16 @@ class StandingPayTests(unittest.TestCase):
             approved_on='2026-01-02', creation='2026-01-01', base_salary=3000,
             function_allowance=200, certificate_allowance=0, multi_skill_allowance=0,
             full_salary=3200, remarks='首次定薪')
+        social = Row(name='social-1', employee='e1', contribution_type='社保', effective_date='2026-02-01',
+            approved_on='2026-02-02', creation='2026-02-01', enabled=1,
+            personal_amount=100, company_amount=200, remarks='首次社保')
+        housing = Row(name='housing-1', employee='e1', contribution_type='公积金', effective_date='2026-03-01',
+            approved_on='2026-03-02', creation='2026-03-01', enabled=1,
+            personal_amount=80, company_amount=80, remarks='首次公积金')
         department = Row(name='DEP-1', department_name='工程课')
         def get_all(doctype, **kwargs):
             return {'Employee': [employee], 'Department': [department],
-                self.api.SALARY: [salary], self.api.CONTRIBUTION: []}.get(doctype, [])
+                self.api.SALARY: [salary], self.api.CONTRIBUTION: [social, housing]}.get(doctype, [])
         self.frappe.get_all = get_all
         self.frappe.db.get_all = lambda doctype, **kwargs: [department] if doctype == 'Department' else []
         stored = {}
@@ -368,19 +381,22 @@ class StandingPayTests(unittest.TestCase):
         with patch.dict(sys.modules, {'hrms.utils.export_watermark': watermark}):
             result = self.api.export_compensation_register(
                 'ACME', '2026-01-01', '2026-08-10',
-                json.dumps(['base_salary', 'social_personal', 'remarks']), 'DEP-1', 'e1')
+                json.dumps(['base_salary', 'social_personal', 'housing_personal', 'remarks']), 'DEP-1', 'e1')
         workbook = load_workbook(BytesIO(stored['content']))
-        sheet = workbook['工资社保历史']
+        sheet = workbook['工资社保汇总']
         self.assertEqual(result['row_count'], 1)
         self.assertEqual([cell.value for cell in sheet[1]], [
-            '姓名', '工号', '工作性质', '部门', '生效开始', '生效结束', '记录类型',
-            '底薪', '社保个人承担', '变更原因'])
+            '姓名', '工号', '工作性质', '部门', '定薪生效日期', '底薪',
+            '社保生效日期', '社保个人承担', '公积金生效日期', '公积金个人承担', '变更原因'])
         self.assertEqual(sheet['A2'].value, '员工甲')
         self.assertEqual(sheet['B2'].value, 'E001')
         self.assertEqual(sheet['D2'].value, '工程课')
-        self.assertEqual(sheet['H2'].value, 3000)
+        self.assertEqual(sheet['F2'].value, 3000)
+        self.assertEqual(sheet['H2'].value, 100)
+        self.assertEqual(sheet['J2'].value, 80)
         self.assertIsInstance(sheet['E2'].value, datetime)
-        self.assertEqual(sheet.auto_filter.ref, 'A1:J2')
+        self.assertEqual(sheet['K2'].value, '定薪：首次定薪；社保：首次社保；公积金：首次公积金')
+        self.assertEqual(sheet.auto_filter.ref, 'A1:K2')
 
     def test_compensation_export_whitelist_arguments_are_typed(self):
         parameters = inspect.signature(self.api.export_compensation_register).parameters

@@ -34,6 +34,15 @@ def run():
 		assert cards()[unit_id]["has_staffing_plan"] is True
 		detail = chart._get_manual_organization_node_detail(unit_id, "organization_section", company, "")
 		assert detail["relationships"]["parent"]["name"] == management["name"]
+		line = chart.save_manual_organization_node("线", company=company, display_name="验证直线级", department=base,
+			parent_node=unit["name"], roster_subset=1, planned_headcount_set=0)
+		placement = chart.assign_employee_organization_position(company, manager, parent_node_name=line["name"], role_title="验证线长")
+		assert placement["position_created"] is True
+		assert placement["employee_master_updated"] is False
+		reused = chart.assign_employee_organization_position(company, manager, parent_node_name=line["name"], role_title="验证线长")
+		assert reused["position_created"] is False and reused["node_name"] == placement["node_name"]
+		position = next(n for n in chart._get_manual_organization_records(company)["nodes"] if n.name == placement["node_name"])
+		assert position.manual_config["organization_placements"][0]["employee"] == manager
 		management_detail = chart._get_manual_organization_node_detail("organization_node:" + management["name"], "organization_management", company, "")
 		assert any("总经理：" in line for line in management_detail["role_lines"])
 		proxy = frappe.get_list("Employee", filters={"company": company, "status": "Active", "name": ["!=", manager]}, pluck="name", limit_page_length=1)[0]

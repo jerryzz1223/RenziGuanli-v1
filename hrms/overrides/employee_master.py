@@ -88,9 +88,15 @@ def apply_employee_work_nature(employee):
 		return
 
 	selected = cstr(employee.get("custom_work_nature")).strip()
-	selected_changed = employee.is_new() or employee.has_value_changed("custom_work_nature")
+	is_roster_import = bool(getattr(employee.flags, "hrms_employee_roster_import", False))
 	if selected and selected not in WORK_NATURE_OPTIONS:
 		frappe.throw(_("工作性质只能选择：{0}").format("、".join(WORK_NATURE_OPTIONS)))
+	# Manual Employee creation is always a probationary onboarding record. The
+	# roster importer is the only path allowed to declare another work nature for
+	# a new employee, and only when the workbook actually supplies that field.
+	if employee.is_new() and (not is_roster_import or not selected):
+		selected = "在职·试用期"
+	selected_changed = employee.is_new() or employee.has_value_changed("custom_work_nature")
 	if not selected:
 		# Compatibility for an old form submission that still posted the public
 		# label through the standard Link field.

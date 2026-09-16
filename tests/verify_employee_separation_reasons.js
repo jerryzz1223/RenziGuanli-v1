@@ -19,7 +19,7 @@ const intake = read("hrms", "api", "form_data_intake.py");
 const employeeDetail = read("hrms", "hr", "page", "employee_detail", "employee_detail.js");
 const field = (fieldname) => doctype.fields.find((item) => item.fieldname === fieldname);
 
-assert.equal(field("separation_reason_section")?.label, "选择离职原因");
+assert.equal(field("separation_reason_section")?.label, "员工自述离职原因");
 assert.equal(field("separation_reason_type")?.reqd, 1);
 assert.equal(field("separation_reason_type")?.options, "\n主动离职\n被动离职\n自定义");
 assert.match(field("separation_reason")?.mandatory_depends_on || "", /!= '自定义'/);
@@ -27,6 +27,11 @@ assert.match(field("custom_separation_reason")?.mandatory_depends_on || "", /== 
 assert.equal(field("separation_reason_detail")?.fieldtype, "Small Text");
 assert.equal(field("separation_reason_detail")?.reqd || 0, 0);
 assert.match(field("separation_reason_detail")?.label || "", /详细原因/);
+assert.equal(field("approver_reason_section")?.label, "审批员确认离职原因");
+assert.equal(field("approver_reason_type")?.options, "\n主动离职\n被动离职\n自定义");
+assert.equal(field("approver_reason_type")?.read_only, 1);
+assert.equal(field("approver_reason_detail")?.fieldtype, "Small Text");
+assert.equal(field("approver_reason_detail")?.read_only, 1);
 
 const handlers = {};
 const frappe = {

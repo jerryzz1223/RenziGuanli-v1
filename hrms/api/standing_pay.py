@@ -1,6 +1,5 @@
 """Persistent salary and contribution registers, independent of payroll months."""
 import json
-from datetime import timedelta
 from io import BytesIO
 
 import frappe
@@ -43,19 +42,25 @@ def _export_event_order(event):
 
 def _apply_compensation_event(state, event):
 	row, kind = event['row'], event['kind']
+	effective_date = getdate(_row_value(row, 'effective_date'))
+	remarks = _row_value(row, 'remarks') or _row_value(row, 'change_reason') or ''
 	if kind == 'salary':
 		for field in ('base_salary', 'function_allowance', 'certificate_allowance', 'multi_skill_allowance', 'full_salary'):
 			state[field] = flt(_row_value(row, field))
+		state['salary_effective_date'] = effective_date
+		state['salary_remarks'] = remarks
 		return
 	prefix = 'social' if kind == 'social' else 'housing'
 	enabled = int(bool(_row_value(row, 'enabled')))
 	state[f'{prefix}_enabled'] = enabled
 	state[f'{prefix}_personal'] = flt(_row_value(row, 'personal_amount')) if enabled else 0
 	state[f'{prefix}_company'] = flt(_row_value(row, 'company_amount')) if enabled else 0
+	state[f'{prefix}_effective_date'] = effective_date
+	state[f'{prefix}_remarks'] = remarks
 
 
 def _build_compensation_export_rows(employees, salary_rows, contribution_rows, start_date, end_date, selected_fields):
-	"""Build effective-period snapshots without collapsing equal-valued decisions."""
+	"""Build one current salary/social/housing snapshot per employee."""
 	start, end = getdate(start_date), getdate(end_date)
 	selected_kinds = {COMPENSATION_EXPORT_FIELDS[field][1] for field in selected_fields if field in COMPENSATION_EXPORT_FIELDS}
 	selected_kinds.discard('audit')
@@ -70,40 +75,31 @@ def _build_compensation_export_rows(employees, salary_rows, contribution_rows, s
 	for employee in employees:
 		employee_id = _row_value(employee, 'name') or _row_value(employee, 'employee')
 		events = sorted(events_by_employee.get(employee_id, []), key=_export_event_order)
-		state, output_events = {}, []
+		state, available_kinds = {}, set()
 		for event in events:
 			effective = getdate(_row_value(event['row'], 'effective_date'))
-			if effective < start:
-				_apply_compensation_event(state, event)
-				continue
 			if effective > end:
 				break
-			if event['kind'] in selected_kinds:
-				output_events.append(event)
-
-		# A standard already in force at the start of the requested period must be
-		# represented even when the employee had no changes inside that period.
-		if state and not any(getdate(_row_value(event['row'], 'effective_date')) == start for event in output_events):
-			output_events.insert(0, {'kind': 'opening', 'row': {'effective_date': start}})
-
-		for index, event in enumerate(output_events):
-			if event['kind'] != 'opening':
-				_apply_compensation_event(state, event)
-			period_start = max(start, getdate(_row_value(event['row'], 'effective_date')))
-			next_start = getdate(_row_value(output_events[index + 1]['row'], 'effective_date')) if index + 1 < len(output_events) else None
-			period_end = min(end, next_start - timedelta(days=1)) if next_start and next_start > period_start else (period_start if next_start else end)
-			result.append({
-				'employee': employee_id,
-				'employee_name': _row_value(employee, 'employee_name') or employee_id,
-				'employee_code': _row_value(employee, 'custom_employee_code') or _row_value(employee, 'employee_code') or employee_id,
-				'department': _row_value(employee, 'department_label') or _row_value(employee, 'department') or '',
-				'employment_type': _row_value(employee, 'work_nature') or _row_value(employee, 'employment_type') or '',
-				'period_start': period_start,
-				'period_end': period_end,
-				'change_type': {'salary': '定薪', 'social': '社保', 'housing': '公积金', 'opening': '期初沿用'}[event['kind']],
-				'remarks': '' if event['kind'] == 'opening' else (_row_value(event['row'], 'remarks') or _row_value(event['row'], 'change_reason') or ''),
-				**state,
-			})
+			_apply_compensation_event(state, event)
+			available_kinds.add(event['kind'])
+		if not available_kinds.intersection(selected_kinds):
+			continue
+		remarks = '；'.join(
+			f'{label}：{state.get(f"{kind}_remarks")}'
+			for kind, label in (('salary', '定薪'), ('social', '社保'), ('housing', '公积金'))
+			if kind in selected_kinds and state.get(f'{kind}_remarks')
+		)
+		result.append({
+			'employee': employee_id,
+			'employee_name': _row_value(employee, 'employee_name') or employee_id,
+			'employee_code': _row_value(employee, 'custom_employee_code') or _row_value(employee, 'employee_code') or employee_id,
+			'department': _row_value(employee, 'department_label') or _row_value(employee, 'department') or '',
+			'employment_type': _row_value(employee, 'work_nature') or _row_value(employee, 'employment_type') or '',
+			'report_start': start,
+			'report_end': end,
+			'remarks': remarks,
+			**state,
+		})
 	return result
 
 
@@ -421,12 +417,23 @@ def export_compensation_register(company: str, start_date: str, end_date: str, s
 
 	fixed_columns = [
 		('姓名', 'employee_name'), ('工号', 'employee_code'), ('工作性质', 'employment_type'), ('部门', 'department'),
-		('生效开始', 'period_start'), ('生效结束', 'period_end'), ('记录类型', 'change_type'),
 	]
-	columns = fixed_columns + [(COMPENSATION_EXPORT_FIELDS[field][0], field) for field in selected]
+	kind_date_columns = {
+		'salary': ('定薪生效日期', 'salary_effective_date'),
+		'social': ('社保生效日期', 'social_effective_date'),
+		'housing': ('公积金生效日期', 'housing_effective_date'),
+	}
+	columns = list(fixed_columns)
+	for kind in ('salary', 'social', 'housing'):
+		kind_fields = [field for field in selected if COMPENSATION_EXPORT_FIELDS[field][1] == kind]
+		if kind_fields:
+			columns.append(kind_date_columns[kind])
+			columns.extend((COMPENSATION_EXPORT_FIELDS[field][0], field) for field in kind_fields)
+	if 'remarks' in selected:
+		columns.append((COMPENSATION_EXPORT_FIELDS['remarks'][0], 'remarks'))
 	workbook = Workbook()
 	sheet = workbook.active
-	sheet.title = '工资社保历史'
+	sheet.title = '工资社保汇总'
 	sheet.append([label for label, _field in columns])
 	header_fill = PatternFill('solid', fgColor='DDEBF7')
 	thin = Side(style='thin', color='B7C9D6')
@@ -448,12 +455,12 @@ def export_compensation_register(company: str, start_date: str, end_date: str, s
 			cell = sheet.cell(sheet.max_row, column_index)
 			cell.border = border
 			cell.alignment = Alignment(vertical='center', wrap_text=True)
-			if field in ('period_start', 'period_end'):
+			if field.endswith('_effective_date'):
 				cell.number_format = 'yyyy-mm-dd'
 			elif field in COMPENSATION_EXPORT_FIELDS and COMPENSATION_EXPORT_FIELDS[field][1] in ('salary', 'social', 'housing') and not field.endswith('_enabled'):
 				cell.number_format = '#,##0.00'
 	widths = {'employee_name': 14, 'employee_code': 14, 'employment_type': 14, 'department': 18,
-		'period_start': 13, 'period_end': 13, 'change_type': 12, 'remarks': 28}
+		'salary_effective_date': 14, 'social_effective_date': 14, 'housing_effective_date': 16, 'remarks': 36}
 	for index, (_label, field) in enumerate(columns, start=1):
 		sheet.column_dimensions[get_column_letter(index)].width = widths.get(field, 16)
 	sheet.freeze_panes = 'A2'
@@ -462,7 +469,7 @@ def export_compensation_register(company: str, start_date: str, end_date: str, s
 
 	output = BytesIO()
 	save_workbook_with_logo_watermark(workbook, output)
-	filename = f'工资社保历史_{start:%Y%m%d}-{end:%Y%m%d}.xlsx'
+	filename = f'工资社保汇总_{start:%Y%m%d}-{end:%Y%m%d}.xlsx'
 	file_doc = frappe.get_doc({'doctype': 'File', 'file_name': filename, 'content': output.getvalue(), 'is_private': 1}).insert(ignore_permissions=True)
 	return {'file_url': file_doc.file_url, 'file_name': filename, 'row_count': len(rows)}
 

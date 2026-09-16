@@ -2,7 +2,7 @@ export const isChrome = () =>
 	navigator.userAgent.toLowerCase().includes("chrome")
 
 export const showNotification = (payload) => {
-	const registration = window.frappePushNotification.serviceWorkerRegistration
+	const registration = window.frappePushNotification?.serviceWorkerRegistration
 	if (!registration) return
 
 	const notificationTitle = payload?.data?.title

@@ -36,7 +36,7 @@ for (const marker of [
 	"save_dingtalk_connection_settings",
 	"dingtalk-manual-sync",
 	"手动拉取指定日期",
-	"每日自动同步（02:30）",
+	"考勤每日自动同步（02:30，可选）",
 	"sync_lookback_days",
 	"最多 5 名员工",
 ]) {
@@ -47,7 +47,7 @@ const topNav = read("hrms/public/js/hrms_top_nav.js");
 for (const marker of [
 	'label: "钉钉集成"',
 	'route: "/desk/attendance-import-center/dingtalk"',
-	"钉钉考勤、员工映射与同步记录",
+	"钉钉连接、扫码入职、考勤与员工映射",
 	"function isDingtalkIntegrationRoute()",
 	'if (isDingtalkIntegrationRoute()) return "";',
 	"const moreActive = isDingtalkIntegrationRoute()",

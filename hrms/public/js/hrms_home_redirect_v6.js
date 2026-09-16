@@ -1,4 +1,17 @@
 (function () {
+	function separation_view_from_location() {
+		var route_filters = new URLSearchParams(window.location.search);
+		var explicit_view = route_filters.get("view");
+		if (explicit_view === "application" || explicit_view === "approval") return explicit_view;
+		if (route_filters.get("docstatus") === "0") return "application";
+		if (route_filters.get("docstatus") === "1" && route_filters.get("boarding_status") === "Pending") return "approval";
+		return window.hrmsSeparationListView || "";
+	}
+
+	var initial_separation_view = separation_view_from_location();
+	if (initial_separation_view === "application" || initial_separation_view === "approval") {
+		window.hrmsSeparationListView = initial_separation_view;
+	}
 	var text_replacements = {
 		"Begin typing for results.": "输入以搜索结果。",
 		"Core": "系统管理",
@@ -188,7 +201,9 @@
 		"快捷入口",
 		"常用报表",
 		"员工管理",
+		"员工表单录入",
 		"员工关系",
+		"离职管理",
 		"数据面板",
 		"报表",
 		"设置",
@@ -334,11 +349,18 @@
 				"employee-roster-import",
 				"employee-roster-export",
 				"personnel-reports",
+				"employee-form-entry",
+				"employee-talk-form",
+				"employee-duty-change",
+				"employee-reward-form",
 				"staff-attribute-settings",
 				"employee-onboarding",
 				"employee-promotion",
 				"employee-separation",
+				"employee-separation-application",
+				"employee-separation-approval",
 				"employee-separation-records",
+				"employee-separation-effective",
 				"employee-transfer",
 				"employee-property-history",
 				"employee-skill-map",
@@ -359,16 +381,34 @@
 				},
 				{
 					type: "section",
+					label: "员工表单录入",
+					children: [
+						{ label: "员工表单录入首页", route: "/desk/employee-form-entry", slug: "employee-form-entry" },
+						{ label: "员工谈话表", route: "/desk/employee-talk-form", slug: "employee-talk-form" },
+						{ label: "员工职务调动申请表", route: "/desk/employee-duty-change", slug: "employee-duty-change" },
+						{ label: "奖惩提报单", route: "/desk/employee-reward-form", slug: "employee-reward-form" },
+					],
+				},
+				{
+					type: "section",
 					label: "员工关系",
 					children: [
 						{ label: "入职管理", route: "/desk/employee-onboarding", slug: "employee-onboarding" },
 						{ label: "转正管理", route: "/desk/employee-promotion", slug: "employee-promotion" },
-						{ label: "离职管理", route: "/desk/employee-separation", slug: "employee-separation" },
-						{ label: "离职记录", route: "/desk/employee-separation-records", slug: "employee-separation-records" },
 						{ label: "异动记录", route: "/desk/employee-property-history", slug: "employee-property-history" },
 						{ label: "培训经历", route: "/desk/employee-skill-map", slug: "employee-skill-map" },
 						{ label: "奖惩记录", route: "/desk/hrms-employee-reward-punishment", slug: "hrms-employee-reward-punishment" },
 						{ label: "离职面谈", route: "/desk/exit-interview", slug: "exit-interview" },
+					],
+				},
+				{
+					type: "section",
+					label: "离职管理",
+					children: [
+						{ label: "离职申请", route: "/desk/employee-separation/view/list?docstatus=0", slug: "employee-separation-application" },
+						{ label: "离职审批", route: "/desk/employee-separation/view/list?docstatus=1&boarding_status=Pending", slug: "employee-separation-approval" },
+						{ label: "实际离职", route: "/desk/employee-separation-effective", slug: "employee-separation-effective" },
+						{ label: "离职记录", route: "/desk/employee-separation-records", slug: "employee-separation-records" },
 					],
 				},
 				{
@@ -754,6 +794,13 @@
 	}
 
 	function current_route_slug() {
+		var current_path = window.location.pathname.replace(/\/$/, "");
+		if (current_path === "/desk/employee-separation" || current_path === "/desk/employee-separation/view/list") {
+			var location_separation_view = separation_view_from_location();
+			if (location_separation_view === "application" || location_separation_view === "approval") {
+				return "employee-separation-" + location_separation_view;
+			}
+		}
 		if (window.frappe && frappe.get_route) {
 			var route = frappe.get_route();
 			if (route && route.length) {
@@ -761,6 +808,10 @@
 					return workspace_route_slug(route[1] || route[0]);
 				}
 				if (route[0] === "List" || route[0] === "Form") {
+					if (route[0] === "List" && normalize_slug(route[1]) === "employee-separation") {
+						var separation_view = separation_view_from_location();
+						if (separation_view === "application" || separation_view === "approval") return "employee-separation-" + separation_view;
+					}
 					return normalize_slug(route[1] || route[0]);
 				}
 				if (route[0] === "query-report") {
@@ -784,6 +835,10 @@
 		}
 		if (parts[0].toLowerCase() === "form" || parts[0].toLowerCase() === "list") {
 			return normalize_slug(parts[1] || parts[0]);
+		}
+		if (parts[0].toLowerCase() === "employee-separation") {
+			var separation_view = separation_view_from_location();
+			if (separation_view === "application" || separation_view === "approval") return "employee-separation-" + separation_view;
 		}
 		if (parts[0].toLowerCase() === "query-report") {
 			return normalize_slug(parts[1] || parts[0]);
@@ -880,6 +935,9 @@
 
 	function current_breadcrumb_label(route, parent, label_override) {
 		if (label_override) return String(label_override).trim();
+		if (normalize_slug(route[0]) === "employee-detail" && window.hrmsEmployeeDetailBreadcrumbLabel) {
+			return String(window.hrmsEmployeeDetailBreadcrumbLabel).trim();
+		}
 		if (route[0] === "Form") {
 			var form = window.cur_frm;
 			if (normalize_slug(route[1]) === "employee-separation") {
@@ -951,15 +1009,25 @@
 		schedule_hrms_ui_rules(0);
 	}
 
-	function navigate_hrms_sidebar(route) {
+	function navigate_hrms_sidebar(route, item_slug) {
 		// Keep the drawer in the state chosen by the user. A route change must not
 		// silently close a menu they intentionally left open.
 		if (window.frappe && frappe.set_route && route.indexOf("/desk/") === 0) {
 			announce_hrms_route_change(route);
-			if (route.replace(/\/$/, "") === "/desk/employee-separation") {
-				// A submitted form can leave docstatus=0 in the current URL. The
-				// sidebar entry always means the submitted pending-approval queue.
-				frappe.route_options = { docstatus: 1, boarding_status: "Pending" };
+			var separation_list_route = route.split("?")[0].replace(/\/$/, "");
+			if (separation_list_route === "/desk/employee-separation" || separation_list_route === "/desk/employee-separation/view/list") {
+				window.hrmsSeparationListView = item_slug === "employee-separation-application" ? "application" : "approval";
+				if (window.hrmsSeparationListView === "approval") {
+					// A submitted form can leave docstatus=0 in the current URL. The
+					// approval entry always means the submitted pending-approval queue.
+					frappe.route_options = { docstatus: 1, boarding_status: "Pending" };
+				} else {
+					frappe.route_options = { docstatus: 0 };
+				}
+			}
+			if (route.includes("?")) {
+				window.location.href = route;
+				return;
 			}
 			var route_parts = route_to_parts(route);
 			frappe.set_route.apply(frappe, route_parts);
@@ -1116,10 +1184,10 @@
 			return;
 		}
 		sidebar.dataset.hrmsUnifiedSidebar = signature;
-		// The first visit starts closed. After that, the drawer is a user-controlled
-		// setting and stays open across both top navigation and drawer navigation.
+		// The first visit starts open so the business menu is discoverable. After
+		// that, the drawer is a user-controlled setting and keeps its state.
 		var saved_sidebar_state = window.localStorage.getItem("hrms-top-drawer:collapsed");
-		set_hrms_sidebar_collapsed(saved_sidebar_state !== "0");
+		set_hrms_sidebar_collapsed(saved_sidebar_state === "1");
 
 		var body = [
 			'<div class="hrms-unified-sidebar">',
@@ -1175,7 +1243,7 @@
 				}
 				event.preventDefault();
 				event.stopPropagation();
-				navigate_hrms_sidebar(link.getAttribute("data-hrms-route"));
+				navigate_hrms_sidebar(link.getAttribute("data-hrms-route"), link.getAttribute("data-hrms-slug"));
 			});
 		});
 
@@ -1792,6 +1860,9 @@
 	prepare_hrms_sidebar_geometry();
 	run_hrms_shell_step("redirecting the Desk home", redirect_to_hrms_home);
 	apply_hrms_ui_rules();
+	// Desk can load this include before frappe.get_route() is ready. Retry once
+	// after the initial route and page shell have been mounted.
+	schedule_hrms_ui_rules(180);
 	run_hrms_shell_step("binding route events", bind_hrms_shell_route_events);
 	new MutationObserver(function (mutations) {
 		run_hrms_shell_step("binding route events", bind_hrms_shell_route_events);

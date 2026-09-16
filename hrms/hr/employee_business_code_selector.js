@@ -76,13 +76,17 @@
 
 		frappe.call({
 			method: "hrms.api.employee_field_template.get_employee_by_business_code",
-			args: { employee_code, company: frm.doc.company || "" },
+			args: {
+				employee_code,
+				company: frm.doc.company || "",
+				include_pending: frm.doctype === "Employee Separation" ? 1 : 0,
+			},
 			callback(response) {
 				const employee = response.message;
 				if (!employee) {
 					frm.__hrms_selected_employee_code = "";
 					if (frm.doc.employee) frm.set_value("employee", "");
-					frappe.msgprint(__("未找到工号为 {0} 的在职员工。", [employee_code]));
+					frappe.msgprint(__("未找到工号为 {0} 的员工。", [employee_code]));
 					return;
 				}
 

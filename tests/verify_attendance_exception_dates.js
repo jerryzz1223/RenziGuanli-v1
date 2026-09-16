@@ -55,4 +55,13 @@ assert.match(exceptionMarkup, /2026-07-31/);
 assert.match(exceptionMarkup, /下班缺卡/);
 assert.doesNotMatch(exceptionMarkup, /生产夜班|19:47|来源行/);
 
+const twoRestdayMarkup = center.render_attendance_exception_lines([
+	{ attendance_date: "2026-07-04", source_row: 10, exception_codes: ["RESTDAY_CLOCKED_WITHOUT_OVERTIME"] },
+	{ attendance_date: "2026-07-25", source_row: 20, exception_codes: ["RESTDAY_CLOCKED_WITHOUT_OVERTIME"] },
+], "record-1");
+assert.strictEqual((twoRestdayMarkup.match(/data-confirm-attendance-daily-no-overtime=/g) || []).length, 2);
+assert.match(twoRestdayMarkup, /data-attendance-source-row="10"/);
+assert.match(twoRestdayMarkup, /data-attendance-source-row="20"/);
+assert.match(twoRestdayMarkup, />确认本日不计加班</);
+
 console.log("Attendance exception-date display checks passed.");

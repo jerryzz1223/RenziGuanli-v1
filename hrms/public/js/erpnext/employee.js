@@ -11,6 +11,8 @@ frappe.ui.form.on("Employee", {
 		hide_employee_form_header_actions(frm);
 		remember_employee_list_return(frm);
 		setup_employee_form_defaults(frm);
+		setup_employee_company_field(frm);
+		setup_employee_designation_field(frm);
 		setup_employee_rehire_fields(frm);
 		setup_employee_gender_field(frm);
 		setup_employee_work_nature_field(frm);
@@ -76,6 +78,14 @@ frappe.ui.form.on("Employee", {
 		apply_employee_work_nature_choice(frm, frm.doc.custom_work_nature);
 	},
 
+	department(frm) {
+		// A position is scoped by the selected department. Do not keep a stale
+		// position when the department changes; the user must choose from the
+		// newly scoped candidates.
+		if (frm.doc.designation) frm.set_value("designation", "");
+		setup_employee_designation_field(frm);
+	},
+
 	after_save(frm) {
 		setup_employee_work_nature_field(frm);
 		sync_employee_work_nature_dependent_fields(frm);
@@ -122,6 +132,42 @@ function setup_employee_form_defaults(frm) {
 	if (frm.doc.create_user_permission !== 0) {
 		frm.set_value("create_user_permission", 0);
 	}
+}
+
+function setup_employee_company_field(frm) {
+	const field = frm.fields_dict.company;
+	if (!field) return;
+
+	// Employee records in the current operating mode all belong to Yongxin.
+	// Keep the value for Frappe's company-scoped logic, but do not make users
+	// repeat a company choice on the employee form.
+	if (is_blank_employee_form_value(frm.doc.company)) {
+		frm.set_value("company", "永新");
+	}
+	frm.set_df_property("company", "hidden", 1);
+	frm.set_df_property("company", "reqd", false);
+	frm.toggle_display("company", false);
+}
+
+function setup_employee_designation_field(frm) {
+	if (!frm.fields_dict.designation) return;
+
+	frm.set_query("designation", () => {
+		const department = String(frm.doc.department || "").trim();
+		if (!department) {
+			// Do not expose every Designation before a department is selected.
+			return { filters: { name: ["=", "__hrms_department_required__"] } };
+		}
+
+		return {
+			query: "hrms.hr.doctype.employee_transfer.employee_transfer.get_designations_for_department",
+			filters: {
+				department,
+				company: frm.doc.company || "永新",
+			},
+		};
+	});
+	frm.set_df_property("designation", "only_select", 1);
 }
 
 function is_blank_employee_form_value(value) {
@@ -221,14 +267,20 @@ function setup_employee_work_nature_field(frm) {
 	// control on top of `employment_type`, or the roster would have to infer the
 	// choice from implementation fields after every save.
 	frm.set_df_property("custom_work_nature", "label", __("工作性质"));
-	const options = frm.is_new()
-		? EMPLOYEE_WORK_NATURE_VALUES.filter((value) => !["待离职", "离职"].includes(value))
-		: EMPLOYEE_WORK_NATURE_VALUES;
-	frm.set_df_property("custom_work_nature", "options", options.join("\n"));
-	// List filters can prefill departure values when opening a new employee.
-	if (frm.is_new() && ["待离职", "离职"].includes(frm.doc.custom_work_nature)) {
-		frm.set_value("custom_work_nature", options[0]);
+	if (frm.is_new()) {
+		// New employees enter through the probationary onboarding path. Work
+		// nature remains available on saved records for an administrator to
+		// complete the manual confirmation later.
+		frm.toggle_display("custom_work_nature", false);
+		frm.set_df_property("custom_work_nature", "reqd", false);
+		if (frm.doc.custom_work_nature !== "在职·试用期") {
+			frm.set_value("custom_work_nature", "在职·试用期");
+		}
+		return;
 	}
+	frm.toggle_display("custom_work_nature", true);
+	const options = EMPLOYEE_WORK_NATURE_VALUES;
+	frm.set_df_property("custom_work_nature", "options", options.join("\n"));
 }
 
 function apply_employee_work_nature_choice(frm, work_nature) {
@@ -241,8 +293,8 @@ function apply_employee_work_nature_choice(frm, work_nature) {
 }
 
 function sync_employee_work_nature_dependent_fields(frm, work_nature = frm.doc.custom_work_nature) {
-	const is_probation = work_nature === "在职·试用期";
-	for (const fieldname of ["custom_probation_months", "final_confirmation_date"]) {
+	const is_probation = !frm.is_new() && work_nature === "在职·试用期";
+	for (const fieldname of ["final_confirmation_date"]) {
 		if (!frm.fields_dict[fieldname]) continue;
 		frm.toggle_display(fieldname, is_probation);
 		if (!is_probation) frm.set_df_property(fieldname, "reqd", false);
@@ -336,6 +388,7 @@ function apply_employee_field_template(frm) {
 				}
 			});
 
+			setup_employee_company_field(frm);
 			sync_employee_work_nature_dependent_fields(frm);
 			show_employee_form_as_one_page(frm);
 		})
@@ -351,9 +404,14 @@ function show_employee_form_as_one_page(frm) {
 		frm.toggle_display(fieldname, false);
 		frm.set_df_property(fieldname, "reqd", false);
 	}
+	// The old probation-month input is retired. Keep historical values intact,
+	// but never expose the field while the async template is loading.
+	frm.toggle_display("custom_probation_months", false);
+	frm.set_df_property("custom_probation_months", "reqd", false);
 	// The asynchronous field template restores its configured "工号" label.
 	// Reapply the returnee-specific pair after every layout render.
 	setup_employee_rehire_fields(frm);
+	setup_employee_work_nature_field(frm);
 	update_employee_age(frm);
 	// Apply this on every render, including while the template RPC is pending
 	// or unavailable, so the native form cannot expose departure fields on add.
@@ -390,6 +448,33 @@ function update_employee_age(frm) {
 
 // Keep Frappe's controls, columns and dependency handling in place. Only add
 // headings and style the existing column forms as compact rows of fields.
+function setup_employee_identity_row_order(frm) {
+	const passport = frm.fields_dict.passport_number;
+	const employee_code = frm.fields_dict.custom_employee_code;
+	const first_name = frm.fields_dict.first_name;
+	if (!passport?.$wrapper || !employee_code?.$wrapper || !first_name?.$wrapper) return;
+
+	const passport_form = passport.$wrapper.closest("form")[0];
+	if (!passport_form || employee_code.$wrapper.closest("form")[0] !== passport_form) return;
+
+	// Keep native controls in their Frappe section/form, but make the first
+	// grid row deterministic even before a site has run the field-order migrate.
+	const identity_fields = [passport, employee_code, first_name, frm.fields_dict.employee_name].filter(
+		(field) => field?.$wrapper,
+	);
+	const identity_wrappers = new Set(identity_fields.map((field) => field.$wrapper[0]));
+	$(passport_form)
+		.children(".frappe-control, .hrms-employee-group-title")
+		.each((index, element) => {
+			if (!identity_wrappers.has(element)) element.style.order = String(100 + index);
+		});
+	identity_fields.forEach((field, index) => {
+		field.$wrapper[0].style.order = String(index + 1);
+	});
+	const heading = employee_code.$wrapper.prev(".hrms-employee-group-title[data-group='custom_employee_code']");
+	if (heading.length) heading[0].style.order = "0";
+}
+
 function setup_employee_roster_layout(frm) {
 	(frm.layout?.sections || []).forEach((section) => section.wrapper.addClass("hrms-roster-field-section"));
 	// Frappe restores the section's collapsed default on every form refresh.
@@ -397,8 +482,9 @@ function setup_employee_roster_layout(frm) {
 	frm.layout?.sections_dict?.address_section?.collapse(false);
 	const groups = [
 		["custom_employee_code", "员工基本信息"],
+		["permanent_address", "户籍信息"],
 		["gender", "个人资料"],
-		["custom_education_category", "教育信息"],
+		["custom_education_level", "教育信息"],
 		["date_of_joining", "入职信息"],
 		["cell_number", "联系方式"],
 		["final_confirmation_date", "转正信息"],
@@ -416,6 +502,7 @@ function setup_employee_roster_layout(frm) {
 		}
 		heading.toggle(!field.df.hidden && !field.df.hidden_due_to_dependency);
 	}
+	setup_employee_identity_row_order(frm);
 
 	const identity = frm.fields_dict.employee_name;
 	const editable_name = frm.fields_dict.first_name;
@@ -428,9 +515,9 @@ function setup_employee_roster_layout(frm) {
 	}
 	const section_labels = {
 		company_details_section: "任职信息",
-		address_section: "居住与户籍地址",
+		address_section: "居住地址",
 		emergency_contact_details: "紧急联系人",
-		passport_details_section: "证件与户籍资料",
+		passport_details_section: "证件信息",
 	};
 	for (const [fieldname, label] of Object.entries(section_labels)) {
 		const section = frm.layout?.sections_dict?.[fieldname];

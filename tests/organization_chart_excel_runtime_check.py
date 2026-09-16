@@ -8,14 +8,15 @@ import json
 import frappe
 from openpyxl import load_workbook
 from hrms.api.organization_chart_export import workbook_bytes, select_tree, _walk, export_excel
-from hrms.hr.page.organizational_chart.organizational_chart import get_hybrid_tree
+from hrms.hr.page.organizational_chart.organizational_chart import get_hybrid_tree, get_organization_report
 
 
 def run():
 	frappe.set_user('Administrator')
 	root = get_hybrid_tree(company='永新')['root']
 	before = deepcopy(root)
-	data, sheets = workbook_bytes(root, '2026-09-09 12:00')
+	report = get_organization_report(company='永新')
+	data, sheets = workbook_bytes(root, '2026-09-09 12:00', report=report)
 	book = load_workbook(BytesIO(data))
 	assert root == before
 	assert not any(name.startswith('xl/media/') for name in ZipFile(BytesIO(data)).namelist()), 'must use native cells, not screenshots'
@@ -28,6 +29,9 @@ def run():
 	assert '课长（正式）：朱耀辉' in text and '代理人：张付俊' in text
 	assert text.count('王传瑞') >= 3, 'retain all three source appointments'
 	assert '组长（任职待确认）：王传瑞' in text
+	assert report['title'] in text and '部门/课别' in text and '批准：' in text
+	for row in report['rows']:
+		assert row['department'] in text
 	assert '编制/实际：107/82' in ''.join(str(c.value or '') for row in book['连续课'] for c in row)
 	for sheet in book:
 		by_row = {}

@@ -1,0 +1,66 @@
+:root {
+	--hrms-blue: #1677ff;
+	--hrms-border: #e6eaf0;
+	--hrms-muted: #6b7280;
+}
+
+body:has(.hrms-registration-page) {
+	background: #f5f7fb;
+}
+
+.hrms-registration-page {
+	min-height: 100vh;
+	padding: 24px 12px 42px;
+	font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+	color: #1f2937;
+}
+
+.hrms-registration-shell {
+	max-width: 720px;
+	margin: 0 auto;
+	background: #fff;
+	border-radius: 16px;
+	box-shadow: 0 8px 32px rgba(15, 23, 42, .08);
+	padding: 24px 20px 20px;
+}
+
+.hrms-registration-header { text-align: center; padding-bottom: 18px; border-bottom: 1px solid var(--hrms-border); }
+.hrms-registration-brand { color: var(--hrms-blue); font-size: 13px; font-weight: 600; }
+.hrms-registration-header h1 { margin: 8px 0 6px; font-size: 25px; }
+.hrms-registration-header p, .hrms-registration-shell footer { color: var(--hrms-muted); font-size: 13px; line-height: 1.6; }
+.hrms-registration-section { margin-top: 22px; }
+.hrms-registration-section h2 { font-size: 17px; margin: 0 0 12px; }
+.hrms-registration-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px; }
+.hrms-registration-field { display: flex; flex-direction: column; gap: 6px; }
+.hrms-registration-field.full { grid-column: 1 / -1; }
+.hrms-registration-field label { font-size: 14px; font-weight: 600; }
+.hrms-registration-field label span, .hrms-registration-consent span { color: #dc2626; }
+.hrms-registration-field input, .hrms-registration-field select, .hrms-registration-field textarea {
+	box-sizing: border-box; width: 100%; border: 1px solid #d8dee8; border-radius: 8px; padding: 10px 11px;
+	font: inherit; background: #fff; min-height: 42px;
+}
+.hrms-registration-field textarea { min-height: 78px; resize: vertical; }
+.hrms-registration-field input:disabled, .hrms-registration-field select:disabled { background: #f3f4f6; color: #6b7280; }
+.hrms-registration-help { color: var(--hrms-muted); font-size: 12px; }
+.hrms-registration-attachment input { padding: 8px; }
+.hrms-registration-consent { margin: 22px 0 14px; font-size: 13px; line-height: 1.6; }
+.hrms-registration-consent input { margin-right: 6px; }
+.hrms-registration-submit { width: 100%; border: 0; border-radius: 9px; padding: 13px; color: white; background: var(--hrms-blue); font-size: 16px; cursor: pointer; }
+.hrms-registration-submit:disabled { opacity: .65; cursor: wait; }
+.hrms-registration-alert, .hrms-registration-result { margin-top: 18px; padding: 14px; border-radius: 9px; line-height: 1.6; }
+.hrms-registration-alert { background: #fff7ed; color: #9a3412; }
+.hrms-registration-result { background: #ecfdf5; color: #166534; text-align: center; }
+.hrms-registration-shell footer { margin-top: 18px; text-align: center; }
+.hrms-registration-qr-dialog { text-align: center; padding: 8px 12px 4px; }
+.hrms-registration-qr-image { width: 280px; max-width: 100%; margin: 0 auto 12px; }
+.hrms-registration-qr-image svg { display: block; width: 100%; height: auto; }
+.hrms-registration-qr-url { max-width: 420px; margin: 10px auto; padding: 8px; border: 1px solid var(--hrms-border); border-radius: 6px; word-break: break-all; font-size: 12px; text-align: left; }
+.hrms-copy-registration-url { margin-top: 4px; }
+.hrms-registration-manual-entry { display: inline-block; margin-top: 10px; color: var(--hrms-muted); font-size: 12px; text-decoration: underline; }
+
+@media (max-width: 560px) {
+	.hrms-registration-page { padding: 0; }
+	.hrms-registration-shell { min-height: 100vh; border-radius: 0; box-shadow: none; padding: 22px 16px 18px; }
+	.hrms-registration-grid { grid-template-columns: 1fr; }
+	.hrms-registration-field.full { grid-column: auto; }
+}

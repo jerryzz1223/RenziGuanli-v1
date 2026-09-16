@@ -2,11 +2,12 @@
 # See license.txt
 
 import frappe
-from frappe.utils import add_days, getdate
+from frappe.utils import add_days, getdate, now_datetime
 
 from hrms.hr.doctype.employee_separation.employee_separation import (
 	approve_employee_separation,
 	process_due_employee_separations,
+	record_employee_separation_actual_time,
 )
 
 from hrms.tests.utils import HRMSTestSuite
@@ -31,21 +32,41 @@ class TestEmployeeSeparation(HRMSTestSuite):
 
 		# Approval is a separate System Manager action and may be performed by the
 		# same highest-level account that submitted the application.
-		approve_employee_separation(separation.name)
+		approve_employee_separation(
+			separation.name,
+			approver_reason_type="主动离职",
+			approver_reason="个人原因",
+			approver_reason_detail="审批员确认：员工已完成离职沟通。",
+		)
 		separation.reload()
 		self.assertEqual(separation.boarding_status, "Completed")
+		self.assertEqual(separation.applied_on is not None, True)
+		if separation.meta.has_field("applied_by"):
+			self.assertEqual(separation.applied_by, frappe.session.user)
+		self.assertEqual(separation.approver_reason, "个人原因")
 		if separation.meta.has_field("approved_by"):
 			self.assertEqual(separation.approved_by, frappe.session.user)
 
 		pending_departure = frappe.get_doc("Employee", employee)
 		self.assertEqual(pending_departure.status, "Inactive")
-		self.assertEqual(pending_departure.relieving_date, separation.boarding_begins_on)
+		self.assertIsNone(pending_departure.relieving_date)
 		if pending_departure.meta.has_field("custom_work_nature"):
 			self.assertEqual(pending_departure.custom_work_nature, "待离职")
 
-		# Once the approved departure date arrives, the scheduled transition makes
-		# the same employee a departed employee.
-		frappe.db.set_value("Employee Separation", separation.name, "boarding_begins_on", getdate())
+		# The actual-time page is the only place that establishes the unique
+		# effective departure time. A future time remains pending until due.
+		future_actual_time = add_days(now_datetime(), 1)
+		record_employee_separation_actual_time(separation.name, future_actual_time)
+		separation.reload()
+		if separation.meta.has_field("departed_by"):
+			self.assertEqual(separation.departed_by, frappe.session.user)
+		pending_departure.reload()
+		self.assertEqual(pending_departure.status, "Inactive")
+		self.assertEqual(pending_departure.relieving_date, future_actual_time.date())
+
+		# Once that recorded time arrives, the scheduled transition makes the
+		# same employee a departed employee.
+		frappe.db.set_value("Employee Separation", separation.name, "departed_on", now_datetime())
 		process_due_employee_separations()
 		departed_employee = frappe.get_doc("Employee", employee)
 		self.assertEqual(departed_employee.status, "Left")

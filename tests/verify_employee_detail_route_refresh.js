@@ -33,6 +33,7 @@ assert(!source.includes("hrms-employee-apple-tree"), "Apple-tree summary must re
 for (const marker of [
 	'__("员工花名册 / 员工档案")',
 	'__("返回员工花名册")',
+	"hrmsEmployeeDetailBreadcrumbLabel",
 	"return_to_roster()",
 	'frappe.set_route("List", "Employee")',
 ]) {

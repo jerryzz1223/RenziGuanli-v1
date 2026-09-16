@@ -84,12 +84,17 @@ const newFrm = {
 context.renderForTest(newFrm);
 assert.strictEqual(visible.naming_series, false);
 assert.strictEqual(properties["naming_series.reqd"], false);
+assert.strictEqual(visible.custom_work_nature, false);
+assert.strictEqual(properties["custom_work_nature.reqd"], false);
+assert.strictEqual(newFrm.doc.custom_work_nature, "在职·试用期");
+assert.strictEqual(visible.custom_probation_months, false);
+assert.strictEqual(properties["custom_probation_months.reqd"], false);
 assert.strictEqual(visible.relieving_date, false);
 assert.strictEqual(visible.exit, false);
 assert.strictEqual(properties["relieving_date.reqd"], false);
 context.setupWorkNatureForTest(newFrm);
-assert.strictEqual(properties["custom_work_nature.options"], "在职·正式\n在职·试用期\n退休返聘");
-assert.strictEqual(newFrm.doc.custom_work_nature, "在职·正式");
+assert.strictEqual(properties["custom_work_nature.options"], undefined);
+assert.strictEqual(newFrm.doc.custom_work_nature, "在职·试用期");
 for (const value of ["在职·正式", "在职·试用期", "退休返聘", "待离职", "离职"]) {
 	newFrm.doc.custom_work_nature = value;
 	visible.relieving_date = true; // Simulate template/native visibility reset.
@@ -98,10 +103,11 @@ for (const value of ["在职·正式", "在职·试用期", "退休返聘", "待
 	context.renderForTest(newFrm);
 	assert.strictEqual(visible.naming_series, false);
 	assert.strictEqual(properties["naming_series.reqd"], false);
+	assert.strictEqual(visible.custom_work_nature, false);
+	assert.strictEqual(visible.custom_probation_months, false);
 	assert.strictEqual(visible.relieving_date, false);
 	assert.strictEqual(properties["relieving_date.reqd"], false);
-	assert.strictEqual(visible.custom_probation_months, value === "在职·试用期");
-	assert.strictEqual(visible.final_confirmation_date, value === "在职·试用期");
+	assert.strictEqual(visible.final_confirmation_date, false);
 	for (const fieldname of ["custom_roster_sequence", "education", "educational_qualification", "custom_is_confirmed"]) {
 		assert.strictEqual(visible[fieldname], false);
 	}
@@ -109,15 +115,17 @@ for (const value of ["在职·正式", "在职·试用期", "退休返聘", "待
 newFrm.doc.final_confirmation_date = "2026-12-09";
 for (const value of ["在职·试用期", "在职·正式", "在职·试用期"]) {
 	context.applyWorkNatureForTest(newFrm, value);
-	assert.strictEqual(visible.custom_probation_months, value === "在职·试用期");
-	assert.strictEqual(visible.final_confirmation_date, value === "在职·试用期");
+	assert.strictEqual(visible.final_confirmation_date, false);
 	assert.strictEqual(newFrm.doc.final_confirmation_date, "2026-12-09", "Hiding fields must preserve recorded dates.");
 }
 // Existing employees retain the complete departure workflow and stored date.
 newFrm.is_new = () => false;
+newFrm.doc.custom_work_nature = "离职";
 context.setupWorkNatureForTest(newFrm);
 context.renderForTest(newFrm);
 assert.strictEqual(properties["custom_work_nature.options"], "在职·正式\n在职·试用期\n退休返聘\n待离职\n离职");
+assert.strictEqual(visible.custom_work_nature, true);
+assert.strictEqual(visible.custom_probation_months, false);
 assert.strictEqual(visible.relieving_date, true);
 assert.strictEqual(visible.exit, true);
 assert.strictEqual(properties["relieving_date.reqd"], true);

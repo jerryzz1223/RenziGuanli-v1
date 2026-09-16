@@ -48,8 +48,21 @@ const recordsPy = read(
 	"employee_separation_records",
 	"employee_separation_records.py",
 );
+const applicationPage = JSON.parse(
+	read("hrms", "hr", "page", "employee_separation_application", "employee_separation_application.json"),
+);
+const approvalPage = JSON.parse(
+	read("hrms", "hr", "page", "employee_separation_approval", "employee_separation_approval.json"),
+);
+const applicationPageJs = read(
+	"hrms", "hr", "page", "employee_separation_application", "employee_separation_application.js",
+);
+const approvalPageJs = read(
+	"hrms", "hr", "page", "employee_separation_approval", "employee_separation_approval.js",
+);
 const employeeDetail = read("hrms", "hr", "page", "employee_detail", "employee_detail.js");
-const personnel = JSON.parse(read("hrms", "hr", "workspace", "personnel", "personnel.json"));
+const employeeCodeApi = read("hrms", "api", "employee_field_template.py");
+const employeeCodeSelector = read("hrms", "hr", "employee_business_code_selector.js");
 const personnelSidebar = JSON.parse(read("hrms", "workspace_sidebar", "personnel.json"));
 const redirect = read("hrms", "public", "js", "hrms_home_redirect_v6.js");
 const topNav = read("hrms", "public", "js", "hrms_top_nav.js");
@@ -79,12 +92,24 @@ for (const fieldname of [
 for (const [fieldname, label] of [
 	["employee_name", "员工姓名"],
 	["employee_code_display", "员工工号"],
-	["boarding_begins_on", "离职日期"],
+	["boarding_begins_on", "拟离职日期"],
+	["applied_on", "离职申请时间"],
+	["applied_by", "申请操作人"],
+	["approved_on", "离职审批时间"],
+	["approved_by", "审批操作人"],
+	["departed_on", "实际离职时间"],
+	["departed_by", "实际离职操作人"],
 	["designation", "岗位"],
 	["exit_interview", "离职面谈"],
 ]) {
 	assert(field(fieldname)?.label === label, `离职字段中文标签错误: ${fieldname}`);
 }
+for (const fieldname of ["applied_on", "approved_on", "departed_on"]) {
+	assert(field(fieldname)?.fieldtype === "Datetime", `离职时间字段类型错误: ${fieldname}`);
+	assert(field(fieldname)?.read_only === 1, `离职时间字段必须由系统自动记录: ${fieldname}`);
+}
+assert(field("boarding_begins_on")?.fieldtype === "Date", "实际离职日期必须是日期字段。");
+assert(field("resignation_letter_date")?.hidden === 1, "旧离职申请日期字段只保留兼容数据，不应和申请时间重复展示。");
 
 for (const marker of [
 	"employee_business_code_selector.js",
@@ -114,12 +139,13 @@ for (const marker of [
 	"sync_employee_separation_business_identities",
 	'frappe.db.set_value("Employee Separation"',
 	'self.db_set("boarding_status", "Pending")',
-	"def approve_employee_separation(separation_name: str):",
-	"separation._set_employee_departure_state()",
-	"is_departed = departure_date <= getdate(nowdate())",
+	"def approve_employee_separation(",
+	"separation._set_employee_pending_state()",
+	"actual_departure_time = get_datetime(self.departed_on)",
 	'work_nature = "离职" if is_departed else "待离职"',
 	'employee.status = "Left" if is_departed else "Inactive"',
-	"employee.relieving_date = departure_date",
+	"employee.relieving_date = getdate(actual_departure_time)",
+	"def record_employee_separation_actual_time(",
 	"def process_due_employee_separations():",
 ]) {
 	assert(separationPy.includes(marker), `离职后端缺少业务身份或完成状态同步: ${marker}`);
@@ -132,15 +158,34 @@ assert(separationList.includes("hide_name_column: true"), "离职管理列表必
 
 assert(recordsJson.name === "employee-separation-records", "离职记录 Page 路由不正确。");
 assert(recordsJson.title === "离职记录", "离职记录 Page 标题不正确。");
+assert(applicationPage.name === "employee-separation-application", "离职申请必须使用独立页面路由。");
+assert(approvalPage.name === "employee-separation-approval", "离职审批必须使用独立页面路由。");
+assert(applicationPageJs.includes("on_page_show"), "离职申请兼容入口在缓存页面再次显示时也必须跳转。");
+assert(approvalPageJs.includes("on_page_show"), "离职审批兼容入口在缓存页面再次显示时也必须跳转。");
+assert(
+	applicationPageJs.includes("/desk/employee-separation/view/list?docstatus=0"),
+	"离职申请兼容入口必须跳转到可刷新的稳定列表地址。",
+);
+assert(
+	approvalPageJs.includes("/desk/employee-separation/view/list?docstatus=1&boarding_status=Pending"),
+	"离职审批兼容入口必须跳转到可刷新的稳定列表地址。",
+);
 for (const marker of [
 	"frappe.has_permission",
 	"_get_departed_employees",
-	"_get_approved_separation_employee_names",
-	"_get_employees_by_names",
 	"_get_latest_separations",
 	"custom_employee_code",
 	"relieving_date",
 	"departure_date",
+	"application_time",
+	"approval_time",
+	"actual_departure_time",
+	"application_operator",
+	"approval_operator",
+	"actual_departure_operator",
+	"approver_reason_type",
+	"approver_reason_display",
+	"approver_reason_detail",
 	"separation_name",
 	"exit_interview",
 	"department_display",
@@ -156,9 +201,8 @@ assert(
 	"离职记录不应依赖字段中心的私有函数。",
 );
 assert(
-	recordsPy.indexOf("_get_departed_employees(company)") <
-		recordsPy.indexOf("_get_approved_separation_employee_names(company)"),
-	"离职记录必须以 Employee 离职状态为主，且只允许审批完成的离职单补偿同步延迟。",
+	recordsPy.includes('return employee.get("status") == "Left"'),
+	"离职记录只能展示员工状态已正式离职的员工，不能把待离职员工提前列入。",
 );
 for (const marker of [
 	"company: str | None = None",
@@ -170,10 +214,16 @@ for (const marker of [
 	assert(recordsPy.includes(marker), `离职记录 RPC 缺少 Frappe v17 必需的类型声明: ${marker}`);
 }
 for (const marker of [
-	"离职日期",
+	"拟离职日期",
+	"离职申请时间",
+	"离职审批时间",
+	"实际离职时间",
 	"员工姓名",
 	"工号",
 	"岗位",
+	"员工自述原因",
+	"审批确认原因",
+	"流程操作记录",
 	"离职面谈",
 	"show_record_details",
 	"row.separation_name",
@@ -194,18 +244,59 @@ for (const marker of [
 	assert(employeeDetail.includes(marker), `员工档案发起离职时缺少业务身份字段: ${marker}`);
 }
 
-for (const collection of [personnel.links, personnelSidebar.items]) {
-	assert(
-		collection.some(
-			(item) =>
-				item.type === "Link" &&
-				item.label === "离职记录" &&
-				item.link_to === "employee-separation-records" &&
-				item.link_type === "Page",
-		),
-		"人事导航必须提供独立离职记录入口。",
-	);
-}
+const sidebarItems = personnelSidebar.items;
+const leaveSectionIndex = sidebarItems.findIndex(
+	(item) => item.type === "Section Break" && item.label === "离职管理",
+);
+assert(leaveSectionIndex >= 0, "人事导航必须提供独立的离职管理分组。");
+const nextSectionIndex = sidebarItems.findIndex(
+	(item, index) => index > leaveSectionIndex && item.type === "Section Break",
+);
+const leaveItems = sidebarItems.slice(
+	leaveSectionIndex + 1,
+	nextSectionIndex >= 0 ? nextSectionIndex : sidebarItems.length,
+);
+assert(
+	JSON.stringify(leaveItems.map((item) => item.label)) ===
+		JSON.stringify(["离职申请", "离职审批", "实际离职", "离职记录"]),
+	"离职管理分组必须按申请、审批、实际离职、记录提供四个入口。",
+);
+const relationshipSectionIndex = sidebarItems.findIndex(
+	(item) => item.type === "Section Break" && item.label === "员工关系",
+);
+assert(relationshipSectionIndex >= 0, "人事导航必须保留员工关系分组。");
+const relationshipItems = sidebarItems.slice(
+	relationshipSectionIndex + 1,
+	leaveSectionIndex,
+);
+assert(
+	!relationshipItems.some((item) => ["离职申请", "离职审批", "实际离职", "离职记录"].includes(item.label)),
+	"离职申请、审批、实际离职和记录不能继续混在员工关系分组中。",
+);
+assert(
+	leaveItems.find((item) => item.label === "实际离职")?.link_to === "employee-separation-effective",
+	"实际离职入口必须指向独立的办理页面。",
+);
+assert(
+		leaveItems.find((item) => item.label === "离职申请")?.url === "/desk/employee-separation/view/list?docstatus=0" &&
+		leaveItems.find((item) => item.label === "离职申请")?.link_type === "URL",
+	"离职申请入口必须指向可刷新并保留视图状态的列表地址。",
+);
+assert(
+		leaveItems.find((item) => item.label === "离职审批")?.url === "/desk/employee-separation/view/list?docstatus=1&boarding_status=Pending" &&
+		leaveItems.find((item) => item.label === "离职审批")?.link_type === "URL",
+	"离职审批入口必须指向可刷新并保留视图状态的列表地址。",
+);
+assert(redirect.includes('/desk/employee-separation/view/list?docstatus=0'), "左侧离职申请入口必须使用稳定列表路由。");
+assert(redirect.includes('/desk/employee-separation/view/list?docstatus=1&boarding_status=Pending'), "左侧离职审批入口必须使用稳定列表路由。");
+assert(redirect.includes('current_path === "/desk/employee-separation/view/list"'), "刷新离职列表时必须从地址识别业务侧栏。");
+assert(redirect.includes('"employee-separation-application"'), "人事模块必须识别离职申请视图。");
+assert(redirect.includes('"employee-separation-approval"'), "人事模块必须识别离职审批视图。");
+assert(redirect.includes("window.hrmsSeparationListView"), "离职列表必须保留入口视图状态。");
+assert(separationList.includes("route_filters.get(\"docstatus\") === \"0\""), "离职列表必须用可刷新的草稿筛选识别申请视图。");
+assert(employeeCodeApi.includes('filters = {"status": ["!=", "Left"]} if cint(include_pending) else {"status": "Active"}'), "离职工号查询必须允许匹配待离职员工并排除已离职员工。");
+assert(employeeCodeApi.includes('custom_employee_code": employee_code'), "工号匹配必须使用公司工号字段。");
+assert(employeeCodeSelector.includes('include_pending: frm.doctype === "Employee Separation" ? 1 : 0'), "离职表单必须启用待离职员工工号匹配。");
 assert(redirect.includes("employee-separation-records"), "左侧模块路由必须识别离职记录。");
 assert(topNav.includes("employee-separation-records"), "顶部模块路由必须识别离职记录。");
 

@@ -7,7 +7,8 @@ from pathlib import Path
 import frappe
 from frappe import _
 from frappe.query_builder.functions import Count
-from frappe.utils import cint, cstr
+from frappe.utils import cint, cstr, now_datetime
+from hrms.utils.business_department import organization_report_from_tree
 from hrms.utils.organization_roles import ROSTER_UNIT_KINDS, chart_assigned_employees, role_lines, whole_department
 
 
@@ -1365,7 +1366,7 @@ def _get_manual_organization_records(company=None):
 		filters={"structure_version": version, "confirmation_status": "已确认"},
 		fields=[
 			"name", "node_code", "node_type", "display_name", "parent_node", "source_text",
-			"planned_headcount", "current_headcount", "vacancy_count",
+			"planned_headcount", "current_headcount", "vacancy_count", "modified",
 		],
 		order_by="creation asc",
 	)
@@ -1410,9 +1411,29 @@ def _manual_employee_labels(employee_names):
 	rows = frappe.get_all(
 		"Employee",
 		filters={"name": ["in", list(set(employee_names))]},
-		fields=["name", "employee_name", "custom_employee_code", "designation", "grade", "department", "status"],
+		fields=[
+			"name",
+			"employee_name",
+			"custom_employee_code",
+			"designation",
+			"grade",
+			"department",
+			"status",
+			"image",
+			"reports_to",
+		],
 	)
 	return {row.name: frappe._dict(row) for row in rows}
+
+
+def _organization_placement_employee_ids(nodes):
+	"""Employees placed on the chart without changing roster master data."""
+	return {
+		row.get("employee")
+		for node in nodes
+		for row in node.manual_config.get("organization_placements", [])
+		if row.get("employee")
+	}
 
 
 def _build_manual_organization_tree(company, manual):
@@ -1423,7 +1444,9 @@ def _build_manual_organization_tree(company, manual):
 	nodes_by_name = {node.name: node for node in manual["nodes"]}
 	company_employees = _get_active_employees(company)
 	from hrms.api.organization_assignment_review import assignment_issues
-	assignment_warnings = {i["node_name"]: i["reasons"] for i in assignment_issues(manual["nodes"], company_employees)}
+	assignment_review_items = assignment_issues(manual["nodes"], company_employees)
+	assignment_warnings = {item["node_name"]: item["reasons"] for item in assignment_review_items}
+	multiple_position_reviews = {item["node_name"]: item["multiple_position_employees"] for item in assignment_review_items}
 	company_staffing = _get_manual_company_staffing(company, company_employees)
 	employee_labels = _manual_employee_labels(
 		[node.manual_config.get("manager_employee") for node in manual["nodes"] if node.manual_config.get("manager_employee")]
@@ -1432,6 +1455,7 @@ def _build_manual_organization_tree(company, manual):
 		+ [node.manual_config.get("proxy_employee") for node in manual["nodes"] if node.manual_config.get("proxy_employee")]
 		+ [employee for node in manual["nodes"] for employee in _normalize_manual_employee_names(chart_assigned_employees(node.manual_config))]
 		+ [b["employee"] for node in manual["nodes"] for b in node.manual_config.get("template_bindings", []) if b.get("employee")]
+		+ [p["employee"] for node in manual["nodes"] for p in node.manual_config.get("organization_placements", []) if p.get("employee")]
 	)
 	employees_by_department = defaultdict(list)
 	for employee in company_employees:
@@ -1495,6 +1519,7 @@ def _build_manual_organization_tree(company, manual):
 			"node_id": f"organization_node:{node.name}", "id": f"organization_node:{node.name}",
 			"node_type": node_type, "organization_node_type": kind, "name": name, "title": kind,
 			"assignment_issues": assignment_warnings.get(node.name, []),
+			"multiple_position_employees": multiple_position_reviews.get(node.name, []),
 			"department": node.manual_config.get("department"),
 			"department_label": node.manual_config.get("department_label", ""),
 			"reporting_scope_pending": bool(node.manual_config.get("reporting_scope_pending") and not node.parent_node),
@@ -1517,7 +1542,7 @@ def _build_manual_organization_tree(company, manual):
 			"template_source_cell": node.manual_config.get("template_source_cell"),
 			"template_source_vacancies": node.manual_config.get("template_source_vacancies", 0),
 			"member_ids": sorted(headcount_members[node.name]) if node.manual_config.get("roster_subset") else [],
-			"hide_empty_roster_bucket": kind == "岗位" and not node.manual_config.get("roster_subset") and node.manual_config.get("roster_auto_sync") and roster_department in template_departments and current_headcount == 0 and not child_nodes and not has_staffing_plan,
+			"hide_empty_roster_bucket": kind == "岗位" and not node.manual_config.get("roster_subset") and node.manual_config.get("roster_auto_sync") and roster_department in template_departments and current_headcount == 0 and not child_nodes and not has_staffing_plan and not node.manual_config.get("organization_placements"),
 			"has_staffing_plan": has_staffing_plan,
 			"planned_headcount": planned_headcount,
 			"current_headcount": current_headcount,
@@ -1526,18 +1551,14 @@ def _build_manual_organization_tree(company, manual):
 		}
 
 	children = [organization_node(node) for node in children_by_parent[None]]
-	missing = [e for e in company_employees if not e.get("department")]
-	if missing:
-		children.append({"node_id": f"unassigned:{company}", "node_type": "roster_unassigned", "name": _("待完善部门的人员"),
-			"title": _("花名册未填写部门"), "current_headcount": len(missing), "has_staffing_plan": False,
-			"children": [], "people": [{"employee": e.name, "employee_route": e.name, "employee_name": e.employee_name,
-				"employee_code": e.custom_employee_code, "designation": e.designation, "matched_employee": True} for e in missing]})
+	placed_employee_ids = _organization_placement_employee_ids(manual["nodes"])
+	missing = [e for e in company_employees if not e.get("department") and e.name not in placed_employee_ids]
 	counts = Counter(_manual_node_kind(node) for node in manual["nodes"])
 	return {
 		"node_id": f"company:{company or 'all'}", "id": f"company:{company or 'all'}", "node_type": "company",
 		"name": _get_company_label(company) + (_("公司") if not _get_company_label(company).endswith("公司") else ""), "title": _("公司"),
 		"people": [], "lines": company_staffing["leadership_lines"],
-		"unassigned_employees": [_employee_row(employee) for employee in company_employees if not employee.get("department")],
+		"unassigned_employees": [_employee_row(employee) for employee in missing],
 		"has_staffing_plan": company_staffing["planned_headcount"] > 0,
 		"planned_headcount": company_staffing["planned_headcount"],
 		"current_headcount": company_staffing["current_headcount"],
@@ -1817,7 +1838,7 @@ def save_manual_organization_node(
 		allowed_departments=allowed_departments,
 	)
 	config = {
-		**{key: previous_config[key] for key in ("assignment_rules_manual", "assignment_reviewed_by", "assignment_reviewed_on", "portable_id", "chart_grade_code", "chart_grade", "roster_department_alias_labels", "portable_proxy_display_only", "roster_initialization", "roster_initialization_complete", "reporting_scope_pending", "navigation_upgrade", "roster_generated", "roster_auto_sync", "template_source_cell", "template_leadership_cell", "template_bindings", "template_source_document", "template_source_vacancies", "template_leadership", "department_label", "designation_label", "grade_label", "pending_person_references") if key in previous_config},
+		**{key: previous_config[key] for key in ("assignment_rules_manual", "assignment_reviewed_by", "assignment_reviewed_on", "portable_id", "chart_grade_code", "chart_grade", "roster_department_alias_labels", "portable_proxy_display_only", "roster_initialization", "roster_initialization_complete", "reporting_scope_pending", "navigation_upgrade", "roster_generated", "roster_auto_sync", "template_source_cell", "template_leadership_cell", "template_bindings", "template_source_document", "template_source_vacancies", "template_leadership", "department_label", "designation_label", "grade_label", "pending_person_references", "organization_placements") if key in previous_config},
 		"manual_organization": True,
 		"chart_grade_code": chart_grade_code,
 		"chart_grade": chart_grade,
@@ -1879,6 +1900,127 @@ def save_manual_organization_node(
 	else:
 		doc.save(ignore_permissions=False)
 	return {"name": doc.name, "node_kind": node_kind, "display_name": doc.display_name}
+
+
+@frappe.whitelist(methods=["POST"])
+def assign_employee_organization_position(
+	company: str,
+	employee: str,
+	node_name: str | None = None,
+	parent_node_name: str | None = None,
+	role_title: str | None = None,
+):
+	"""Place an employee on an existing or newly named chart position only."""
+	company = _normalize_yongxin_company(company) or YONGXIN_COMPANY_NAME
+	frappe.get_doc("Company", company).check_permission("read")
+	employee = cstr(employee).strip()
+	node_name = cstr(node_name).strip()
+	parent_node_name = cstr(parent_node_name).strip()
+	role_title = re.sub(r"\s+", " ", cstr(role_title)).strip()
+	if not employee or not (node_name or parent_node_name):
+		frappe.throw(_("请选择待分配人员和组织岗位。"))
+	if node_name and parent_node_name:
+		frappe.throw(_("请只选择已有岗位，或在当前层级建立新岗位。"))
+	if len(role_title) > 140:
+		frappe.throw(_("岗位身份不能超过 140 个字符。"))
+
+	employee_doc = frappe.get_doc("Employee", employee)
+	employee_doc.check_permission("read")
+	if employee_doc.status != "Active" or employee_doc.company != company:
+		frappe.throw(_("只能分配当前公司的在职人员。"))
+	employee_code = cstr(employee_doc.get("custom_employee_code")).strip()
+	if not employee_code:
+		frappe.throw(_("该人员缺少公司工号，不能建立可追溯的组织位置。"))
+	if frappe.db.count("Employee", {"company": company, "custom_employee_code": employee_code}) != 1:
+		frappe.throw(_("公司工号 {0} 不唯一，请先清理重复档案。").format(employee_code))
+
+	version = _get_manual_organization_version(company)
+	if not version:
+		frappe.throw(_("当前公司还没有可编辑的组织架构。"))
+	frappe.db.sql(
+		"select name from `tabOrganization Structure Version` where name=%s for update",
+		version,
+	)
+	manual = _get_manual_organization_records(company)
+	target = next((row for row in manual["nodes"] if row.name == node_name), None) if node_name else None
+	position_created = False
+	if node_name:
+		if not target or _manual_node_kind(target) != "岗位":
+			frappe.throw(_("请逐级进入组织，最终选择一个岗位节点。"))
+	else:
+		if not role_title:
+			frappe.throw(_("请填写岗位身份，例如线长、组长或作业员。"))
+		parent = next((row for row in manual["nodes"] if row.name == parent_node_name), None)
+		if not parent or _manual_node_kind(parent) not in ROSTER_UNIT_KINDS:
+			frappe.throw(_("只能在课室、组或线层级下建立岗位。"))
+		matches = [
+			row for row in manual["nodes"]
+			if row.parent_node == parent.name
+			and _manual_node_kind(row) == "岗位"
+			and cstr(row.manual_config.get("role_title") or row.manual_config.get("designation") or row.display_name).strip().casefold() == role_title.casefold()
+		]
+		if len(matches) > 1:
+			frappe.throw(_("当前层级存在多个同名岗位，请返回列表选择具体岗位。"))
+		if matches:
+			target = matches[0]
+		else:
+			department = cstr(parent.manual_config.get("department") or _manual_parent_department(parent.name, version)).strip()
+			if not department:
+				frappe.throw(_("当前层级尚未关联花名册部门，不能建立岗位。"))
+			saved = save_manual_organization_node(
+				"岗位",
+				company=company,
+				parent_node=parent.name,
+				department=department,
+				display_name=role_title,
+				role_title=role_title,
+				assignment_mode="正式",
+				roster_subset=1,
+				roster_auto_sync=0,
+				planned_headcount_set=0,
+			)
+			position_created = True
+			manual = _get_manual_organization_records(company)
+			target = next(row for row in manual["nodes"] if row.name == saved["name"])
+
+	changed_from = []
+	for row in manual["nodes"]:
+		placements = [
+			dict(item)
+			for item in row.manual_config.get("organization_placements", [])
+			if item.get("employee") != employee
+		]
+		if len(placements) == len(row.manual_config.get("organization_placements", [])) and row.name != target.name:
+			continue
+		doc = frappe.get_doc("Organization Node", row.name, for_update=True)
+		doc.check_permission("write")
+		config = _manual_node_config(doc.source_text)
+		if row.name != target.name:
+			changed_from.append(doc.display_name)
+		else:
+			placements.append({
+				"employee": employee,
+				"source_code": employee_code,
+				"source_name": employee_doc.employee_name,
+				"role": config.get("role_title") or config.get("designation") or doc.display_name,
+				"placement_type": "组织位置",
+				"assigned_by": frappe.session.user,
+				"assigned_on": now_datetime().isoformat(),
+			})
+		config["organization_placements"] = placements
+		doc.source_text = json.dumps(config, ensure_ascii=False, sort_keys=True)
+		doc.save(ignore_permissions=False)
+
+	return {
+		"employee": employee,
+		"employee_code": employee_code,
+		"employee_name": employee_doc.employee_name,
+		"node_name": target.name,
+		"position": target.display_name,
+		"position_created": position_created,
+		"moved_from": changed_from,
+		"employee_master_updated": False,
+	}
 
 
 @frappe.whitelist()
@@ -2036,92 +2178,14 @@ def _organization_export_staffing(node):
 @frappe.whitelist()
 def get_organization_report(company: str | None = None):
 	company = _normalize_yongxin_company(company)
-	departments = _get_departments(company)
-	employees = _get_active_employees(company)
-	staffing = _get_department_staffing(company)
-	notes = _get_department_vacancy_notes(company)
-	employee_counts = defaultdict(int)
-	for employee in employees:
-		if employee.get("department"):
-			employee_counts[employee.get("department")] += 1
-
-	department_by_name = {department.name: department for department in departments}
-	rows = []
-	for department in departments:
-		staffing_row = staffing.get(department.name, {})
-		planned = cint(staffing_row.get("planned_headcount"))
-		current = employee_counts.get(department.name, 0)
-		vacancy = cint(staffing_row.get("vacancy_count")) or max(planned - current, 0)
-		rows.append(
-			{
-				"department": _organization_business_name(department.get("department_name") or department.name),
-				"parent_department": _organization_business_name(
-					department_by_name.get(department.get("parent_department"), {}).get("department_name")
-					if department.get("parent_department") in department_by_name
-					else ""
-				),
-				"level": cint(department.get("hrms_org_level")) or _department_tree_level(department, department_by_name),
-				"planned_headcount": planned,
-				"current_headcount": current,
-				"vacancy_count": vacancy,
-				"fulfillment_rate": (current / planned) if planned else None,
-				"vacancy_notes": "、".join(notes.get(department.name, []))
-				or cstr(staffing_row.get("recruitment_plan")).strip(),
-			}
-		)
-
-	root_departments = [
-		department
-		for department in departments
-		if not department.get("parent_department") or department.get("parent_department") not in department_by_name
-	]
-	staffing_summary = _summarize_staffing(root_departments, staffing)
-	total_planned = cint(staffing_summary.get("planned_headcount"))
-	total_current = len(employees)
-	total_vacancy = cint(staffing_summary.get("vacancy_count")) or max(total_planned - total_current, 0)
+	payload = get_hybrid_tree(company=company)
+	report = organization_report_from_tree(payload.get("root") or {})
 	return {
 		"company": company,
 		"title": _("{0}组织报表").format(_get_company_label(company)),
 		"columns": ["部门/课别", "编制人数", "现有人数", "空缺人数", "岗位满足率", "备注"],
-		"rows": rows,
-		"total": {
-			"planned_headcount": total_planned,
-			"current_headcount": total_current,
-			"vacancy_count": total_vacancy,
-			"fulfillment_rate": (total_current / total_planned) if total_planned else None,
-		},
+		**report,
 	}
-
-
-def _department_tree_level(department, department_by_name):
-	level = 1
-	seen = {department.name}
-	parent = department.get("parent_department")
-	while parent and parent in department_by_name and parent not in seen:
-		seen.add(parent)
-		level += 1
-		parent = department_by_name[parent].get("parent_department")
-	return level
-
-
-def _get_department_vacancy_notes(company=None):
-	notes = defaultdict(list)
-	if not frappe.db.exists("DocType", "Staffing Plan"):
-		return notes
-	filters = {"company": company} if company else {}
-	for plan in frappe.get_all("Staffing Plan", filters=filters, fields=["name", "department"]):
-		try:
-			doc = frappe.get_doc("Staffing Plan", plan.name)
-		except Exception:
-			continue
-		for row in doc.get("staffing_plan_details") or []:
-			vacancies = cint(row.get("vacancies")) or max(
-				cint(row.get("number_of_positions")) - cint(row.get("current_count")),
-				0,
-			)
-			if vacancies:
-				notes[plan.department].append(_("{0}：{1}人").format(row.get("designation") or _("未设置岗位"), vacancies))
-	return notes
 
 
 @frappe.whitelist()
@@ -2138,8 +2202,10 @@ def get_hybrid_node_detail(
 	node_type = node_type or _node_type_from_id(node_id)
 	search = (search or "").strip()
 	if node_type == "roster_unassigned":
-		people = [_employee_row(e) for e in _get_active_employees(company) if not e.get("department")]
-		return {"node_id": node_id, "node_type": node_type, "title": _("待完善部门的人员"), "employee_match_mode": "missing_department",
+		manual = _get_manual_organization_records(company)
+		placed_employee_ids = _organization_placement_employee_ids(manual["nodes"])
+		people = [_employee_row(e) for e in _get_active_employees(company) if not e.get("department") and e.name not in placed_employee_ids]
+		return {"node_id": node_id, "node_type": node_type, "title": _("待分配组织位置"), "employee_match_mode": "missing_department",
 			"employees": [p for p in people if not search or search.casefold() in " ".join(cstr(v) for v in p.values()).casefold()],
 			"metrics": {"current_headcount": len(people)}, "actions": {}}
 	if cstr(source_mode).strip() == "workbook_snapshot":
@@ -2273,6 +2339,10 @@ def _get_manual_organization_node_detail(node_id, node_type, company, search):
 	primary = _manual_employee_labels([_manual_primary_employee(node)]).get(_manual_primary_employee(node))
 	proxy = _manual_employee_labels([node.manual_config.get("proxy_employee")]).get(node.manual_config.get("proxy_employee"))
 	assigned_names = _normalize_manual_employee_names(chart_assigned_employees(node.manual_config))
+	placement_names = _normalize_manual_employee_names(
+		[row.get("employee") for row in node.manual_config.get("organization_placements", [])]
+	)
+	assigned_names = list(dict.fromkeys([*assigned_names, *placement_names]))
 	assigned_labels = _manual_employee_labels(assigned_names)
 	assigned_rows = [_employee_row(assigned_labels[name]) for name in assigned_names if name in assigned_labels]
 	department = node.manual_config.get("department")
@@ -2313,7 +2383,7 @@ def _get_manual_organization_node_detail(node_id, node_type, company, search):
 		"subtitle": _("{0}；引用已有部门、岗位或员工，仅用于组织架构显示。").format(kind),
 		"metrics": {key: cint(card.get(key)) for key in ("planned_headcount", "current_headcount", "vacancy_count")},
 		"employees": person_rows, "people": [],
-		"employee_match_mode": "department" if whole_department(node.manual_config) else "assigned" if manual_people else "display" if kind in {"管理层", "分管"} else None,
+		"employee_match_mode": "department" if whole_department(node.manual_config) else "organization_position" if placement_names else "assigned" if manual_people else "display" if kind in {"管理层", "分管"} else None,
 		"roster_department": roster_department,
 		"role_lines": card.get("lines", []),
 		"primary_employee": primary.get("employee_name") if primary else None,

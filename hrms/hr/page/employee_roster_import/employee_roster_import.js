@@ -16,6 +16,8 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		row_overrides: {},
 		file: null,
 		request_id: 0,
+		import_progress_timer: null,
+		import_in_progress: false,
 	};
 
 	$(page.body).addClass("hrms-roster-import-page");
@@ -304,25 +306,74 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			: `<div class="alert alert-success">${empty_message}</div>`;
 	}
 
+	function render_import_progress() {
+		const phases = [
+			__("正在提交导入任务..."),
+			__("正在写入员工档案..."),
+			__("正在更新员工状态..."),
+			__("正在整理导入结果..."),
+		];
+		let phase_index = 0;
+		$(page.body).append(`
+			<div class="hrms-import-progress" data-import-progress role="status" aria-live="polite">
+				<div class="hrms-import-progress__card">
+					<div class="hrms-import-progress__icon" aria-hidden="true"><span></span></div>
+					<strong class="hrms-import-progress__title">${__("正在导入...")}</strong>
+					<div class="hrms-import-progress__message" data-import-progress-message>${phases[phase_index]}</div>
+					<div class="hrms-import-progress__track" role="progressbar" aria-label="${__("导入进度")}" aria-valuetext="${__("正在处理中")}">
+						<span class="hrms-import-progress__bar"></span>
+					</div>
+					<small class="hrms-import-progress__hint">${__("数据量较大时可能需要一些时间，请不要关闭当前页面。")}</small>
+				</div>
+			</div>
+		`);
+		state.import_progress_timer = window.setInterval(() => {
+			phase_index = Math.min(phase_index + 1, phases.length - 1);
+			const message = $(page.body).find("[data-import-progress-message]");
+			if (message.length) message.text(phases[phase_index]);
+		}, 1800);
+	}
+
+	function hide_import_progress() {
+		if (state.import_progress_timer) window.clearInterval(state.import_progress_timer);
+		state.import_progress_timer = null;
+		state.import_in_progress = false;
+		$(page.body).find("[data-import-progress]").remove();
+	}
+
 	function confirm_import() {
-		const submit_import = () => frappe
-			.call({
-				method: "hrms.api.employee_field_template.import_employee_roster",
-				args: {
-					file_url: state.file.file_url,
-					mode: state.mode || "insert",
-					match_by: state.match_by,
-					manual_mappings: JSON.stringify(state.manual_mappings || {}),
-					row_overrides: JSON.stringify(state.row_overrides || {}),
-				},
-				freeze: true,
-				freeze_message: __("正在导入..."),
-			})
-			.then((r) => {
-				state.step = 4;
-				state.import_result = r.message || {};
-				render_result();
-			});
+		const submit_import = () => {
+			if (state.import_in_progress) return;
+			state.import_in_progress = true;
+			page.set_primary_action(null);
+			render_import_progress();
+			frappe
+				.call({
+					method: "hrms.api.employee_field_template.import_employee_roster",
+					args: {
+						file_url: state.file.file_url,
+						mode: state.mode || "insert",
+						match_by: state.match_by,
+						manual_mappings: JSON.stringify(state.manual_mappings || {}),
+						row_overrides: JSON.stringify(state.row_overrides || {}),
+					},
+					freeze: true,
+					freeze_message: __("正在导入..."),
+				})
+				.then((r) => {
+					state.step = 4;
+					state.import_result = r.message || {};
+					render_result();
+				})
+				.catch((error) => {
+					frappe.msgprint({
+						title: __("导入失败"),
+						indicator: "red",
+						message: error?.message || error?.exc || __("导入未完成，请重试。"),
+					});
+				})
+				.finally(hide_import_progress);
+		};
 
 		if (state.mode !== "replace") {
 			submit_import();

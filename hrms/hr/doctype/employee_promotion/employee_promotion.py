@@ -42,7 +42,6 @@ class EmployeePromotion(Document):
 		promotion_date: DF.Date
 		promotion_details: DF.Table[EmployeePropertyHistory]
 		revised_ctc: DF.Currency
-		salary_currency: DF.Link | None
 	# end: auto-generated types
 
 	def validate(self):

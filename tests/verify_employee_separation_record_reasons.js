@@ -17,7 +17,11 @@ for (const marker of [
 	'"custom_separation_reason"',
 	'"separation_reason_detail"',
 	'"separation_reason_display"',
+	'"approver_reason_type"',
+	'"approver_reason_display"',
+	'"approver_reason_detail"',
 	'def _separation_reason_display(separation):',
+	'def _approver_reason_display(separation):',
 	'reason_type == "自定义"',
 ]) {
 	if (!recordsPy.includes(marker)) {
@@ -26,12 +30,16 @@ for (const marker of [
 }
 
 for (const marker of [
-	'__("离职原因")',
-	'__("离职原因分类")',
+	'__("员工自述离职原因")',
+	'__("审批确认离职原因")',
 	'row.separation_reason_display || __("未填写")',
+	'row.approver_reason_display || __("未确认")',
 	'row.separation_reason_type || __("未填写")',
 	'row.separation_reason_detail || __("未填写")',
-	'this.detail_item(__("详细原因"), reason_detail)',
+	'row.approver_reason_type || __("未确认")',
+	'row.approver_reason_detail || __("未记录")',
+	'this.detail_item(__("员工自述详细原因"), reason_detail)',
+	'this.detail_item(__("审批确认详细原因"), approver_reason_detail)',
 	'frappe.route_options = { hrms_from: "employee-separation-records" }',
 ]) {
 	if (!recordsJs.includes(marker)) {

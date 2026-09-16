@@ -21,11 +21,32 @@
 		get_employee_roster_summary: true,
 	};
 
-	// 花名册只按员工表单已保存的工作性质筛选，不从状态或转正字段反推。
+	function shift_roster_date(value, offset) {
+		const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+		if (!match) return value;
+		const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+		date.setUTCDate(date.getUTCDate() + offset);
+		return date.toISOString().slice(0, 10);
+	}
+
+	function get_roster_probation_filters(min_days, max_days, stage = "") {
+		const today = frappe.datetime?.get_today?.() || new Date().toISOString().slice(0, 10);
+		const end = shift_roster_date(today, -(min_days - 1));
+		const date_filter = max_days
+			? ["between", [shift_roster_date(today, -(max_days - 1)), end]]
+			: ["<=", end];
+		const filters = { custom_work_nature: "在职·试用期", date_of_joining: date_filter };
+		if (stage) filters._hrms_probation_stage = stage;
+		return filters;
+	}
+
+	// 三个入职阶段都只匹配表单保存的“在职·试用期”，日期仅用于分栏。
 	const roster_cards = [
 		{ label: "全部", filters: { custom_work_nature: ["!=", "离职"] } },
 		{ label: "在职 · 正式", filters: { custom_work_nature: "在职·正式" } },
-		{ label: "在职 · 试用期", filters: { custom_work_nature: "在职·试用期" } },
+		{ label: "1-7日试用期", filters: get_roster_probation_filters(1, 7) },
+		{ label: "8-14日试用期", filters: get_roster_probation_filters(8, 14) },
+		{ label: "15以上试用期", filters: get_roster_probation_filters(15, null, "15_plus") },
 		{ label: "退休返聘", filters: { custom_work_nature: "退休返聘" } },
 		{ label: "待离职", filters: { custom_work_nature: "待离职" } },
 		{ label: "离职", filters: { custom_work_nature: "离职" } },
@@ -39,6 +60,8 @@
 		// 工作性质由表格上方的状态卡片选择，表头不再重复提供筛选。
 		{ fieldname: "custom_work_nature", label: "工作性质", filterable: false },
 		{ fieldname: "date_of_joining", label: "入职日期" },
+		{ fieldname: "suggested_confirmation_date", label: "建议转正日期", filterable: false, sortable: false },
+		{ fieldname: "contract_end_date", label: "合同到期日" },
 		{ fieldname: "relieving_date", label: "离职日期" },
 		{ fieldname: "cell_number", label: "手机号码" },
 	];
@@ -66,6 +89,7 @@
 			"final_confirmation_date",
 			"status",
 			"date_of_joining",
+			"contract_end_date",
 			"relieving_date",
 			"custom_id_type",
 			"passport_number",
@@ -244,13 +268,25 @@
 		if (listview.page.__hrms_roster_actions_ready) return;
 		listview.page.__hrms_roster_actions_ready = true;
 
-		listview.page.set_primary_action(__("添加员工"), function () {
-			frappe.new_doc(EMPLOYEE_DOCTYPE);
+		listview.page.add_inner_button(__("钉钉同步新员工"), function () {
+			sync_new_employees_from_dingtalk(listview);
+		});
+
+		listview.page.add_inner_button(__("钉钉导入审批"), function () {
+			open_dingtalk_employee_import_approval(listview);
+		});
+
+		listview.page.add_inner_button(__("钉钉附件重试"), function () {
+			open_dingtalk_employee_import_approval(listview, { import_status: "已批准", retry_only: true });
 		});
 
 		listview.page.add_inner_button(__("表单导入"), function () {
 			window.hrmsFormImport?.open("employee_roster") || frappe.set_route("employee-roster-import");
 		});
+
+		listview.page.add_inner_button(__("员工扫码填写"), function () {
+			open_employee_registration_link();
+		}, __("入职资料"));
 
 		listview.page.add_inner_button(__("导出"), function () {
 			frappe.set_route("employee-roster-export");
@@ -261,6 +297,206 @@
 				open_roster_cleanup_dialog(listview);
 			});
 		}
+	}
+
+	function sync_new_employees_from_dingtalk(listview) {
+		const company = frappe.defaults.get_user_default("Company") || "";
+		if (!company) {
+			frappe.msgprint(__("请先设置默认公司，再同步钉钉新员工。"));
+			return;
+		}
+		frappe.call({
+			method: "hrms.api.dingtalk_integration.sync_new_employees_from_dingtalk",
+			args: { company },
+			freeze: true,
+			freeze_message: __("正在拉取并匹配钉钉新员工…"),
+		}).then((response) => {
+			const result = response.message || {};
+			const message = __(
+				"钉钉同步完成：拉取 {0}，待审批 {1}，待匹配 {2}，失败 {3}",
+				[
+					result.received || 0,
+					result.pending_approval || 0,
+					(result.pending_match || 0) + (result.conflicts || 0),
+					result.failed || 0,
+				],
+			);
+			frappe.show_alert({ message, indicator: result.failed ? "red" : result.pending_approval || result.pending_match || result.conflicts ? "orange" : "green" });
+			listview.refresh();
+		});
+	}
+
+	function open_dingtalk_employee_import_approval(listview, options = {}) {
+		const company = frappe.defaults.get_user_default("Company") || "";
+		if (!company) {
+			frappe.msgprint(__("请先设置默认公司，再查看钉钉导入审批。"));
+			return;
+		}
+		const dialog = new frappe.ui.Dialog({
+			title: __("钉钉导入审批"),
+			fields: [{ fieldtype: "HTML", fieldname: "imports_html" }],
+			primary_action_label: __("刷新"),
+			primary_action: () => load_dingtalk_employee_imports(),
+		});
+
+		function escape(value) {
+			return frappe.utils.escape_html(String(value ?? ""));
+		}
+
+		function load_dingtalk_employee_imports() {
+			const wrapper = dialog.fields_dict.imports_html.$wrapper[0];
+			wrapper.innerHTML = `<div class="text-muted">${__("正在加载钉钉待审数据…")}</div>`;
+			frappe.call({
+				method: "hrms.api.dingtalk_integration.list_dingtalk_employee_imports",
+				args: { company, import_status: options.import_status || "" },
+			}).then((response) => {
+				const rows = response.message || [];
+				if (!rows.length) {
+					wrapper.innerHTML = `<div class="text-muted">${__("当前没有待审批、待匹配或冲突的钉钉员工数据。")}</div>`;
+					return;
+				}
+				wrapper.innerHTML = rows.map((row) => {
+					const values = row.mapped_values || {};
+					const labels = row.field_labels || {};
+					const detail = Object.entries(values)
+						.filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== "")
+						.map(([fieldname, value]) => `<div><span class="text-muted">${escape(labels[fieldname] || fieldname)}：</span>${escape(value)}</div>`)
+						.join("");
+					const attachments = Array.isArray(row.attachments) ? row.attachments : [];
+					const attachment_detail = attachments.length
+						? `<div style="margin-top:8px;"><span class="text-muted">${__("附件")}（${attachments.length}）：</span>${attachments.map((attachment) => `${escape(attachment.field_name || attachment.material_type || "钉钉材料")} · ${escape(attachment.file_name || "未命名文件")} · ${escape(attachment.download_url?.startsWith("dingpan://") ? __("钉盘内部链接") : attachment.download_url ? __("可下载地址") : __("仅有附件元数据"))}`).join("；")}</div>`
+						: `<div class="text-muted" style="margin-top:8px;">${__("附件：无")}</div>`;
+					const can_approve = row.import_status === "待审批";
+					const can_retry = options.retry_only && row.import_status === "已批准" && attachments.length && row.attachment_status !== "已下载";
+					const can_reject = ["待审批", "待匹配", "冲突"].includes(row.import_status);
+					return `<div class="dingtalk-employee-import-card" data-import-name="${escape(row.name)}" style="border:1px solid var(--border-color);border-radius:8px;padding:12px;margin-bottom:10px;">
+						<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+							<strong>${escape(row.employee_name || "未填写姓名")} ${row.employee_code ? `(${escape(row.employee_code)})` : ""}</strong>
+							<span class="indicator-pill ${can_approve ? "orange" : "gray"}">${escape(row.import_status)}</span>
+						</div>
+						<div class="text-muted" style="margin:6px 0;">${escape(row.department || "未填写部门")} · ${escape(row.designation || "未填写岗位")} · ${escape(row.date_of_joining || "未填写入职日期")}</div>
+						<div class="dingtalk-employee-import-fields" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 16px;">${detail}</div>
+						${attachment_detail}
+						${row.error_message ? `<div class="text-muted" style="margin-top:6px;">${escape(row.error_message)}</div>` : ""}
+						<div style="display:flex;gap:8px;margin-top:10px;">
+							${can_approve ? `<button class="btn btn-primary btn-sm" data-action="approve">${__("审批通过并导入")}</button>` : ""}
+							${can_retry ? `<button class="btn btn-primary btn-sm" data-action="retry">${__("重试附件下载")}</button>` : ""}
+							${can_reject ? `<button class="btn btn-default btn-sm" data-action="reject">${__("驳回")}</button>` : ""}
+						</div>
+					</div>`;
+				}).join("");
+				wrapper.querySelectorAll("[data-action]").forEach((button) => {
+					button.addEventListener("click", () => handle_dingtalk_import_action(button.closest("[data-import-name]")?.dataset.importName, button.dataset.action));
+				});
+			});
+		}
+
+		function handle_dingtalk_import_action(import_name, action) {
+			if (!import_name) return;
+			if (action === "retry") {
+				submit_dingtalk_import_action(import_name, action, "");
+				return;
+			}
+			if (action === "approve") {
+				frappe.confirm(__("确认信息无误并导入员工主表吗？"), () => submit_dingtalk_import_action(import_name, action, ""));
+				return;
+			}
+			frappe.prompt(
+				[{ fieldname: "approval_note", fieldtype: "Small Text", label: __("驳回原因"), reqd: 1 }],
+				(values) => submit_dingtalk_import_action(import_name, action, values.approval_note),
+				__("驳回钉钉导入"),
+				__("确认驳回"),
+			);
+		}
+
+		function submit_dingtalk_import_action(import_name, action, approval_note) {
+			frappe.call({
+				method: action === "approve"
+					? "hrms.api.dingtalk_integration.approve_dingtalk_employee_import"
+					: action === "retry"
+						? "hrms.api.dingtalk_integration.retry_dingtalk_employee_attachments"
+						: "hrms.api.dingtalk_integration.reject_dingtalk_employee_import",
+				args: { import_name, approval_note },
+				freeze: true,
+				freeze_message: action === "approve" ? __("正在审批并导入员工…") : action === "retry" ? __("正在重试钉钉附件下载…") : __("正在驳回钉钉导入…"),
+			}).then(() => {
+				frappe.show_alert({ message: action === "approve" ? __("已审批并导入员工主表。") : action === "retry" ? __("附件重试完成，请查看附件状态。") : __("已驳回，未修改员工主表。"), indicator: action === "reject" ? "orange" : "green" });
+				load_dingtalk_employee_imports();
+				listview.refresh();
+			});
+		}
+
+		dialog.show();
+		load_dingtalk_employee_imports();
+	}
+
+	function open_employee_registration_link(options = {}) {
+		const default_company = frappe.defaults.get_user_default("Company") || "";
+		if (options.direct && default_company) {
+			generate_employee_registration_qr(
+				{ company: default_company, expires_days: 30 },
+				{ show_manual_entry: true },
+			);
+			return;
+		}
+
+		const dialog = new frappe.ui.Dialog({
+			title: __("生成员工扫码填写链接"),
+			fields: [
+				{ fieldtype: "Link", fieldname: "company", label: __("公司"), options: "Company", reqd: 1, default: frappe.defaults.get_user_default("Company") || "" },
+				{ fieldtype: "Link", fieldname: "department", label: __("部门"), options: "Department" },
+				{ fieldtype: "Link", fieldname: "designation", label: __("岗位"), options: "Designation" },
+				{ fieldtype: "Date", fieldname: "date_of_joining", label: __("入职日期") },
+				{ fieldtype: "Int", fieldname: "expires_days", label: __("链接有效天数"), default: 30, reqd: 1 },
+			],
+			primary_action_label: __("生成二维码"),
+			primary_action(values) {
+				generate_employee_registration_qr(values, { show_manual_entry: false }).then(() => dialog.hide());
+			},
+		});
+		dialog.show();
+	}
+
+	function generate_employee_registration_qr(values, options = {}) {
+		return frappe.call({
+			method: "hrms.hr.doctype.hrms_employee_registration.hrms_employee_registration.create_registration_link",
+			args: values,
+			freeze: true,
+			freeze_message: __("正在生成一次性填写链接…"),
+		}).then((response) => {
+			const link = response.message;
+			const url = `${window.location.origin}/employee-registration`;
+			return frappe.call({
+				method: "hrms.hr.doctype.hrms_employee_registration.hrms_employee_registration.get_registration_qr_svg",
+				args: { name: link.name, url },
+			}).then((qr_response) => {
+				show_employee_registration_qr(qr_response.message, url, link.token, options);
+				return qr_response.message;
+			});
+		});
+	}
+
+	function show_employee_registration_qr(qr, base_url, token, options = {}) {
+		const url = `${base_url}?token=${encodeURIComponent(token)}`;
+		const dialog = new frappe.ui.Dialog({ title: __("员工入职填写二维码"), fields: [{ fieldtype: "HTML", fieldname: "qr" }] });
+		dialog.fields_dict.qr.$wrapper.html(`
+			<div class="hrms-registration-qr-dialog">
+				<div class="hrms-registration-qr-image">${qr.svg}</div>
+				<p class="text-muted">${__("员工连接公司 Wi‑Fi 后，使用任意二维码扫描软件扫码填写。")}</p>
+				<div class="hrms-registration-qr-url">${frappe.utils.escape_html(url)}</div>
+				<button class="btn btn-default hrms-copy-registration-url">${__("复制填写地址")}</button>
+				${options.show_manual_entry ? `<div><a href="#" class="hrms-registration-manual-entry">${__("手动填写")}</a></div>` : ""}
+			</div>`);
+		dialog.fields_dict.qr.$wrapper.find(".hrms-copy-registration-url").on("click", () => {
+			frappe.utils.copy_to_clipboard(url);
+			frappe.show_alert({ message: __("地址已复制"), indicator: "green" });
+		});
+		dialog.fields_dict.qr.$wrapper.find(".hrms-registration-manual-entry").on("click", (event) => {
+			event.preventDefault();
+			dialog.hide();
+			frappe.new_doc(EMPLOYEE_DOCTYPE);
+		});
+		dialog.show();
 	}
 
 	const ROSTER_CLEANUP_MODULES = ["attendance", "payroll", "form_intake", "personnel_changes", "dingtalk", "employees"];
@@ -693,10 +929,19 @@
 		const source_records = custom_records;
 
 		const matches_card_filter = (employee, [fieldname, expected]) => {
+			if (fieldname === "_hrms_probation_stage") return true;
 			const actual = employee?.[fieldname];
 			if (Array.isArray(expected)) {
 				const [operator, value] = expected;
-				return operator === "!=" ? actual !== value : actual === value;
+				const actual_date = String(actual || "").slice(0, 10);
+				if (operator === "between" && Array.isArray(value)) return actual_date >= value[0] && actual_date <= value[1];
+				if (operator === "!=") return actual !== value;
+				if (!actual_date) return false;
+				if (operator === "<=") return actual_date <= value;
+				if (operator === ">=") return actual_date >= value;
+				if (operator === "<") return actual_date < value;
+				if (operator === ">") return actual_date > value;
+				return actual === value;
 			}
 			return actual === expected;
 		};
@@ -727,8 +972,39 @@
 		const value = employee?.[column?.fieldname];
 		if (column?.fieldname === "department") return get_roster_department_label(value);
 		if (column?.fieldname === "custom_work_nature") return format_roster_work_nature(value);
+		if (column?.fieldname === "suggested_confirmation_date") {
+			return employee?.date_of_joining ? shift_roster_date(String(employee.date_of_joining).slice(0, 10), 90) : "-";
+		}
 		if (column?.fieldname === "cell_number") return format_roster_phone_number(value) || "-";
 		return value == null || value === "" ? "-" : value;
+	}
+
+	function get_roster_date_only(value) {
+		if (value instanceof Date && !Number.isNaN(value.getTime())) {
+			return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+		}
+		const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+		if (!match) return null;
+		const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+		if (
+			Number.isNaN(date.getTime()) ||
+			date.getFullYear() !== Number(match[1]) ||
+			date.getMonth() !== Number(match[2]) - 1 ||
+			date.getDate() !== Number(match[3])
+		) return null;
+		return date;
+	}
+
+	function is_roster_contract_expiry_warning(contract_end_date, today = new Date()) {
+		const end_date = get_roster_date_only(contract_end_date);
+		const current_date = get_roster_date_only(today);
+		if (!end_date || !current_date) return false;
+		const warning_cutoff = new Date(
+			current_date.getFullYear(),
+			current_date.getMonth() + 2,
+			current_date.getDate(),
+		);
+		return end_date <= warning_cutoff;
 	}
 
 	function render_roster_table_cell(employee, column, row_number) {
@@ -752,6 +1028,15 @@
 			return cell;
 		}
 		cell.textContent = get_roster_table_cell_value(employee, column);
+		if (column.fieldname === "suggested_confirmation_date" && employee.date_of_joining) {
+			cell.title = __("仅供参考，不影响实际转正");
+		}
+		if (column.fieldname === "contract_end_date" && is_roster_contract_expiry_warning(employee.contract_end_date)) {
+			cell.classList.add("hrms-roster-contract-expiry-warning");
+			const end_date = get_roster_date_only(employee.contract_end_date);
+			const today = get_roster_date_only(new Date());
+			cell.title = end_date < today ? __("合同已到期") : __("合同将在两个月内到期");
+		}
 		return cell;
 	}
 
@@ -842,9 +1127,12 @@
 	}
 
 	function get_visible_roster_columns() {
-		const show_departure_date = get_active_roster_card().filters.custom_work_nature === "离职";
+		const active_card = get_active_roster_card();
+		const show_departure_date = active_card.filters.custom_work_nature === "离职";
+		const show_suggested_confirmation_date = active_card.filters.custom_work_nature === "在职·试用期";
 		return roster_list_columns.filter((column) =>
-			show_departure_date ? column.fieldname !== "date_of_joining" : column.fieldname !== "relieving_date",
+			(column.fieldname !== "suggested_confirmation_date" || show_suggested_confirmation_date) &&
+			(show_departure_date ? column.fieldname !== "date_of_joining" : column.fieldname !== "relieving_date"),
 		);
 	}
 
@@ -1208,9 +1496,11 @@
 			}
 			await filter_area.clear_filters();
 			if (revision !== listview.__hrmsRosterFilterRevision) return;
-			const filters = Object.entries(route_options).map(([fieldname, value]) =>
+			const filters = Object.entries(route_options)
+				.filter(([fieldname]) => fieldname !== "_hrms_probation_stage")
+				.map(([fieldname, value]) =>
 				Array.isArray(value) ? [EMPLOYEE_DOCTYPE, fieldname, value[0], value[1]] : [EMPLOYEE_DOCTYPE, fieldname, "=", value],
-			);
+				);
 			await filter_area.set(filters);
 			if (revision !== listview.__hrmsRosterFilterRevision) return;
 			listview.search_term = "";
@@ -1243,7 +1533,9 @@
 	function build_roster_route_options(filters, search) {
 		const route_options = {};
 		Object.keys(filters || {}).forEach((fieldname) => {
-			if (has_employee_field(fieldname)) {
+			if (fieldname === "_hrms_probation_stage") {
+				route_options[fieldname] = filters[fieldname];
+			} else if (has_employee_field(fieldname)) {
 				route_options[fieldname] = filters[fieldname];
 			}
 		});
@@ -1335,7 +1627,7 @@ function hide_native_filter_controls() {
 		const page_wrapper = listview?.page?.wrapper?.[0] || listview?.page?.wrapper?.get?.(0);
 		if (!page_wrapper) return;
 
-		const allowed_labels = ["添加员工", "表单导入", "导出", "清空花名册"];
+		const allowed_labels = ["钉钉同步新员工", "钉钉导入审批", "表单导入", "导出", "清空花名册"];
 		const toolbar = page_wrapper.querySelector(".page-actions, .list-view-actions, .list-actions") || page_wrapper;
 
 		// Sorting is provided by the fixed table header. Remove Frappe's separate

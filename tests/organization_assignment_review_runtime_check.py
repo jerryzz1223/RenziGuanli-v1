@@ -52,15 +52,25 @@ def run():
 		assert second_rows[0]["assignment_type"] == "待确认"
 		second_rows[0]["assignment_type"] = "正式"
 		fails(lambda: review.save_review("永新", second["node_name"], second["modified"], second_rows), "正式职位不唯一")
-		second_rows[0]["assignment_type"] = "待确认"
-		pending = review.save_review("永新", second["node_name"], second["modified"], second_rows)
-		assert pending["assigned"] == 1 and pending["pending"] == 1
-		print("PASS: 王传瑞 keeps both placements; second confirmed formal post blocked; pending duty still counts once")
+		multiple = review.get_multiple_position_review("永新", "1302")
+		assert len(multiple["positions"]) >= 3
+		primary = next(row["position_id"] for row in multiple["positions"] if row["node_name"] == second["node_name"])
+		saved = review.save_multiple_position_review("永新", "1302", primary, multiple["positions"])
+		assert saved["formal"] == 1 and saved["secondary"] == len(multiple["positions"]) - 1
+		fails(lambda: review.save_multiple_position_review("永新", "1302", primary, multiple["positions"]), "多职位记录已变化")
+		refreshed = review.get_multiple_position_review("永新", "1302")["positions"]
+		assert sum(row["formal"] for row in refreshed) == 1
+		assert all(row["formal"] or row["assignment_type"] == "兼任" for row in refreshed)
+		first_types = [row["assignment_type"] for row in review.get_review("永新", node)["rows"] if row["employee"] == "1302"]
+		second_types = [row["assignment_type"] for row in review.get_review("永新", second["node_name"])["rows"] if row["employee"] == "1302"]
+		assert first_types and set(first_types) == {"兼任"}
+		assert second_types.count("正式") == 1
+		print("PASS: choosing one formal position atomically changes every other position to secondary")
 		fails(lambda: review.save_review("永新", node, view["modified"], rows), "记录已变化")
 		reconcile("永新")
 		card = cards()["organization_node:" + node]
 		assert card["current_headcount"] >= 1
-		assert any("组长（正式）、培训负责人（兼）：王传瑞" == line for line in card["lines"]), card["lines"]
+		assert any("组长（兼）、培训负责人（兼）：王传瑞" == line for line in card["lines"]), card["lines"]
 		assert "协调员（兼）：杨玉婷" in card["lines"]
 		cfg = chart._manual_node_config(frappe.get_doc("Organization Node", node).source_text)
 		assert cfg["assigned_employees"] == ["1302"] and cfg["assignment_rules_manual"]
@@ -70,11 +80,11 @@ def run():
 		plan = package.prepare("永新", data)
 		assert not plan["errors"], plan["errors"]
 		bad = copy.deepcopy(data)
-		target_id = next(n.manual_config.get("portable_id") or n.node_code for n in chart._get_manual_organization_records("永新")["nodes"] if n.name == second["node_name"])
+		target_id = next(n.manual_config.get("portable_id") or n.node_code for n in chart._get_manual_organization_records("永新")["nodes"] if n.name == node)
 		for row in bad["人员任职"]:
 			if row["node"] == target_id and row["type"] == "原表人员" and row["code"] == "1302": row.update(manual_confirmed="1", assignment_type="正式")
 		assert any("正式职位不唯一" in e for e in package.prepare("永新", bad)["errors"])
-		assert any(row.get("assignment_type") == "待确认" and row["node"] == target_id for row in data["人员任职"])
+		assert any(row.get("assignment_type") == "兼任" and row["node"] == target_id for row in data["人员任职"])
 		package.apply_configuration("永新", file["file_url"], plan["fingerprint"])
 		reconcile("永新")
 		assert cards()["organization_node:" + node]["lines"] == card["lines"]

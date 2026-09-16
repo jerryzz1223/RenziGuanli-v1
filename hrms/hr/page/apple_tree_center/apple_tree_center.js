@@ -20,6 +20,8 @@ class AppleTreeCenter {
 		this.data = null;
 		this.activePerson = "";
 		this.personData = null;
+		this.personFilters = { startDate: "", endDate: "", search: "" };
+		this.personRouteFilterKey = "";
 		this.table = { page: 1, pageSize: 20, sortKey: "net_apples", sortOrder: "desc", filters: {} };
 		this.requestId = 0;
 		this.view = this.viewFromRoute();
@@ -36,19 +38,78 @@ class AppleTreeCenter {
 		return route[1] === "monthly-detail" ? "monthly-detail" : "annual-summary";
 	}
 
+	monthDateRange(month) {
+		const match = String(month || "").match(/^(\d{4})-(\d{2})$/);
+		if (!match) return { startDate: "", endDate: "" };
+		const year = Number(match[1]);
+		const monthNumber = Number(match[2]);
+		if (monthNumber < 1 || monthNumber > 12) return { startDate: "", endDate: "" };
+		const lastDay = new Date(year, monthNumber, 0).getDate();
+		return { startDate: `${match[1]}-${match[2]}-01`, endDate: `${match[1]}-${match[2]}-${String(lastDay).padStart(2, "0")}` };
+	}
+
+	routeFilters() {
+		const params = new URLSearchParams(window.location?.search || "");
+		const filters = { month: params.get("month") || "", startDate: params.get("start_date") || "", endDate: params.get("end_date") || "", search: params.get("search") || "" };
+		if (filters.month && !filters.startDate && !filters.endDate) Object.assign(filters, this.monthDateRange(filters.month));
+		return filters;
+	}
+
+	hasRouteFilters(filters) {
+		return Object.values(filters).some(Boolean);
+	}
+
+	outerFilterParams() {
+		const params = new URLSearchParams();
+		[["month", this.month], ["start_date", this.startDate], ["end_date", this.endDate], ["search", this.search]].forEach(([key, value]) => {
+			if (value) params.set(key, value);
+		});
+		return params;
+	}
+
+	personDefaultFilters() {
+		return { startDate: this.startDate || "", endDate: this.endDate || "", search: "" };
+	}
+
+	personUrl(person, year = this.year) {
+		const query = this.outerFilterParams().toString();
+		return `/desk/apple-tree-center/person/${encodeURIComponent(person)}/${encodeURIComponent(year)}${query ? `?${query}` : ""}`;
+	}
+
+	summaryUrl(view = "annual-summary") {
+		const query = this.outerFilterParams().toString();
+		const path = view === "monthly-detail" ? "/monthly-detail" : "";
+		return `/desk/apple-tree-center${path}${query ? `?${query}` : ""}`;
+	}
+
 	refreshFromRoute() {
 		const nextView = this.viewFromRoute();
 		const route = frappe.get_route?.() || [];
 		if (nextView === "person") {
 			const person = String(route[2] || "");
 			const year = /^\d{4}$/.test(String(route[3] || "")) ? String(route[3]) : this.year;
-			if (nextView !== this.view || person !== this.activePerson || year !== this.year || (!this.personData && !this.personRequestKey)) {
+			const filters = this.routeFilters();
+			const filterKey = JSON.stringify(filters);
+			if (nextView !== this.view || person !== this.activePerson || year !== this.year || filterKey !== this.personRouteFilterKey || (!this.personData && !this.personRequestKey)) {
 				this.view = nextView;
 				this.activePerson = person;
 				this.year = year;
+				this.month = filters.month;
+				this.startDate = filters.startDate;
+				this.endDate = filters.endDate;
+				this.search = filters.search;
+				this.personFilters = this.personDefaultFilters();
+				this.personRouteFilterKey = filterKey;
 				this.loadPerson();
 			}
 			return;
+		}
+		const filters = this.routeFilters();
+		if (this.hasRouteFilters(filters)) {
+			this.month = filters.month;
+			this.startDate = filters.startDate;
+			this.endDate = filters.endDate;
+			this.search = filters.search;
 		}
 		if (nextView === this.view) return;
 		this.view = nextView;
@@ -64,6 +125,10 @@ class AppleTreeCenter {
 	}
 
 	setView(view) {
+		if (this.view === "person") {
+			window.location.href = this.summaryUrl(view);
+			return;
+		}
 		if (view === "monthly-detail") frappe.set_route("apple-tree-center", "monthly-detail");
 		else frappe.set_route("apple-tree-center");
 	}
@@ -96,7 +161,8 @@ class AppleTreeCenter {
 	}
 
 	personKey(person) {
-		return String(person.employee || person.employee_code || person.employee_name || "");
+		// The company employee code is the business identity shown and shared with users.
+		return String(person.employee_code || person.employee || person.employee_name || "");
 	}
 
 	resetTable() {
@@ -245,7 +311,7 @@ class AppleTreeCenter {
 		const start = (page - 1) * this.table.pageSize;
 		const visibleRows = rows.slice(start, start + this.table.pageSize);
 		const direction = (key) => this.table.sortKey === key ? (this.table.sortOrder === "asc" ? "↑" : "↓") : "↕";
-		return `<div class="apple-tree-center__table-wrap"><table class="table apple-tree-center__data-table"><thead><tr><th>${__("序号")}</th>${columns.map((column) => `<th><button class="apple-tree-center__sort" data-apple-table-sort="${column.key}">${column.label}<span>${direction(column.key)}</span></button></th>`).join("")}<th>${__("操作")}</th></tr><tr class="apple-tree-center__filter-row"><th></th>${columns.map((column) => `<th><input class="form-control input-xs" data-apple-table-filter="${column.key}" value="${this.escape(this.table.filters[column.key])}" placeholder="${__("搜索")}"></th>`).join("")}<th></th></tr></thead><tbody>${visibleRows.length ? visibleRows.map((person, index) => `<tr class="${this.personKey(person) === this.activePerson ? "is-selected" : ""}"><td>${start + index + 1}</td><td>${this.escape(person.department)}</td><td><a class="apple-tree-center__name-link" href="/desk/apple-tree-center/person/${encodeURIComponent(this.personKey(person))}/${this.year}" data-apple-person="${this.escape(this.personKey(person))}">${this.escape(person.employee_name)}</a></td><td>${this.escape(person.employee_code)}</td><td>${this.number(person.green_apples)}</td><td>${this.number(person.red_apples)}</td><td>${this.number(person.net_apples)}</td><td>${this.number(person.reward_amount)}</td><td><button class="btn btn-xs btn-default" data-apple-person="${this.escape(this.personKey(person))}">${__("查看明细")} (${this.number(person.record_count)})</button></td></tr>`).join("") : `<tr><td class="apple-tree-center__empty-cell" colspan="${columns.length + 2}">${__("没有符合列筛选条件的员工。")}</td></tr>`}</tbody></table></div>${this.tablePager(rows.length, page)}`;
+		return `<div class="apple-tree-center__table-wrap"><table class="table apple-tree-center__data-table"><thead><tr><th>${__("序号")}</th>${columns.map((column) => `<th><button class="apple-tree-center__sort" data-apple-table-sort="${column.key}">${column.label}<span>${direction(column.key)}</span></button></th>`).join("")}<th>${__("操作")}</th></tr><tr class="apple-tree-center__filter-row"><th></th>${columns.map((column) => `<th><input class="form-control input-xs" data-apple-table-filter="${column.key}" value="${this.escape(this.table.filters[column.key])}" placeholder="${__("搜索")}"></th>`).join("")}<th></th></tr></thead><tbody>${visibleRows.length ? visibleRows.map((person, index) => `<tr class="${this.personKey(person) === this.activePerson ? "is-selected" : ""}"><td>${start + index + 1}</td><td>${this.escape(person.department)}</td><td><a class="apple-tree-center__name-link" href="${this.personUrl(this.personKey(person))}" data-apple-person="${this.escape(this.personKey(person))}">${this.escape(person.employee_name)}</a></td><td>${this.escape(person.employee_code)}</td><td>${this.number(person.green_apples)}</td><td>${this.number(person.red_apples)}</td><td>${this.number(person.net_apples)}</td><td>${this.number(person.reward_amount)}</td><td><button class="btn btn-xs btn-default" data-apple-person="${this.escape(this.personKey(person))}">${__("查看明细")} (${this.number(person.record_count)})</button></td></tr>`).join("") : `<tr><td class="apple-tree-center__empty-cell" colspan="${columns.length + 2}">${__("没有符合列筛选条件的员工。")}</td></tr>`}</tbody></table></div>${this.tablePager(rows.length, page)}`;
 	}
 
 	monthlyDetailTable() {
@@ -254,19 +320,19 @@ class AppleTreeCenter {
 		const columns = this.monthlyDetailColumns();
 		const rows = this.monthlyDetailRows();
 		const direction = (key) => this.table.sortKey === key ? (this.table.sortOrder === "asc" ? "↑" : "↓") : "↕";
-		return `<div class="apple-tree-center__table-wrap"><table class="table apple-tree-center__monthly-table"><thead><tr>${columns.map((column) => `<th><button class="apple-tree-center__sort" data-apple-table-sort="${column.key}">${column.label}<span>${direction(column.key)}</span></button></th>`).join("")}</tr><tr class="apple-tree-center__filter-row">${columns.map((column) => `<th><input class="form-control input-xs" data-apple-table-filter="${column.key}" value="${this.escape(this.table.filters[column.key])}" placeholder="${__("搜索")}"></th>`).join("")}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr><td>${this.escape(this.monthlyDetailValue(row, "attendance_month"))}</td><td>${this.escape(row.department)}</td><td><a class="apple-tree-center__name-link" href="/desk/apple-tree-center/person/${encodeURIComponent(this.personKey(row))}/${this.year}" data-apple-person="${this.escape(this.personKey(row))}">${this.escape(row.employee_name)}</a></td><td>${this.escape(row.employee_code)}</td><td>${this.number(row.green_apples)}</td><td>${this.number(row.red_apples)}</td><td>${this.number(this.monthlyDetailValue(row, "net_apples"))}</td><td>${this.number(row.reward_amount)}</td><td>${this.escape(row.reward_item)}</td><td>${this.escape(this.monthlyDetailValue(row, "final_status"))}</td></tr>`).join("") : `<tr><td class="apple-tree-center__empty-cell" colspan="${columns.length}">${__("没有符合列筛选条件的明细记录。")}</td></tr>`}</tbody></table></div>`;
+		return `<div class="apple-tree-center__table-wrap"><table class="table apple-tree-center__monthly-table"><thead><tr>${columns.map((column) => `<th><button class="apple-tree-center__sort" data-apple-table-sort="${column.key}">${column.label}<span>${direction(column.key)}</span></button></th>`).join("")}</tr><tr class="apple-tree-center__filter-row">${columns.map((column) => `<th><input class="form-control input-xs" data-apple-table-filter="${column.key}" value="${this.escape(this.table.filters[column.key])}" placeholder="${__("搜索")}"></th>`).join("")}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr><td>${this.escape(this.monthlyDetailValue(row, "attendance_month"))}</td><td>${this.escape(row.department)}</td><td><a class="apple-tree-center__name-link" href="${this.personUrl(this.personKey(row))}" data-apple-person="${this.escape(this.personKey(row))}">${this.escape(row.employee_name)}</a></td><td>${this.escape(row.employee_code)}</td><td>${this.number(row.green_apples)}</td><td>${this.number(row.red_apples)}</td><td>${this.number(this.monthlyDetailValue(row, "net_apples"))}</td><td>${this.number(row.reward_amount)}</td><td>${this.escape(row.reward_item)}</td><td>${this.escape(this.monthlyDetailValue(row, "final_status"))}</td></tr>`).join("") : `<tr><td class="apple-tree-center__empty-cell" colspan="${columns.length}">${__("没有符合列筛选条件的明细记录。")}</td></tr>`}</tbody></table></div>`;
 	}
 
 	loadPerson() {
 		const requestId = ++this.requestId;
-		this.personSort = { field: "attendance_month", direction: "asc" };
-		this.personRequestKey = this.activePerson + "/" + this.year;
+		this.personSort = { field: "reward_date", direction: "asc" };
+		this.personRequestKey = this.activePerson + "/" + this.year + "/" + this.month + "/" + this.startDate + "/" + this.endDate + "/" + this.search;
 		this.personData = null;
 		this.wrapper.innerHTML = `<section class="apple-tree-center apple-tree-center--state">正在加载个人明细…</section>`;
 		return frappe.call({
 			method: "hrms.hr.page.apple_tree_center.apple_tree_center.get_person_detail",
 			timeout: 30000,
-			args: { person: this.activePerson, year: this.year, company: this.company() },
+			args: { person: this.activePerson, year: this.year, month: this.month, search: this.search, company: this.company(), start_date: this.startDate, end_date: this.endDate },
 		}).then((response) => {
 			if (requestId !== this.requestId) return;
 			this.personRequestKey = "";
@@ -285,24 +351,29 @@ class AppleTreeCenter {
 		return numeric ? this.number(value) : this.escape(value);
 	}
 
-	personMonthRows() {
-		const data = this.personData || {};
-		const source = data.rows || [];
-		const person = data.person || {};
-		return Array.from({ length: 12 }, (_, index) => {
-			const month = this.year + "-" + String(index + 1).padStart(2, "0");
-			return source.find((row) => row.attendance_month === month) || {
-				attendance_month: month, department: person.department,
-				employee_name: person.employee_name, employee_code: person.employee_code,
-				date_of_joining: source[0]?.date_of_joining, __placeholder: true,
-			};
-		});
+	personRecordedMonthCount() {
+		return new Set((this.personData?.rows || []).map((row) => {
+			const match = String(row.reward_date || "").match(/^(\d{4})-(\d{1,2})/);
+			return match && match[1] === this.year ? `${match[1]}-${String(match[2]).padStart(2, "0")}` : "";
+		}).filter(Boolean)).size;
 	}
 
 	personCellText(row, column) {
-		const value = row[column.field];
-		if (column.field === "attendance_month") return String(value || "").replace("-", "").slice(2);
-		return value === null || value === undefined ? "" : String(value);
+		return row[column.field] === null || row[column.field] === undefined ? "" : String(row[column.field]);
+	}
+
+	personDetailRows() {
+		const filters = this.personFilters || {};
+		const startDate = String(filters.startDate || "");
+		const endDate = String(filters.endDate || "");
+		const search = String(filters.search || "").trim().toLowerCase();
+		return (this.personData?.rows || []).filter((row) => {
+			const rewardDate = String(row.reward_date || "").slice(0, 10);
+			if (startDate && (!rewardDate || rewardDate < startDate)) return false;
+			if (endDate && (!rewardDate || rewardDate > endDate)) return false;
+			if (search && !Object.values(row).join(" ").toLowerCase().includes(search)) return false;
+			return true;
+		});
 	}
 
 	sortPersonRows(rows, columns) {
@@ -315,69 +386,98 @@ class AppleTreeCenter {
 			// Missing values remain last in both directions; zero is a real value.
 			if (emptyA !== emptyB) return emptyA ? 1 : -1;
 			const compared = emptyA ? 0 : numeric ? Number(a) - Number(b) : String(a).localeCompare(String(b), "zh-Hans-CN", { numeric: true });
-			return compared * (sort.direction === "desc" ? -1 : 1) || String(left.attendance_month).localeCompare(String(right.attendance_month));
+			return compared * (sort.direction === "desc" ? -1 : 1) || String(left.reward_date || "").localeCompare(String(right.reward_date || ""), "zh-Hans-CN", { numeric: true });
 		});
 	}
 
+	personDetailColumns() {
+		return this.personData?.columns?.length ? this.personData.columns : [
+			{ field: "sequence", label: "序号" }, { field: "created_at", label: "创建时间" }, { field: "reward_date", label: "奖/惩日期" },
+			{ field: "department", label: "受奖/惩人部门" }, { field: "employee_name", label: "受奖/惩人" },
+			{ field: "green_apples", label: "绿苹果", numeric: true }, { field: "red_apples", label: "红苹果", numeric: true },
+			{ field: "reward_item", label: "奖/惩项目" }, { field: "note", label: "备注" }, { field: "created_by_name", label: "创建人" },
+			{ field: "signature", label: "签名" }, { field: "note_2", label: "备注" },
+		];
+	}
+
 	personGrid(columns) {
-		const calendar = this.personMonthRows();
-		const sort = this.personSort || { field: "attendance_month", direction: "asc" };
-		const rows = this.sortPersonRows(calendar, columns);
-		const recorded = rows.filter((row) => !row.__placeholder);
+		const source = this.personData?.rows || [];
+		if (!source.length) return `<p class="apple-tree-center__empty">没有苹果树奖惩记录。</p>`;
+		const sort = this.personSort || { field: "reward_date", direction: "asc" };
+		const rows = this.sortPersonRows(this.personDetailRows(), columns);
 		const identity = this.personData.person || {};
 		const frozenColumns = {
-			attendance_month: "is-month",
+			sequence: "is-sequence",
+			created_at: "is-created-at",
+			reward_date: "is-reward-date",
 			department: "is-department",
 			employee_name: "is-employee-name",
-			employee_code: "is-employee-code",
 		};
-		const cellClass = (column) => [column.numeric ? "is-numeric" : "", frozenColumns[column.field] ? `is-frozen ${frozenColumns[column.field]}` : "", column.field === "missing_hours" ? "is-absence" : "", column.field === "green_apples" ? "is-green" : "", column.field === "red_apples" ? "is-red" : "", column.field === "review_note" ? "is-note" : ""].filter(Boolean).join(" ");
+		const cellClass = (column) => [column.numeric ? "is-numeric" : "", frozenColumns[column.field] ? `is-frozen ${frozenColumns[column.field]}` : "", column.field === "green_apples" ? "is-green" : "", column.field === "red_apples" ? "is-red" : "", ["reward_item", "note", "note_2"].includes(column.field) ? "is-note" : ""].filter(Boolean).join(" ");
 		const headers = columns.map((column) => {
 			const active = sort.field === column.field;
 			const arrow = active ? (sort.direction === "asc" ? "↑" : "↓") : "↕";
 			const next = active && sort.direction === "asc" ? "降序" : "升序";
 			return `<th class="${cellClass(column)}" aria-sort="${active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}"><button class="apple-tree-center__sort ${active ? "is-sorted" : ""}" data-person-sort="${column.field}" aria-label="${this.escape(column.label)}：点击${next}排序"><span>${this.escape(column.label)}</span><span aria-hidden="true">${arrow}</span></button></th>`;
 		}).join("");
-		const body = rows.map((row) => `<tr class="${row.attendance_month.endsWith("-12") ? "is-year-end" : ""} ${row.__placeholder ? "is-unrecorded" : ""}">${columns.map((column) => `<td class="${cellClass(column)}" title="${column.field === "attendance_month" && row.__placeholder ? "该月份暂无入账数据" : ""}">${column.field === "attendance_month" ? this.escape(this.personCellText(row, column)) : row.__placeholder ? this.escape(row[column.field]) : this.detailValue(row[column.field], column.numeric)}</td>`).join("")}</tr>`).join("");
+		const body = rows.length ? rows.map((row) => `<tr>${columns.map((column) => `<td class="${cellClass(column)}">${this.detailValue(this.personCellText(row, column), column.numeric)}</td>`).join("")}</tr>`).join("") : `<tr><td class="apple-tree-center__empty-cell" colspan="${columns.length}">没有符合明细筛选条件的记录。</td></tr>`;
 		const total = columns.map((column, index) => {
-			let value = identity[column.field] || (column.field === "date_of_joining" ? calendar[0].date_of_joining : "");
-			if (column.numeric) value = recorded.length && recorded.every((row) => row[column.field] !== null && row[column.field] !== undefined && row[column.field] !== "") ? Math.round(recorded.reduce((sum, row) => sum + Number(row[column.field]), 0) * 10000) / 10000 : null;
+			let value = identity[column.field] || "";
+			if (column.numeric) value = Math.round(rows.reduce((sum, row) => sum + Number(row[column.field] || 0), 0) * 10000) / 10000;
 			return `<td class="${cellClass(column)}">${index === 0 ? "合计" : column.numeric ? this.detailValue(value, true) : this.escape(value)}</td>`;
 		}).join("");
-		return `<div class="apple-tree-center__table-wrap apple-tree-center__person-scroll"><table class="table apple-tree-center__person-table"><thead><tr>${headers}</tr></thead><tbody>${body || `<tr><td colspan="${columns.length}">没有符合筛选条件的月份。</td></tr>`}</tbody><tfoot><tr>${total}</tr></tfoot></table></div>`;
+		return `<div class="apple-tree-center__table-wrap apple-tree-center__person-scroll"><table class="table apple-tree-center__person-table apple-tree-center__apple-detail-table"><thead><tr>${headers}</tr></thead><tbody>${body || `<tr><td colspan="${columns.length}">没有苹果树奖惩记录。</td></tr>`}</tbody><tfoot><tr>${total}</tr></tfoot></table></div>`;
+	}
+
+	personDetailFilters() {
+		const filters = this.personFilters || {};
+		const inherited = [];
+		if (this.month) inherited.push(`统计期间：${this.month}`);
+		if (this.startDate && this.endDate) inherited.push(`${this.startDate} 至 ${this.endDate}`);
+		if (this.search) inherited.push(`统计关键词：${this.search}`);
+		return `<div class="apple-tree-center__person-detail-filters"><div class="apple-tree-center__person-detail-filter-fields"><label>明细开始日期<input type="date" class="form-control" data-person-detail-start-date value="${this.escape(filters.startDate)}"></label><span>至</span><label>明细结束日期<input type="date" class="form-control" data-person-detail-end-date value="${this.escape(filters.endDate)}"></label><label class="apple-tree-center__person-detail-search">明细关键词<input class="form-control" data-person-detail-search value="${this.escape(filters.search)}" placeholder="奖/惩项目、备注、创建人"></label><button class="btn btn-default" data-person-detail-apply>筛选</button>${filters.startDate || filters.endDate || filters.search ? `<button class="btn btn-link" data-person-detail-clear>清除</button>` : ""}</div><p>已继承统计页条件：${this.escape(inherited.length ? inherited.join("；") : "全年全部条件")}；明细筛选只会在此范围内继续缩小结果。</p></div>`;
 	}
 
 	renderPerson() {
 		if (!this.personData) return;
 		const data = this.personData;
 		const person = data.person || {};
-		const columns = data.columns || [];
-		const rows = data.rows || [];
+		const columns = this.personDetailColumns();
+		const rows = this.personDetailRows();
 		const title = person.employee_name ? `${person.employee_name} · 苹果树明细` : "个人苹果树明细";
 		this.page.set_title(title);
 		const table = this.personGrid(columns);
 		this.wrapper.innerHTML = `<section class="apple-tree-center apple-tree-center--person">
 			<header class="apple-tree-center__header"><div><button class="btn btn-default btn-sm" data-apple-back>返回个人年度汇总</button><h2>${this.escape(title)}</h2><p>${this.escape(person.department)}　工号 ${this.escape(person.employee_code)}　${this.escape(this.year)} 年</p></div><div class="apple-tree-center__header-actions"><label>统计年份 <select class="form-control" data-person-year>${Array.from(new Set([...(data.available_years || this.data?.available_years || []), Number(this.year), new Date().getFullYear()])).sort((a,b) => b-a).map((year) => `<option value="${year}" ${String(year) === this.year ? "selected" : ""}>${year}年</option>`).join("")}</select></label><button class="btn btn-default" data-apple-export>${__("导出 Excel")}</button>${person.employee ? `<button class="btn btn-default" data-employee-detail="${this.escape(person.employee)}">打开员工档案</button>` : ""}<button class="btn btn-default" data-person-refresh>刷新数据</button></div></header>
-			<section class="apple-tree-center__card"><header><div><h3>个人全年考勤奖惩明细</h3><p>1—12 月逐月列示 · 工时：小时 · 奖金：元</p></div><span class="apple-tree-center__coverage">已入账 ${rows.length} 个月</span></header>${data.available ? table : `<p class="apple-tree-center__empty">${this.escape(data.reason)}</p>`}<p class="apple-tree-center__footnote">月份采用年份后两位＋月份（如 2601）。空白月份尚无入账数据；“—”为已入账记录中未提供的字段。点击表头切换升降序，合计固定在底部。</p></section>
+			<section class="apple-tree-center__card"><header><div><h3>个人苹果树奖惩明细</h3><p>按奖/惩记录列示 · 苹果数量：颗</p></div><span class="apple-tree-center__coverage">共 ${rows.length} 条记录</span></header>${data.available ? `${this.personDetailFilters()}${table}` : `<p class="apple-tree-center__empty">${this.escape(data.reason)}</p>`}<p class="apple-tree-center__footnote">表头按苹果树（月考勤版）明细格式列示；“—”表示原始奖惩记录未提供该字段。点击表头可切换升降序，合计固定在底部。</p></section>
 		</section>`;
 		this.wrapper.querySelector("[data-apple-back]")?.addEventListener("click", () => this.setView("annual-summary"));
 		this.wrapper.querySelector("[data-apple-export]")?.addEventListener("click", () => this.exportCurrentView());
 		this.wrapper.querySelector("[data-person-refresh]")?.addEventListener("click", () => this.loadPerson());
+		this.wrapper.querySelector("[data-person-detail-apply]")?.addEventListener("click", () => {
+			const startDate = this.wrapper.querySelector("[data-person-detail-start-date]")?.value || "";
+			const endDate = this.wrapper.querySelector("[data-person-detail-end-date]")?.value || "";
+			if ((startDate && !endDate) || (!startDate && endDate)) return frappe.msgprint("明细开始日期和结束日期需要同时填写。");
+			if (startDate && endDate && startDate > endDate) return frappe.msgprint("明细开始日期不能晚于结束日期。");
+			this.personFilters = { startDate, endDate, search: this.wrapper.querySelector("[data-person-detail-search]")?.value.trim() || "" };
+			this.renderPerson();
+		});
+		this.wrapper.querySelector("[data-person-detail-clear]")?.addEventListener("click", () => { this.personFilters = this.personDefaultFilters(); this.renderPerson(); });
 		this.wrapper.querySelectorAll("[data-person-sort]").forEach((button) => button.addEventListener("click", () => {
 			const field = button.dataset.personSort;
-			const current = this.personSort || { field: "attendance_month", direction: "asc" };
+			const current = this.personSort || { field: "reward_date", direction: "asc" };
 			this.personSort = { field, direction: current.field === field && current.direction === "asc" ? "desc" : "asc" };
 			const scrollLeft = this.wrapper.querySelector(".apple-tree-center__person-scroll")?.scrollLeft || 0;
 			this.renderPerson();
 			this.wrapper.querySelector(".apple-tree-center__person-scroll").scrollLeft = scrollLeft;
 			this.wrapper.querySelector(`[data-person-sort="${field}"]`)?.focus({ preventScroll: true });
 		}));
-		this.wrapper.querySelector("[data-person-year]")?.addEventListener("change", (event) => frappe.set_route("apple-tree-center", "person", this.activePerson, event.target.value));
+		this.wrapper.querySelector("[data-person-year]")?.addEventListener("change", (event) => { this.month = ""; this.startDate = ""; this.endDate = ""; window.location.href = this.personUrl(this.activePerson, event.target.value); });
 		this.wrapper.querySelector("[data-employee-detail]")?.addEventListener("click", (event) => frappe.set_route("employee-detail", event.currentTarget.dataset.employeeDetail));
 	}
 
 	exportCurrentView() {
-		const sort = this.view === "person" ? (this.personSort || { field: "attendance_month", direction: "asc" }) : { field: this.table.sortKey, direction: this.table.sortOrder };
+		const sort = this.view === "person" ? (this.personSort || { field: "reward_date", direction: "asc" }) : { field: this.table.sortKey, direction: this.table.sortOrder };
 		const params = new URLSearchParams({
 			view: this.view,
 			year: this.year,
@@ -388,6 +488,9 @@ class AppleTreeCenter {
 			end_date: this.endDate,
 			person: this.view === "person" ? this.activePerson : "",
 			column_filters: this.view === "person" ? "" : JSON.stringify(this.table.filters || {}),
+			detail_start_date: this.view === "person" ? this.personFilters.startDate : "",
+			detail_end_date: this.view === "person" ? this.personFilters.endDate : "",
+			detail_search: this.view === "person" ? this.personFilters.search : "",
 			sort_key: sort.field || "",
 			sort_order: sort.direction || "desc",
 		});
@@ -477,7 +580,7 @@ class AppleTreeCenter {
 		this.wrapper.querySelector("[data-apple-history-import]")?.addEventListener("click", () => this.openHistoryImport());
 		this.wrapper.querySelectorAll("[data-apple-view]").forEach((button) => button.addEventListener("click", () => this.setView(button.dataset.appleView)));
 		this.wrapper.querySelector("[data-apple-year]")?.addEventListener("change", (event) => { this.year = event.target.value; this.month = ""; this.startDate = ""; this.endDate = ""; this.activePerson = ""; this.resetTable(); this.load(); });
-		this.wrapper.querySelector("[data-apple-month]")?.addEventListener("change", (event) => { this.month = event.target.value; this.startDate = ""; this.endDate = ""; this.activePerson = ""; this.resetTable(); this.load(); });
+		this.wrapper.querySelector("[data-apple-month]")?.addEventListener("change", (event) => { this.month = event.target.value; const range = this.monthDateRange(this.month); this.startDate = range.startDate; this.endDate = range.endDate; this.activePerson = ""; this.resetTable(); this.load(); });
 		this.wrapper.querySelector("[data-apple-date-apply]")?.addEventListener("click", () => {
 			const startDate = this.wrapper.querySelector("[data-apple-start-date]")?.value || "";
 			const endDate = this.wrapper.querySelector("[data-apple-end-date]")?.value || "";
@@ -505,6 +608,6 @@ class AppleTreeCenter {
 			this.render();
 			this.wrapper.querySelector(".apple-tree-center__primary-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
 		}));
-		this.wrapper.querySelectorAll("[data-apple-person]").forEach((button) => button.addEventListener("click", (event) => { event.preventDefault(); frappe.set_route("apple-tree-center", "person", button.dataset.applePerson, this.year); }));
+		this.wrapper.querySelectorAll("[data-apple-person]").forEach((button) => button.addEventListener("click", (event) => { event.preventDefault(); window.location.href = this.personUrl(button.dataset.applePerson); }));
 	}
 }

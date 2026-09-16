@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<title>员工入职资料填写</title>
+		<style>
+			:root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172033; background: #f5f7fb; }
+			* { box-sizing: border-box; }
+			body { margin: 0; padding: 24px 12px 48px; }
+			main { width: min(760px, 100%); margin: 0 auto; }
+			.card { background: #fff; border: 1px solid #e5eaf2; border-radius: 16px; box-shadow: 0 8px 30px rgb(32 52 84 / 8%); padding: 24px; }
+			header { margin-bottom: 22px; }
+			header h1 { margin: 0 0 8px; font-size: 24px; }
+			header p, .hint, .error, .success { color: #697586; line-height: 1.6; }
+			.section { border-top: 1px solid #edf0f5; margin-top: 22px; padding-top: 18px; }
+			.section h2 { font-size: 17px; margin: 0 0 14px; }
+			.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+			.field { display: flex; flex-direction: column; gap: 6px; }
+			.field.full { grid-column: 1 / -1; }
+			label { font-size: 14px; font-weight: 600; }
+			label span { color: #dc3545; }
+			input, select, textarea { width: 100%; border: 1px solid #d7deea; border-radius: 9px; padding: 10px 11px; font: inherit; color: inherit; background: #fff; }
+			textarea { min-height: 78px; resize: vertical; }
+			input:read-only, select:disabled { background: #f2f4f7; color: #667085; }
+			button { border: 0; border-radius: 9px; padding: 11px 18px; font: inherit; cursor: pointer; }
+			button[type="submit"] { color: #fff; background: #202124; min-width: 150px; }
+			button:disabled { opacity: .55; cursor: wait; }
+			.actions { display: flex; justify-content: flex-end; margin-top: 24px; }
+			.notice { padding: 12px 14px; border-radius: 9px; background: #eef6ff; color: #24527a; margin-bottom: 16px; line-height: 1.6; }
+			.error { color: #a61b29; background: #fff1f2; padding: 12px 14px; border-radius: 9px; }
+			.success { color: #176b3a; background: #eefbf3; padding: 18px; border-radius: 9px; }
+			@media (max-width: 600px) { body { padding: 10px 8px 28px; } .card { padding: 17px 14px; border-radius: 12px; } .grid { grid-template-columns: 1fr; } .field.full { grid-column: auto; } header h1 { font-size: 21px; } }
+		</style>
+	</head>
+	<body data-token="{{ token }}">
+		<main>
+			<section class="card">
+				<header>
+					<h1>员工入职资料填写</h1>
+					<p>请按身份证、户口资料和银行卡资料如实填写。提交后由人事审核，审核通过后才会创建正式员工档案。</p>
+				</header>
+				<div id="message" class="notice">正在加载填写链接……</div>
+				<form id="registration-form" hidden>
+					<div class="section" style="border-top:0;margin-top:0;padding-top:0">
+						<h2>入职信息</h2>
+						<div class="grid">
+							<div class="field"><label for="employee_code">公司工号</label><input id="employee_code" name="employee_code" placeholder="如暂未分配，可留空由人事填写" /></div>
+							<div class="field"><label for="employee_name">姓名 <span>*</span></label><input id="employee_name" name="employee_name" required /></div>
+							<div class="field"><label for="company">公司 <span>*</span></label><select id="company" name="company" required></select></div>
+							<div class="field"><label for="department">部门/课别 <span>*</span></label><select id="department" name="department" required></select></div>
+							<div class="field"><label for="designation">岗位 <span>*</span></label><select id="designation" name="designation" required></select></div>
+							<div class="field"><label for="date_of_joining">入职日期 <span>*</span></label><input id="date_of_joining" name="date_of_joining" type="date" required /></div>
+						</div>
+					</div>
+
+					<div class="section"><h2>个人资料</h2><div class="grid">
+						<div class="field"><label for="custom_id_type">证件类型</label><select id="custom_id_type" name="custom_id_type"><option>身份证</option><option>护照</option><option>港澳通行证</option><option>台胞证</option><option>其他</option></select></div>
+						<div class="field"><label for="passport_number">证件号码 <span>*</span></label><input id="passport_number" name="passport_number" required /></div>
+						<div class="field"><label for="gender">性别</label><select id="gender" name="gender"><option value="">请选择</option><option>男</option><option>女</option><option>其他</option></select></div>
+						<div class="field"><label for="date_of_birth">出生日期 <span>*</span></label><input id="date_of_birth" name="date_of_birth" type="date" required /></div>
+						<div class="field"><label for="custom_ethnicity">民族</label><select id="custom_ethnicity" name="custom_ethnicity"><option value="">请选择</option></select></div>
+						<div class="field"><label for="custom_native_place">籍贯</label><input id="custom_native_place" name="custom_native_place" list="native-place-options" placeholder="可填常熟市、苏州市或江苏省" /><datalist id="native-place-options"></datalist><small class="hint">城市会自动归一到所属省份，例如：常熟市 → 江苏省。</small></div>
+						<div class="field"><label for="custom_marital_status_text">婚姻状况</label><select id="custom_marital_status_text" name="custom_marital_status_text"><option value="">请选择</option><option>未</option><option>已</option><option>离异</option><option>丧偶</option></select></div>
+						<div class="field"><label for="cell_number">手机号码 <span>*</span></label><input id="cell_number" name="cell_number" inputmode="tel" required /></div>
+						<div class="field"><label for="personal_email">个人邮箱</label><input id="personal_email" name="personal_email" type="email" /></div>
+						<div class="field full"><label for="permanent_address">户籍地址</label><textarea id="permanent_address" name="permanent_address"></textarea></div>
+						<div class="field full"><label for="current_address">现居住地</label><textarea id="current_address" name="current_address"></textarea></div>
+					</div></div>
+
+					<div class="section"><h2>紧急联系人与教育</h2><div class="grid">
+						<div class="field"><label for="person_to_be_contacted">紧急联系人 <span>*</span></label><input id="person_to_be_contacted" name="person_to_be_contacted" required /></div>
+						<div class="field"><label for="relation">联系人关系 <span>*</span></label><select id="relation" name="relation" required><option value="">请选择</option><option>配偶</option><option>父母</option><option>子女</option><option>兄弟姐妹</option><option>其他</option></select></div>
+						<div class="field"><label for="emergency_phone_number">联系人电话 <span>*</span></label><input id="emergency_phone_number" name="emergency_phone_number" inputmode="tel" required /></div>
+						<div class="field"><label for="custom_education_level">学历 <span>*</span></label><select id="custom_education_level" name="custom_education_level" required><option value="">请选择</option><option>初中</option><option>高中</option><option>中专</option><option>大专</option><option>本科</option><option>研究生</option></select></div>
+						<div class="field"><label for="custom_graduation_school">毕业院校</label><input id="custom_graduation_school" name="custom_graduation_school" /></div>
+						<div class="field"><label for="custom_major">专业科系</label><input id="custom_major" name="custom_major" /></div>
+						<div class="field"><label for="custom_graduation_date">毕业时间</label><input id="custom_graduation_date" name="custom_graduation_date" type="date" /></div>
+					</div></div>
+
+					<div class="section"><h2>银行卡与其他信息</h2><div class="grid">
+						<div class="field"><label for="bank_name">开户行 <span>*</span></label><input id="bank_name" name="bank_name" required /></div>
+						<div class="field"><label for="bank_ac_no">银行卡号 <span>*</span></label><input id="bank_ac_no" name="bank_ac_no" inputmode="numeric" required /></div>
+						<div class="field"><label for="custom_transport">交通工具</label><input id="custom_transport" name="custom_transport" /></div>
+						<div class="field"><label for="custom_work_nature">工作性质</label><select id="custom_work_nature" name="custom_work_nature"><option>在职·试用期</option><option>在职·正式</option><option>退休返聘</option><option>待离职</option><option>离职</option></select></div>
+						<div class="field"><label for="custom_direct_indirect">直间接</label><select id="custom_direct_indirect" name="custom_direct_indirect"><option value="">请选择</option><option>直接人员</option><option>间接人员</option></select></div>
+						<div class="field"><label for="custom_contract_type">合同类型</label><select id="custom_contract_type" name="custom_contract_type"><option value="">请选择</option><option>固定期限</option><option>无固定期限</option><option>非全日制</option><option>实习协议</option><option>其他</option></select></div>
+						<div class="field"><label for="custom_contract_sign_date">合同签订日期</label><input id="custom_contract_sign_date" name="custom_contract_sign_date" type="date" /></div>
+						<div class="field"><label for="custom_contract_no">合同编号</label><input id="custom_contract_no" name="custom_contract_no" /></div>
+						<div class="field"><label for="custom_contract_sign_count">合同签订次数</label><input id="custom_contract_sign_count" name="custom_contract_sign_count" type="number" min="0" /></div>
+						<div class="field"><label for="contract_end_date">合同到期日</label><input id="contract_end_date" name="contract_end_date" type="date" /></div>
+					</div></div>
+
+					<div class="section"><h2>资料附件</h2><p class="hint">请上传清晰照片或 PDF；单个附件不超过 8 MB。</p><div class="grid" id="attachment-fields"></div></div>
+					<div class="section"><label><input id="declaration_accepted" name="declaration_accepted" type="checkbox" value="1" required style="width:auto;margin-right:8px" />本人确认以上资料真实、准确，并同意公司用于入职及人事管理 <span>*</span></label></div>
+					<div class="actions"><button id="submit-button" type="submit">提交资料</button></div>
+				</form>
+			</section>
+		</main>
+		<script>
+			// Read the token from the actual URL. This is the source of truth for
+			// localhost, LAN IPs, and a future migrated host; it also avoids a
+			// literal template placeholder when the public page is served from a
+			// cached/static response.
+			const TOKEN = new URL(window.location.href).searchParams.get("token") || document.body.dataset.token || "";
+			const csrfCookie = document.cookie.split("; ").find((item) => item.startsWith("csrf_token="));
+			const CSRF = window.csrf_token || (csrfCookie ? decodeURIComponent(csrfCookie.split("=").slice(1).join("=")) : "") || "{{ csrf_token }}";
+			const API = "/api/method/hrms.hr.doctype.hrms_employee_registration.hrms_employee_registration.";
+			const form = document.querySelector("#registration-form");
+			const message = document.querySelector("#message");
+			const esc = (value) => String(value ?? "").replace(/[&<>\"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
+			const setMessage = (text, kind = "notice") => { message.className = kind; message.textContent = text; };
+			const serverMessage = (payload) => {
+				if (payload?.message && typeof payload.message === "string") return payload.message;
+				if (payload?._server_messages) {
+					try {
+						const messages = JSON.parse(payload._server_messages);
+						const first = messages?.[0] ? JSON.parse(messages[0]) : null;
+						if (first?.message) return first.message;
+					} catch (error) { /* fall through to the generic error */ }
+				}
+				return payload?.exc_type || "请求未完成，请联系人事。";
+			};
+
+			function fillSelect(id, values, selected, editable = true) {
+				const select = document.querySelector(`#${id}`);
+				const emptyLabel = id === "designation" && !(values || []).length ? "请先选择部门" : "请选择";
+				select.innerHTML = `<option value="">${emptyLabel}</option>${(values || []).map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join("")}`;
+				if (selected) select.value = selected;
+				select.disabled = !editable;
+			}
+
+			async function loadDesignations(department, selected = "", editable = true) {
+				const select = document.querySelector("#designation");
+				if (!department) {
+					fillSelect("designation", [], "", editable);
+					return;
+				}
+				select.disabled = true;
+				select.innerHTML = `<option value="">正在加载岗位…</option>`;
+				const response = await fetch(`${API}get_public_designations?token=${encodeURIComponent(TOKEN)}&department=${encodeURIComponent(department)}`);
+				const payload = await response.json();
+				if (!response.ok || payload.exc) throw new Error(serverMessage(payload));
+				fillSelect("designation", payload.message?.designations || [], selected, editable);
+			}
+
+			function setValue(name, value, editable = true) {
+				const input = document.querySelector(`[name="${name}"]`);
+				if (!input) return;
+				if (input.tagName === "SELECT") input.value = value || "";
+				else input.value = value || "";
+				if (!editable) input.readOnly = true;
+			}
+
+			function renderAttachments(required) {
+			const labels = { employee_photo: "员工照片", id_card_front: "身份证人像面", id_card_back: "身份证国徽面", household_register: "户口本", bank_card_photo: "银行卡照片", residence_permit: "居住证", education_certificate: "学历证书", former_employment_certificate: "前公司离职证明", marriage_certificate: "结婚证" };
+			const all = [...new Set([...(required || []), "residence_permit", "education_certificate", "former_employment_certificate", "marriage_certificate"])]
+			document.querySelector("#attachment-fields").innerHTML = all.map((fieldname) => { const isRequired = (required || []).includes(fieldname); return `<div class="field"><label for="${fieldname}">${esc(labels[fieldname] || fieldname)}${isRequired ? " <span>*</span>" : ""}</label><input id="${fieldname}" data-attachment="${fieldname}" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf"${isRequired ? " required" : ""} /></div>`; }).join("");
+			}
+
+			function fileAsPayload(file, fieldname) {
+				return new Promise((resolve, reject) => {
+					const reader = new FileReader();
+					reader.onload = () => resolve({ fieldname, file_name: file.name, content: String(reader.result).split(",", 2)[1] || "" });
+					reader.onerror = () => reject(new Error(`${file.name}读取失败`));
+					reader.readAsDataURL(file);
+				});
+			}
+
+			async function load() {
+				if (!TOKEN) throw new Error("填写链接缺少 token，请联系人事重新生成二维码。");
+				const response = await fetch(`${API}get_public_registration?token=${encodeURIComponent(TOKEN)}`);
+				const payload = await response.json();
+				if (!response.ok || payload.exc) throw new Error(serverMessage(payload));
+				const data = payload.message || {};
+				const registration = data.registration || {};
+				if (data.status === "待审核") { form.hidden = true; setMessage("资料已提交，请勿重复填写，等待人事审核。", "success"); return; }
+				const editable = new Set(data.editable_preset_fields || []);
+				const links = data.options || {};
+				fillSelect("company", links.companies, registration.company, editable.has("company"));
+				fillSelect("department", links.departments, registration.department, editable.has("department"));
+				fillSelect("designation", links.designations, registration.designation, editable.has("designation"));
+				for (const [name, value] of Object.entries(registration)) setValue(name, value, !["company", "department", "designation", "date_of_joining"].includes(name) || editable.has(name));
+				const departmentSelect = document.querySelector("#department");
+				departmentSelect.addEventListener("change", async () => {
+					try {
+						await loadDesignations(departmentSelect.value, "", editable.has("designation"));
+					} catch (error) {
+						fillSelect("designation", [], "", editable.has("designation"));
+						setMessage(error.message || "岗位加载失败，请稍后重试。", "error");
+					}
+				});
+				if (departmentSelect.value && editable.has("designation")) {
+					await loadDesignations(departmentSelect.value, registration.designation, true);
+				}
+				const profileOptions = data.profile_options || {};
+				fillSelect("custom_ethnicity", profileOptions.custom_ethnicity, registration.custom_ethnicity, true);
+				const datalist = document.querySelector("#native-place-options");
+				datalist.innerHTML = (profileOptions.custom_native_place || []).map((value) => `<option value="${esc(value)}"></option>`).join("");
+				renderAttachments(data.required_attachments);
+				form.hidden = false;
+				const rejected = data.status === "已驳回";
+				setMessage(rejected ? `资料曾被驳回，请按人事意见修改后重新提交。${data.review_note || ""}` : "请填写完整资料后提交。", "notice");
+			}
+
+			form.addEventListener("submit", async (event) => {
+				event.preventDefault();
+				const button = document.querySelector("#submit-button");
+				button.disabled = true;
+				setMessage("正在提交，请稍候……");
+				try {
+					const values = Object.fromEntries(new FormData(form).entries());
+					values.declaration_accepted = document.querySelector("#declaration_accepted").checked ? 1 : 0;
+					const files = await Promise.all([...form.querySelectorAll("[data-attachment]")].filter((input) => input.files[0]).map((input) => fileAsPayload(input.files[0], input.dataset.attachment)));
+					const body = new URLSearchParams({ token: TOKEN, data: JSON.stringify(values), files: JSON.stringify(files) });
+					const response = await fetch(`${API}submit_public_registration`, { method: "POST", headers: { "X-Frappe-CSRF-Token": CSRF, "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" }, body });
+					const payload = await response.json();
+					if (!response.ok || payload.exc) throw new Error(serverMessage(payload));
+					form.hidden = true;
+					setMessage("资料已提交，请等待人事审核。", "success");
+				} catch (error) {
+					setMessage(error.message || "提交失败，请稍后重试。", "error");
+					button.disabled = false;
+				}
+			});
+
+			load().catch((error) => setMessage(error.message || "填写链接无效或已过期。", "error"));
+		</script>
+	</body>
+</html>

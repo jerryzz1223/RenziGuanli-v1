@@ -72,7 +72,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "同步状态",
-   "options": "待匹配\n已同步\n冲突\n忽略"
+   "options": "待匹配\n待审批\n已同步\n冲突\n忽略"
   },
   {
    "fieldname": "last_synced_at",

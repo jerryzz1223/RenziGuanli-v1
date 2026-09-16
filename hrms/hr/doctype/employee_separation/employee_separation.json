@@ -15,15 +15,24 @@
   "column_break_7",
   "company",
   "boarding_status",
-  "approved_by",
-  "approved_on",
   "resignation_letter_date",
+  "applied_on",
+  "applied_by",
+  "approved_on",
+  "approved_by",
   "boarding_begins_on",
+  "departed_on",
+  "departed_by",
   "separation_reason_section",
   "separation_reason_type",
   "separation_reason",
   "custom_separation_reason",
   "separation_reason_detail",
+  "approver_reason_section",
+  "approver_reason_type",
+  "approver_reason",
+  "approver_custom_reason",
+  "approver_reason_detail",
   "project",
   "table_for_activity",
   "employee_separation_template",
@@ -61,7 +70,7 @@
    "fetch_from": "employee.resignation_letter_date",
    "fieldname": "resignation_letter_date",
    "fieldtype": "Date",
-   "in_list_view": 1,
+   "hidden": 1,
    "label": "离职申请日期",
    "read_only": 1
   },
@@ -78,15 +87,33 @@
    "allow_on_submit": 1,
    "fieldname": "approved_by",
    "fieldtype": "Link",
-   "label": "审批人",
+   "label": "审批操作人",
    "options": "User",
    "read_only": 1
   },
   {
    "allow_on_submit": 1,
+   "fieldname": "applied_by",
+   "fieldtype": "Link",
+   "label": "申请操作人",
+   "options": "User",
+   "read_only": 1
+  },
+ {
+   "allow_on_submit": 1,
    "fieldname": "approved_on",
    "fieldtype": "Datetime",
-   "label": "审批时间",
+   "in_list_view": 1,
+   "label": "离职审批时间",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "description": "提交离职申请时自动记录。",
+   "fieldname": "applied_on",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "离职申请时间",
    "read_only": 1
   },
   {
@@ -176,7 +203,7 @@
   {
    "fieldname": "separation_reason_section",
    "fieldtype": "Section Break",
-   "label": "选择离职原因"
+   "label": "员工自述离职原因"
   },
   {
    "fieldname": "separation_reason_type",
@@ -205,6 +232,42 @@
    "label": "详细原因（选填）"
   },
   {
+   "fieldname": "approver_reason_section",
+   "fieldtype": "Section Break",
+   "label": "审批员确认离职原因"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "approver_reason_type",
+   "fieldtype": "Select",
+   "label": "离职原因分类",
+   "options": "\n主动离职\n被动离职\n自定义",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "depends_on": "eval:doc.approver_reason_type && doc.approver_reason_type != '自定义'",
+   "fieldname": "approver_reason",
+   "fieldtype": "Select",
+   "label": "离职原因",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "depends_on": "eval:doc.approver_reason_type == '自定义'",
+   "fieldname": "approver_custom_reason",
+   "fieldtype": "Small Text",
+   "label": "自定义离职原因",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "approver_reason_detail",
+   "fieldtype": "Small Text",
+   "label": "详细原因（选填）",
+   "read_only": 1
+  },
+  {
    "fieldname": "amended_from",
    "fieldtype": "Link",
    "label": "修订自",
@@ -216,8 +279,27 @@
   {
    "fieldname": "boarding_begins_on",
    "fieldtype": "Date",
-   "label": "离职日期",
+   "description": "申请中填写的拟离职日期；正式离职以“实际离职”功能填写的唯一时间为准。",
+   "in_list_view": 1,
+   "label": "拟离职日期",
    "reqd": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "description": "在“实际离职”功能中填写的唯一离职时间；时间到达后员工才转为“已离职”。",
+   "fieldname": "departed_on",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "实际离职时间",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "departed_by",
+   "fieldtype": "Link",
+   "label": "实际离职操作人",
+   "options": "User",
+   "read_only": 1
   }
  ],
  "is_submittable": 1,

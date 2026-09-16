@@ -32,7 +32,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "来源类型",
-   "options": "department\nuser\nattendance\napproval\nemployee_status",
+   "options": "department\nuser\npreentry\nemployee_roster\nattendance\napproval\nemployee_status",
    "reqd": 1
   },
   {

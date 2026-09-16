@@ -107,7 +107,110 @@ def select_tree(root, scope, node_ids=None, search=""):
 			return selected
 
 
-def _diagram(book, root, title, stamp):
+def _report_cell(sheet, row, start_col, end_col, value, font, border, alignment, number_format=None):
+	from openpyxl.styles import Alignment
+
+	sheet.merge_cells(start_row=row, start_column=start_col, end_row=row, end_column=end_col)
+	cell = sheet.cell(row, start_col)
+	cell.value = _text(value) if isinstance(value, str) else value
+	if isinstance(value, str):
+		cell.data_type = "s"
+	cell.font = font
+	cell.alignment = alignment
+	if number_format:
+		cell.number_format = number_format
+	for column in range(start_col, end_col + 1):
+		merged_cell = sheet.cell(row, column)
+		merged_cell.border = border
+		merged_cell.alignment = Alignment(
+			horizontal=alignment.horizontal,
+			vertical=alignment.vertical,
+			wrap_text=alignment.wrap_text,
+		)
+	return cell
+
+
+def _append_organization_report(sheet, report, diagram_end_row, diagram_end_col, font_name):
+	"""Place the page's organization report below the editable chart."""
+	from openpyxl.styles import Alignment, Border, Font, Side
+	from openpyxl.utils import get_column_letter
+
+	columns = report.get("columns") or ["部门/课别", "编制人数", "现有人数", "空缺人数", "岗位满足率", "备注"]
+	keys = ("department", "planned_headcount", "current_headcount", "vacancy_count", "fulfillment_rate", "vacancy_notes")
+	spans = (6, 4, 4, 4, 5, 8)
+	table_width = sum(spans)
+	left = max(1, (max(diagram_end_col, table_width) - table_width) // 2 + 1)
+	right = left + table_width - 1
+	for column in range(diagram_end_col + 1, right + 1):
+		sheet.column_dimensions[get_column_letter(column)].width = 5.5
+
+	title_row = diagram_end_row + 3
+	header_row = title_row + 2
+	line = Side(style="thin", color="333333")
+	border = Border(left=line, right=line, top=line, bottom=line)
+	title_cell = sheet.cell(title_row, left, _text(report.get("title") or "组织报表"))
+	title_cell.data_type = "s"
+	title_cell.font = Font(name=font_name, size=14, bold=True, color="111111")
+	title_cell.alignment = Alignment(horizontal="left", vertical="center")
+	sheet.merge_cells(start_row=title_row, start_column=left, end_row=title_row, end_column=right)
+	sheet.row_dimensions[title_row].height = 24
+
+	column_ranges = []
+	next_column = left
+	for span in spans:
+		column_ranges.append((next_column, next_column + span - 1))
+		next_column += span
+	header_font = Font(name=font_name, size=10, bold=True, color="111111")
+	body_font = Font(name=font_name, size=10, color="111111")
+	for label, (start_col, end_col) in zip(columns, column_ranges):
+		_report_cell(
+			sheet,
+			header_row,
+			start_col,
+			end_col,
+			label,
+			header_font,
+			border,
+			Alignment(horizontal="center", vertical="center", wrap_text=True),
+		)
+	sheet.row_dimensions[header_row].height = 24
+
+	rows = list(report.get("rows") or [])
+	total = {"department": "汇总", **(report.get("total") or {}), "vacancy_notes": "-"}
+	for offset, data in enumerate(rows + [total], start=1):
+		row = header_row + offset
+		is_total = offset == len(rows) + 1
+		for key, (start_col, end_col) in zip(keys, column_ranges):
+			value = data.get(key)
+			if key == "vacancy_notes":
+				value = value or "-"
+			if key == "fulfillment_rate" and value is None:
+				value = "-"
+			_report_cell(
+				sheet,
+				row,
+				start_col,
+				end_col,
+				value,
+				Font(name=font_name, size=10, bold=is_total, color="111111") if is_total else body_font,
+				border,
+				Alignment(
+					horizontal="left" if key in {"department", "vacancy_notes"} else "center",
+					vertical="center",
+					wrap_text=True,
+				),
+				"0%" if key == "fulfillment_rate" and isinstance(value, (int, float)) else None,
+			)
+		sheet.row_dimensions[row].height = 24
+	approval_row = header_row + len(rows) + 3
+	approval_cell = sheet.cell(approval_row, left, "批准：")
+	approval_cell.data_type = "s"
+	approval_cell.font = Font(name=font_name, size=10, bold=True, color="111111")
+	approval_cell.alignment = Alignment(horizontal="left", vertical="center")
+	return approval_row, right
+
+
+def _diagram(book, root, title, stamp, report=None):
 	from openpyxl.styles import Alignment, Border, Font, Side
 	from openpyxl.utils import get_column_letter
 	from openpyxl.worksheet.page import PageMargins
@@ -198,15 +301,18 @@ def _diagram(book, root, title, stamp):
 			for c in range(first,last):edge(bus,c,'bottom')
 			for child in item['children']:
 				for r in range(bus+1,child['top']):edge(r,child['center']-1,'right')
+	if report is not None:
+		end_row, report_end_col = _append_organization_report(sheet, report, end_row, end_col, font)
+		end_col = max(end_col, report_end_col)
 	sheet.print_options.horizontalCentered=True
 	sheet.print_area=f"A1:{get_column_letter(end_col)}{end_row}"
 	return sheet
 
 
-def workbook_bytes(root, stamp, split_departments=True):
+def workbook_bytes(root, stamp, split_departments=True, report=None):
 	from openpyxl import Workbook
 	book=Workbook();book.remove(book.active)
-	_diagram(book,root,"完整架构图" if split_departments else "当前层级架构图",stamp)
+	_diagram(book,root,"完整架构图" if split_departments else "当前层级架构图",stamp,report=report)
 	if split_departments:
 		def departments(node):
 			if node.get("organization_node_type") in ("课","室"):
@@ -224,6 +330,7 @@ def workbook_bytes(root, stamp, split_departments=True):
 def export_excel(company: str, scope: str = "complete", node_ids: str | None = None, search: str = ""):
 	from frappe.utils.file_manager import save_file
 	from hrms.hr.page.organizational_chart.organizational_chart import get_hybrid_tree
+	from hrms.utils.business_department import organization_report_from_tree
 	# Whole-company personnel export is restricted to HR administrators.
 	frappe.only_for(("System Manager", "HR Manager"))
 	frappe.get_doc("Company",company).check_permission("read")
@@ -236,9 +343,14 @@ def export_excel(company: str, scope: str = "complete", node_ids: str | None = N
 		root=select_tree(payload.get("root") or {},scope,ids,search.strip() if scope=='current' else '')
 		if not root or not root.get("node_id"):
 			raise ValueError("暂无可导出的组织架构")
-		data,sheets=workbook_bytes(root,now_datetime().strftime("%Y-%m-%d %H:%M"),scope=='complete')
+		report = {
+			"title": f"{payload.get('root', {}).get('name') or company}组织报表",
+			"columns": ["部门/课别", "编制人数", "现有人数", "空缺人数", "岗位满足率", "备注"],
+			**organization_report_from_tree(root),
+		}
+		data,sheets=workbook_bytes(root,now_datetime().strftime("%Y-%m-%d %H:%M"),scope=='complete',report=report)
 	except ValueError as error:
 		frappe.throw(str(error))
 	label=re.sub(r'[\\/:*?"<>|]', '_',root.get('name') or company)
-	file=save_file(f"{label}-Excel架构图-{now_datetime():%Y%m%d-%H%M%S}.xlsx",data,None,None,is_private=1)
+	file=save_file(f"{label}-Excel组织架构图及报表-{now_datetime():%Y%m%d-%H%M%S}.xlsx",data,None,None,is_private=1)
 	return {"file_url":file.file_url,"file_name":file.file_name,"sheet_count":len(sheets),"node_count":sum(1 for _ in _walk(root))}

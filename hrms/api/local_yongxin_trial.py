@@ -715,7 +715,7 @@ def _import_roster(workbook):
 			"permanent_address": source.get("户籍地址", ""),
 			"education_level": source.get("学历", ""),
 			"graduation_school": source.get("毕业院校", ""),
-			"major": source.get("科系", ""),
+			"major": source.get("专业科系", source.get("科系", "")),
 		}
 		target_row = inserted_rows + 2
 		for column, field in enumerate(fields, start=1):

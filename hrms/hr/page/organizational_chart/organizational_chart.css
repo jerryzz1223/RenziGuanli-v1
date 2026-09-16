@@ -1062,3 +1062,240 @@
 .hrms-config-node .hrms-config-state { justify-self: end; color: #1f7a4d; font-weight: 600; }
 .hrms-config-node.is-pending .hrms-config-state { color: #b54708; }
 @media(max-width: 780px) { .hrms-config-node { grid-template-columns: 1fr; } .hrms-config-node .hrms-config-state { justify-self: start; } }
+
+/* Hierarchy navigator: make parentage, containment and employee identity explicit. */
+.hrms-org-relation-summary {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	grid-column: 1 / -1;
+}
+
+.hrms-org-relation-summary > span {
+	background: #fff;
+	border: 1px solid #dfe6ef;
+	border-radius: 8px;
+	display: grid;
+	gap: 2px;
+	min-width: 220px;
+	padding: 9px 12px;
+}
+
+.hrms-org-relation-summary small {
+	font-size: 11px;
+	letter-spacing: .04em;
+}
+
+.hrms-org-relation-summary strong,
+.hrms-org-relation-summary .btn-link {
+	color: #24364b;
+	font-size: 13px;
+	font-weight: 600;
+	justify-self: start;
+	padding: 0;
+}
+
+.hrms-org-current-people {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.hrms-org-current-person {
+	align-items: center;
+	background: #fff;
+	border: 1px solid #dfe6ef;
+	border-radius: 8px;
+	display: flex;
+	gap: 8px;
+	padding: 6px 9px;
+}
+
+.hrms-org-current-person strong,
+.hrms-org-current-person small {
+	display: block;
+	line-height: 1.35;
+}
+
+.hrms-org-current-person strong { font-size: 13px; }
+.hrms-org-level-row {
+	grid-template-columns: minmax(220px, 1.1fr) minmax(220px, 1fr) 104px;
+	padding: 16px 10px;
+}
+
+.hrms-org-list-identity {
+	align-items: center;
+	display: flex;
+	gap: 12px;
+	min-width: 0;
+}
+
+.hrms-org-list-identity > span:last-child { min-width: 0; }
+.hrms-org-row-info { line-height: 1.45; }
+.hrms-org-containment { color: #3b5d82 !important; font-weight: 600; }
+.hrms-org-enter { color: #285c9c; font-size: 13px; text-align: right; white-space: nowrap; }
+
+.hrms-org-unit-avatar,
+.hrms-org-avatar {
+	align-items: center;
+	background: #e7f0fd;
+	border: 1px solid #d2e2f7;
+	border-radius: 10px;
+	color: #2869b2;
+	display: inline-flex;
+	flex: 0 0 auto;
+	font-size: 11px;
+	font-weight: 700;
+	height: 42px;
+	justify-content: center;
+	overflow: hidden;
+	width: 42px;
+}
+
+.hrms-org-avatar img {
+	height: 100%;
+	object-fit: cover;
+	width: 100%;
+}
+
+.hrms-org-avatar--node,
+.hrms-org-unit-avatar { height: 46px; width: 46px; }
+.hrms-org-avatar--small { border-radius: 8px; height: 30px; width: 30px; }
+.hrms-org-avatar--token { border-radius: 7px; height: 28px; width: 28px; }
+.hrms-org-avatar--roster { height: 48px; width: 48px; }
+
+.hrms-org-page .hrms-org-person-token {
+	align-items: center;
+	display: flex;
+	gap: 7px;
+}
+
+.hrms-org-person-token-copy {
+	display: block;
+	min-width: 0;
+}
+
+.hrms-org-page .hrms-org-person-token-copy > span {
+	display: block;
+	font-size: 12px;
+	line-height: 1.35;
+}
+
+.hrms-org-roster-list {
+	border-top: 1px solid #edf0f4;
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hrms-org-roster-person {
+	align-items: center;
+	display: grid;
+	gap: 4px 12px;
+	grid-template-columns: 48px minmax(0, 1fr) auto;
+	padding: 14px 10px;
+	border-bottom: 1px solid #edf0f4;
+}
+
+.hrms-org-roster-person:nth-child(odd) { border-right: 1px solid #edf0f4; }
+.hrms-org-roster-person .hrms-org-avatar { grid-row: 1 / 3; }
+.hrms-org-roster-person-main { min-width: 0; }
+.hrms-org-roster-person-main .btn-link { color: #20262f; font-size: 15px; font-weight: 600; padding: 0; }
+.hrms-org-roster-person-main span,
+.hrms-org-employee-code { color: #667085; display: block; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hrms-org-roster-open { grid-column: 3; grid-row: 1 / 3; }
+
+.hrms-org-position-picker { color: #20262f; }
+.hrms-org-position-person {
+	align-items: center;
+	background: #f6f9fe;
+	border: 1px solid #dce8f8;
+	border-radius: 12px;
+	display: flex;
+	gap: 12px;
+	margin-bottom: 12px;
+	padding: 12px;
+}
+.hrms-org-position-person strong,
+.hrms-org-position-person small { display: block; }
+.hrms-org-position-person small { color: #667085; margin-top: 3px; }
+.hrms-org-position-path {
+	align-items: center;
+	border-bottom: 1px solid #e7eaf0;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 2px 5px;
+	margin: 16px 0;
+	padding-bottom: 12px;
+}
+.hrms-org-position-path .btn { padding: 3px 4px; }
+.hrms-org-position-path [aria-current="page"] { color: #475467; font-weight: 600; pointer-events: none; }
+.hrms-org-position-caption { color: #667085; font-size: 12px; margin-bottom: 8px; }
+.hrms-org-position-options { border: 1px solid #e7eaf0; border-radius: 10px; overflow: hidden; }
+.hrms-org-position-option {
+	align-items: center;
+	background: #fff;
+	border: 0;
+	border-bottom: 1px solid #edf0f4;
+	display: flex;
+	justify-content: space-between;
+	padding: 12px 14px;
+	text-align: left;
+	width: 100%;
+}
+.hrms-org-position-option:last-child { border-bottom: 0; }
+.hrms-org-position-option:hover,
+.hrms-org-position-option:focus { background: #f7faff; outline: none; }
+.hrms-org-position-option > span { align-items: center; display: flex; gap: 12px; min-width: 0; }
+.hrms-org-position-option strong,
+.hrms-org-position-option small { display: block; }
+.hrms-org-position-option small { color: #667085; margin-top: 3px; }
+.hrms-org-position-option em { color: #1677d2; font-style: normal; white-space: nowrap; }
+.hrms-org-position-option b { font-size: 18px; }
+.hrms-org-position-confirm { background: #f7fbf8; border: 1px solid #cfe8d5; border-radius: 12px; padding: 18px; }
+.hrms-org-position-confirm small,
+.hrms-org-position-confirm p { color: #667085; }
+.hrms-org-position-confirm h4 { margin: 5px 0; }
+.hrms-org-position-confirm .btn { margin-top: 8px; }
+.hrms-org-position-create {
+	background: #f8f9fb;
+	border: 1px solid #e2e7ee;
+	border-radius: 12px;
+	margin-top: 14px;
+	padding: 16px;
+}
+.hrms-org-position-create > div:first-child { margin-bottom: 12px; }
+.hrms-org-position-create strong,
+.hrms-org-position-create small { display: block; }
+.hrms-org-position-create small { color: #667085; margin-top: 3px; }
+.hrms-org-position-create label { font-size: 12px; margin-bottom: 5px; }
+.hrms-org-position-create .input-group + small { margin-top: 8px; }
+.hrms-org-position-empty { background: #fafafa; border-radius: 10px; color: #667085; padding: 24px; text-align: center; }
+.hrms-org-position-picker footer { color: #667085; font-size: 12px; margin-top: 14px; }
+
+@media (max-width: 760px) {
+	.hrms-org-page--list .hrms-org-level-list { padding: 16px; }
+	.hrms-org-level-row { grid-template-columns: minmax(0, 1fr) auto; }
+	.hrms-org-level-row .hrms-org-row-info { grid-column: 1; grid-row: 2; padding-left: 58px; }
+	.hrms-org-enter { grid-column: 2; grid-row: 1 / 3; }
+	.hrms-org-roster-list { grid-template-columns: 1fr; }
+	.hrms-org-roster-person:nth-child(odd) { border-right: 0; }
+	.hrms-org-position-option { padding: 11px 10px; }
+}
+
+@media (max-width: 460px) {
+	.hrms-org-page--list .hrms-org-main,
+	.hrms-org-page--list .hrms-org-level-list { overflow-x: hidden; }
+	.hrms-org-breadcrumb { gap: 4px 6px; margin-bottom: 14px; }
+	.hrms-org-breadcrumb .btn { font-size: 13px; max-width: 100%; white-space: normal; }
+	.hrms-org-current-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+	.hrms-org-current-actions .btn { margin: 0; overflow: hidden; text-overflow: ellipsis; width: 100%; }
+	.hrms-org-roster-heading { align-items: stretch; flex-direction: column; }
+	.hrms-org-roster-heading input { max-width: none; width: 100%; }
+	.hrms-org-relation-summary > span { min-width: 100%; }
+	.hrms-org-level-row { gap: 8px; }
+	.hrms-org-enter { font-size: 0; }
+	.hrms-org-enter span { font-size: 18px; }
+	.hrms-org-roster-person { grid-template-columns: 48px minmax(0, 1fr); }
+	.hrms-org-roster-open { grid-column: 2; grid-row: 3; justify-self: start; margin-top: 4px; }
+}

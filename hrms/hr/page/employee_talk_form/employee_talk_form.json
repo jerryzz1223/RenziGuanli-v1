@@ -1,0 +1,30 @@
+{
+ "content": null,
+ "creation": "2026-09-16 11:05:37.688550",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "file-text",
+ "idx": 0,
+ "modified": "2026-09-16 11:05:37.688550",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "employee-talk-form",
+ "owner": "Administrator",
+ "page_name": "employee-talk-form",
+ "roles": [
+  {
+   "role": "HR User"
+  },
+  {
+   "role": "HR Manager"
+  },
+  {
+   "role": "System Manager"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "\u5458\u5de5\u8c08\u8bdd\u8868"
+}

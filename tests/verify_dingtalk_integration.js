@@ -34,6 +34,11 @@ for (const marker of [
 	"DINGTALK_OAPI_BASE_URL",
 	"DINGTALK_DEPARTMENT_LIST_PATH",
 	"DINGTALK_DEPARTMENT_USERS_PATH",
+	"DINGTALK_PREENTRY_LIST_PATH",
+	"DINGTALK_ONJOB_LIST_PATH",
+	"DINGTALK_PREENTRY_DETAIL_PATH",
+	"DINGTALK_EMPLOYEE_ROSTER_SOURCE_TYPE",
+	"DINGTALK_USER_DETAIL_PATH",
 	"DINGTALK_ATTENDANCE_UPDATEDATA_PATH",
 	"get_dingtalk_connection_status",
 	"save_dingtalk_connection_settings",
@@ -43,6 +48,8 @@ for (const marker of [
 	"sync_departments_from_dingtalk",
 	"fetch_dingtalk_department_users",
 	"sync_users_from_dingtalk",
+	"sync_preentry_employees_from_dingtalk",
+	"sync_all_employee_rosters_from_dingtalk",
 	"fetch_dingtalk_attendance_update_data",
 	"sync_attendance_from_dingtalk",
 	"fetch_dingtalk_process_instance_ids",
@@ -189,13 +196,38 @@ for (const marker of [
 	"queue_dingtalk_local_pilot_sync",
 	"sync_departments_from_dingtalk",
 	"sync_users_from_dingtalk",
+	"sync_preentry_employees_from_dingtalk",
+	"sync_all_employee_rosters_from_dingtalk",
+	"首次全量档案同步",
 	"list_dingtalk_attendance_sync_runs",
 ]) {
 	mustInclude(attendanceCenter, marker, `Standalone DingTalk integration is missing marker: ${marker}`);
 }
 
+const dingtalkIntegration = read("hrms/api/dingtalk_integration.py");
+for (const marker of [
+	"DINGTALK_EMPLOYEE_IMPORT_DOCTYPE",
+	"_stage_dingtalk_employee_import",
+	"list_dingtalk_employee_imports",
+	"approve_dingtalk_employee_import",
+	"reject_dingtalk_employee_import",
+	"_roster_attachment_items",
+	"_import_dingtalk_attachments",
+	"待审批",
+]) {
+	mustInclude(dingtalkIntegration, marker, `DingTalk employee approval is missing marker: ${marker}`);
+}
+
+const employeeImport = read("hrms/hr/doctype/hrms_dingtalk_employee_import/hrms_dingtalk_employee_import.json");
+for (const marker of ["import_status", "mapped_values_json", "approved_by", "approval_note"]) {
+	mustInclude(employeeImport, marker, `DingTalk employee import DocType is missing field: ${marker}`);
+}
+for (const marker of ["attachments_json", "attachment_count", "attachment_status"]) {
+	mustInclude(employeeImport, marker, `DingTalk employee import DocType is missing attachment field: ${marker}`);
+}
+
 const topNav = read("hrms/public/js/hrms_top_nav.js");
-for (const marker of ["label: \"钉钉集成\"", "route: \"/desk/attendance-import-center/dingtalk\"", "钉钉考勤、员工映射与同步记录"]) {
+for (const marker of ["label: \"钉钉集成\"", "route: \"/desk/attendance-import-center/dingtalk\"", "钉钉连接、扫码入职、考勤与员工映射"]) {
 	mustInclude(topNav, marker, `更多 menu is missing DingTalk entry: ${marker}`);
 }
 

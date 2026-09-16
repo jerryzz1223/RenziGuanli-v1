@@ -28,6 +28,13 @@ const assert = (condition, message) => {
 });
 
 [
+	"employee_separation_application/employee_separation_application.js",
+	"employee_separation_approval/employee_separation_approval.js",
+].forEach((file) => {
+	assert(read(`hrms/hr/page/${file}`).includes("on_page_show"), `${file} must redirect when Frappe shows a cached Page`);
+});
+
+[
 	"employee_property_history/employee_property_history.js",
 	"form_data_intake/form_data_intake.js",
 	"organizational_chart/organizational_chart.js",

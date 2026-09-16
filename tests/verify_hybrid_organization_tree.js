@@ -106,6 +106,7 @@ for (const marker of [
 	"_is_management_designation",
 	"_get_department_staffing",
 	"def get_organization_report",
+	"business_departments(_get_departments(company))",
 	'"columns": ["部门/课别", "编制人数", "现有人数", "空缺人数", "岗位满足率", "备注"]',
 	"_get_department_relationships",
 	"_is_all_departments_name",

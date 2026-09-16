@@ -129,6 +129,10 @@ class HybridOrganizationChart {
 
 	setup_actions() {
 		this.page.clear_inner_toolbar();
+		this.page.add_inner_button(
+			__(this.mode === "list" ? "树状架构图" : "层级通讯录"),
+			() => this.mode === "list" ? frappe.set_route("organizational-chart") : frappe.set_route("organizational-chart", "list"),
+		);
 		if (frappe.user.has_role("System Manager")) {
 			for (const [label, action] of [["配置关系图", () => this.show_configuration_map()], ["如何建立组织关系", () => this.show_configuration_guide()], ["从花名册初始化", () => this.initialize_from_roster()], ["导出配置", () => this.export_configuration()], ["导入配置", () => this.import_configuration()], ["核对原表工号", () => this.show_reference_report()]]) {
 				const item = this.page.add_inner_button(__(label), action, __("组织配置"));
@@ -530,7 +534,9 @@ class HybridOrganizationChart {
 		if (action === "edit-organization-node") this.edit_manual_node(element?.dataset.nodeId);
 		if (action === "delete-organization-node") this.delete_manual_node(element?.dataset.nodeId);
 		if (action === "review-assignments") this.show_assignment_review(element?.dataset.nodeId);
+		if (action === "review-multiple-positions") this.show_multiple_position_review(element?.dataset.employee);
 		if (action === "quick-edit-node") this.edit_manual_node(element?.dataset.nodeId);
+		if (action === "assign-organization-position") this.show_organization_position_picker(this.read_person_payload(element));
 		if (action === "open-employee") {
 			this.open_employee(
 				element?.dataset.employeeCode,
@@ -800,7 +806,12 @@ class HybridOrganizationChart {
 	}
 
 	render_assignment_warning(node) {
-		return (node.assignment_issues || []).length ? `<p class="text-warning">待核对：${node.assignment_issues.map(v => frappe.utils.escape_html(v)).join("；")}</p>` : "";
+		const issues = node.assignment_issues || [];
+		if (!issues.length) return "";
+		const escape = value => frappe.utils.escape_html(String(value || ""));
+		const people = node.multiple_position_employees || [];
+		const actions = people.map(person => `<button type="button" class="btn btn-link btn-xs text-warning" data-action="review-multiple-positions" data-employee="${escape(person.employee)}">${escape(person.employee_name)}身兼数职：设置正职/兼</button>`).join("");
+		return `<p class="text-warning">待核对：${issues.map(escape).join("；")}${actions ? `<span class="d-block">${actions}</span>` : ""}</p>`;
 	}
 
 	render_assignment_queue() {
@@ -819,8 +830,8 @@ class HybridOrganizationChart {
 		const escape = value => frappe.utils.escape_html(String(value || ""));
 		const dialog = new frappe.ui.Dialog({title: `核对任职 · ${data.name}`, size: "extra-large",
 			fields: [
-				{fieldname: "help", fieldtype: "HTML", options: `<p>${escape(data.department || company)}${data.source_cell ? ` · 原表 ${escape(data.source_cell)}` : ""}</p><p>按工号选择员工，逐人确认职务和任职性质。“代理任职”表示代行该岗位，“代理人”表示本节点明确设置的代理关系。同一人可保留多处任职，但全公司至多确认一个正式职位，其他任职需明确为兼任、代理或继续待确认。汇总人数按工号去重。</p><p class="text-muted">同名组线无法仅凭职位分配；请对照原表确认。跨部门展示仅用于明确的兼任或代理人，不改变花名册部门、不计本部门人数。未选员工的原表记录保留待核对。</p>`},
-				{fieldname: "related", fieldtype: "HTML", options: (data.related_assignments || []).filter(item => item.positions.length > 1).map(item => `<p><strong>${escape(item.employee_name)} · 多处任职</strong>：${item.positions.map(pos => `${escape(pos.name)} / ${escape(pos.role)}（${pos.formal ? "已确认正式" : escape(pos.assignment_type)}）`).join("；")}。${item.positions.some(pos => pos.formal) ? "变更正式职位前，请先将原正式任职调整为待确认或其他性质。" : "尚未人工确认唯一正式职位。"}</p>`).join("")},
+				{fieldname: "help", fieldtype: "HTML", options: `<p>${escape(data.department || company)}${data.source_cell ? ` · 原表 ${escape(data.source_cell)}` : ""}</p><p>按工号选择员工，逐人确认职务和任职性质。“代理任职”表示代行该岗位，“代理人”表示本节点明确设置的代理关系。同一人可保留多处任职，但全公司至多确认一个正式职位。需要一个正职、其余全部为兼时，可从页面橙色“身兼数职”入口统一设置；需要保留代理或待确认时，继续在本窗口逐条维护。汇总人数按工号去重。</p><p class="text-muted">同名组线无法仅凭职位分配；请对照原表确认。跨部门展示仅用于明确的兼任或代理人，不改变花名册部门、不计本部门人数。未选员工的原表记录保留待核对。</p>`},
+				{fieldname: "related", fieldtype: "HTML", options: (data.related_assignments || []).filter(item => item.positions.length > 1).map(item => `<p><strong>${escape(item.employee_name)} · 多处任职</strong>：${item.positions.map(pos => `${escape(pos.name)} / ${escape(pos.role)}（${pos.formal ? "已确认正式" : escape(pos.assignment_type)}）`).join("；")}。可返回页面点击“身兼数职”，选择一个正职并自动将其余职位设为兼。</p>`).join("")},
 				{fieldname: "rows", fieldtype: "Table", label: "任职记录", in_place_edit: true, data: data.rows,
 					fields: [
 						{fieldname: "reference_index", fieldtype: "Data", hidden: 1},
@@ -847,6 +858,74 @@ class HybridOrganizationChart {
 		dialog.show();
 	}
 
+	async show_multiple_position_review(employee) {
+		const company = this.company;
+		const result = await frappe.call({
+			method: "hrms.api.organization_assignment_review.get_multiple_position_review",
+			args: {company, employee},
+		});
+		const data = result.message;
+		const escape = value => frappe.utils.escape_html(String(value || ""));
+		const positions = data.positions || [];
+		const rows = positions.map(position => `<tr>
+			<td><strong>${escape(position.name)}</strong><small class="d-block text-muted">${escape(position.role)}</small></td>
+			<td><label class="mb-0"><input type="radio" name="hrms-multiple-position-primary" data-multiple-primary value="${escape(position.position_id)}" ${position.formal ? "checked" : ""}> 正职</label></td>
+			<td><span class="badge badge-light" data-position-nature data-position-id="${escape(position.position_id)}">${position.formal ? "正职" : position.assignment_type === "兼任" ? "兼" : "待选择"}</span></td>
+		</tr>`).join("");
+		const dialog = new frappe.ui.Dialog({
+			title: `身兼数职 · ${escape(data.employee_name)}`,
+			size: "large",
+			fields: [{
+				fieldname: "multiple_positions",
+				fieldtype: "HTML",
+				options: `<p><strong>${escape(data.employee_name)}</strong>${data.employee_code ? ` · 工号 ${escape(data.employee_code)}` : ""}</p>
+					<p class="text-muted">选择一个职位为正职后，其余职位自动填充为“兼”。本次保存会一次性更新全部职位。</p>
+					<div class="table-responsive"><table class="table table-bordered"><thead><tr><th>职位</th><th>选择正职</th><th>工作性质</th></tr></thead><tbody>${rows}</tbody></table></div>`,
+			}],
+			primary_action_label: "保存工作性质",
+			primary_action: async () => {
+				const root = dialog.$wrapper[0];
+				const selected = root.querySelector("[data-multiple-primary]:checked")?.value;
+				if (!selected) {
+					frappe.msgprint("请先选择一个职位作为正职；其余职位会自动设为兼。");
+					return;
+				}
+				try {
+					await frappe.call({
+						method: "hrms.api.organization_assignment_review.save_multiple_position_review",
+						args: {
+							company,
+							employee: data.employee,
+							primary_position: selected,
+							positions: positions.map(position => ({
+								position_id: position.position_id,
+								modified: position.modified,
+							})),
+						},
+						freeze: true,
+						freeze_message: "保存多职位工作性质…",
+					});
+				} catch (error) {
+					frappe.show_alert({message: "保存未完成，请按提示核对后重试；当前选择已保留", indicator: "red"});
+					return;
+				}
+				dialog.hide();
+				await this.load_tree();
+				frappe.show_alert({message: `${data.employee_name}已设置一个正职，其余职位已自动设为兼`, indicator: "green"});
+			},
+		});
+		dialog.show();
+		const refresh_natures = () => {
+			const root = dialog.$wrapper[0];
+			const selected = root.querySelector("[data-multiple-primary]:checked")?.value;
+			root.querySelectorAll("[data-position-nature]").forEach(label => {
+				label.textContent = selected ? (label.dataset.positionId === selected ? "正职" : "兼") : "待选择";
+			});
+		};
+		dialog.$wrapper.on("change", "[data-multiple-primary]", refresh_natures);
+		refresh_natures();
+	}
+
 	node_path(node_id, node = this.tree?.root, path = []) {
 		if (!node) return [];
 		const next = [...path, node];
@@ -870,6 +949,126 @@ class HybridOrganizationChart {
 		this.select_node(node_id, node.node_type);
 	}
 
+	employee_initials(name) {
+		const value = String(name || "?").trim();
+		if (!value) return "?";
+		if (/^[\u3400-\u9fff]/.test(value)) return value.slice(-2);
+		return value.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase();
+	}
+
+	safe_avatar_url(value) {
+		const url = String(value || "").trim();
+		if (!url) return "";
+		return /^(?:https?:\/\/|\/(?!\/))/i.test(url) ? url : "";
+	}
+
+	render_employee_avatar(person, modifier = "") {
+		const escape = value => frappe.utils.escape_html(String(value ?? ""));
+		const name = person?.employee_name || person?.name || "?";
+		const image = this.safe_avatar_url(person?.image);
+		return `<span class="hrms-org-avatar ${modifier}" aria-label="${escape(name)}">${image
+			? `<img src="${escape(image)}" alt="${escape(name)}" loading="lazy">`
+			: `<span aria-hidden="true">${escape(this.employee_initials(name))}</span>`}</span>`;
+	}
+
+	show_organization_position_picker(person) {
+		const employee = person?.employee || person?.name;
+		const employeeCode = this.resolve_employee_code_value(person);
+		if (!employee) { frappe.msgprint(__("无法识别待分配人员，请刷新后重试。")); return; }
+		if (!employeeCode) { frappe.msgprint(__("该人员尚无公司工号，请先补齐唯一工号。")); return; }
+		if (this.tree?.source_mode !== "manual" || !this.tree?.root) {
+			frappe.msgprint(__("只能在当前手工组织架构中分配位置。"));
+			return;
+		}
+		const escape = value => frappe.utils.escape_html(String(value ?? ""));
+		let currentNodeId = this.tree.root.node_id;
+		const dialog = new frappe.ui.Dialog({
+			title: __("分配组织位置"),
+			size: "large",
+			fields: [{ fieldname: "organization_position_picker", fieldtype: "HTML" }],
+		});
+		const host = dialog.fields_dict.organization_position_picker.$wrapper;
+		const render = () => {
+			const current = this.find_node(currentNodeId) || this.tree.root;
+			currentNodeId = current.node_id;
+			const path = this.node_path(current.node_id);
+			const children = (current.children || []).filter(node => node.node_type !== "roster_unassigned");
+			const isPosition = current.organization_node_type === "岗位" || current.node_type === "organization_position";
+			const canCreatePosition = ["室", "课", "组", "线"].includes(current.organization_node_type);
+			host.html(`<div class="hrms-org-position-picker">
+					<header class="hrms-org-position-person">${this.render_employee_avatar(person, "hrms-org-avatar--roster")}<span><strong>${escape(person.employee_name || person.name)}</strong><small>${__("工号")} ${escape(employeeCode)}${person.designation ? ` · ${escape(person.designation)}` : ""}</small></span></header>
+					<p class="text-muted">${__("逐级选择公司、分管、课室、组线；已有合适岗位时直接选择，没有合适岗位时可在课室或组线下建立新岗位。")}</p>
+					<nav class="hrms-org-position-path" aria-label="${__("选择路径")}">${path.map((node, index) => `${index ? '<span>/</span>' : ''}<button type="button" class="btn btn-link" data-picker-action="path" data-node-id="${escape(node.node_id)}" ${node === current ? 'aria-current="page"' : ''}>${escape(node.name)}</button>`).join("")}</nav>
+					${isPosition ? `<section class="hrms-org-position-confirm"><small>${__("已选到岗位")}</small><h4>${escape(current.name)}</h4>${current.chart_grade?.label ? `<p>${__("职级")} · ${escape(current.chart_grade.label)}</p>` : ""}<p>${escape(path.map(node => node.name).join(" / "))}</p><button type="button" class="btn btn-primary" data-picker-action="confirm" data-node-name="${escape(this.manual_node_name(current.node_id))}">${__("确认分配到此位置")}</button></section>` : ""}
+					${!isPosition ? `<div class="hrms-org-position-caption">${__("选择下一级")} · ${children.length}</div>${children.length ? `<div class="hrms-org-position-options">${children.map(node => {
+						const position = node.organization_node_type === "岗位" || node.node_type === "organization_position";
+						const enterLabel = ["室", "课", "组", "线"].includes(node.organization_node_type) ? __("进入部门") : __("进入下级");
+						return `<button type="button" class="hrms-org-position-option" data-picker-action="enter" data-node-id="${escape(node.node_id)}"><span>${this.render_list_node_avatar(node)}<span><strong>${escape(node.name)}</strong><small>${escape(node.title || node.organization_node_type || __("组织节点"))}${node.chart_grade?.label ? ` · ${__("职级")} ${escape(node.chart_grade.label)}` : ""}</small></span></span><em>${position ? __("选择岗位") : enterLabel} <b aria-hidden="true">›</b></em></button>`;
+					}).join("")}</div>` : `<div class="hrms-org-position-empty">${canCreatePosition ? __("此层级还没有岗位，可在下方建立岗位后直接分配。") : __("此层级还没有可选下级岗位，请返回上级或先完善组织节点。")}</div>`}${canCreatePosition ? `<section class="hrms-org-position-create"><div><strong>${__("没有合适岗位？")}</strong><small>${__("在当前层级建立或复用同名岗位，再将此人分配进去。")}</small></div><label for="hrms-org-new-position-role">${__("岗位身份")}</label><div class="input-group"><input id="hrms-org-new-position-role" class="form-control" data-picker-role maxlength="140" value="${escape(person.designation || "")}" placeholder="${__("例如：线长、组长、作业员")}"><div class="input-group-append"><button type="button" class="btn btn-primary" data-picker-action="create-position">${__("建立岗位并分配")}</button></div></div><small>${__("如果当前层级已有同名岗位会直接复用；不会修改员工档案中的部门、职位或职级。")}</small></section>` : ""}` : ""}
+					<footer><span>${__("本操作只保存组织位置，不修改员工档案的部门、职位或职级。")}</span></footer>
+			</div>`);
+		};
+		host.on("click", "[data-picker-action]", async event => {
+			const action = event.currentTarget.dataset.pickerAction;
+			if (action === "enter" || action === "path") {
+				currentNodeId = event.currentTarget.dataset.nodeId;
+				render();
+				return;
+			}
+			if (!["confirm", "create-position"].includes(action)) return;
+			const button = event.currentTarget;
+			const args = { company: this.company, employee };
+			if (action === "confirm") {
+				args.node_name = button.dataset.nodeName;
+			} else {
+				const roleTitle = String(host[0]?.querySelector("[data-picker-role]")?.value || "").trim();
+				const parentNodeName = this.manual_node_name(currentNodeId);
+				if (!roleTitle) { frappe.msgprint(__("请填写岗位身份，例如线长、组长或作业员。")); return; }
+				if (!parentNodeName) { frappe.msgprint(__("请先进入具体课室、组或线，再建立岗位。")); return; }
+				args.parent_node_name = parentNodeName;
+				args.role_title = roleTitle;
+			}
+			button.disabled = true;
+			try {
+				const response = await frappe.call({
+					method: "hrms.hr.page.organizational_chart.organizational_chart.assign_employee_organization_position",
+					args,
+					freeze: true,
+					freeze_message: __("正在保存组织位置…"),
+				});
+				dialog.hide();
+				await this.load_tree();
+				const position = response.message?.position || __("所选岗位");
+				const message = response.message?.position_created
+					? __("已建立岗位 {0} 并完成分配；员工基本资料未修改", [position])
+					: __("已分配到 {0}；员工基本资料未修改", [position]);
+				frappe.show_alert({ message, indicator: "green" });
+			} catch (error) {
+				button.disabled = false;
+			}
+		});
+		dialog.show();
+		render();
+	}
+
+	node_representative(node) {
+		return (node.people || []).find(person => person.leader || /\u8d1f\u8d23\u4eba|\u4e3b\u7ba1|\u7ecf\u7406|\u603b\u76d1/.test(person.role || "")) ||
+			(node.organization_node_type === "\u5458\u5de5" || node.node_type === "organization_person" ? (node.people || [])[0] : null);
+	}
+
+	render_list_node_avatar(node) {
+		const representative = this.node_representative(node);
+		if (representative) return this.render_employee_avatar(representative, "hrms-org-avatar--node");
+		const label = node.organization_node_type === "\u5c97\u4f4d" ? "\u5c97" : node.organization_node_type === "\u5206\u7ba1" ? "\u5206" : "\u7ec4\u7ec7";
+		return `<span class="hrms-org-unit-avatar" aria-hidden="true">${frappe.utils.escape_html(label)}</span>`;
+	}
+
+	render_current_people(node) {
+		const people = node.people || [];
+		if (!people.length) return "";
+		return `<div class="hrms-org-current-people" aria-label="${__("\u672c\u7ea7\u8d1f\u8d23\u4eba\u4e0e\u4efb\u804c\u4eba\u5458")}">${people.slice(0, 4).map(person => `<span class="hrms-org-current-person">${this.render_employee_avatar(person, "hrms-org-avatar--small")}<span><strong>${frappe.utils.escape_html(person.employee_name || person.name || "")}</strong><small>${frappe.utils.escape_html(person.role || person.designation || __("\u4efb\u804c\u4eba\u5458"))}</small></span></span>`).join("")}${people.length > 4 ? `<small>${__("\u53e6\u6709 {0} \u4eba", [people.length - 4])}</small>` : ""}</div>`;
+	}
+
 	render_level_list() {
 		const host = this.wrapper.querySelector("[data-level-list]");
 		if (!host) return;
@@ -888,22 +1087,27 @@ class HybridOrganizationChart {
 			visit(this.tree.root);
 		}
 		const editable = String(current.node_type).startsWith("organization_");
-		const has_people = current.node_type === "roster_unassigned" || (current.node_type === "company" && current.unassigned_employees?.length > 0) || ["室", "课", "组", "线", "岗位", "员工"].includes(current.organization_node_type) || ["organization_section", "organization_office", "organization_group", "organization_line", "organization_position", "organization_person"].includes(current.node_type);
+		const parent = path.length > 1 ? path[path.length - 2] : null;
+		const has_people = (current.people || []).length > 0 || current.node_type === "roster_unassigned" || (current.node_type === "company" && current.unassigned_employees?.length > 0) || ["室", "课", "组", "线", "岗位", "员工"].includes(current.organization_node_type) || ["organization_section", "organization_office", "organization_group", "organization_line", "organization_position", "organization_person"].includes(current.node_type);
 		this.wrapper.querySelector(".hrms-org-page")?.classList.toggle("show-personnel", this.show_personnel === true);
 		const unplaced = this.tree.unplaced_departments || [];
 		host.innerHTML = `
 			<nav class="hrms-org-breadcrumb" aria-label="${__("组织路径")}">${path.map((node, index) => `${index ? '<span>/</span>' : ''}<button type="button" class="btn btn-link" data-action="browse-node" data-node-id="${escape(node.node_id)}" ${node === current ? 'aria-current="page"' : ''}>${escape(node.name)}</button>`).join("")}</nav>
 			<section class="hrms-org-current">
-				<div><small>${escape(current.title)}</small><h3>${escape(current.name)}</h3>${this.render_assignment_warning(current)}${(current.lines || []).slice(0, 3).map(line => `<div>${escape(line)}</div>`).join("")}</div>
+				<div><small>${escape(current.title)}</small><h3>${escape(current.name)}</h3>${this.render_assignment_warning(current)}${this.render_current_people(current)}</div>
 				<div class="hrms-org-current-actions"><button class="btn btn-default btn-sm" data-action="show-personnel">${__("人员明细")}</button>${editable ? `<button class="btn btn-default btn-sm" data-action="edit-organization-node" data-node-id="${escape(current.node_id)}">${__("编辑节点")}</button><button class="btn btn-default btn-sm" data-action="review-assignments" data-node-id="${escape(current.node_id)}">${__("核对任职")}</button>` : ''}${this.can_add_manual_child(current) ? `<button class="btn btn-primary btn-sm" data-action="add-organization-node" data-parent-node-id="${escape(current.node_id)}">${__("新增下级")}</button>` : ''}</div>
+				<div class="hrms-org-relation-summary">
+					<span><small>${__("上级组织")}</small>${parent ? `<button type="button" class="btn btn-link" data-action="browse-node" data-node-id="${escape(parent.node_id)}">${escape(parent.name)}</button>` : `<strong>${__("无（公司顶级）")}</strong>`}</span>
+					<span><small>${__("本级包含")}</small><strong>${(current.children || []).length} ${__("个直属下级")} · ${escape(this.staffing_value(current, "current_headcount"))} ${__("人")}</strong></span>
+				</div>
 				<div class="hrms-org-current-metrics">${[ ["编制", "planned_headcount"], ["实际", "current_headcount"], ["空缺", "vacancy_count"] ].map(([label, key]) => `<span>${__(label)} <strong>${escape(this.staffing_value(current, key))}</strong></span>`).join("")}</div>
 			</section>
-			<div class="hrms-org-list-caption">${this.search_term ? __("全组织搜索结果") : __("直属下级")} · ${children.length}</div>
+			<div class="hrms-org-list-caption">${this.search_term ? __("全组织搜索结果") : __("下级组织")} · ${children.length}</div>
 			${children.length ? `<div class="hrms-org-level-rows">${children.map(node => `<button type="button" class="hrms-org-level-row" data-action="browse-node" data-node-id="${escape(node.node_id)}">
-				<span><strong>${escape(node.name)}</strong><small>${escape(node.title)}${node.reporting_scope_pending ? " · 分管待设置" : ""}</small>${node.chart_grade?.label ? `<small>职级：${escape(node.chart_grade.label)}</small>` : ""}${node.source_grade_tags ? `<small>${escape(this.source_grade_text(node))}</small>` : ""}${this.search_term ? `<small>${escape(this.node_path(node.node_id).slice(0, -1).map(parent => parent.name).join(" / "))}</small>` : ''}</span>
-				<span class="hrms-org-row-info">${(node.lines || []).slice(0, 3).map(escape).join("<br>") + ((node.lines || []).length > 3 ? `<small>另有 ${node.lines.length - 3} 人，点击查看</small>` : "") || (node.department || node.department_label ? `${__("关联部门")}：${escape(node.department || node.department_label)}` : __("负责人待设置"))}${node.configuration_match_status === "待匹配" ? `<small class="hrms-org-config-pending">配置待匹配：${escape((node.configuration_pending_items || []).join("、"))}</small>` : ""}<small>${(node.children || []).length} ${__("个下级")} · ${__("实际")} ${escape(this.staffing_value(node, "current_headcount"))} · ${__("编制")} ${escape(this.staffing_value(node, "planned_headcount"))} · ${__("空缺")} ${escape(this.staffing_value(node, "vacancy_count"))}</small></span><span aria-hidden="true">›</span>
+				<span class="hrms-org-list-identity">${this.render_list_node_avatar(node)}<span><strong>${escape(node.name)}</strong><small>${escape(node.title)}${node.reporting_scope_pending ? " · 分管待设置" : ""}</small>${node.chart_grade?.label ? `<small>职级：${escape(node.chart_grade.label)}</small>` : ""}${node.source_grade_tags ? `<small>${escape(this.source_grade_text(node))}</small>` : ""}${this.search_term ? `<small>${escape(this.node_path(node.node_id).slice(0, -1).map(parent => parent.name).join(" / "))}</small>` : ''}</span></span>
+				<span class="hrms-org-row-info">${(node.people || []).slice(0, 2).map(person => `${escape(person.employee_name || person.name)}${person.role ? ` · ${escape(person.role)}` : ""}`).join("<br>") || (node.department || node.department_label ? `${__("关联部门")}：${escape(node.department || node.department_label)}` : __("负责人待设置"))}${node.configuration_match_status === "待匹配" ? `<small class="hrms-org-config-pending">配置待匹配：${escape((node.configuration_pending_items || []).join("、"))}</small>` : ""}<small class="hrms-org-containment">${__("包含 {0} 人 · {1} 个直属下级", [escape(this.staffing_value(node, "current_headcount")), (node.children || []).length])}</small></span><span class="hrms-org-enter">${(node.children || []).length ? __("查看下级") : __("查看人员")} <span aria-hidden="true">›</span></span>
 			</button>`).join("")}</div>` : `<div class="hrms-org-list-empty">${this.search_term ? __("没有匹配的组织节点") : __("暂无下级机构，可新增下级或查看人员明细。")}</div>`}
-			${has_people && !this.search_term ? `<section class="hrms-org-inline-people"><div class="hrms-org-roster-heading"><h3>${current.node_type === "company" ? __("待完善部门的人员") : current.organization_node_type === "岗位" || current.node_type === "organization_position" ? __("岗位人员") : __("本部门人员")}</h3><input class="form-control" data-roster-search aria-label="搜索本层人员" placeholder="搜索姓名、工号、职位"></div><div data-inline-people>${__("正在读取人员…")}</div></section>` : ''}
+			${has_people && !this.search_term ? `<section class="hrms-org-inline-people"><div class="hrms-org-roster-heading"><h3>${current.node_type === "company" ? __("待分配组织位置") : current.organization_node_type === "岗位" || current.node_type === "organization_position" ? __("岗位人员") : __("本部门人员")}</h3><input class="form-control" data-roster-search aria-label="搜索本层人员" placeholder="搜索姓名、工号、职位"></div><div data-inline-people>${__("正在读取人员…")}</div></section>` : ''}
 			${current.node_type === "company" ? this.render_assignment_queue() : ""}
 			${current.node_type === "company" && (this.roster_sync_status?.issues || []).some(item => item.reason !== "待完善部门") ? `<section class="hrms-org-unplaced"><h3>待完善的组织关系</h3>${this.roster_sync_status.issues.filter(item => item.reason !== "待完善部门").map(item => `<p>${item.employee ? `<button class="btn btn-link" data-action="open-employee" data-employee="${escape(item.employee)}" data-employee-route="${escape(item.employee)}">${escape(item.employee)}</button>` : escape(item.department)} · ${escape(item.reason)}</p>`).join("")}</section>` : ""}
 			${current.node_type === "company" && unplaced.length && !this.search_term ? `<details class="hrms-org-unplaced"><summary>${__("待编入组织的部门")} · ${unplaced.length}</summary>${unplaced.map(dept => `<div><span>${escape(dept.department_name)}</span><button class="btn btn-default btn-xs" data-action="place-department" data-department="${escape(dept.name)}">${__("编入组织")}</button></div>`).join("")}</details>` : ''}
@@ -921,8 +1125,19 @@ class HybridOrganizationChart {
 		const all = detail.employees || [];
 		const term = search.trim().toLowerCase();
 		const rows = all.filter(row => [row.employee_name, row.employee_code, row.designation].some(value => String(value || "").toLowerCase().includes(term)));
-		host.innerHTML = `<p class="text-muted">${detail.employee_match_mode === "missing_department" ? "花名册尚未填写部门，待补齐后分配" : detail.employee_match_mode === "department" ? "花名册部门归属" : "本岗位已分配人员"} · ${rows.length} / ${all.length} 人</p>
-			${rows.length ? `<table class="hrms-org-roster-table"><thead><tr><th>姓名</th><th>工号</th><th>花名册职位</th></tr></thead><tbody>${rows.map(person => `<tr data-roster-employee="${escape(person.name)}"><td><button class="btn btn-link" data-action="open-employee" data-employee="${escape(person.name)}" data-employee-route="${escape(this.resolve_employee_route_value(person))}">${escape(person.employee_name || person.name)}</button></td><td>${escape(this.resolve_employee_code_value(person))}</td><td>${escape(person.designation || "未设置")}</td></tr>`).join("")}</tbody></table>` : `<p class="text-muted">${term ? "没有匹配的人员" : "暂无人员"}</p>`}`;
+		const isPendingPosition = detail.employee_match_mode === "missing_department";
+		host.innerHTML = `<p class="text-muted">${isPendingPosition ? "花名册部门未设置；可在不修改员工档案的前提下分配组织位置" : detail.employee_match_mode === "department" ? "花名册部门归属" : detail.employee_match_mode === "organization_position" ? "组织位置人员（不改变花名册归属）" : "本岗位已分配人员"} · ${rows.length} / ${all.length} 人</p>
+			${rows.length ? `<div class="hrms-org-roster-list">${rows.map(person => {
+				const employee_route = this.resolve_employee_route_value(person);
+				const employee_code = this.resolve_employee_code_value(person);
+				const person_payload = escape(this.person_payload({ ...person, employee: person.name, employee_code }));
+				return `<article class="hrms-org-roster-person" data-roster-employee="${escape(person.name)}">
+					${this.render_employee_avatar(person, "hrms-org-avatar--roster")}
+					<div class="hrms-org-roster-person-main"><button class="btn btn-link" data-action="${isPendingPosition ? "assign-organization-position" : "open-employee"}" data-person-payload="${person_payload}" data-employee="${escape(person.name)}" data-employee-route="${escape(employee_route)}" data-employee-code="${escape(employee_code)}">${escape(person.employee_name || person.name)}</button><span>${escape(person.designation || "职位未设置")}${person.grade ? ` · ${escape(person.grade)}` : ""}</span></div>
+					<small class="hrms-org-employee-code">${employee_code ? `${__("工号")} ${escape(employee_code)}` : __("工号待补齐")}</small>
+					<button class="btn btn-xs ${isPendingPosition ? "btn-primary" : "btn-link"} hrms-org-roster-open" data-action="${isPendingPosition ? "assign-organization-position" : "open-employee"}" data-person-payload="${person_payload}" data-employee="${escape(person.name)}" data-employee-route="${escape(employee_route)}" data-employee-code="${escape(employee_code)}">${isPendingPosition ? __("分配组织位置") : __("查看档案")}</button>
+				</article>`;
+			}).join("")}</div>` : `<p class="text-muted">${term ? "没有匹配的人员" : "暂无人员"}</p>`}`;
 	}
 
 	render_tree() {
@@ -1112,10 +1327,11 @@ class HybridOrganizationChart {
 						data-person-payload="${frappe.utils.escape_html(payload)}"
 						title="${frappe.utils.escape_html([person.match_status, meta].filter(Boolean).join(" · "))}"
 					>
-						<span>${frappe.utils.escape_html(label || "")}</span>
-						${matched && employee_code ? `<small>工号 ${frappe.utils.escape_html(employee_code)}</small>` : ''}
-						${person.source_reference ? `<small>原表 · ${frappe.utils.escape_html(person.match_status || "待核对")}</small>` : ""}
-						${options.showMeta && meta ? `<small>${frappe.utils.escape_html(meta)}</small>` : ""}
+						${this.render_employee_avatar(person, "hrms-org-avatar--token")}
+						<span class="hrms-org-person-token-copy"><span>${frappe.utils.escape_html(label || "")}</span>
+							${matched && employee_code ? `<small>工号 ${frappe.utils.escape_html(employee_code)}</small>` : ''}
+							${person.source_reference ? `<small>原表 · ${frappe.utils.escape_html(person.match_status || "待核对")}</small>` : ""}
+							${options.showMeta && meta ? `<small>${frappe.utils.escape_html(meta)}</small>` : ""}</span>
 					</button>
 				`;
 			})
@@ -1306,7 +1522,7 @@ class HybridOrganizationChart {
 							});
 							return `
 							<div class="hrms-org-employee-row" data-employee="${frappe.utils.escape_html(employee.name || "")}" data-employee-route="${frappe.utils.escape_html(employee_route)}" data-employee-code="${frappe.utils.escape_html(employee_code)}">
-								<div class="hrms-org-avatar">${frappe.utils.escape_html((employee.employee_name || employee.name || "?").slice(0, 1))}</div>
+								${this.render_employee_avatar(employee)}
 								<div>
 									<strong>${frappe.utils.escape_html(employee.employee_name || employee.name || "")}</strong>
 									<span>${frappe.utils.escape_html([employee.employee_code, employee.designation, employee.grade].filter(Boolean).join(" · "))}</span>
@@ -1442,8 +1658,8 @@ class HybridOrganizationChart {
 			title: __("导出架构图"),
 			fields: [
 				{ fieldname: "scope", fieldtype: "Select", label: __("导出范围"), options: "完整架构\n当前展开层级", default: "完整架构", reqd: 1 },
-				{ fieldname: "format", fieldtype: "Select", label: __("文件格式"), options: "Excel 可编辑架构图\nSVG 矢量图\nPNG 图片", default: "Excel 可编辑架构图", reqd: 1 },
-				{ fieldtype: "HTML", options: "<p class='text-muted'>完整架构包含所有下级及人员；当前展开层级按当前搜索、查看范围和展开状态导出。均保留任职标记，不受页面缩放或滚动位置影响。<br>Excel 使用可编辑单元格与连线，完整导出附各课室工作表，便于放大查看和打印。SVG 可放大查看；PNG 会按尺寸限制等比缩小。</p>" },
+				{ fieldname: "format", fieldtype: "Select", label: __("文件格式"), options: "Excel 可编辑架构图及组织报表\nSVG 矢量图\nPNG 图片", default: "Excel 可编辑架构图及组织报表", reqd: 1 },
+				{ fieldtype: "HTML", options: "<p class='text-muted'>完整架构包含所有下级及人员；当前展开层级按当前搜索、查看范围和展开状态导出。均保留任职标记，不受页面缩放或滚动位置影响。<br>Excel 主工作表上方为可编辑架构图，下方同时附组织报表；完整导出另附各课室工作表，便于放大查看和打印。SVG 可放大查看；PNG 会按尺寸限制等比缩小。</p>" },
 			],
 			primary_action_label: __("导出"),
 			primary_action: async values => {
@@ -1545,8 +1761,8 @@ class HybridOrganizationChart {
 			const link = document.createElement("a");
 			link.href = result.message.file_url; link.download = result.message.file_name;
 			document.body.appendChild(link); link.click(); link.remove();
-			frappe.show_alert({message: `已生成 Excel 架构图，${result.message.node_count} 个节点、${result.message.sheet_count} 张工作表。`, indicator: "green"}, 8);
-			frappe.msgprint({title: __("Excel 架构图已生成"), message: `<p>${result.message.node_count} 个节点，${result.message.sheet_count} 张工作表。文字和连线可在 Excel 中编辑。</p><a class="btn btn-primary" href="${frappe.utils.escape_html(result.message.file_url)}" download="${frappe.utils.escape_html(result.message.file_name)}" target="_blank" rel="noopener">下载 Excel 架构图</a>`});
+			frappe.show_alert({message: `已生成 Excel 架构图及组织报表，${result.message.node_count} 个节点、${result.message.sheet_count} 张工作表。`, indicator: "green"}, 8);
+			frappe.msgprint({title: __("Excel 架构图及组织报表已生成"), message: `<p>${result.message.node_count} 个节点，${result.message.sheet_count} 张工作表。主工作表的架构图下方已附组织报表，文字和连线可在 Excel 中编辑。</p><a class="btn btn-primary" href="${frappe.utils.escape_html(result.message.file_url)}" download="${frappe.utils.escape_html(result.message.file_name)}" target="_blank" rel="noopener">下载 Excel 架构图及报表</a>`});
 			return;
 		}
 		await document.fonts?.ready;

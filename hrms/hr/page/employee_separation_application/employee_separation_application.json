@@ -1,0 +1,19 @@
+{
+ "creation": "2026-09-16 00:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "log-out",
+ "idx": 0,
+ "modified": "2026-09-16 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "employee-separation-application",
+ "owner": "Administrator",
+ "page_name": "employee-separation-application",
+ "roles": [],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "离职申请"
+}

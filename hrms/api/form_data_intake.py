@@ -115,7 +115,7 @@ FORM_IMPORT_PROFILES = [
 			_column("id_card", "身份证号码", False, ["身份证", "证件号码"]),
 			_column("education_level", "学历", False),
 			_column("graduation_school", "毕业院校", False),
-			_column("major", "科系", False, ["专业"]),
+			_column("major", "专业科系", False, ["科系", "专业"]),
 		],
 	},
 	{

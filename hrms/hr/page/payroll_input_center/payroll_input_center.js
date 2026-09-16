@@ -325,8 +325,10 @@ class PayrollInputCenter {
 		const rows = Array.from(table.tBodies[0].rows).filter((row) => row.cells.length > column);
 		const numeric = (value) => Number(String(value || "").replace(/[￥,，\s]/g, ""));
 		rows.sort((left, right) => {
-			const leftValue = left.cells[column]?.innerText.trim() || "";
-			const rightValue = right.cells[column]?.innerText.trim() || "";
+			const leftCell = left.cells[column];
+			const rightCell = right.cells[column];
+			const leftValue = leftCell?.dataset.sortValue ?? leftCell?.innerText.trim() ?? "";
+			const rightValue = rightCell?.dataset.sortValue ?? rightCell?.innerText.trim() ?? "";
 			const leftNumber = numeric(leftValue);
 			const rightNumber = numeric(rightValue);
 			const result = leftValue && rightValue && Number.isFinite(leftNumber) && Number.isFinite(rightNumber)
@@ -2117,7 +2119,7 @@ class PayrollInputCenter {
 		];
 		let dialog;
 		dialog = new frappe.ui.Dialog({
-			title: __("导出工资社保历史"),
+			title: __("导出工资社保汇总"),
 			fields: [
 				{ fieldname: "start_date", fieldtype: "Date", label: __("开始日期"), default: `${today.slice(0, 4)}-01-01`, reqd: 1 },
 				{ fieldname: "end_date", fieldtype: "Date", label: __("结束日期"), default: today, reqd: 1 },
@@ -2141,14 +2143,14 @@ class PayrollInputCenter {
 						method: "hrms.api.standing_pay.export_compensation_register",
 						args: { company, start_date: values.start_date, end_date: values.end_date, department: values.department || "", employee: values.employee || "", selected_fields: JSON.stringify(selected) },
 						freeze: true,
-						freeze_message: __("正在生成工资社保历史报表…"),
+						freeze_message: __("正在生成工资社保汇总报表…"),
 					});
 					if (!response.message?.file_url) throw new Error(__("服务器未返回报表文件。"));
 					dialog.hide();
 					this.download_generated_file(response.message.file_url, response.message.file_name);
-					frappe.show_alert({ message: __("已生成 {0} 条历史数据", [response.message.row_count || 0]), indicator: "green" });
+					frappe.show_alert({ message: __("已生成 {0} 人的汇总数据", [response.message.row_count || 0]), indicator: "green" });
 				} catch (error) {
-					console.error("生成工资社保历史报表失败", error);
+					console.error("生成工资社保汇总报表失败", error);
 					frappe.msgprint({ title: __("生成 Excel 报表失败"), message: error?.message || __("请重试；如果仍失败，请联系管理员查看服务器日志。"), indicator: "red" });
 				} finally {
 					primaryButton.prop("disabled", false).text(__("生成 Excel 报表"));
@@ -2157,7 +2159,7 @@ class PayrollInputCenter {
 		});
 		dialog.show();
 		dialog.fields_dict.export_columns.$wrapper.html(`
-			<p class="text-muted">${frappe.utils.escape_html(__("姓名、工号、工作性质、部门及生效起止日期固定导出。区间内每次已批准变更各占一行；金额相同的独立记录也会保留。"))}</p>
+			<p class="text-muted">${frappe.utils.escape_html(__("姓名、工号、工作性质和部门固定导出。每位员工只占一行，定薪、社保、公积金分别采用结束日期时最新已批准且已生效的标准，并保留各自的生效日期。"))}</p>
 			<div class="hrms-payroll-column-selector-actions"><button class="btn btn-default btn-sm" type="button" data-compensation-export-all>${frappe.utils.escape_html(__("全选"))}</button><button class="btn btn-default btn-sm" type="button" data-compensation-export-clear>${frappe.utils.escape_html(__("清除"))}</button></div>
 			<div class="hrms-payroll-column-selector">${fields.map(([field, label]) => `<label><input type="checkbox" data-compensation-export-field="${field}" ${field === "remarks" ? "" : "checked"}> ${frappe.utils.escape_html(__(label))}</label>`).join("")}</div>
 		`);
@@ -2188,16 +2190,21 @@ class PayrollInputCenter {
 			.sort((a, b) => String(a.employee_name || "").localeCompare(String(b.employee_name || ""), "zh-Hans-CN"));
 		const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
 		const money = (value, available = true) => available ? Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
-		const contribution_cell = (row) => row
-			? `${Number(row.enabled) ? `个人 ${money(row.personal_amount)}<br>公司 ${money(row.company_amount)}` : "已停缴"}<br><small>${esc(row.effective_date)} 起</small>`
-			: "尚未建档";
+		const contribution_amount_cell = (row, field) => {
+			const enabled = Boolean(row && Number(row.enabled));
+			const sortValue = enabled ? Number(row[field] || 0) : 0;
+			const content = !row
+				? "尚未建档"
+				: `${enabled ? money(row[field]) : "已停缴"}<br><small>${esc(row.effective_date)} 起</small>`;
+			return `<td data-sort-value="${sortValue}">${content}</td>`;
+		};
 		const salary_fields = [["base_salary", "底薪"], ["function_allowance", "职能津贴"], ["certificate_allowance", "证书津贴"], ["multi_skill_allowance", "多能工津贴"]];
 		const action_button = (row, index) => {
 			if (!pending_employees.has(row.employee)) return `<button class="btn btn-primary btn-xs" data-compensation-request="${index}">修改</button>`;
 			if (can_approve) return '<button class="btn btn-warning btn-xs" data-open-standing-approval>待审批</button>';
 			return '<button class="btn btn-default btn-xs" disabled aria-disabled="true" title="等待有审批权限的账户处理">待审批</button>';
 		};
-		this.body().innerHTML = `<div class="hrms-payroll-input-list-head"><div><h3>${editing ? "申请修改 · 薪资与社保公积金" : "薪资与社保公积金查看"}</h3><p>${editing ? "点击员工行内的修改按钮，再选择本次要修改的内容；一次只修改一个项目，其他标准保持不变。已有待审批申请的员工需先完成审批。" : "在同一名员工下查看当前已生效的薪资、社保和公积金标准。最后修改人只显示最近一位，点击姓名可查看首次提交、历次修改及审批记录。"}</p></div><div class="hrms-payroll-action-group"><span class="hrms-payroll-template-status">${editing ? "分项修改需审批" : "只读"} · 共 ${rows.length} 人</span>${editing ? "" : '<button class="btn btn-primary btn-sm" data-export-compensation>导出 Excel</button>'}</div></div><div class="hrms-payroll-filter-row"><input class="form-control input-sm" data-compensation-search placeholder="搜索姓名、工号、部门或工作性质"></div><div class="table-responsive hrms-compensation-register-table-wrap"><table class="table table-bordered table-sm hrms-compensation-register-table" data-table-page-size="10"><thead><tr>${["姓名", "工号", "部门", "工作性质", "底薪", "职能津贴", "证书津贴", "多能工津贴", "薪资小计", "社保：个人 / 公司", "公积金：个人 / 公司", ...(!editing ? ["最后修改人"] : ["操作"])].map((label) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${rows.map((row, index) => { const social = contributions.get(`${row.employee}:社保`), fund = contributions.get(`${row.employee}:公积金`), latest = latest_actions.get(row.employee); return `<tr data-compensation-row data-search="${esc([row.employee_name, row.employee_code, row.department, row.employment_type].join(" ").toLowerCase())}"><td><button class="btn btn-link btn-xs" data-standing-history="${esc(row.employee)}">${esc(row.employee_name || row.employee)}</button></td><td>${esc(row.employee_code || row.employee)}</td><td>${esc(row.department || "—")}</td><td>${esc(row.employment_type || "—")}</td>${salary_fields.map(([field]) => `<td>${money(row[field], Boolean(row.name))}</td>`).join("")}<td>${money(row.full_salary, Boolean(row.name))}</td><td>${contribution_cell(social)}</td><td>${contribution_cell(fund)}</td>${editing ? `<td>${action_button(row, index)}</td>` : `<td><button class="btn btn-link btn-xs hrms-compensation-last-editor" data-standing-history="${esc(row.employee)}" title="查看首次提交、历次修改及审批记录">${esc(latest?.submitted_by_name || "未记录")}</button></td>`}</tr>`; }).join("") || `<tr><td colspan="12">暂无档案</td></tr>`}</tbody></table></div>`;
+		this.body().innerHTML = `<div class="hrms-payroll-input-list-head"><div><h3>${editing ? "申请修改 · 薪资与社保公积金" : "薪资与社保公积金查看"}</h3><p>${editing ? "点击员工行内的修改按钮，再选择本次要修改的内容；一次只修改一个项目，其他标准保持不变。已有待审批申请的员工需先完成审批。" : "在同一名员工下查看当前已生效的薪资、社保和公积金标准。最后修改人只显示最近一位，点击姓名可查看首次提交、历次修改及审批记录。"}</p></div><div class="hrms-payroll-action-group"><span class="hrms-payroll-template-status">${editing ? "分项修改需审批" : "只读"} · 共 ${rows.length} 人</span>${editing ? "" : '<button class="btn btn-primary btn-sm" data-export-compensation>导出 Excel</button>'}</div></div><div class="hrms-payroll-filter-row"><input class="form-control input-sm" data-compensation-search placeholder="搜索姓名、工号、部门或工作性质"></div><div class="table-responsive hrms-compensation-register-table-wrap"><table class="table table-bordered table-sm hrms-compensation-register-table" data-table-page-size="15"><thead><tr>${["姓名", "工号", "部门", "工作性质", "底薪", "职能津贴", "证书津贴", "多能工津贴", "薪资小计", "社保个人承担", "社保公司承担", "公积金个人承担", "公积金公司承担", ...(!editing ? ["最后修改人"] : ["操作"])].map((label) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${rows.map((row, index) => { const social = contributions.get(`${row.employee}:社保`), fund = contributions.get(`${row.employee}:公积金`), latest = latest_actions.get(row.employee); return `<tr data-compensation-row data-search="${esc([row.employee_name, row.employee_code, row.department, row.employment_type].join(" ").toLowerCase())}"><td><button class="btn btn-link btn-xs" data-standing-history="${esc(row.employee)}">${esc(row.employee_name || row.employee)}</button></td><td>${esc(row.employee_code || row.employee)}</td><td>${esc(row.department || "—")}</td><td>${esc(row.employment_type || "—")}</td>${salary_fields.map(([field]) => `<td>${money(row[field], Boolean(row.name))}</td>`).join("")}<td>${money(row.full_salary, Boolean(row.name))}</td>${contribution_amount_cell(social, "personal_amount")}${contribution_amount_cell(social, "company_amount")}${contribution_amount_cell(fund, "personal_amount")}${contribution_amount_cell(fund, "company_amount")}${editing ? `<td>${action_button(row, index)}</td>` : `<td><button class="btn btn-link btn-xs hrms-compensation-last-editor" data-standing-history="${esc(row.employee)}" title="查看首次提交、历次修改及审批记录">${esc(latest?.submitted_by_name || "未记录")}</button></td>`}</tr>`; }).join("") || `<tr><td colspan="14">暂无档案</td></tr>`}</tbody></table></div>`;
 		this.body().querySelector("[data-export-compensation]")?.addEventListener("click", () => this.open_compensation_export_dialog(rows));
 		this.body().querySelectorAll("[data-standing-history]").forEach((button) => button.addEventListener("click", () => this.show_standing_history(button.dataset.standingHistory)));
 		this.body().querySelectorAll("[data-compensation-request]").forEach((button) => button.addEventListener("click", () => {

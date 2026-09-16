@@ -1,0 +1,30 @@
+{
+ "content": null,
+ "creation": "2026-09-16 11:08:10.812069",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "file-text",
+ "idx": 0,
+ "modified": "2026-09-16 11:08:10.812069",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "employee-duty-change",
+ "owner": "Administrator",
+ "page_name": "employee-duty-change",
+ "roles": [
+  {
+   "role": "HR User"
+  },
+  {
+   "role": "HR Manager"
+  },
+  {
+   "role": "System Manager"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "\u5458\u5de5\u804c\u52a1\u8c03\u52a8\u7533\u8bf7\u8868"
+}

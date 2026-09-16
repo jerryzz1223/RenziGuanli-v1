@@ -850,6 +850,113 @@ body.hrms-module-shell .body-sidebar-container {
 	padding: 20px;
 }
 
+.hrms-import-progress {
+	align-items: center;
+	background: rgba(255, 255, 255, 0.72);
+	backdrop-filter: blur(2px);
+	display: flex;
+	inset: 0;
+	justify-content: center;
+	position: fixed;
+	z-index: 1050;
+}
+
+.hrms-import-progress__card {
+	background: var(--card-bg, #fff);
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 10px;
+	box-shadow: 0 12px 36px rgba(31, 41, 55, 0.14);
+	max-width: 420px;
+	padding: 28px 32px;
+	text-align: center;
+	width: calc(100% - 32px);
+}
+
+.hrms-import-progress__icon {
+	align-items: center;
+	display: flex;
+	height: 34px;
+	justify-content: center;
+	margin: 0 auto 14px;
+	position: relative;
+	width: 34px;
+}
+
+.hrms-import-progress__icon::before {
+	border: 3px solid var(--control-bg, #e5e7eb);
+	border-radius: 999px;
+	border-top-color: var(--primary, #2490ef);
+	content: "";
+	height: 28px;
+	position: absolute;
+	width: 28px;
+}
+
+.hrms-import-progress__icon span {
+	background: var(--primary, #2490ef);
+	border-radius: 999px;
+	display: block;
+	height: 6px;
+	width: 6px;
+}
+
+.hrms-import-progress__title {
+	color: var(--heading-color, #1f2937);
+	display: block;
+	font-size: 17px;
+	margin-bottom: 8px;
+}
+
+.hrms-import-progress__message,
+.hrms-import-progress__hint {
+	color: var(--text-muted, #6b7280);
+}
+
+.hrms-import-progress__message {
+	margin-bottom: 18px;
+}
+
+.hrms-import-progress__track {
+	background: var(--control-bg, #eef1f4);
+	border-radius: 999px;
+	height: 8px;
+	overflow: hidden;
+	width: 100%;
+}
+
+.hrms-import-progress__bar {
+	animation: hrms-import-progress-slide 1.5s ease-in-out infinite;
+	background: var(--primary, #2490ef);
+	border-radius: inherit;
+	display: block;
+	height: 100%;
+	transform: translateX(-100%);
+	width: 42%;
+}
+
+.hrms-import-progress__hint {
+	display: block;
+	margin-top: 14px;
+}
+
+@keyframes hrms-import-progress-slide {
+	0% {
+		transform: translateX(-100%);
+	}
+	60%,
+	100% {
+		transform: translateX(250%);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.hrms-import-progress__bar {
+		animation: none;
+		transform: translateX(0);
+		width: 100%;
+	}
+}
+
 .hrms-import-result__summary {
 	align-items: center;
 	display: flex;
@@ -1678,7 +1785,8 @@ body.hrms-module-shell .main-section {
 .hrms-roster-summary__cards {
 	display: grid;
 	gap: 8px;
-	grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(180px, 220px));
+	justify-content: start;
 }
 
 .hrms-roster-card {
@@ -2282,6 +2390,12 @@ body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-r
 	white-space: nowrap;
 }
 
+body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table .hrms-roster-contract-expiry-warning {
+	background: var(--red-50, #fef2f2);
+	color: var(--red-600, #dc2626);
+	font-weight: 600;
+}
+
 body.hrms-employee-roster-view .page-container.hrms-employee-roster-page .hrms-roster-input-table th {
 	background: #f8fafc;
 	color: #4b5563;
@@ -2649,6 +2763,7 @@ body:has(#employee-basic_details_tab) .form-layout > .form-page > .form-tabs-lis
 .hrms-roster-card__label {
 	color: var(--text-muted, #6b7280);
 	font-size: 12px;
+	line-height: 1.35;
 }
 
 .hrms-roster-card__value {

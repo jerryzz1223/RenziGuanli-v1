@@ -14,7 +14,9 @@ function mustInclude(source, marker, message) {
 
 const expectedCards = [
 	["在职 · 正式", "custom_work_nature: 在职·正式"],
-	["在职 · 试用期", "custom_work_nature: 在职·试用期"],
+	["1-7日试用期", "get_roster_probation_filters"],
+	["8-14日试用期", "get_roster_probation_filters"],
+	["15以上试用期", "get_roster_probation_filters"],
 	["退休返聘", "custom_work_nature: 退休返聘"],
 	["待离职", "custom_work_nature: 待离职"],
 	["离职", "custom_work_nature: 离职"],
@@ -38,6 +40,9 @@ mustInclude(api, '_backfill_employee_work_nature()', "上线前必须为历史�
 mustInclude(api, "EMPLOYEE_ROSTER_STATUS_CARDS", "花名册必须提供五类工作性质卡片。");
 mustInclude(list, "format_roster_work_nature", "花名册必须显示表单保存的工作性质。");
 mustInclude(list, "custom_work_nature", "花名册必须按工作性质字段筛选。");
+mustInclude(list, 'return filters;', "三个入职阶段必须统一匹配试用期工作性质。");
+mustInclude(list, 'filters = { custom_work_nature: "在职·试用期", date_of_joining: date_filter }', "三个入职阶段必须统一匹配试用期工作性质。");
+mustInclude(list, 'filters._hrms_probation_stage = stage', "15日以上试用期必须启用转正日期逻辑判断。");
 mustInclude(list, "state.request_id !== request_id", "工作性质卡片的数据请求必须避开原生列表的切换时序。");
 mustInclude(list, "frappe.route_options", "花名册卡片必须使用 Frappe 路由筛选。");
 mustInclude(list, "build_roster_route_options", "花名册卡片必须统一构建路由筛选条件。");

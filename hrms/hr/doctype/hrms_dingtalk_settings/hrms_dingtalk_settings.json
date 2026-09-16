@@ -83,10 +83,10 @@
    "label": "企业编号"
   },
   {
-   "depends_on": "eval:doc.public_gateway_enabled",
+   "description": "读取智能人事待入职花名册时必填；从钉钉企业内部应用详情复制 AgentId。",
    "fieldname": "agent_id",
    "fieldtype": "Data",
-   "label": "应用代理编号"
+   "label": "应用 AgentId"
   },
   {
    "description": "第一期 API 同步必填；由钉钉企业内部应用提供。",

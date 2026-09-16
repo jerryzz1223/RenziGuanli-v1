@@ -54,6 +54,7 @@ for method in (
 	"get_processing_record",
 	"update_processing_record",
 	"update_special_hours_manual_entry",
+	"review_attendance_draft_daily_exception",
 	"bulk_update_processing_records",
 	"confirm_source_result",
 	"list_processing_exceptions",
@@ -332,7 +333,7 @@ require(get_batch_body, '"employee_recognition": _monthly_final_employee_recogni
 # Every callable API must authorize before accessing the batch/record data.
 for method in (
 	"get_processing_batch", "register_source_file", "register_monthly_support_file", "bulk_import_and_process_sources", "precheck_monthly_support_file", "process_monthly_support_file", "confirm_monthly_support_file", "precheck_source_slot", "process_source_slot",
-	"list_processing_results", "export_processing_result", "get_processing_record", "update_processing_record", "update_special_hours_manual_entry", "bulk_update_processing_records", "confirm_source_result",
+	"list_processing_results", "export_processing_result", "get_processing_record", "update_processing_record", "update_special_hours_manual_entry", "review_attendance_draft_daily_exception", "bulk_update_processing_records", "confirm_source_result",
 	"list_processing_exceptions", "list_processing_batches", "list_daily_attendance_records", "reset_attendance_month", "list_manual_adjustments",
 	"get_processing_configuration", "list_department_mappings", "upsert_department_mapping", "generate_monthly_final_files", "get_monthly_final_preview", "update_monthly_final_rows",
 ):
