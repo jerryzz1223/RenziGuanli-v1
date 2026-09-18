@@ -67,7 +67,7 @@ for (const marker of [
 	"def _get_employee_materials(doc):",
 	"confirmation_material",
 	"转正",
-	"def upload_employee_material(employee: str, material_type: str, file_url: str):",
+	"def upload_employee_material(employee: str, material_type: str, file_url: str, title: str = \"\"):",
 	'file_doc.db_set("attached_to_field", material["fieldname"])',
 	"def delete_employee_material(employee: str, file_name: str):",
 	'file_doc.check_permission("delete")',

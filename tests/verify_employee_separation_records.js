@@ -258,20 +258,28 @@ const leaveItems = sidebarItems.slice(
 );
 assert(
 	JSON.stringify(leaveItems.map((item) => item.label)) ===
-		JSON.stringify(["离职申请", "离职审批", "实际离职", "离职记录"]),
-	"离职管理分组必须按申请、审批、实际离职、记录提供四个入口。",
+		JSON.stringify(["离职申请", "离职审批", "离职面谈", "实际离职", "离职记录"]),
+	"离职管理分组必须按申请、审批、面谈、实际离职、记录提供五个入口。",
 );
-const relationshipSectionIndex = sidebarItems.findIndex(
-	(item) => item.type === "Section Break" && item.label === "员工关系",
+const employeeManagementSectionIndex = sidebarItems.findIndex(
+	(item, index) =>
+		item.type === "Section Break" &&
+		item.label === "员工管理" &&
+		sidebarItems[index + 1]?.label === "入职管理",
 );
-assert(relationshipSectionIndex >= 0, "人事导航必须保留员工关系分组。");
-const relationshipItems = sidebarItems.slice(
-	relationshipSectionIndex + 1,
+assert(employeeManagementSectionIndex >= 0, "人事导航必须提供入职管理所在的员工管理分组。");
+const employeeManagementItems = sidebarItems.slice(
+	employeeManagementSectionIndex + 1,
 	leaveSectionIndex,
 );
 assert(
-	!relationshipItems.some((item) => ["离职申请", "离职审批", "实际离职", "离职记录"].includes(item.label)),
-	"离职申请、审批、实际离职和记录不能继续混在员工关系分组中。",
+	!employeeManagementItems.some((item) => ["离职申请", "离职审批", "离职面谈", "实际离职", "离职记录"].includes(item.label)),
+	"离职申请、审批、面谈、实际离职和记录不能继续混在员工管理分组中。",
+);
+assert(
+	leaveItems.find((item) => item.label === "离职面谈")?.link_to === "employee-separation-interview" &&
+		leaveItems.findIndex((item) => item.label === "离职面谈") === 2,
+	"离职面谈入口必须位于离职审批之后。",
 );
 assert(
 	leaveItems.find((item) => item.label === "实际离职")?.link_to === "employee-separation-effective",

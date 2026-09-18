@@ -5,19 +5,19 @@ const path = require("path");
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const api = read("hrms/api/employee_form_entry.py");
-const page = read("hrms/hr/page/employee_form_entry/employee_form_entry.js");
 const submitPage = read("hrms/public/js/hrms_employee_form_entry.js");
+const navigation = read("hrms/public/js/hrms_home_redirect_v6.js");
 const talkPage = read("hrms/hr/page/employee_talk_form/employee_talk_form.js");
 const dutyPage = read("hrms/hr/page/employee_duty_change/employee_duty_change.js");
 const rewardPage = read("hrms/hr/page/employee_reward_form/employee_reward_form.js");
-const pageJson = JSON.parse(read("hrms/hr/page/employee_form_entry/employee_form_entry.json"));
 const detail = read("hrms/api/employee_field_template.py");
 const detailPage = read("hrms/hr/page/employee_detail/employee_detail.js");
 const sidebar = JSON.parse(read("hrms/workspace_sidebar/personnel.json"));
 const topNav = read("hrms/public/js/hrms_top_nav.js");
 const home = read("hrms/public/js/hrms_home_redirect_v6.js");
 
-assert.strictEqual(pageJson.page_name, "employee-form-entry");
+assert(!fs.existsSync(path.join(root, "hrms/hr/page/employee_form_entry/employee_form_entry.js")), "员工表单录入首页不应继续保留。");
+assert(!fs.existsSync(path.join(root, "hrms/hr/page/employee_form_entry/employee_form_entry.json")), "员工表单录入首页 Page 不应继续保留。");
 const dutyPageJson = JSON.parse(read("hrms/hr/page/employee_duty_change/employee_duty_change.json"));
 assert.strictEqual(dutyPageJson.page_name, "employee-duty-change");
 assert(api.includes("find_employee_matches"));
@@ -28,6 +28,8 @@ assert(api.includes('filters={**filters, "custom_employee_code": query}'), "Empl
 assert(api.includes('{"employee_name": ["like", f"%{query}%"]}'), "Employee name matching should remain fuzzy.");
 assert(!api.includes('{"custom_employee_code": ["like",'), "Employee code must not use substring matching.");
 assert(api.includes("archive_employee_form_attachment"));
+assert(api.includes("EMPLOYEE_ATTACHMENT_TITLE_FIELD"), "Form attachment titles must have a durable File field.");
+assert(api.includes("title: str = \"\""), "Form attachment archiving must accept a title.");
 assert(api.includes("list_employee_form_entries"));
 assert(api.includes("get_employee_form_entry_summaries"), "The entry landing page must load each employee's latest form material.");
 assert(api.includes('"designation", "status"'), "Form records must include the employee's current position and status.");
@@ -44,49 +46,49 @@ assert(submitPage.includes("当前职务") && submitPage.includes("当前状态"
 assert(submitPage.includes("请输入员工姓名或部门"), "Employee form records must provide a name or department filter.");
 assert(submitPage.includes("data-action=\"record-reset\""), "Employee form records must provide a reset action.");
 assert(submitPage.includes("render_employee_photo"), "Employee form submit pages must render the current employee photo.");
+for (const title of ["谈话标题", "调动标题", "奖惩标题"]) {
+	assert(submitPage.includes(title), `Missing employee form title input: ${title}`);
+}
+assert(submitPage.includes("data-role=\"form-title\""), "Employee form pages must collect the title before upload.");
+assert(submitPage.includes("row.title"), "Employee form records must show the attachment title.");
 assert(submitPage.includes("hrms-employee-form-submit__photo-empty"), "Employee form submit pages must show an empty-photo state.");
-assert(page.includes("render_employee_photo"), "Employee form entry must render the current employee photo.");
-assert(page.includes("hrms-employee-form-entry__photo-empty"), "Employee form entry must show an empty-photo state.");
 assert(submitPage.includes('size: "extra-large"'), "Record image preview should use a large dialog.");
 assert(submitPage.includes("hrms-employee-form-record-preview-dialog"), "Record image preview should use its large-dialog wrapper class.");
 assert(detailPage.includes("提交人"), "Roster employee materials must show the submitter.");
 assert(detailPage.includes("提交时间"), "Roster employee materials must show the submission time.");
-assert(page.includes("匹配员工"));
-assert(page.includes("data-entry-form"));
-assert(page.includes("archive_employee_form_attachment"));
-assert(page.includes("当前录入员工"));
+assert(detailPage.includes("get_material_title_label"), "Roster material uploads must collect form titles.");
+assert(detailPage.includes("file.title"), "Roster employee materials must show the attachment title.");
 for (const label of ["员工谈话表", "员工职务调动申请表", "奖惩提报单"]) {
 	assert(api.includes(label), `Missing API form type: ${label}`);
-	assert(page.includes(label), `Missing page form type: ${label}`);
 	assert(detail.includes(label), `Missing employee material type: ${label}`);
 }
 for (const marker of ["allow_take_photo", "disable_file_browser", "find_employee_matches", "archive_employee_form_attachment", "list_employee_form_entries", "submitted_by_name", "data-preview-src", "employee-detail", "材料附件", "录入记录"]) {
 	assert(submitPage.includes(marker), `Missing employee form entry behavior: ${marker}`);
 }
 for (const route of ["employee-talk-form", "employee-duty-change", "employee-reward-form"]) {
-	assert(page.includes(`key: "${route}"`), `Missing entry button route: ${route}`);
+	assert(submitPage.includes(`"${route}"`), `Missing submit page route: ${route}`);
 }
-assert(page.includes("data-records"), "Missing entry-record buttons on the form landing page.");
-assert(page.includes("render_latest_record"), "The entry landing page must show whether each form has a latest record.");
-assert(page.includes("data-preview-latest"), "The entry landing page must preview the latest material thumbnail.");
-assert(page.includes("get_employee_form_entry_summaries"), "The entry landing page must query latest records after employee selection.");
-assert(page.includes("已有历史记录") && page.includes("最新提交"), "The entry landing page must show the latest record details.");
 for (const [source, route] of [[talkPage, "employee-talk-form"], [dutyPage, "employee-duty-change"], [rewardPage, "employee-reward-form"]]) {
 	assert(source.includes(`frappe.pages["${route}"].on_page_show`), `Route changes must refresh ${route}.`);
 }
 assert(sidebar.items.some((item) => item.label === "员工表单录入" && item.type === "Section Break"));
-assert(sidebar.items.some((item) => item.label === "员工表单录入" && item.link_to === "employee-form-entry"));
+assert(!sidebar.items.some((item) => item.link_to === "employee-form-entry"), "左侧菜单不应保留员工表单录入首页。");
+assert(detail.includes('"employee-form-entry"'), "迁移清理必须识别旧的员工表单录入首页。");
+assert(detail.includes('"Cross Department Support Capability", "employee-form-entry"'), "部署后的侧栏同步必须清理旧首页入口。");
 for (const [label, route] of [["员工谈话表", "employee-talk-form"], ["员工职务调动申请表", "employee-duty-change"], ["奖惩提报单", "employee-reward-form"]]) {
 	assert(sidebar.items.some((item) => item.label === label && item.link_to === route), `Missing sidebar entry: ${label}`);
 }
-assert(topNav.includes('"employee-form-entry"'));
+assert(!topNav.includes('"employee-form-entry"'), "顶部导航不应保留员工表单录入首页。");
 assert(topNav.includes('label: "人事"'));
 assert(!home.includes('employee-transfer-form'));
 assert(home.includes('label: "员工表单录入"'));
-assert(home.includes('route: "/desk/employee-form-entry"'));
+assert(!home.includes('employee-form-entry'), "自定义人事导航不应保留员工表单录入首页。");
 for (const route of ["employee-talk-form", "employee-duty-change", "employee-reward-form"]) {
 	assert(submitPage.includes(`\"${route}\"`), `Missing submit page route mapping: ${route}`);
 	assert(home.includes(`route: "/desk/${route}"`), `Missing custom sidebar route: ${route}`);
 }
+assert(!submitPage.includes('set_secondary_action(__("返回人事首页")'), "员工表单页不应显示冗余的返回人事首页按钮。");
+assert(submitPage.includes('this.page.set_title(__(`${this.form.label}录入记录`))'), "录入记录页标题应包含当前表单名称。");
+assert(navigation.includes('return normalize_slug(route[0] + "/" + route[1]);'), "员工表单录入记录路由应保留二级路径。");
 
 console.log("employee form entry contract passed");

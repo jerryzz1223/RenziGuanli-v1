@@ -17,12 +17,14 @@ class AppleTreeCenter {
 		this.startDate = "";
 		this.endDate = "";
 		this.search = "";
+		this.department = "";
+		this.designation = "";
 		this.data = null;
 		this.activePerson = "";
 		this.personData = null;
 		this.personFilters = { startDate: "", endDate: "", search: "" };
 		this.personRouteFilterKey = "";
-		this.table = { page: 1, pageSize: 20, sortKey: "net_apples", sortOrder: "desc", filters: {} };
+		this.table = { page: 1, pageSize: 20, sortKey: "green_apples", sortOrder: "desc", filters: {} };
 		this.requestId = 0;
 		this.view = this.viewFromRoute();
 	}
@@ -50,7 +52,7 @@ class AppleTreeCenter {
 
 	routeFilters() {
 		const params = new URLSearchParams(window.location?.search || "");
-		const filters = { month: params.get("month") || "", startDate: params.get("start_date") || "", endDate: params.get("end_date") || "", search: params.get("search") || "" };
+		const filters = { month: params.get("month") || "", startDate: params.get("start_date") || "", endDate: params.get("end_date") || "", search: params.get("search") || "", department: params.get("department") || "", designation: params.get("designation") || "" };
 		if (filters.month && !filters.startDate && !filters.endDate) Object.assign(filters, this.monthDateRange(filters.month));
 		return filters;
 	}
@@ -61,7 +63,7 @@ class AppleTreeCenter {
 
 	outerFilterParams() {
 		const params = new URLSearchParams();
-		[["month", this.month], ["start_date", this.startDate], ["end_date", this.endDate], ["search", this.search]].forEach(([key, value]) => {
+		[["month", this.month], ["start_date", this.startDate], ["end_date", this.endDate], ["search", this.search], ["department", this.department], ["designation", this.designation]].forEach(([key, value]) => {
 			if (value) params.set(key, value);
 		});
 		return params;
@@ -98,6 +100,8 @@ class AppleTreeCenter {
 				this.startDate = filters.startDate;
 				this.endDate = filters.endDate;
 				this.search = filters.search;
+				this.department = filters.department;
+				this.designation = filters.designation;
 				this.personFilters = this.personDefaultFilters();
 				this.personRouteFilterKey = filterKey;
 				this.loadPerson();
@@ -110,6 +114,8 @@ class AppleTreeCenter {
 			this.startDate = filters.startDate;
 			this.endDate = filters.endDate;
 			this.search = filters.search;
+			this.department = filters.department;
+			this.designation = filters.designation;
 		}
 		if (nextView === this.view) return;
 		this.view = nextView;
@@ -125,12 +131,7 @@ class AppleTreeCenter {
 	}
 
 	setView(view) {
-		if (this.view === "person") {
-			window.location.href = this.summaryUrl(view);
-			return;
-		}
-		if (view === "monthly-detail") frappe.set_route("apple-tree-center", "monthly-detail");
-		else frappe.set_route("apple-tree-center");
+		window.location.href = this.summaryUrl(view);
 	}
 
 	company() {
@@ -143,7 +144,7 @@ class AppleTreeCenter {
 		this.wrapper.innerHTML = `<section class="apple-tree-center apple-tree-center--state">${__("正在加载苹果树统计...")}</section>`;
 		return frappe.call({
 			method: "hrms.hr.page.apple_tree_center.apple_tree_center.get_data",
-			args: { year: this.year, month: this.month, search: this.search, company: this.company(), start_date: this.startDate, end_date: this.endDate },
+			args: { year: this.year, month: this.month, search: this.search, company: this.company(), start_date: this.startDate, end_date: this.endDate, department: this.department, designation: this.designation },
 		}).then((response) => {
 			if (requestId !== this.requestId) return;
 			this.data = response.message || {};
@@ -151,6 +152,8 @@ class AppleTreeCenter {
 			this.month = this.data.filters?.month || this.month;
 			this.startDate = this.data.filters?.start_date || "";
 			this.endDate = this.data.filters?.end_date || "";
+			this.department = this.data.filters?.department || this.department;
+			this.designation = this.data.filters?.designation || this.designation;
 			if (this.activePerson && !(this.data.people || []).some((person) => this.personKey(person) === this.activePerson)) this.activePerson = "";
 			this.render();
 		}).catch(() => {
@@ -199,13 +202,13 @@ class AppleTreeCenter {
 						return `<option value="${value}" ${value === this.month ? "selected" : ""}>${index + 1}${__("月")}</option>`;
 					}).join("")}</optgroup></select></label>
 					<div class="apple-tree-center__date-range"><label>${__("开始日期")}<input type="date" class="form-control" data-apple-start-date value="${this.escape(this.startDate)}"></label><span>${__("至")}</span><label>${__("结束日期")}<input type="date" class="form-control" data-apple-end-date value="${this.escape(this.endDate)}"></label><button class="btn btn-default" data-apple-date-apply>${__("按日期查询")}</button>${this.startDate ? `<button class="btn btn-link" data-apple-date-clear>${__("清除")}</button>` : ""}</div>
-					<label class="apple-tree-center__search">${__("检索员工或项目")}<input class="form-control" data-apple-search value="${this.escape(this.search)}" placeholder="${__("姓名、工号、部门或项目")}"></label>
+					${!isMonthlyDetail ? `<label>${__("部门")}<select class="form-control" data-apple-department>${this.selectOptions(this.data.filter_options?.departments, this.department)}</select></label><label>${__("岗位")}<select class="form-control" data-apple-designation>${this.selectOptions(this.data.filter_options?.designations, this.designation)}</select></label>` : ""}
+					<label class="apple-tree-center__search">${__("检索员工或项目")}<input class="form-control" data-apple-search value="${this.escape(this.search)}" placeholder="${__("姓名、工号、部门、岗位或项目")}"></label>
 				</section>
 				<section class="apple-tree-center__metrics">
-					${this.metric(__("员工数"), summary.employee_count, __("当前统计范围内有记录的员工"))}
+					${this.metric(__("员工数"), summary.employee_count, __("当前统计范围内去重后的员工数"))}
 					${this.metric(__("绿苹果"), summary.green_apples, `${__("红苹果")} ${this.number(summary.red_apples)}`)}
-					${this.metric(__("净苹果"), summary.net_apples, __("绿苹果减红苹果"))}
-					${this.metric(__("记录数"), summary.record_count, `${__("金额合计")} ${this.number(summary.reward_amount)}`)}
+					${this.metric(__("记录数"), summary.record_count, `${__("全部记录条数")} · ${__("金额合计")} ${this.number(summary.reward_amount)}`)}
 				</section>
 				<section class="apple-tree-center__card apple-tree-center__primary-table"><header><div><h3>${title}</h3><p>${subtitle}</p></div></header>${isMonthlyDetail ? this.monthlyDetailTable() : this.annualSummaryTable()}</section>
 			</section>`;
@@ -216,15 +219,20 @@ class AppleTreeCenter {
 		return `<article class="apple-tree-center__metric"><span>${label}</span><b>${this.number(value)}</b><small>${note}</small></article>`;
 	}
 
+	selectOptions(values, selected) {
+		const options = [...new Set([selected, ...(values || [])].filter(Boolean))];
+		return [`<option value="">${__("全部")}</option>`, ...options.map((value) => `<option value="${this.escape(value)}" ${String(value) === String(selected) ? "selected" : ""}>${this.escape(value)}</option>`)].join("");
+	}
+
 
 	tableColumns() {
 		return [
 			{ key: "department", label: __("部门") },
+			{ key: "designation", label: __("岗位") },
 			{ key: "employee_name", label: __("姓名") },
 			{ key: "employee_code", label: __("工号") },
 			{ key: "green_apples", label: __("绿苹果"), numeric: true },
 			{ key: "red_apples", label: __("红苹果"), numeric: true },
-			{ key: "net_apples", label: __("净苹果"), numeric: true },
 			{ key: "reward_amount", label: __("苹果金额"), numeric: true },
 		];
 	}
@@ -253,7 +261,6 @@ class AppleTreeCenter {
 			{ key: "employee_code", label: __("工号") },
 			{ key: "green_apples", label: __("绿苹果"), numeric: true },
 			{ key: "red_apples", label: __("红苹果"), numeric: true },
-			{ key: "net_apples", label: __("净苹果"), numeric: true },
 			{ key: "reward_amount", label: __("苹果金额"), numeric: true },
 			{ key: "reward_item", label: __("来源") },
 			{ key: "final_status", label: __("终稿状态") },
@@ -262,7 +269,6 @@ class AppleTreeCenter {
 
 	monthlyDetailValue(row, key) {
 		if (key === "attendance_month") return row.attendance_month || String(row.reward_date || "").slice(0, 7);
-		if (key === "net_apples") return Number(row.green_apples || 0) - Number(row.red_apples || 0);
 		if (key === "final_status") return row.approval_result || row.approval_status
 			? `${row.approval_result || "-"} / ${row.approval_status || "-"}`
 			: __("未提供");
@@ -311,7 +317,7 @@ class AppleTreeCenter {
 		const start = (page - 1) * this.table.pageSize;
 		const visibleRows = rows.slice(start, start + this.table.pageSize);
 		const direction = (key) => this.table.sortKey === key ? (this.table.sortOrder === "asc" ? "↑" : "↓") : "↕";
-		return `<div class="apple-tree-center__table-wrap"><table class="table apple-tree-center__data-table"><thead><tr><th>${__("序号")}</th>${columns.map((column) => `<th><button class="apple-tree-center__sort" data-apple-table-sort="${column.key}">${column.label}<span>${direction(column.key)}</span></button></th>`).join("")}<th>${__("操作")}</th></tr><tr class="apple-tree-center__filter-row"><th></th>${columns.map((column) => `<th><input class="form-control input-xs" data-apple-table-filter="${column.key}" value="${this.escape(this.table.filters[column.key])}" placeholder="${__("搜索")}"></th>`).join("")}<th></th></tr></thead><tbody>${visibleRows.length ? visibleRows.map((person, index) => `<tr class="${this.personKey(person) === this.activePerson ? "is-selected" : ""}"><td>${start + index + 1}</td><td>${this.escape(person.department)}</td><td><a class="apple-tree-center__name-link" href="${this.personUrl(this.personKey(person))}" data-apple-person="${this.escape(this.personKey(person))}">${this.escape(person.employee_name)}</a></td><td>${this.escape(person.employee_code)}</td><td>${this.number(person.green_apples)}</td><td>${this.number(person.red_apples)}</td><td>${this.number(person.net_apples)}</td><td>${this.number(person.reward_amount)}</td><td><button class="btn btn-xs btn-default" data-apple-person="${this.escape(this.personKey(person))}">${__("查看明细")} (${this.number(person.record_count)})</button></td></tr>`).join("") : `<tr><td class="apple-tree-center__empty-cell" colspan="${columns.length + 2}">${__("没有符合列筛选条件的员工。")}</td></tr>`}</tbody></table></div>${this.tablePager(rows.length, page)}`;
+		return `<div class="apple-tree-center__table-wrap"><table class="table apple-tree-center__data-table"><thead><tr><th>${__("序号")}</th>${columns.map((column) => `<th><button class="apple-tree-center__sort" data-apple-table-sort="${column.key}">${column.label}<span>${direction(column.key)}</span></button></th>`).join("")}<th>${__("操作")}</th></tr><tr class="apple-tree-center__filter-row"><th></th>${columns.map((column) => `<th><input class="form-control input-xs" data-apple-table-filter="${column.key}" value="${this.escape(this.table.filters[column.key])}" placeholder="${__("搜索")}"></th>`).join("")}<th></th></tr></thead><tbody>${visibleRows.length ? visibleRows.map((person, index) => `<tr class="${this.personKey(person) === this.activePerson ? "is-selected" : ""}"><td>${start + index + 1}</td><td>${this.escape(person.department)}</td><td>${this.escape(person.designation)}</td><td><a class="apple-tree-center__name-link" href="${this.personUrl(this.personKey(person))}" data-apple-person="${this.escape(this.personKey(person))}">${this.escape(person.employee_name)}</a></td><td>${this.escape(person.employee_code)}</td><td>${this.number(person.green_apples)}</td><td>${this.number(person.red_apples)}</td><td>${this.number(person.reward_amount)}</td><td><button class="btn btn-xs btn-default" data-apple-person="${this.escape(this.personKey(person))}">${__("查看明细")} (${this.number(person.record_count)})</button></td></tr>`).join("") : `<tr><td class="apple-tree-center__empty-cell" colspan="${columns.length + 2}">${__("没有符合列筛选条件的员工。")}</td></tr>`}</tbody></table></div>${this.tablePager(rows.length, page)}`;
 	}
 
 	monthlyDetailTable() {
@@ -320,19 +326,19 @@ class AppleTreeCenter {
 		const columns = this.monthlyDetailColumns();
 		const rows = this.monthlyDetailRows();
 		const direction = (key) => this.table.sortKey === key ? (this.table.sortOrder === "asc" ? "↑" : "↓") : "↕";
-		return `<div class="apple-tree-center__table-wrap"><table class="table apple-tree-center__monthly-table"><thead><tr>${columns.map((column) => `<th><button class="apple-tree-center__sort" data-apple-table-sort="${column.key}">${column.label}<span>${direction(column.key)}</span></button></th>`).join("")}</tr><tr class="apple-tree-center__filter-row">${columns.map((column) => `<th><input class="form-control input-xs" data-apple-table-filter="${column.key}" value="${this.escape(this.table.filters[column.key])}" placeholder="${__("搜索")}"></th>`).join("")}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr><td>${this.escape(this.monthlyDetailValue(row, "attendance_month"))}</td><td>${this.escape(row.department)}</td><td><a class="apple-tree-center__name-link" href="${this.personUrl(this.personKey(row))}" data-apple-person="${this.escape(this.personKey(row))}">${this.escape(row.employee_name)}</a></td><td>${this.escape(row.employee_code)}</td><td>${this.number(row.green_apples)}</td><td>${this.number(row.red_apples)}</td><td>${this.number(this.monthlyDetailValue(row, "net_apples"))}</td><td>${this.number(row.reward_amount)}</td><td>${this.escape(row.reward_item)}</td><td>${this.escape(this.monthlyDetailValue(row, "final_status"))}</td></tr>`).join("") : `<tr><td class="apple-tree-center__empty-cell" colspan="${columns.length}">${__("没有符合列筛选条件的明细记录。")}</td></tr>`}</tbody></table></div>`;
+		return `<div class="apple-tree-center__table-wrap"><table class="table apple-tree-center__monthly-table"><thead><tr>${columns.map((column) => `<th><button class="apple-tree-center__sort" data-apple-table-sort="${column.key}">${column.label}<span>${direction(column.key)}</span></button></th>`).join("")}</tr><tr class="apple-tree-center__filter-row">${columns.map((column) => `<th><input class="form-control input-xs" data-apple-table-filter="${column.key}" value="${this.escape(this.table.filters[column.key])}" placeholder="${__("搜索")}"></th>`).join("")}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr><td>${this.escape(this.monthlyDetailValue(row, "attendance_month"))}</td><td>${this.escape(row.department)}</td><td><a class="apple-tree-center__name-link" href="${this.personUrl(this.personKey(row))}" data-apple-person="${this.escape(this.personKey(row))}">${this.escape(row.employee_name)}</a></td><td>${this.escape(row.employee_code)}</td><td>${this.number(row.green_apples)}</td><td>${this.number(row.red_apples)}</td><td>${this.number(row.reward_amount)}</td><td>${this.escape(row.reward_item)}</td><td>${this.escape(this.monthlyDetailValue(row, "final_status"))}</td></tr>`).join("") : `<tr><td class="apple-tree-center__empty-cell" colspan="${columns.length}">${__("没有符合列筛选条件的明细记录。")}</td></tr>`}</tbody></table></div>`;
 	}
 
 	loadPerson() {
 		const requestId = ++this.requestId;
 		this.personSort = { field: "reward_date", direction: "asc" };
-		this.personRequestKey = this.activePerson + "/" + this.year + "/" + this.month + "/" + this.startDate + "/" + this.endDate + "/" + this.search;
+		this.personRequestKey = this.activePerson + "/" + this.year + "/" + this.month + "/" + this.startDate + "/" + this.endDate + "/" + this.search + "/" + this.department + "/" + this.designation;
 		this.personData = null;
 		this.wrapper.innerHTML = `<section class="apple-tree-center apple-tree-center--state">正在加载个人明细…</section>`;
 		return frappe.call({
 			method: "hrms.hr.page.apple_tree_center.apple_tree_center.get_person_detail",
 			timeout: 30000,
-			args: { person: this.activePerson, year: this.year, month: this.month, search: this.search, company: this.company(), start_date: this.startDate, end_date: this.endDate },
+			args: { person: this.activePerson, year: this.year, month: this.month, search: this.search, company: this.company(), start_date: this.startDate, end_date: this.endDate, department: this.department, designation: this.designation },
 		}).then((response) => {
 			if (requestId !== this.requestId) return;
 			this.personRequestKey = "";
@@ -448,7 +454,7 @@ class AppleTreeCenter {
 		this.page.set_title(title);
 		const table = this.personGrid(columns);
 		this.wrapper.innerHTML = `<section class="apple-tree-center apple-tree-center--person">
-			<header class="apple-tree-center__header"><div><button class="btn btn-default btn-sm" data-apple-back>返回个人年度汇总</button><h2>${this.escape(title)}</h2><p>${this.escape(person.department)}　工号 ${this.escape(person.employee_code)}　${this.escape(this.year)} 年</p></div><div class="apple-tree-center__header-actions"><label>统计年份 <select class="form-control" data-person-year>${Array.from(new Set([...(data.available_years || this.data?.available_years || []), Number(this.year), new Date().getFullYear()])).sort((a,b) => b-a).map((year) => `<option value="${year}" ${String(year) === this.year ? "selected" : ""}>${year}年</option>`).join("")}</select></label><button class="btn btn-default" data-apple-export>${__("导出 Excel")}</button>${person.employee ? `<button class="btn btn-default" data-employee-detail="${this.escape(person.employee)}">打开员工档案</button>` : ""}<button class="btn btn-default" data-person-refresh>刷新数据</button></div></header>
+			<header class="apple-tree-center__header"><div><button class="btn btn-default btn-sm" data-apple-back>返回个人年度汇总</button><h2>${this.escape(title)}</h2><p>${this.escape(person.department)}${person.designation ? `　${this.escape(person.designation)}` : ""}　工号 ${this.escape(person.employee_code)}　${this.escape(this.year)} 年</p></div><div class="apple-tree-center__header-actions"><label>统计年份 <select class="form-control" data-person-year>${Array.from(new Set([...(data.available_years || this.data?.available_years || []), Number(this.year), new Date().getFullYear()])).sort((a,b) => b-a).map((year) => `<option value="${year}" ${String(year) === this.year ? "selected" : ""}>${year}年</option>`).join("")}</select></label><button class="btn btn-default" data-apple-export>${__("导出 Excel")}</button>${person.employee ? `<button class="btn btn-default" data-employee-detail="${this.escape(person.employee)}">打开员工档案</button>` : ""}<button class="btn btn-default" data-person-refresh>刷新数据</button></div></header>
 			<section class="apple-tree-center__card"><header><div><h3>个人苹果树奖惩明细</h3><p>按奖/惩记录列示 · 苹果数量：颗</p></div><span class="apple-tree-center__coverage">共 ${rows.length} 条记录</span></header>${data.available ? `${this.personDetailFilters()}${table}` : `<p class="apple-tree-center__empty">${this.escape(data.reason)}</p>`}<p class="apple-tree-center__footnote">表头按苹果树（月考勤版）明细格式列示；“—”表示原始奖惩记录未提供该字段。点击表头可切换升降序，合计固定在底部。</p></section>
 		</section>`;
 		this.wrapper.querySelector("[data-apple-back]")?.addEventListener("click", () => this.setView("annual-summary"));
@@ -486,6 +492,8 @@ class AppleTreeCenter {
 			company: this.company(),
 			start_date: this.startDate,
 			end_date: this.endDate,
+			department: this.department,
+			designation: this.designation,
 			person: this.view === "person" ? this.activePerson : "",
 			column_filters: this.view === "person" ? "" : JSON.stringify(this.table.filters || {}),
 			detail_start_date: this.view === "person" ? this.personFilters.startDate : "",
@@ -579,17 +587,19 @@ class AppleTreeCenter {
 		this.wrapper.querySelector("[data-apple-export]")?.addEventListener("click", () => this.exportCurrentView());
 		this.wrapper.querySelector("[data-apple-history-import]")?.addEventListener("click", () => this.openHistoryImport());
 		this.wrapper.querySelectorAll("[data-apple-view]").forEach((button) => button.addEventListener("click", () => this.setView(button.dataset.appleView)));
-		this.wrapper.querySelector("[data-apple-year]")?.addEventListener("change", (event) => { this.year = event.target.value; this.month = ""; this.startDate = ""; this.endDate = ""; this.activePerson = ""; this.resetTable(); this.load(); });
-		this.wrapper.querySelector("[data-apple-month]")?.addEventListener("change", (event) => { this.month = event.target.value; const range = this.monthDateRange(this.month); this.startDate = range.startDate; this.endDate = range.endDate; this.activePerson = ""; this.resetTable(); this.load(); });
+		this.wrapper.querySelector("[data-apple-year]")?.addEventListener("change", (event) => { this.year = event.target.value; this.month = ""; this.startDate = ""; this.endDate = ""; this.department = ""; this.designation = ""; this.activePerson = ""; this.resetTable(); this.load(); });
+		this.wrapper.querySelector("[data-apple-month]")?.addEventListener("change", (event) => { this.month = event.target.value; const range = this.monthDateRange(this.month); this.startDate = range.startDate; this.endDate = range.endDate; this.department = ""; this.designation = ""; this.activePerson = ""; this.resetTable(); this.load(); });
 		this.wrapper.querySelector("[data-apple-date-apply]")?.addEventListener("click", () => {
 			const startDate = this.wrapper.querySelector("[data-apple-start-date]")?.value || "";
 			const endDate = this.wrapper.querySelector("[data-apple-end-date]")?.value || "";
 			if (!startDate || !endDate) return frappe.msgprint(__("请选择完整的开始日期和结束日期。"));
 			if (startDate > endDate) return frappe.msgprint(__("开始日期不能晚于结束日期。"));
-			this.startDate = startDate; this.endDate = endDate; this.month = ""; this.activePerson = ""; this.resetTable(); this.load();
+			this.startDate = startDate; this.endDate = endDate; this.month = ""; this.department = ""; this.designation = ""; this.activePerson = ""; this.resetTable(); this.load();
 		});
-		this.wrapper.querySelector("[data-apple-date-clear]")?.addEventListener("click", () => { this.startDate = ""; this.endDate = ""; this.activePerson = ""; this.resetTable(); this.load(); });
+		this.wrapper.querySelector("[data-apple-date-clear]")?.addEventListener("click", () => { this.startDate = ""; this.endDate = ""; this.department = ""; this.designation = ""; this.activePerson = ""; this.resetTable(); this.load(); });
 		this.wrapper.querySelector("[data-apple-search]")?.addEventListener("change", (event) => { this.search = event.target.value.trim(); this.activePerson = ""; this.resetTable(); this.load(); });
+		this.wrapper.querySelector("[data-apple-department]")?.addEventListener("change", (event) => { this.department = event.target.value; this.designation = ""; this.activePerson = ""; this.resetTable(); this.load(); });
+		this.wrapper.querySelector("[data-apple-designation]")?.addEventListener("change", (event) => { this.designation = event.target.value; this.activePerson = ""; this.resetTable(); this.load(); });
 		this.wrapper.querySelectorAll("[data-apple-table-sort]").forEach((button) => button.addEventListener("click", () => {
 			const key = button.dataset.appleTableSort;
 			this.table.sortOrder = this.table.sortKey === key && this.table.sortOrder === "desc" ? "asc" : "desc";

@@ -23,6 +23,8 @@ class EmployeeSeparationRecordsPage {
 		this.wrapper = page.main[0];
 		this.company = this.current_company();
 		this.search = "";
+		this.filters = { department: "", startDate: "", endDate: "", year: "", month: "", reason: "" };
+		this.filter_options = { departments: [], reasons: [], years: [] };
 		this.start = 0;
 		this.page_length = 50;
 		this.total = 0;
@@ -69,7 +71,12 @@ class EmployeeSeparationRecordsPage {
 		this.wrapper.innerHTML = `
 			<style>
 				.hrms-separation-records { padding: 0 2px 24px; }
-				.hrms-separation-records__toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; max-width: 520px; }
+				.hrms-separation-records__toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; max-width: 900px; }
+				.hrms-separation-records__filters { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 14px; }
+				.hrms-separation-records__filter { min-width: 132px; }
+				.hrms-separation-records__filter--date { min-width: 150px; }
+				.hrms-separation-records__filter label { display: block; color: var(--text-muted); font-size: var(--text-xs); margin-bottom: 4px; }
+				.hrms-separation-records__actions { display: flex; gap: 8px; align-items: center; margin-left: auto; }
 				.hrms-separation-records__table-wrap { overflow-x: auto; border-top: 1px solid var(--border-color); }
 				.hrms-separation-records__table { min-width: 1280px; margin-bottom: 0; }
 				.hrms-separation-records__table tbody tr { cursor: pointer; }
@@ -89,6 +96,19 @@ class EmployeeSeparationRecordsPage {
 				<div class="hrms-separation-records__toolbar">
 					<input type="search" class="form-control" data-search placeholder="${frappe.utils.escape_html(__("姓名、工号、部门、岗位、离职原因"))}">
 					<button type="button" class="btn btn-default btn-sm" data-search-button>${frappe.utils.escape_html(__("搜索"))}</button>
+				</div>
+				<div class="hrms-separation-records__filters">
+					<div class="hrms-separation-records__filter"><label>${frappe.utils.escape_html(__("部门"))}</label><select class="form-control" data-filter-department><option value="">${frappe.utils.escape_html(__("全部部门"))}</option></select></div>
+					<div class="hrms-separation-records__filter hrms-separation-records__filter--date"><label>${frappe.utils.escape_html(__("离职日期起"))}</label><input type="date" class="form-control" data-filter-start-date></div>
+					<div class="hrms-separation-records__filter hrms-separation-records__filter--date"><label>${frappe.utils.escape_html(__("离职日期止"))}</label><input type="date" class="form-control" data-filter-end-date></div>
+					<div class="hrms-separation-records__filter"><label>${frappe.utils.escape_html(__("年份"))}</label><select class="form-control" data-filter-year><option value="">${frappe.utils.escape_html(__("全部年份"))}</option></select></div>
+					<div class="hrms-separation-records__filter"><label>${frappe.utils.escape_html(__("月份"))}</label><select class="form-control" data-filter-month><option value="">${frappe.utils.escape_html(__("全部月份"))}</option>${this.month_options()}</select></div>
+					<div class="hrms-separation-records__filter"><label>${frappe.utils.escape_html(__("离职原因"))}</label><select class="form-control" data-filter-reason><option value="">${frappe.utils.escape_html(__("全部原因"))}</option></select></div>
+					<div class="hrms-separation-records__actions">
+						<button type="button" class="btn btn-default btn-sm" data-filter-apply>${frappe.utils.escape_html(__("筛选"))}</button>
+						<button type="button" class="btn btn-default btn-sm" data-filter-clear>${frappe.utils.escape_html(__("清空"))}</button>
+						<button type="button" class="btn btn-primary btn-sm" data-export>${frappe.utils.escape_html(__("导出 Excel"))}</button>
+					</div>
 				</div>
 				<div class="hrms-separation-records__table-wrap">
 					<table class="table hrms-separation-records__table">
@@ -121,6 +141,9 @@ class EmployeeSeparationRecordsPage {
 		this.wrapper.querySelector("[data-search]").addEventListener("keydown", (event) => {
 			if (event.key === "Enter") this.run_search();
 		});
+		this.wrapper.querySelector("[data-filter-apply]").addEventListener("click", () => this.run_filters());
+		this.wrapper.querySelector("[data-filter-clear]").addEventListener("click", () => this.clear_filters());
+		this.wrapper.querySelector("[data-export]").addEventListener("click", () => this.export_records());
 		this.wrapper.querySelector("[data-prev]").addEventListener("click", () => {
 			if (this.start <= 0) return;
 			this.start = Math.max(this.start - this.page_length, 0);
@@ -139,6 +162,77 @@ class EmployeeSeparationRecordsPage {
 		this.load();
 	}
 
+	run_filters() {
+		const filters = this.read_filter_controls();
+		if (!filters) return;
+		this.filters = filters;
+		this.start = 0;
+		this.load();
+	}
+
+	read_filter_controls() {
+		const startDate = this.wrapper.querySelector("[data-filter-start-date]").value || "";
+		const endDate = this.wrapper.querySelector("[data-filter-end-date]").value || "";
+		if ((startDate && !endDate) || (!startDate && endDate)) {
+			frappe.msgprint(__("离职日期起和离职日期止需要同时填写。"));
+			return null;
+		}
+		if (startDate && endDate && startDate > endDate) {
+			frappe.msgprint(__("离职日期起不能晚于离职日期止。"));
+			return null;
+		}
+		return {
+			department: this.wrapper.querySelector("[data-filter-department]").value || "",
+			startDate,
+			endDate,
+			year: this.wrapper.querySelector("[data-filter-year]").value || "",
+			month: this.wrapper.querySelector("[data-filter-month]").value || "",
+			reason: this.wrapper.querySelector("[data-filter-reason]").value || "",
+		};
+	}
+
+	clear_filters() {
+		this.filters = { department: "", startDate: "", endDate: "", year: "", month: "", reason: "" };
+		this.sync_filter_controls();
+		this.start = 0;
+		this.load();
+	}
+
+	month_options() {
+		return Array.from({ length: 12 }, (_item, index) => {
+			const value = String(index + 1).padStart(2, "0");
+			return `<option value="${value}">${value}${__("月")}</option>`;
+		}).join("");
+	}
+
+	render_filter_options(options) {
+		this.filter_options = options || { departments: [], reasons: [], years: [] };
+		const escape = frappe.utils.escape_html;
+		const department = this.wrapper.querySelector("[data-filter-department]");
+		const year = this.wrapper.querySelector("[data-filter-year]");
+		const reason = this.wrapper.querySelector("[data-filter-reason]");
+		if (!department || !year || !reason) return;
+		department.innerHTML = `<option value="">${escape(__("全部部门"))}</option>${(this.filter_options.departments || []).map((item) => `<option value="${escape(item.value)}">${escape(item.label)}</option>`).join("")}`;
+		year.innerHTML = `<option value="">${escape(__("全部年份"))}</option>${(this.filter_options.years || []).map((item) => `<option value="${escape(item)}">${escape(item)}${escape(__("年"))}</option>`).join("")}`;
+		reason.innerHTML = `<option value="">${escape(__("全部原因"))}</option>${(this.filter_options.reasons || []).map((item) => `<option value="${escape(item)}">${escape(item)}</option>`).join("")}`;
+		this.sync_filter_controls();
+	}
+
+	sync_filter_controls() {
+		const selectors = {
+			"[data-filter-department]": this.filters.department,
+			"[data-filter-start-date]": this.filters.startDate,
+			"[data-filter-end-date]": this.filters.endDate,
+			"[data-filter-year]": this.filters.year,
+			"[data-filter-month]": this.filters.month,
+			"[data-filter-reason]": this.filters.reason,
+		};
+		Object.entries(selectors).forEach(([selector, value]) => {
+			const control = this.wrapper.querySelector(selector);
+			if (control) control.value = value || "";
+		});
+	}
+
 	load() {
 		const request_id = ++this.request_id;
 		const empty = this.wrapper.querySelector("[data-empty]");
@@ -149,6 +243,12 @@ class EmployeeSeparationRecordsPage {
 			args: {
 				company: this.company,
 				search: this.search,
+				department: this.filters.department,
+				start_date: this.filters.startDate,
+				end_date: this.filters.endDate,
+				year: this.filters.year,
+				month: this.filters.month,
+				reason: this.filters.reason,
 				start: this.start,
 				page_length: this.page_length,
 			},
@@ -158,6 +258,7 @@ class EmployeeSeparationRecordsPage {
 				const data = response.message || {};
 				this.total = data.total || 0;
 				this.page_length = data.page_length || this.page_length;
+				this.render_filter_options(data.filter_options || {});
 				this.render_rows(data.rows || [], __("暂无离职记录"));
 				this.render_pagination();
 			},
@@ -172,6 +273,24 @@ class EmployeeSeparationRecordsPage {
 				this.render_pagination();
 			},
 		});
+	}
+
+	export_records() {
+		const filters = this.read_filter_controls();
+		if (!filters) return;
+		this.filters = filters;
+		this.search = this.wrapper.querySelector("[data-search]").value.trim();
+		const params = new URLSearchParams({
+			company: this.company || "",
+			search: this.search || "",
+			department: this.filters.department || "",
+			start_date: this.filters.startDate || "",
+			end_date: this.filters.endDate || "",
+			year: this.filters.year || "",
+			month: this.filters.month || "",
+			reason: this.filters.reason || "",
+		});
+		window.open(`/api/method/hrms.hr.page.employee_separation_records.employee_separation_records.export_separation_records?${params.toString()}`, "_blank");
 	}
 
 	render_rows(rows, empty_message = __("暂无离职记录")) {

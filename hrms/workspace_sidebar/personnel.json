@@ -10,6 +10,61 @@
   {
    "child": 0,
    "collapsible": 1,
+   "icon": "file-text",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "公告管理",
+   "link_type": "Page",
+   "show_arrow": 1,
+   "type": "Section Break"
+  },
+  {
+   "child": 1,
+   "collapsible": 0,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "公告目录",
+   "link_to": "announcement-directory",
+   "link_type": "Page",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 1,
+   "collapsible": 0,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "提交公告",
+   "link_to": "announcement-submit",
+   "link_type": "Page",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 1,
+   "collapsible": 0,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "公告审批",
+   "link_to": "announcement-approval",
+   "link_type": "Page",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 1,
+   "collapsible": 0,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "上传签字版",
+   "link_to": "announcement-signed-upload",
+   "link_type": "Page",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
    "icon": "users",
    "indent": 0,
    "keep_closed": 0,
@@ -32,10 +87,10 @@
   {
    "child": 0,
    "collapsible": 1,
-   "icon": "file-text",
+   "icon": "users",
    "indent": 0,
    "keep_closed": 0,
-   "label": "员工表单录入",
+   "label": "员工关系",
    "link_type": "Page",
    "show_arrow": 1,
    "type": "Section Break"
@@ -45,11 +100,22 @@
    "collapsible": 0,
    "indent": 0,
    "keep_closed": 0,
-   "label": "员工表单录入",
-   "link_to": "employee-form-entry",
+   "label": "员工关系",
+   "link_to": "employee-relationship",
    "link_type": "Page",
    "show_arrow": 0,
    "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "file-text",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "员工表单录入",
+   "link_type": "Page",
+   "show_arrow": 1,
+   "type": "Section Break"
   },
   {
    "child": 1,
@@ -90,7 +156,7 @@
    "icon": "git-branch",
    "indent": 0,
    "keep_closed": 0,
-   "label": "员工关系",
+   "label": "员工管理",
    "link_type": "DocType",
    "show_arrow": 1,
    "type": "Section Break"
@@ -140,39 +206,6 @@
    "type": "Link"
   },
   {
-   "child": 1,
-   "collapsible": 0,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "培训经历",
-   "link_to": "Employee Skill Map",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 0,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "奖惩记录",
-   "link_to": "HRMS Employee Reward Punishment",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 0,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "离职面谈",
-   "link_to": "Exit Interview",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
    "child": 0,
    "collapsible": 1,
    "icon": "user-round-minus",
@@ -204,6 +237,17 @@
    "show_arrow": 0,
 	"type": "Link",
 	"url": "/desk/employee-separation/view/list?docstatus=1&boarding_status=Pending"
+  },
+  {
+   "child": 1,
+   "collapsible": 0,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "离职面谈",
+   "link_to": "employee-separation-interview",
+   "link_type": "Page",
+   "show_arrow": 0,
+   "type": "Link"
   },
   {
    "child": 1,

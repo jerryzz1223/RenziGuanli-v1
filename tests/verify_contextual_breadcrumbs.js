@@ -19,6 +19,9 @@ for (const marker of [
 	'{ label: "主页", route: "/desk/hrms-workbench", slug: "hrms-workbench" }',
 	'if (module.label !== "主页")',
 	'"employee-detail": { label: "员工花名册", route: "/desk/employee", slug: "employee" }',
+	'["employee-talk-form", "employee-duty-change", "employee-reward-form"].indexOf(route[0]) !== -1 && route[1]',
+	'route[1] === "records"',
+	'is_employee_form_records',
 	'{ label: "离职记录", route: "/desk/employee-separation-records", slug: "employee-separation-records" }',
 	'form?.doc?.docstatus === 1 && form?.doc?.boarding_status === "Completed"',
 	'document.body.classList.remove("hrms-hide-breadcrumbs")',
@@ -31,8 +34,13 @@ for (const marker of [
 	assert.ok(navigation.includes(marker), `全局层级导航缺少契约: ${marker}`);
 }
 
+assert.match(
+	hooks,
+	/\/assets\/hrms\/js\/hrms_home_redirect_v6\.js\?v=[^"\n]+/,
+	"导航脚本必须带有静态资源版本号。",
+);
 assert.ok(
-	hooks.includes("/assets/hrms/js/hrms_home_redirect_v6.js?v=20260916e"),
+	!hooks.includes("/assets/hrms/js/hrms_home_redirect_v6.js?v=20260916e"),
 	"导航脚本变更后必须刷新静态资源版本。",
 );
 

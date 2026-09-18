@@ -406,6 +406,16 @@ def get_custom_fields():
 				"insert_after": "salary_cb",
 			},
 		],
+		"File": [
+			{
+				"fieldname": "custom_hrms_attachment_title",
+				"fieldtype": "Data",
+				"label": _("Attachment Title"),
+				"description": _("Business title bound to an HRMS employee material attachment."),
+				"length": 140,
+				"insert_after": "file_name",
+			},
+		],
 		"Project": [
 			{
 				"fieldname": "total_expense_claim",
@@ -860,6 +870,7 @@ def after_migrate():
 	"""
 	update_select_perm_after_install()
 
+	from hrms.api.announcement import ensure_announcement_pages
 	from hrms.api.employee_field_template import ensure_personnel_pages
 	from hrms.api.employee_field_template import ensure_personnel_sidebar_links
 	from hrms.api.employee_field_template import ensure_employee_rehire_setup
@@ -873,11 +884,13 @@ def after_migrate():
 	from hrms.localize_zh import apply_hrms_zh_translations
 	from hrms.utils.employee_form_layout import ensure_employee_identity_number_in_basic_information
 
+	ensure_announcement_pages()
 	ensure_personnel_pages()
 	ensure_personnel_sidebar_links()
 	ensure_employee_rehire_setup()
 	ensure_employee_work_nature_setup()
 	ensure_employee_identity_number_in_basic_information()
+	ensure_employee_material_title_field()
 	ensure_yongxin_departments_roster_assignable()
 	hide_roster_department_tree_columns()
 	ensure_dingtalk_company_scope()
@@ -885,6 +898,13 @@ def after_migrate():
 	ensure_default_reward_punishment_rules(ignore_permissions=True)
 	apply_hrms_zh_translations()
 	apply_login_page_customizations()
+
+
+def ensure_employee_material_title_field():
+	"""Create the attachment title field on existing sites during migration."""
+	fields = get_custom_fields().get("File", [])
+	if fields:
+		create_custom_fields({"File": fields}, ignore_validate=True)
 
 
 def ensure_yongxin_departments_roster_assignable():

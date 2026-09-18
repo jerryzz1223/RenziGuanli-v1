@@ -21,7 +21,7 @@ for (const marker of ["_summarize_records", "HRMS Monthly Attendance Summary", "
 	if (!server.includes(marker)) throw new Error(`Apple-tree statistics server contract is missing: ${marker}`);
 }
 
-for (const marker of ["统计年份", "统计期间", "开始日期", "结束日期", "按日期查询", "data-apple-start-date", "data-apple-end-date", "data-apple-date-apply", "个人季度汇总", "个人年度汇总", "每月明细", "苹果树明细", "monthly-detail", "data-employee-detail", "data-apple-table-sort", "data-apple-table-filter", "data-apple-table-page", "data-apple-export", "导出 Excel", "exportCurrentView", "download_export", "column_filters", "sort_key", "detail_start_date", "detail_search", "personUrl", "outerFilterParams", "data-person-detail-start-date", "data-person-detail-search", "data-person-detail-apply", "data-apple-history-import", "历史数据导入", "openHistoryImport", "preview_history_import", "import_history", "download_history_import_template", "下载填写模板", "受奖/惩人工号", "disable_file_browser: true", "allow_web_link: false", "allow_take_photo: false", "allow_toggle_private: false", "查看明细", "tablePager"]) {
+for (const marker of ["统计年份", "统计期间", "开始日期", "结束日期", "按日期查询", "data-apple-start-date", "data-apple-end-date", "data-apple-date-apply", "个人季度汇总", "个人年度汇总", "每月明细", "苹果树明细", "monthly-detail", "data-employee-detail", "data-apple-table-sort", "data-apple-table-filter", "data-apple-table-page", "data-apple-export", "导出 Excel", "exportCurrentView", "download_export", "column_filters", "sort_key", "detail_start_date", "detail_search", "personUrl", "outerFilterParams", "data-person-detail-start-date", "data-person-detail-search", "data-person-detail-apply", "data-apple-history-import", "历史数据导入", "openHistoryImport", "preview_history_import", "import_history", "download_history_import_template", "下载填写模板", "受奖/惩人工号", "disable_file_browser: true", "allow_web_link: false", "allow_take_photo: false", "allow_toggle_private: false", "查看明细", "tablePager", "去重后的员工数", "全部记录条数"]) {
 	if (!script.includes(marker)) throw new Error(`Apple-tree statistics screen is missing: ${marker}`);
 }
 if (!/\.apple-tree-center__data-table thead tr:first-child th,[\s\S]*position: sticky; top: var\(--page-head-height, 48px\)/.test(styles)) {
@@ -95,7 +95,7 @@ assert.equal(center.detailValue(0, true), "0");
 center.view = "monthly-detail";
 center.year = "2026";
 center.month = "2026-08";
-center.table = { page: 1, pageSize: 20, sortKey: "net_apples", sortOrder: "desc", filters: { department: "连续课" } };
+center.table = { page: 1, pageSize: 20, sortKey: "green_apples", sortOrder: "desc", filters: { department: "连续课" } };
 center.exportCurrentView();
 assert.match(context.openedUrl, /download_export/);
 assert.match(context.openedUrl, /view=monthly-detail/);
@@ -109,7 +109,7 @@ center.data = {
 		{ reward_date: "2026-06-18", department: "品管课", employee_name: "员工乙", employee_code: "010", green_apples: 2, red_apples: 4, reward_amount: -10, reward_item: "手工补录" },
 	],
 };
-center.table = { page: 1, pageSize: 20, sortKey: "net_apples", sortOrder: "desc", filters: {} };
+center.table = { page: 1, pageSize: 20, sortKey: "green_apples", sortOrder: "desc", filters: {} };
 assert.deepEqual(Array.from(center.monthlyDetailRows(), row => row.employee_code), ["001", "010"]);
 center.table.sortOrder = "asc";
 assert.deepEqual(Array.from(center.monthlyDetailRows(), row => row.employee_code), ["010", "001"]);
@@ -117,12 +117,13 @@ center.table.filters = { attendance_month: "2026-06", reward_item: "手工", fin
 assert.deepEqual(Array.from(center.monthlyDetailRows(), row => row.employee_code), ["010"]);
 const monthlyTable = center.monthlyDetailTable();
 assert.match(monthlyTable, /apple-tree-center__monthly-table/);
-assert.equal((monthlyTable.match(/data-apple-table-sort=/g) || []).length, 10);
-assert.equal((monthlyTable.match(/data-apple-table-filter=/g) || []).length, 10);
-assert.match(monthlyTable, />-2<\/td>/);
+assert.equal((monthlyTable.match(/data-apple-table-sort=/g) || []).length, 9);
+assert.equal((monthlyTable.match(/data-apple-table-filter=/g) || []).length, 9);
+assert.doesNotMatch(monthlyTable, /净苹果/);
+assert.doesNotMatch(monthlyTable, />-2<\/td>/);
 center.table.filters.department = "不存在的部门";
 assert.match(center.monthlyDetailTable(), /没有符合列筛选条件的明细记录/);
-console.log("Monthly-detail column filtering and numeric sorting passed.");
+console.log("Monthly-detail column filtering, numeric sorting, and net-apple omission passed.");
 
 center.year = "2026";
 center.personData = {

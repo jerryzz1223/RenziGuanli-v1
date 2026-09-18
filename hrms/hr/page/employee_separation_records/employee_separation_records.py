@@ -1,24 +1,132 @@
 import re
+from datetime import date, datetime
+from io import BytesIO
 
 import frappe
 from frappe import _
-from frappe.utils import cint
+from frappe.utils import cint, get_datetime, getdate
 
 
 @frappe.whitelist()
 def get_separation_records(
 	company: str | None = None,
 	search: str | None = None,
+	department: str | None = None,
+	start_date: str | None = None,
+	end_date: str | None = None,
+	year: str | None = None,
+	month: str | None = None,
+	reason: str | None = None,
 	start: int = 0,
 	page_length: int = 50,
 ) -> dict:
 	if not frappe.has_permission("Employee", ptype="read"):
 		frappe.throw(_("您没有查看离职记录的权限。"), frappe.PermissionError)
 
+	rows, can_read_separations = _collect_records(company, include_separation_details=True)
+	filter_options = _build_filter_options(rows)
+	rows = _filter_records(
+		rows,
+		search=search,
+		department=department,
+		start_date=start_date,
+		end_date=end_date,
+		year=year,
+		month=month,
+		reason=reason,
+	)
+	total = len(rows)
+	start = max(cint(start), 0)
+	page_length = min(max(cint(page_length) or 50, 1), 100)
+	return {
+		"rows": rows[start : start + page_length],
+		"total": total,
+		"start": start,
+		"page_length": page_length,
+		"can_read_separations": can_read_separations,
+		"filter_options": filter_options,
+	}
+
+
+@frappe.whitelist()
+def export_separation_records(
+	company: str | None = None,
+	search: str | None = None,
+	department: str | None = None,
+	start_date: str | None = None,
+	end_date: str | None = None,
+	year: str | None = None,
+	month: str | None = None,
+	reason: str | None = None,
+):
+	"""Download every field currently available in the separation-record detail view."""
+	if not frappe.has_permission("Employee", ptype="read"):
+		frappe.throw(_("您没有导出离职记录的权限。"), frappe.PermissionError)
+	rows, _can_read_separations = _collect_records(company, include_separation_details=True)
+	rows = _filter_records(
+		rows,
+		search=search,
+		department=department,
+		start_date=start_date,
+		end_date=end_date,
+		year=year,
+		month=month,
+		reason=reason,
+	)
+	if not rows:
+		frappe.throw(_("当前筛选条件下没有可导出的离职记录。"))
+
+	from openpyxl import Workbook
+	from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+	from openpyxl.utils import get_column_letter
+
+	columns = _export_columns()
+	workbook = Workbook()
+	sheet = workbook.active
+	sheet.title = "离职记录"
+	header_fill = PatternFill("solid", fgColor="DDEBF7")
+	thin = Side(style="thin", color="B7C9D6")
+	border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	sheet.append([label for label, _field in columns])
+	for cell in sheet[1]:
+		cell.fill = header_fill
+		cell.font = Font(name="Microsoft YaHei", size=10, bold=True)
+		cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+		cell.border = border
+	for row in rows:
+		sheet.append([_excel_value(row.get(field), field) for _label, field in columns])
+		for cell, (_label, field) in zip(sheet[sheet.max_row], columns):
+			cell.alignment = Alignment(vertical="top", wrap_text=True)
+			cell.border = border
+			if field in {"departure_date", "planned_departure_date"} and cell.value:
+				cell.number_format = "yyyy-mm-dd"
+			elif field in {"application_time", "approval_time", "actual_departure_time", "modified"} and cell.value:
+				cell.number_format = "yyyy-mm-dd hh:mm:ss"
+	for index, (_label, field) in enumerate(columns, start=1):
+		values = [str(_excel_value(row.get(field), field) or "") for row in rows[:500]]
+		sheet.column_dimensions[get_column_letter(index)].width = min(
+			42, max(12, max([len(_label), *(len(value) for value in values)], default=12) + 2)
+		)
+	sheet.freeze_panes = "A2"
+	sheet.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{sheet.max_row}"
+	sheet.sheet_view.showGridLines = False
+
+	output = BytesIO()
+	workbook.save(output)
+	period = _export_period_label(start_date, end_date, year, month)
+	filename = re.sub(r'[\\/:*?"<>|]', "_", f"离职记录_{period}.xlsx")
+	frappe.local.response.filename = filename
+	frappe.local.response.filecontent = output.getvalue()
+	frappe.local.response.type = "binary"
+
+
+def _collect_records(company=None, include_separation_details=True):
 	# Employee is the source of truth for departed staff: scheduled or pending
 	# actual-departure times must not appear in the historical record yet.
 	employees = _get_departed_employees(company)
-	can_read_separations = frappe.has_permission("Employee Separation", ptype="read")
+	can_read_separations = include_separation_details and frappe.has_permission(
+		"Employee Separation", ptype="read"
+	)
 	department_names = _get_department_display_names(
 		[employee.get("department") for employee in employees]
 	)
@@ -33,25 +141,181 @@ def get_separation_records(
 		_build_record(employee, separations.get(employee.name), department_names)
 		for employee in employees
 	]
-
-	needle = str(search or "").strip().casefold()
-	if needle:
-		rows = [row for row in rows if _matches_search(row, needle)]
-
 	rows.sort(
 		key=lambda row: (str(row.departure_date or ""), str(row.modified or "")),
 		reverse=True,
 	)
-	total = len(rows)
-	start = max(cint(start), 0)
-	page_length = min(max(cint(page_length) or 50, 1), 100)
+	return rows, bool(can_read_separations)
+
+
+def _filter_records(rows, search=None, department=None, start_date=None, end_date=None, year=None, month=None, reason=None):
+	needle = str(search or "").strip().casefold()
+	department = _normalize_filter_text(department)
+	start_date = str(start_date or "").strip()[:10]
+	end_date = str(end_date or "").strip()[:10]
+	year = str(year or "").strip()
+	month = str(month or "").strip().zfill(2) if str(month or "").strip() else ""
+	reason = _normalize_filter_text(reason)
+	filtered = []
+	for row in rows:
+		departure_date = _record_filter_date(row)
+		department_values = {
+			_normalize_filter_text(row.department),
+			_normalize_filter_text(row.department_display),
+			_normalize_filter_text(_strip_department_company_suffix(row.department)),
+			_normalize_filter_text(_strip_department_company_suffix(row.department_display)),
+		}
+		if department and department not in department_values:
+			continue
+		if start_date and (not departure_date or departure_date < start_date):
+			continue
+		if end_date and (not departure_date or departure_date > end_date):
+			continue
+		if year and (not departure_date or not departure_date.startswith(f"{year}-")):
+			continue
+		if month and (not departure_date or departure_date[5:7] != month):
+			continue
+		if reason and not _matches_reason(row, reason):
+			continue
+		if needle and not _matches_search(row, needle):
+			continue
+		filtered.append(row)
+	return filtered
+
+
+def _matches_reason(row, needle):
+	return any(
+		needle == _normalize_filter_text(value)
+		for value in (
+			row.separation_reason_type,
+			row.separation_reason,
+			row.custom_separation_reason,
+			row.separation_reason_display,
+			row.separation_reason_detail,
+			row.approver_reason_type,
+			row.approver_reason,
+			row.approver_custom_reason,
+			row.approver_reason_display,
+			row.approver_reason_detail,
+		)
+	)
+
+
+def _normalize_filter_text(value):
+	return " ".join(str(value or "").strip().casefold().split())
+
+
+def _record_filter_date(row):
+	"""Return the single date shared by the UI filters and the Excel export."""
+	for value in (row.actual_departure_time, row.departure_date, row.planned_departure_date):
+		date_text = _date_text(value)
+		if date_text:
+			return date_text
+	return ""
+
+
+def _date_text(value):
+	if not value:
+		return ""
+	if isinstance(value, (date, datetime)):
+		return value.isoformat()[:10]
+	return str(value).strip()[:10]
+
+
+def _build_filter_options(rows):
+	departments = {}
+	reasons = set()
+	years = set()
+	for row in rows:
+		if row.department:
+			departments[str(row.department)] = row.department_display or row.department
+		departure_date = _record_filter_date(row)
+		if len(departure_date) >= 4 and departure_date[:4].isdigit():
+			years.add(departure_date[:4])
+		for value in (
+			row.separation_reason_type,
+			row.separation_reason,
+			row.custom_separation_reason,
+			row.separation_reason_display,
+			row.approver_reason_type,
+			row.approver_reason,
+			row.approver_custom_reason,
+			row.approver_reason_display,
+		):
+			if value:
+				reasons.add(str(value))
 	return {
-		"rows": rows[start : start + page_length],
-		"total": total,
-		"start": start,
-		"page_length": page_length,
-		"can_read_separations": can_read_separations,
+		"departments": [{"value": value, "label": label} for value, label in sorted(departments.items(), key=lambda item: item[1])],
+		"reasons": sorted(reasons),
+		"years": sorted(years, reverse=True),
 	}
+
+
+def _export_columns():
+	return [
+		("员工内部编号", "employee"),
+		("员工姓名", "employee_name"),
+		("工号", "employee_code"),
+		("公司", "company"),
+		("部门", "department_display"),
+		("岗位", "designation"),
+		("实际离职日期", "departure_date"),
+		("拟离职日期", "planned_departure_date"),
+		("离职申请时间", "application_time"),
+		("申请操作人", "application_operator"),
+		("离职审批时间", "approval_time"),
+		("审批操作人", "approval_operator"),
+		("实际离职时间", "actual_departure_time"),
+		("实际离职操作人", "actual_departure_operator"),
+		("离职单号", "separation_name"),
+		("离职单状态", "separation_status"),
+		("员工自述原因分类", "separation_reason_type"),
+		("员工自述离职原因", "separation_reason_display"),
+		("员工自述原因原值", "separation_reason"),
+		("员工自述自定义原因", "custom_separation_reason"),
+		("员工自述详细原因", "separation_reason_detail"),
+		("审批确认原因分类", "approver_reason_type"),
+		("审批确认离职原因", "approver_reason_display"),
+		("审批确认原因原值", "approver_reason"),
+		("审批确认自定义原因", "approver_custom_reason"),
+		("审批确认详细原因", "approver_reason_detail"),
+		("离职面谈", "exit_interview"),
+		("记录更新时间", "modified"),
+	]
+
+
+def _excel_value(value, field=None):
+	if value is None:
+		return ""
+	if field in {"departure_date", "planned_departure_date"}:
+		if isinstance(value, datetime):
+			return value.date()
+		if isinstance(value, date):
+			return value
+		try:
+			return getdate(value)
+		except Exception:
+			return str(value)
+	if field in {"application_time", "approval_time", "actual_departure_time", "modified"}:
+		if isinstance(value, datetime):
+			return value
+		try:
+			return get_datetime(value)
+		except Exception:
+			return str(value)
+	if isinstance(value, (str, int, float, bool)):
+		return value
+	return str(value)
+
+
+def _export_period_label(start_date, end_date, year, month):
+	if year and month:
+		return f"{year}年{str(month).zfill(2)}月"
+	if year:
+		return f"{year}年"
+	if start_date or end_date:
+		return f"{start_date or '起始'}-{end_date or '截至'}"
+	return "全部"
 
 
 def _employee_fields():

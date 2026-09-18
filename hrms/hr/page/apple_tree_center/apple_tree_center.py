@@ -54,6 +54,15 @@ def _number(value):
 		return 0.0
 
 
+def _record_count(row):
+	"""Return the number of source records represented by one statistics row."""
+	try:
+		count = int(float(row.get("source_row_count") or 0))
+	except (TypeError, ValueError):
+		count = 0
+	return count if count > 0 else 1
+
+
 def _display_number(value):
 	value = _number(value)
 	return int(value) if value.is_integer() else value
@@ -158,7 +167,7 @@ def _history_employee(company, employee_code="", employee_name=""):
 	rows = frappe.get_all(
 		"Employee",
 		filters=filters,
-		fields=["name", "employee_name", "custom_employee_code", "department"],
+		fields=["name", "employee_name", "custom_employee_code", "department", "designation"],
 		limit_page_length=3,
 	)
 	if len(rows) != 1:
@@ -271,6 +280,7 @@ def _history_preview_data(file_url, company):
 			"employee_code": str(employee.get("custom_employee_code") or "").strip(),
 			"employee_name": employee.get("employee_name") or employee_name,
 			"department": employee.get("department") or "",
+			"designation": employee.get("designation") or "",
 			"source_department": _history_row_value(row, "受奖/惩人部门", "部门"),
 			"green_apples": green,
 			"red_apples": red,
@@ -290,7 +300,7 @@ def _history_preview_data(file_url, company):
 		key = row["employee_code"]
 		item = aggregates.setdefault(key, {
 			"employee": row["employee"], "employee_code": key,
-			"employee_name": row["employee_name"], "department": row["department"],
+			"employee_name": row["employee_name"], "department": row["department"], "designation": row["designation"],
 			"source_department": row["source_department"],
 			"green_apples": 0.0, "red_apples": 0.0, "source_rows": [],
 		})
@@ -394,9 +404,30 @@ def _matches_search(row, search):
 	if not search:
 		return True
 	haystack = " ".join(
-		str(row.get(field) or "") for field in ("employee_code", "employee_name", "department", "reward_item")
+		str(row.get(field) or "") for field in ("employee_code", "employee_name", "department", "designation", "reward_item")
 	).casefold()
 	return search.casefold() in haystack
+
+
+def _enrich_designations(records, company):
+	"""Add the current employee position without changing source departments."""
+	if not records:
+		return []
+	rows = frappe.get_all(
+		"Employee",
+		filters={"company": company},
+		fields=["name", "custom_employee_code", "designation"],
+		limit_page_length=MAX_VISIBLE_RECORDS,
+	)
+	by_code = {str(row.get("custom_employee_code") or "").strip(): row for row in rows if row.get("custom_employee_code")}
+	by_name = {str(row.get("name") or "").strip(): row for row in rows if row.get("name")}
+	enriched = []
+	for source in records:
+		row = dict(source)
+		employee = by_code.get(str(row.get("employee_code") or "").strip()) or by_name.get(str(row.get("employee") or "").strip())
+		row["designation"] = row.get("designation") or (employee or {}).get("designation") or ""
+		enriched.append(row)
+	return enriched
 
 
 def _summarize_records(records):
@@ -412,6 +443,7 @@ def _summarize_records(records):
 				"employee_code": row.get("employee_code") or "",
 				"employee_name": row.get("employee_name") or "未匹配员工",
 				"department": row.get("department") or "",
+				"designation": row.get("designation") or "",
 				"record_count": 0,
 				"green_apples": 0.0,
 				"red_apples": 0.0,
@@ -421,13 +453,14 @@ def _summarize_records(records):
 		green = _number(row.get("green_apples"))
 		red = _number(row.get("red_apples"))
 		amount = _number(row.get("reward_amount"))
-		person["record_count"] += 1
+		record_count = _record_count(row)
+		person["record_count"] += record_count
 		person["green_apples"] += green
 		person["red_apples"] += red
 		person["reward_amount"] += amount
 		month_key = str(row.get("reward_date") or "")[:7]
 		if month_key:
-			months[month_key]["record_count"] += 1
+			months[month_key]["record_count"] += record_count
 			months[month_key]["green_apples"] += green
 			months[month_key]["red_apples"] += red
 			months[month_key]["reward_amount"] += amount
@@ -476,6 +509,7 @@ def _summary_record(row):
 		"employee_code": row.get("employee_code") or "",
 		"employee_name": row.get("employee_name") or "未匹配员工",
 		"department": row.get("department") or "",
+		"designation": row.get("designation") or "",
 		"reward_item": "月度考勤终稿",
 		"green_apples": row.get("green_apples"),
 		"red_apples": row.get("red_apples"),
@@ -624,6 +658,7 @@ def _list_history_month_records(company, attendance_month, start_date=None, end_
 		"employee_code": row.get("employee_code") or "",
 		"employee_name": row.get("employee_name") or "未匹配员工",
 		"department": row.get("source_department") or row.get("department") or "",
+		"designation": row.get("designation") or next((str(item.get("designation") or "").strip() for item in detail_source_rows if item.get("designation")), ""),
 		"reward_item": "历史数据导入",
 		"green_apples": _display_number(green_apples),
 		"red_apples": _display_number(red_apples),
@@ -695,14 +730,13 @@ def _export_rows(view, data):
 		columns = [
 			("attendance_month", "月份"), ("department", "部门"), ("employee_name", "姓名"),
 			("employee_code", "工号"), ("green_apples", "绿苹果"), ("red_apples", "红苹果"),
-			("net_apples", "净苹果"), ("reward_amount", "苹果金额"), ("reward_item", "来源"),
+			("reward_amount", "苹果金额"), ("reward_item", "来源"),
 			("final_status", "终稿状态"),
 		]
 		rows = []
 		for source in data.get("records", []):
 			row = dict(source)
 			row["attendance_month"] = row.get("attendance_month") or str(row.get("reward_date") or "")[:7]
-			row["net_apples"] = _display_number(_number(row.get("green_apples")) - _number(row.get("red_apples")))
 			row["final_status"] = (
 				f"{row.get('approval_result') or '-'} / {row.get('approval_status') or '-'}"
 				if row.get("approval_result") or row.get("approval_status") else "未提供"
@@ -711,10 +745,13 @@ def _export_rows(view, data):
 		return columns, rows
 	columns = [
 		("department", "部门"), ("employee_name", "姓名"), ("employee_code", "工号"),
-		("green_apples", "绿苹果"), ("red_apples", "红苹果"), ("net_apples", "净苹果"),
+		("green_apples", "绿苹果"), ("red_apples", "红苹果"),
 		("reward_amount", "苹果金额"), ("record_count", "记录数"),
 	]
-	return columns, data.get("people", [])
+	people = data.get("people", [])
+	if any("designation" in row for row in people):
+		columns.insert(1, ("designation", "岗位"))
+	return columns, people
 
 
 def _filtered_export_rows(columns, rows, column_filters="", sort_key="", sort_order="desc"):
@@ -768,7 +805,7 @@ def _build_export_workbook(view, data, title, column_filters="", sort_key="", so
 
 
 @frappe.whitelist()
-def download_export(view: str = "annual-summary", year: str = "", month: str = "", search: str = "", company: str = "", start_date: str = "", end_date: str = "", person: str = "", column_filters: str = "", sort_key: str = "", sort_order: str = "desc", detail_start_date: str = "", detail_end_date: str = "", detail_search: str = ""):
+def download_export(view: str = "annual-summary", year: str = "", month: str = "", search: str = "", company: str = "", start_date: str = "", end_date: str = "", person: str = "", column_filters: str = "", sort_key: str = "", sort_order: str = "desc", detail_start_date: str = "", detail_end_date: str = "", detail_search: str = "", department: str = "", designation: str = ""):
 	"""Download the currently selected Apple-tree statistics view as Excel."""
 	view = str(view or "annual-summary").strip()
 	if view not in EXPORT_VIEWS:
@@ -776,14 +813,28 @@ def download_export(view: str = "annual-summary", year: str = "", month: str = "
 	if view == "person":
 		if not str(person or "").strip():
 			frappe.throw("请先选择要导出的员工。")
-		data = get_person_detail(person=str(person).strip(), year=year, company=company, month=month, search=search, start_date=start_date, end_date=end_date, detail_start_date=detail_start_date, detail_end_date=detail_end_date, detail_search=detail_search)
+		person_args = {
+			"person": str(person).strip(), "year": year, "company": company, "month": month, "search": search,
+			"start_date": start_date, "end_date": end_date, "detail_start_date": detail_start_date,
+			"detail_end_date": detail_end_date, "detail_search": detail_search,
+		}
+		if str(department or "").strip():
+			person_args["department"] = department
+		if str(designation or "").strip():
+			person_args["designation"] = designation
+		data = get_person_detail(**person_args)
 		if not data.get("available"):
 			frappe.throw(data.get("reason") or "当前员工没有可导出的苹果树记录。")
 		person_name = data.get("person", {}).get("employee_name") or str(person).strip()
 		title = f"{data.get('year')}年 {person_name} 苹果树明细"
 		filename = f"苹果树统计_{data.get('year')}_{person_name}.xlsx"
 	else:
-		data = get_data(year=year, month=month, search=search, company=company, start_date=start_date, end_date=end_date)
+		data_args = {"year": year, "month": month, "search": search, "company": company, "start_date": start_date, "end_date": end_date}
+		if str(department or "").strip():
+			data_args["department"] = department
+		if str(designation or "").strip():
+			data_args["designation"] = designation
+		data = get_data(**data_args)
 		period = data["filters"].get("month") or (
 			f"{data['filters'].get('start_date')}_{data['filters'].get('end_date')}" if data["filters"].get("start_date") else f"{data['filters'].get('year')}年"
 		)
@@ -934,9 +985,14 @@ def get_employee_summary(employee: str, year: str = "", company: str = ""):
 
 
 @frappe.whitelist()
-def get_person_detail(person: str, year: str = "", company: str = "", month: str = "", search: str = "", start_date: str = "", end_date: str = "", detail_start_date: str = "", detail_end_date: str = "", detail_search: str = ""):
+def get_person_detail(person: str, year: str = "", company: str = "", month: str = "", search: str = "", start_date: str = "", end_date: str = "", detail_start_date: str = "", detail_end_date: str = "", detail_search: str = "", department: str = "", designation: str = ""):
 	"""Return the employee's raw Apple-tree reward/penalty ledger."""
-	data = get_data(year=year, month=month, search=search, company=company, start_date=start_date, end_date=end_date)
+	data_args = {"year": year, "month": month, "search": search, "company": company, "start_date": start_date, "end_date": end_date}
+	if str(department or "").strip():
+		data_args["department"] = department
+	if str(designation or "").strip():
+		data_args["designation"] = designation
+	data = get_data(**data_args)
 	outer_start = _history_date(data["filters"].get("start_date")) if data["filters"].get("start_date") else None
 	outer_end = _history_date(data["filters"].get("end_date")) if data["filters"].get("end_date") else None
 	detail_start, detail_end = _parse_custom_date_range(detail_start_date, detail_end_date)
@@ -976,13 +1032,13 @@ def get_person_detail(person: str, year: str = "", company: str = "", month: str
 		"available": True, "person": employee, "year": data["filters"]["year"],
 		"available_years": data.get("available_years", [data["filters"]["year"]]),
 		"company": data["filters"]["company"], "rows": rows, "totals": _apple_detail_totals(rows),
-		"filters": {"month": data["filters"].get("month", ""), "search": data["filters"].get("search", ""), "start_date": data["filters"].get("start_date", ""), "end_date": data["filters"].get("end_date", ""), "detail_start_date": detail_start.isoformat() if detail_start else "", "detail_end_date": detail_end.isoformat() if detail_end else "", "detail_search": str(detail_search or "").strip()},
+		"filters": {"month": data["filters"].get("month", ""), "search": data["filters"].get("search", ""), "start_date": data["filters"].get("start_date", ""), "end_date": data["filters"].get("end_date", ""), "department": data["filters"].get("department", ""), "designation": data["filters"].get("designation", ""), "detail_start_date": detail_start.isoformat() if detail_start else "", "detail_end_date": detail_end.isoformat() if detail_end else "", "detail_search": str(detail_search or "").strip()},
 		"columns": [{"field": field, "label": label, "numeric": numeric} for field, label, numeric in APPLE_DETAIL_COLUMNS],
 	}
 
 
 @frappe.whitelist()
-def get_data(year: str = "", month: str = "", search: str = "", company: str = "", start_date: str = "", end_date: str = ""):
+def get_data(year: str = "", month: str = "", search: str = "", company: str = "", start_date: str = "", end_date: str = "", department: str = "", designation: str = ""):
 	"""Return a permission-aware Apple-tree statistical view.
 
 	The active monthly attendance final is the canonical source for the annual
@@ -995,6 +1051,8 @@ def get_data(year: str = "", month: str = "", search: str = "", company: str = "
 	defaults = getattr(frappe, "defaults", None)
 	default_company = defaults.get_user_default("Company") if defaults else ""
 	company = str(company or default_company or "").strip()
+	department = str(department or "").strip()
+	designation = str(designation or "").strip()
 	if not company:
 		frappe.throw("请先选择公司后再查看苹果树统计。")
 	available_months = frappe.get_list(
@@ -1040,10 +1098,20 @@ def get_data(year: str = "", month: str = "", search: str = "", company: str = "
 			records.extend(history_records)
 		elif not custom_start or (custom_start <= _month_bounds(attendance_month)[0] and custom_end >= _month_bounds(attendance_month)[1] - date.resolution):
 			records.extend(_summary_record(row) for row in _list_active_month_records(company, attendance_month))
-	records = [row for row in records if _matches_search(row, str(search or "").strip())]
+	records = _enrich_designations(records, company)
+	search = str(search or "").strip()
+	base_records = [row for row in records if _matches_search(row, search)]
+	available_departments = sorted({str(row.get("department") or "").strip() for row in base_records if str(row.get("department") or "").strip()})
+	available_designations = sorted({str(row.get("designation") or "").strip() for row in base_records if (not department or str(row.get("department") or "").strip() == department) and str(row.get("designation") or "").strip()})
+	records = [
+		row for row in base_records
+		if (not department or str(row.get("department") or "").strip() == department)
+		and (not designation or str(row.get("designation") or "").strip() == designation)
+	]
 	summary, people, months = _summarize_records(records)
 	return {
-		"filters": {"year": str(year), "month": month, "search": str(search or "").strip(), "company": company, "start_date": custom_start.isoformat() if custom_start else "", "end_date": custom_end.isoformat() if custom_end else ""},
+		"filters": {"year": str(year), "month": month, "search": search, "company": company, "start_date": custom_start.isoformat() if custom_start else "", "end_date": custom_end.isoformat() if custom_end else "", "department": department, "designation": designation},
+		"filter_options": {"departments": available_departments, "designations": available_designations},
 		"available_years": available_years,
 		"summary": summary,
 		"people": people,

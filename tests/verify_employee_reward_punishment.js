@@ -60,8 +60,8 @@ for (const marker of ["嘉奖", "小功", "大功", "警告", "小过", "大过"
 
 const sidebarLink = sidebar.items.find((link) => link.label === "奖惩记录");
 const workspaceLink = workspace.links.find((link) => link.label === "奖惩记录");
-assert.strictEqual(sidebarLink.link_to, "HRMS Employee Reward Punishment");
-assert.strictEqual(workspaceLink.link_to, "HRMS Employee Reward Punishment");
+assert.strictEqual(sidebarLink, undefined, "人事侧栏不应展示奖惩记录入口。");
+assert.strictEqual(workspaceLink, undefined, "人事工作区不应展示奖惩记录入口。");
 for (const source of [shell, topNav]) {
 	assert(source.includes("hrms-employee-reward-punishment"), "Personnel navigation must recognize the dedicated route.");
 }

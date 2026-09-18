@@ -26,6 +26,7 @@ assert(!settingsCenter.includes("SYSTEM_SETTINGS_MODULES = new Set([\"钉钉集�
 assert(!settingsCenter.includes("render_dingtalk_integration"), "DingTalk controls must not remain duplicated in Settings Center.");
 
 const attendanceCenter = read("hrms/hr/page/attendance_import_center/attendance_import_center.js");
+assert(!attendanceCenter.includes('data-action="dingtalk-local-pilot"'), "The local DingTalk pilot button must not be rendered in the integration page.");
 for (const marker of [
 	"standalone_views",
 	"key: \"dingtalk\"",

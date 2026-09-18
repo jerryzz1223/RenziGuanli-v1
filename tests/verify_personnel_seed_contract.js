@@ -83,7 +83,7 @@ for (const marker of ['"attendance-import-center"', '"payroll-input-center"', '"
 }
 
 assert(!redirectSource.includes('{ label: "培训经历", route: "/desk/employee-training"'), "培训经历不能指向 Employee Training 子表裸路由。");
-assert(redirectSource.includes('{ label: "培训经历", route: "/desk/employee-skill-map"'), "培训经历应进入 Employee Skill Map 父级资料。");
+assert(!redirectSource.includes('{ label: "培训经历", route: "/desk/employee-skill-map"'), "人事侧栏不应展示培训经历入口。");
 
 for (const workspaceParts of [
 	["hrms", "hr", "workspace", "personnel", "personnel.json"],
@@ -95,7 +95,8 @@ for (const workspaceParts of [
 	assert(workspaceSource.includes('"link_to": "employee-property-history"'), `${workspaceParts.join("/")} 必须进入任职记录汇总页。`);
 	assert(workspaceSource.includes('"label": "异动记录"'), `${workspaceParts.join("/")} 左侧必须只展示异动记录入口。`);
 	assert(!workspaceSource.includes('"link_to": "Employee Transfer"'), `${workspaceParts.join("/")} 左侧不得直接办理人事异动。`);
-	assert(workspaceSource.includes('"link_to": "Employee Skill Map"'), `${workspaceParts.join("/")} 必须进入培训经历父级资料。`);
+	assert(!workspaceSource.includes('"label": "培训经历"'), `${workspaceParts.join("/")} 左侧不应展示培训经历入口。`);
+	assert(!workspaceSource.includes('"label": "奖惩记录"'), `${workspaceParts.join("/")} 左侧不应展示奖惩记录入口。`);
 }
 
 const propertyHistory = readJson("hrms", "hr", "doctype", "employee_property_history", "employee_property_history.json");

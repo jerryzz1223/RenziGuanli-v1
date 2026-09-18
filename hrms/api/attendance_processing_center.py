@@ -3433,8 +3433,27 @@ def list_processing_exceptions(company: str, attendance_month: str, source_type:
 		limit_page_length=5000,
 	)
 	rows = [_serialize_record(row) for row in records]
-	rows.sort(key=lambda row: ("RESTDAY_CLOCKED_WITHOUT_OVERTIME" not in (row.get("exception_codes") or []), row.get("reviewed_on") or "", row.get("record_id") or ""))
+	rows.sort(key=_processing_exception_sort_key)
 	return {"review_rows": rows[page_start : page_start + page_length], "total_pending_count": total_pending_count, "filtered_pending_count": filtered_pending_count, "source_type": source_type, "page_start": page_start, "page_length": page_length}
+
+
+def _processing_exception_sort_key(row: dict[str, Any]):
+	"""Keep mixed DB datetime/string review timestamps sortable.
+
+	A row resolved just now can contain a ``datetime`` while a sibling pending
+	row still contains an empty string.  Sorting those values directly raises a
+	TypeError and hides the remaining exception dates.
+	"""
+	reviewed_on = row.get("reviewed_on") or ""
+	if isinstance(reviewed_on, (date, datetime)):
+		reviewed_on = reviewed_on.isoformat()
+	else:
+		reviewed_on = str(reviewed_on)
+	return (
+		"RESTDAY_CLOCKED_WITHOUT_OVERTIME" not in (row.get("exception_codes") or []),
+		reviewed_on,
+		str(row.get("record_id") or ""),
+	)
 
 
 @frappe.whitelist()
@@ -3562,7 +3581,7 @@ def list_manual_adjustments(company: str, attendance_month: str, page_length: in
 	items = []
 	for record in records:
 		for event in _loads(record.review_history_json, []):
-			items.append({"record_id": record.name, "employee_code": record.employee_code, "employee_name": record.employee_name, "source_type": record.source_type, "field_name": event.get("field_name", ""), "original_value": event.get("old_value"), "new_value": event.get("new_value"), "reason": event.get("reason", ""), "modified_by": event.get("reviewer", ""), "modified_at": event.get("reviewed_on", "")})
+			items.append({"record_id": record.name, "employee_code": record.employee_code, "employee_name": record.employee_name, "source_type": record.source_type, "field_name": event.get("field_name", ""), "original_value": event.get("old_value"), "new_value": event.get("new_value"), "review_status": event.get("review_status", ""), "reason": event.get("reason", ""), "modified_by": event.get("reviewer", ""), "modified_at": event.get("reviewed_on", "")})
 	return {"items": items[: min(max(cint(page_length), 1), 5000)]}
 
 

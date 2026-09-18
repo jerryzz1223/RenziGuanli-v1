@@ -4,6 +4,7 @@ import importlib.util
 import json
 import sys
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -99,6 +100,15 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 		self.assertEqual(result["proposed_value"]["exception_events"], [])
 		self.assertEqual(result["exception_codes"], [])
 		self.assertEqual(self.module._attendance_draft_review_status(result["exception_codes"], "已通过"), "已通过")
+
+	def test_exception_queue_sort_accepts_mixed_review_timestamp_types(self):
+		rows = [
+			{"record_id": "pending-day", "exception_codes": [RESTDAY_CODE], "reviewed_on": ""},
+			{"record_id": "reviewed-day", "exception_codes": [RESTDAY_CODE], "reviewed_on": datetime(2026, 7, 4, 10, 0)},
+		]
+		ordered = sorted(rows, key=self.module._processing_exception_sort_key)
+
+		self.assertEqual([row["record_id"] for row in ordered], ["pending-day", "reviewed-day"])
 
 	def test_batch_notes_reload_latest_version_before_save(self):
 		class VersionedBatch:

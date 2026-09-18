@@ -145,7 +145,7 @@ class AttendanceImportCenter {
 
 	show() {
 		// Upload belongs to each source's own workflow, never to the global shell.
-		this.page.set_primary_action(null);
+		this.page.clear_primary_action();
 		this.activate(true);
 		this.render();
 		this.load_active_view();
@@ -1029,6 +1029,7 @@ class AttendanceImportCenter {
 
 	processing_field_label(fieldName) {
 		if (String(fieldName || "").startsWith("__daily_exception_decision__:")) return __("按日确认休息日打卡");
+		if (String(fieldName || "").startsWith("special_hours_days")) return __("休息日加班工时");
 		const labels = {
 			employee_code: "工号", employee_name: "姓名", department: "部门", standard_hours: "标准工时", actual_attendance_hours: "实际出勤工时",
 			created_at: "创建时间", punch_time: "补卡时间", punch_type: "补卡类型", reason: "补卡理由", approval_result: "审批结果", approval_status: "审批状态",
@@ -1046,7 +1047,7 @@ class AttendanceImportCenter {
 			clock_in_missing: "上班缺卡次数", clock_out_missing: "下班缺卡次数", source_row: "来源行",
 			"工号": "工号", "姓名": "姓名", "部门": "部门", "苹果类型": "苹果类型", "有效苹果数": "有效苹果数",
 		};
-		return labels[fieldName] || __("其他调整字段");
+		return labels[fieldName] || (fieldName && !String(fieldName).startsWith("__") ? fieldName : __("其他调整字段"));
 	}
 
 	format_processing_value(value) {
@@ -1056,6 +1057,32 @@ class AttendanceImportCenter {
 		return Object.entries(value)
 			.map(([field, item]) => `${this.processing_field_label(field)}：${this.format_processing_value(item)}`)
 			.join("；");
+	}
+
+	manual_adjustment_changes(row) {
+		const fieldName = String(row.field_name || "");
+		const original = row.original_value;
+		const modified = row.new_value;
+		if (fieldName === "__review_decision__") {
+			return [{ label: __("处理决定"), original: __("待处理"), modified: row.review_status || __("已处理") }];
+		}
+		if (fieldName.startsWith("__daily_exception_decision__:")) {
+			return [{ label: __("处理决定"), original: original?.decision || __("待处理"), modified: modified?.decision || __("已处理") }];
+		}
+		if (fieldName.startsWith("special_hours_days:")) {
+			const hoursValue = (value) => value && typeof value === "object" && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, "hours") ? (value.hours ?? 0) : (value ?? 0);
+			return [{ label: __("休息日加班工时"), original: hoursValue(original), modified: hoursValue(modified) }];
+		}
+		if (original && modified && typeof original === "object" && typeof modified === "object" && !Array.isArray(original) && !Array.isArray(modified)) {
+			const keys = [...new Set([...Object.keys(original), ...Object.keys(modified)])];
+			const changed = keys.filter((key) => JSON.stringify(original[key]) !== JSON.stringify(modified[key]));
+			if (changed.length) {
+				const emptyMeansZero = (key, value) => value == null && (String(key).includes("加班") || ["workday_overtime_hours", "restday_overtime_hours", "holiday_overtime_hours", "special_hours", "hours"].includes(key)) ? 0 : value;
+				return changed.map((key) => ({ label: this.processing_field_label(key), original: emptyMeansZero(key, original[key]), modified: emptyMeansZero(key, modified[key]) }));
+			}
+		}
+		const label = fieldName === "__review_decision__" ? __("处理决定") : this.processing_field_label(fieldName);
+		return [{ label, original, modified }];
 	}
 
 	exception_label_text(row) {
@@ -1733,7 +1760,7 @@ class AttendanceImportCenter {
 				<td>${operation}</td>
 			</tr>`;
 		};
-		return `<div class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("异常处理"))}</h3><small>${this.escape(__("按员工集中显示，但仅展开该员工存在异常的钉钉原始日期行。缺卡、迟到、早退与旷工均直接采用钉钉字段；确认后保留人员参与终稿与薪资，缺勤对策仍由薪资规则计算。"))}</small></div><div><strong>${this.escape(scopeSummary)}</strong><br><button class="btn btn-default btn-sm" data-bulk-exception-process ${canBulkProcess && selectedCount ? "" : "disabled"}>${this.escape(__(this.select_all_filtered_exceptions ? "处理当前筛选全部（{0}）" : "处理已勾选（{0}）", [selectedCount]))}</button></div></div><div class="hrms-attendance-result-controls">${this.render_exception_source_filter()}${canBulkProcess && currentPending ? `<button class="btn btn-default btn-sm" data-select-all-filtered-exceptions>${this.escape(__("全选当前筛选 {0} 条", [currentPending]))}</button>` : ""}${!canBulkProcess ? `<small class="text-muted">${this.escape(__("请选择一个来源后，可全选并批量处理该来源的异常。"))}</small>` : ""}</div>${filterNotice}${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}${pagination}<div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr><th><input type="checkbox" data-select-exception-all ${canBulkProcess && rows.length ? "" : "disabled"} ${this.select_all_filtered_exceptions ? "checked" : ""} title="${this.escape(__("全选当前筛选来源的全部待处理异常"))}"></th><th>${this.escape(__("员工"))}</th><th>${this.escape(__("来源"))}</th><th>${this.escape(__("异常日期及原因"))}</th><th>${this.escape(__("处理状态"))}</th><th>${this.escape(__("操作"))}</th></tr></thead><tbody>${loading ? `<tr><td colspan="6" class="text-muted">${this.escape(__("正在读取统一异常队列..."))}</td></tr>` : rows.length ? rows.map(renderRow).join("") : `<tr><td colspan="6" class="text-muted">${this.escape(__("当前筛选下没有待处理异常；已处理记录可在加工结果和人工调整记录中查看。"))}</td></tr>`}</tbody></table></div>${pagination}</div>`;
+		return `<div class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("异常处理"))}</h3><small>${this.escape(__("按员工集中显示，但仅展开该员工存在异常的钉钉原始日期行。缺卡、迟到、早退与旷工均直接采用钉钉字段；确认后保留人员参与终稿与薪资，缺勤对策仍由薪资规则计算。"))}</small></div><div class="hrms-attendance-list-actions"><strong>${this.escape(scopeSummary)}</strong><div><button class="btn btn-default btn-sm" data-bulk-exception-process ${canBulkProcess && selectedCount ? "" : "disabled"}>${this.escape(__(this.select_all_filtered_exceptions ? "处理当前筛选全部（{0}）" : "处理已勾选（{0}）", [selectedCount]))}</button> <button class="btn btn-default btn-sm" data-open-attendance-adjustments>${this.escape(__("修改记录"))}</button></div></div></div><div class="hrms-attendance-result-controls">${this.render_exception_source_filter()}${canBulkProcess && currentPending ? `<button class="btn btn-default btn-sm" data-select-all-filtered-exceptions>${this.escape(__("全选当前筛选 {0} 条", [currentPending]))}</button>` : ""}${!canBulkProcess ? `<small class="text-muted">${this.escape(__("请选择一个来源后，可全选并批量处理该来源的异常。"))}</small>` : ""}</div>${filterNotice}${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}${pagination}<div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr><th><input type="checkbox" data-select-exception-all ${canBulkProcess && rows.length ? "" : "disabled"} ${this.select_all_filtered_exceptions ? "checked" : ""} title="${this.escape(__("全选当前筛选来源的全部待处理异常"))}"></th><th>${this.escape(__("员工"))}</th><th>${this.escape(__("来源"))}</th><th>${this.escape(__("异常日期及原因"))}</th><th>${this.escape(__("处理状态"))}</th><th>${this.escape(__("操作"))}</th></tr></thead><tbody>${loading ? `<tr><td colspan="6" class="text-muted">${this.escape(__("正在读取统一异常队列..."))}</td></tr>` : rows.length ? rows.map(renderRow).join("") : `<tr><td colspan="6" class="text-muted">${this.escape(__("当前筛选下没有待处理异常；已处理记录可在加工结果和人工调整记录中查看。"))}</td></tr>`}</tbody></table></div>${pagination}</div>`;
 	}
 
 	bind_processing_exception_events() {
@@ -1786,6 +1813,7 @@ class AttendanceImportCenter {
 			updateSelection();
 		}));
 		body.querySelector("[data-bulk-exception-process]")?.addEventListener("click", () => this.show_bulk_processing_dialog(this.exception_source_filter));
+		body.querySelector("[data-open-attendance-adjustments]")?.addEventListener("click", () => this.set_view("manual-adjustments"));
 		body.querySelectorAll("[data-edit-exception]").forEach((button) => button.addEventListener("click", () => this.open_processing_record_editor(button.dataset.editException, button.dataset.exceptionSourceType)));
 		body.querySelectorAll("[data-edit-attendance-daily-row]").forEach((button) => button.addEventListener("click", () => this.open_attendance_daily_row_editor(button.dataset.editAttendanceDailyRow, button.dataset.attendanceSourceRow, button.dataset.restdayOvertimeCorrection === "1")));
 		body.querySelectorAll("[data-confirm-attendance-daily-no-overtime]").forEach((button) => button.addEventListener("click", () => this.confirm_attendance_daily_no_overtime(button.dataset.confirmAttendanceDailyNoOvertime, button.dataset.attendanceSourceRow, button.dataset.attendanceDate)));
@@ -1796,7 +1824,9 @@ class AttendanceImportCenter {
 		const method = kind === "batches" ? "list_processing_batches" : "list_attendance_manual_adjustments";
 		body.innerHTML = this.render_processing_ledger(kind, [], true);
 		if (!this.ensure_company()) return;
-		this.call_processing_api(method, { company: this.company, attendance_month: this.attendance_month }, {
+		const args = { company: this.company, attendance_month: this.attendance_month };
+		if (kind === "adjustments") args.page_length = 5000;
+		this.call_processing_api(method, args, {
 			on_success: (data) => { body.innerHTML = this.render_processing_ledger(kind, data.rows || data.items || [], false); this.bind_processing_ledger_events(kind); },
 			on_error: (message) => { body.innerHTML = this.render_processing_ledger(kind, [], false, message); this.bind_processing_ledger_events(kind); },
 		});
@@ -1805,11 +1835,16 @@ class AttendanceImportCenter {
 	render_processing_ledger(kind, rows = [], loading = false, error = "") {
 		const isBatch = kind === "batches";
 		const title = isBatch ? "导入批次" : "考勤修改记录";
-		const headers = isBatch ? ["批次", "月份", "考勤初稿", "苹果树", "忘打卡", "创建时间"] : ["员工", "来源", "字段", "原值", "新值", "原因", "操作人", "时间"];
-		const renderRow = (row) => isBatch
-			? `<tr><td>${this.escape(row.batch_id || row.name || "--")}</td><td>${this.escape(row.attendance_month || "--")}</td><td>${this.escape(row.attendance_draft_status || "--")}</td><td>${this.escape(row.apple_tree_status || "--")}</td><td>${this.escape(row.missing_card_status || "--")}</td><td>${this.escape(row.created_at || row.creation || "--")}</td></tr>`
-			: `<tr><td>${this.escape(`${row.employee_code || "--"} ${row.employee_name || ""}`)}</td><td>${this.escape(this.processing_source_label(row.source_type))}</td><td>${this.escape(row.field_name === "__review_decision__" ? __("仅记录处理决定") : this.processing_field_label(row.field_name))}</td><td>${this.escape(this.format_processing_value(row.original_value))}</td><td>${this.escape(this.format_processing_value(row.new_value))}</td><td>${this.escape(row.reason || "--")}</td><td>${this.escape(row.modified_by || row.operator || "--")}</td><td>${this.escape(row.modified_at || row.creation || "--")}</td></tr>`;
-		return `<div class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__(title))}</h3><small>${this.escape(__(isBatch ? "按月查看三个输入槽的独立状态。清空仅删除本月加工、异常、人工调整与终稿引用，不删除原始上传文件。" : "仅记录考勤初稿和异常处理的人工改动，保留原值、新值、原因、操作人和时间。"))}</small></div>${isBatch ? `<button class="btn btn-danger btn-sm" data-reset-attendance-month>${this.escape(__("清空本月数据"))}</button>` : ""}</div>${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}<div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr>${headers.map((header) => `<th>${this.escape(__(header))}</th>`).join("")}</tr></thead><tbody>${loading ? `<tr><td colspan="${headers.length}" class="text-muted">${this.escape(__("正在读取台账..."))}</td></tr>` : rows.length ? rows.map(renderRow).join("") : `<tr><td colspan="${headers.length}" class="text-muted">${this.escape(__("暂无台账记录。"))}</td></tr>`}</tbody></table></div></div>`;
+		const headers = isBatch ? ["批次", "月份", "考勤初稿", "苹果树", "忘打卡", "创建时间"] : ["员工", "来源", "字段", "之前的异常值", "现在修改后的值", "原因", "操作人", "时间"];
+		const renderRow = (row) => {
+			if (isBatch) return `<tr><td>${this.escape(row.batch_id || row.name || "--")}</td><td>${this.escape(row.attendance_month || "--")}</td><td>${this.escape(row.attendance_draft_status || "--")}</td><td>${this.escape(row.apple_tree_status || "--")}</td><td>${this.escape(row.missing_card_status || "--")}</td><td>${this.escape(row.created_at || row.creation || "--")}</td></tr>`;
+			const changes = this.manual_adjustment_changes(row);
+			const changeLabels = changes.map((change) => change.label).join("；");
+			const originalValue = changes.map((change) => `${change.label}：${this.format_processing_value(change.original)}`).join("；");
+			const modifiedValue = changes.map((change) => `${change.label}：${this.format_processing_value(change.modified)}`).join("；");
+			return `<tr><td>${this.escape(`${row.employee_code || "--"} ${row.employee_name || ""}`)}</td><td>${this.escape(this.processing_source_label(row.source_type))}</td><td>${this.escape(changeLabels || this.processing_field_label(row.field_name))}</td><td>${this.escape(originalValue || "--")}</td><td>${this.escape(modifiedValue || "--")}</td><td>${this.escape(row.reason || "--")}</td><td>${this.escape(row.modified_by || row.operator || "--")}</td><td>${this.escape(row.modified_at || row.creation || "--")}</td></tr>`;
+		};
+		return `<div class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__(title))}</h3><small>${this.escape(__(isBatch ? "按月查看三个输入槽的独立状态。清空仅删除本月加工、异常、人工调整与终稿引用，不删除原始上传文件。" : "只显示实际发生变化的字段，以及之前的异常值和现在修改后的值；原始导入记录仍然保留。"))}</small></div>${isBatch ? `<button class="btn btn-danger btn-sm" data-reset-attendance-month>${this.escape(__("清空本月数据"))}</button>` : ""}</div>${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}<div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr>${headers.map((header) => `<th>${this.escape(__(header))}</th>`).join("")}</tr></thead><tbody>${loading ? `<tr><td colspan="${headers.length}" class="text-muted">${this.escape(__("正在读取台账..."))}</td></tr>` : rows.length ? rows.map(renderRow).join("") : `<tr><td colspan="${headers.length}" class="text-muted">${this.escape(__("暂无台账记录。"))}</td></tr>`}</tbody></table></div></div>`;
 	}
 
 	bind_processing_ledger_events(kind) {
@@ -3173,7 +3208,6 @@ class AttendanceImportCenter {
 						<button class="btn btn-default btn-sm" data-action="dingtalk-directory">${this.escape(__("同步组织和员工"))}</button>
 						<button class="btn btn-default btn-sm" data-action="dingtalk-preentry">${this.escape(__("同步扫码入职"))}</button>
 						<button class="btn btn-default btn-sm" data-action="dingtalk-full-roster">${this.escape(__("首次全量档案同步"))}</button>
-						<button class="btn btn-primary btn-sm" data-action="dingtalk-local-pilot">${this.escape(__("本地考勤试运行"))}</button>
 						<button class="btn btn-default btn-sm" data-action="dingtalk-manual-sync">${this.escape(__("手动拉取指定日期"))}</button>
 						<button class="btn btn-default btn-sm" data-action="open-sync-logs">${this.escape(__("同步记录"))}</button>
 					</div>
@@ -3183,7 +3217,7 @@ class AttendanceImportCenter {
 				<div class="hrms-attendance-quick-grid" data-dingtalk-status><div class="text-muted">${this.escape(__("正在读取钉钉同步状态..."))}</div></div>
 				<div class="hrms-attendance-import-panel mt-3">
 					<h4>${this.escape(__("使用顺序"))}</h4>
-					<p>${this.escape(__("1. 打开连接设置并测试连接 → 2. 同步组织和员工 → 3. 首次点击“首次全量档案同步” → 4. 在员工导入审批中核对字段和附件 → 5. 扫码入职需要时点击“同步扫码入职” → 6. 对指定日期和最多 5 人试运行。"))}</p>
+					<p>${this.escape(__("1. 打开连接设置并测试连接 → 2. 同步组织和员工 → 3. 首次点击“首次全量档案同步” → 4. 在员工导入审批中核对字段和附件 → 5. 扫码入职需要时点击“同步扫码入职” → 6. 需要补拉时点击“手动拉取指定日期”。"))}</p>
 					<div>
 						<button class="btn btn-default btn-sm" data-action="open-mappings">${this.escape(__("查看员工映射"))}</button>
 						<button class="btn btn-default btn-sm" data-action="open-logs">${this.escape(__("刷新同步状态"))}</button>
@@ -3199,7 +3233,6 @@ class AttendanceImportCenter {
 		this.body().querySelector("[data-action='dingtalk-test-connection']").addEventListener("click", () => this.test_dingtalk_connection());
 		this.body().querySelector("[data-action='dingtalk-preentry']").addEventListener("click", () => this.sync_dingtalk_preentries());
 		this.body().querySelector("[data-action='dingtalk-full-roster']").addEventListener("click", () => this.sync_dingtalk_full_roster());
-		this.body().querySelector("[data-action='dingtalk-local-pilot']").addEventListener("click", () => this.open_dingtalk_local_pilot_dialog());
 		this.body().querySelector("[data-action='dingtalk-manual-sync']").addEventListener("click", () => this.sync_dingtalk_attendance_for_date());
 		this.body().querySelector("[data-action='dingtalk-directory']").addEventListener("click", () => this.sync_dingtalk_directory());
 		this.body().querySelector("[data-action='open-mappings']").addEventListener("click", () => frappe.set_route("List", "HRMS DingTalk User Map"));

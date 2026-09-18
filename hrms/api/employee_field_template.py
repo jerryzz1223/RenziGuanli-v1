@@ -108,6 +108,19 @@ EMPLOYEE_MATERIAL_GROUPS = [
 		],
 	},
 ]
+EMPLOYEE_ATTACHMENT_TITLE_FIELD = "custom_hrms_attachment_title"
+EMPLOYEE_MATERIAL_TITLE_LABELS = {
+	"employee_talk_form": "谈话标题",
+	"employee_transfer_application": "调动标题",
+	"reward_punishment_report": "奖惩标题",
+}
+
+
+def _employee_attachment_title_field_available():
+	"""Avoid breaking employee detail while a site is between code and migration."""
+	return frappe.db.has_column("File", EMPLOYEE_ATTACHMENT_TITLE_FIELD)
+
+
 EMPLOYEE_IMPORT_NON_DEFERRABLE_FIELDS = {
 	"custom_employee_code",
 	"first_name",
@@ -150,17 +163,17 @@ PERSONNEL_PAGE_DEFINITIONS = [
 		"roles": HRMS_ACCESS_PAGE_ROLES,
 	},
 	{"name": "employee-property-history", "title": "异动记录", "icon": "timeline"},
+	{
+		"name": "employee-relationship",
+		"title": "员工关系",
+		"icon": "users",
+		"roles": ["HR User", "HR Manager", "System Manager"],
+	},
 	{"name": "cross-department-support", "title": "跨部门支援", "icon": "users"},
 	{"name": "recruitment-center", "title": "招聘中心", "icon": "briefcase", "roles": ["HR User", "HR Manager", "System Manager", "Interviewer"]},
 	{"name": "attendance-import-center", "title": "考勤导入中心", "icon": "upload"},
 	{"name": "payroll-input-center", "title": "薪资输入中心", "icon": "database"},
 	{"name": "form-data-intake", "title": "人资表单导入中心", "icon": "upload"},
-	{
-		"name": "employee-form-entry",
-		"title": "员工表单录入",
-		"icon": "file-text",
-		"roles": ["HR User", "HR Manager", "System Manager"],
-	},
 	{
 		"name": "employee-talk-form",
 		"title": "员工谈话表",
@@ -184,6 +197,7 @@ LEGACY_PERSONNEL_PAGE_SLUGS = {
 	"employee-property-history": "employee-property-hi",
 	"employee-duty-change": "employee-transfer-fo",
 }
+RETIRED_PERSONNEL_PAGE_NAMES = {"employee-form-entry"}
 
 
 def _require_hr_settings_manager():
@@ -1457,6 +1471,11 @@ def ensure_personnel_pages():
 	created = []
 	updated = []
 	cleaned = []
+	for retired_page_name in RETIRED_PERSONNEL_PAGE_NAMES:
+		if frappe.db.exists("Page", retired_page_name):
+			frappe.delete_doc("Page", retired_page_name, force=True, ignore_permissions=True)
+			cleaned.append(retired_page_name)
+
 	for page in PERSONNEL_PAGE_DEFINITIONS:
 		page_name = page["name"]
 		values = {
@@ -1525,9 +1544,45 @@ def ensure_personnel_sidebar_links():
 	items = [
 		row
 		for row in sidebar.items
-		if row.get("link_to") not in {"cross-department-support", "Cross Department Support Capability"}
-		and row.get("label") != "跨部门支援"
+		if row.get("link_to") not in {
+			"cross-department-support", "Cross Department Support Capability", "employee-form-entry",
+			"announcement-directory", "announcement-submit", "announcement-approval", "announcement-signed-upload",
+			"employee-relationship",
+		}
+		and not (row.get("type") == "Section Break" and row.get("label") == "员工关系")
+		and row.get("label") not in {"跨部门支援", "公告管理"}
 	]
+	announcement_links = [
+		{
+			"child": 0, "collapsible": 1, "icon": "file-text", "indent": 0, "keep_closed": 0,
+			"label": "公告管理", "link_type": "Page", "show_arrow": 1, "type": "Section Break",
+		},
+		*(
+			{
+				"child": 1, "collapsible": 0, "indent": 0, "keep_closed": 0, "label": label,
+				"link_to": page, "link_type": "Page", "show_arrow": 0, "type": "Link",
+			}
+			for label, page in (
+				("公告目录", "announcement-directory"),
+				("提交公告", "announcement-submit"),
+				("公告审批", "announcement-approval"),
+				("上传签字版", "announcement-signed-upload"),
+			)
+		),
+	]
+	items[0:0] = announcement_links
+	relationship_links = [
+		{
+			"child": 0, "collapsible": 1, "icon": "users", "indent": 0, "keep_closed": 0,
+			"label": "员工关系", "link_type": "Page", "show_arrow": 1, "type": "Section Break",
+		},
+		{
+			"child": 1, "collapsible": 0, "indent": 0, "keep_closed": 0, "label": "员工关系",
+			"link_to": "employee-relationship", "link_type": "Page", "show_arrow": 0, "type": "Link",
+		},
+	]
+	insert_after_employee = next((index for index, row in enumerate(items) if row.get("link_to") == "Employee"), -1)
+	items[insert_after_employee + 1:insert_after_employee + 1] = relationship_links
 	insert_after = next(
 		(
 			index
@@ -4027,6 +4082,42 @@ def _get_employee_payroll_social_insurance_items(doc):
 	return items
 
 
+def _get_employee_relationship_records(doc, limit=5):
+	"""Return the small relationship summary shown on the employee overview."""
+	if not frappe.db.exists("DocType", "HRMS Employee Relationship"):
+		return {"count": 0, "items": [], "has_more": False}
+	try:
+		rows = frappe.get_list(
+			"HRMS Employee Relationship",
+			filters={},
+			or_filters=[{"employee_a": doc.name}, {"employee_b": doc.name}],
+			fields=[
+				"name", "employee_a", "employee_a_name", "employee_a_code", "employee_b", "employee_b_name",
+				"employee_b_code", "relationship", "modified",
+			],
+			order_by="modified desc",
+			limit_page_length=0,
+		)
+	except frappe.PermissionError:
+		return {"count": 0, "items": [], "has_more": False}
+	items = []
+	for row in rows:
+		if row.employee_a == doc.name:
+			other = {
+				"employee": row.employee_b,
+				"employee_name": row.employee_b_name,
+				"employee_code": row.employee_b_code,
+			}
+		else:
+			other = {
+				"employee": row.employee_a,
+				"employee_name": row.employee_a_name,
+				"employee_code": row.employee_a_code,
+			}
+		items.append({"name": row.name, "relationship": row.relationship, **other})
+	return {"count": len(items), "items": items[:limit], "has_more": len(items) > limit}
+
+
 def _get_employee_doctype_items(doctype, filters, field_map, order_by="modified desc", limit=5):
 	if not frappe.db.exists("DocType", doctype):
 		return []
@@ -4572,6 +4663,7 @@ def get_employee_detail(employee: str):
 		"photo_history": _get_employee_photo_history(doc),
 		"materials": _get_employee_materials(doc),
 		"related_records": _get_employee_related_records(doc),
+		"relationship_records": _get_employee_relationship_records(doc),
 		"permissions": {
 			"can_edit_employee_detail": _can_edit_employee_detail(),
 		},
@@ -4598,6 +4690,10 @@ def _employee_file_payload(file, *, is_current=False, submitted_by_name=None):
 		"name": file.name,
 		"file_name": file.file_name,
 		"file_url": file.file_url,
+		"title": str(
+			(file.get(EMPLOYEE_ATTACHMENT_TITLE_FIELD) if hasattr(file, "get") else getattr(file, EMPLOYEE_ATTACHMENT_TITLE_FIELD, ""))
+			or ""
+		).strip(),
 		"is_private": file.is_private,
 		"modified": file.modified,
 		"creation": file.creation,
@@ -4609,6 +4705,9 @@ def _employee_file_payload(file, *, is_current=False, submitted_by_name=None):
 
 def _get_employee_photo_history(doc):
 	"""Return the current avatar file and every retained earlier upload."""
+	fields = ["name", "file_name", "file_url", "is_private", "modified", "creation"]
+	if _employee_attachment_title_field_available():
+		fields.insert(3, EMPLOYEE_ATTACHMENT_TITLE_FIELD)
 	files = frappe.get_all(
 		"File",
 		filters={
@@ -4616,7 +4715,7 @@ def _get_employee_photo_history(doc):
 			"attached_to_name": doc.name,
 			"attached_to_field": "image",
 		},
-		fields=["name", "file_name", "file_url", "is_private", "modified", "creation"],
+		fields=fields,
 		order_by="modified desc, creation desc, name desc",
 	)
 	current_file = next((file for file in files if file.file_url == doc.get("image")), None)
@@ -4634,19 +4733,22 @@ def _get_employee_materials(doc):
 	"""Return the current and retained historical file for every material type."""
 	type_map = _get_employee_material_type_map()
 	files_by_fieldname = {material["fieldname"]: [] for material in type_map.values()}
+	fields = [
+		"name",
+		"file_name",
+		"file_url",
+		"attached_to_field",
+		"is_private",
+		"modified",
+		"creation",
+		"owner",
+	]
+	if _employee_attachment_title_field_available():
+		fields.insert(3, EMPLOYEE_ATTACHMENT_TITLE_FIELD)
 	files = frappe.get_all(
 		"File",
 		filters={"attached_to_doctype": EMPLOYEE_DOCTYPE, "attached_to_name": doc.name},
-		fields=[
-			"name",
-			"file_name",
-			"file_url",
-			"attached_to_field",
-			"is_private",
-			"modified",
-			"creation",
-			"owner",
-		],
+		fields=fields,
 		order_by="modified desc, creation desc, name desc",
 	)
 	owners = sorted({str(file.get("owner") or "").strip() for file in files if file.get("owner")})
@@ -4694,7 +4796,7 @@ def _get_employee_materials(doc):
 
 
 @frappe.whitelist()
-def upload_employee_material(employee: str, material_type: str, file_url: str):
+def upload_employee_material(employee: str, material_type: str, file_url: str, title: str = ""):
 	"""Classify an uploaded file as a durable employee archive material."""
 	if not _can_edit_employee_detail():
 		frappe.throw(_("只有管理员可以上传员工档案材料"), frappe.PermissionError)
@@ -4704,6 +4806,12 @@ def upload_employee_material(employee: str, material_type: str, file_url: str):
 	material = _get_employee_material_type_map().get(material_type)
 	if not material:
 		frappe.throw(_("员工材料类型不正确"))
+	title = str(title or "").strip()
+	title_label = EMPLOYEE_MATERIAL_TITLE_LABELS.get(material_type)
+	if title_label and not title:
+		frappe.throw(_("请输入{0}").format(title_label))
+	if len(title) > 140:
+		frappe.throw(_("标题不能超过 140 个字符"))
 	doc = frappe.get_doc(EMPLOYEE_DOCTYPE, employee)
 	doc.check_permission("write")
 	file_name = frappe.db.get_value("File", {"file_url": file_url}, "name")
@@ -4720,10 +4828,14 @@ def upload_employee_material(employee: str, material_type: str, file_url: str):
 	extension = os.path.splitext((file_doc.file_name or file_url).split("?", 1)[0])[1].lower()
 	if extension not in EMPLOYEE_MATERIAL_FILE_EXTENSIONS:
 		frappe.throw(_("仅支持 JPG、PNG、WebP 或 PDF 格式的员工材料"))
+	if title_label and not _employee_attachment_title_field_available():
+		frappe.throw(_("系统尚未完成员工材料标题字段迁移，请先执行站点 migrate"))
 
 	file_doc.db_set("attached_to_doctype", EMPLOYEE_DOCTYPE)
 	file_doc.db_set("attached_to_name", doc.name)
 	file_doc.db_set("attached_to_field", material["fieldname"])
+	if title_label:
+		file_doc.db_set(EMPLOYEE_ATTACHMENT_TITLE_FIELD, title)
 	return {"materials": _get_employee_materials(doc)}
 
 

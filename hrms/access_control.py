@@ -70,6 +70,10 @@ CAPABILITY_DEFINITIONS = (
 	_capability("separation_approve", "离职审批", "离职审批", "人事", "审批或驳回已提交的离职申请。", "critical", (("Employee Separation", "read", "write", "submit", "cancel"),)),
 	_capability("separation_effective", "实际离职办理", "实际离职办理", "人事", "填写唯一实际离职时间；时间到达后员工才正式归类为已离职。", "critical", (("Employee Separation", "read", "write"), ("Employee", "read", "write"))),
 	_capability("personnel_export", "人事导出", "人事导出", "人事", "导出花名册和人事报表。", "high", (("Employee", "read", "export", "report", "print"),)),
+	_capability("announcement_view", "公告目录查看", "公告目录查看", "公告", "查看已审核公告目录、公告正文和相关附件。", "medium", (("HRMS Announcement", "read"),)),
+	_capability("announcement_submit", "公告提交", "公告提交", "公告", "创建公告草稿、填写收发信息、上传提交附件并提交审核。", "high", (("HRMS Announcement", "read", "create", "write"),)),
+	_capability("announcement_approve", "公告审批", "公告审批", "公告", "查看待审核公告、下载附件并批准或驳回。", "critical", (("HRMS Announcement", "read", "write"),)),
+	_capability("announcement_sign_upload", "公告签字版上传", "公告签字上传", "公告", "上传审批通过后的签字版并完成归档。", "high", (("HRMS Announcement", "read", "write"),)),
 
 	_capability("attendance_view", "考勤查看", "考勤查看", "考勤", "查看考勤日数据、异常和月度结果。", "high", (("Attendance", "read", "select"), ("HRMS Attendance Import Batch", "read"), ("HRMS Attendance Processing Record", "read"), ("HRMS Monthly Attendance Summary", "read"))),
 	_capability("attendance_import_submit", "考勤导入提交", "考勤导入提交", "考勤", "上传并提交考勤、请假、补卡和月度补充来源。", "high", (("HRMS Attendance Import Batch", "read", "create", "write", "import"),)),

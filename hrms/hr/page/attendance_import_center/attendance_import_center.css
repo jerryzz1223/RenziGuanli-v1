@@ -25,6 +25,13 @@
 	color: var(--text-muted, #6b7280);
 }
 
+.hrms-attendance-list-actions {
+	align-items: flex-end;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
 /* This page is a data workbench.  Do not constrain wide result tables to the
  * generic Desk reading-column width; retain just enough edge space to scan. */
 .page-container.hrms-attendance-wide-layout .layout-main-section-wrapper,

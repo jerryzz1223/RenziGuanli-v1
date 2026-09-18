@@ -1,0 +1,15 @@
+{
+ "creation": "2026-09-16 00:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "upload",
+ "modified": "2026-09-16 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "announcement-signed-upload",
+ "owner": "Administrator",
+ "page_name": "announcement-signed-upload",
+ "roles": [],
+ "standard": "Yes",
+ "title": "上传签字版"
+}

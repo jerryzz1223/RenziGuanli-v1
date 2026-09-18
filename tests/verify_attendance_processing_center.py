@@ -346,7 +346,7 @@ for method in (
 exceptions_start = api.find("def list_processing_exceptions(")
 exceptions_end = api.find("\n\n@frappe.whitelist()", exceptions_start)
 exceptions_body = api[exceptions_start:] if exceptions_end == -1 else api[exceptions_start:exceptions_end]
-for marker in ("page_start", "RESTDAY_CLOCKED_WITHOUT_OVERTIME", "limit_page_length=5000", "rows[page_start : page_start + page_length]"):
+for marker in ("page_start", "RESTDAY_CLOCKED_WITHOUT_OVERTIME", "limit_page_length=5000", "rows[page_start : page_start + page_length]", "_processing_exception_sort_key"):
 	require(exceptions_body, marker, f"Exception queue pagination is incomplete: {marker}")
 
 bulk_start = api.find("def bulk_update_processing_records(")

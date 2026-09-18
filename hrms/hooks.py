@@ -27,13 +27,14 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260916e",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260916-employee-form-pages-v4&compat=20260914-hide-native-user-roles-v1",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260918-announcement-sidebar-records-v1",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260916-employee-relationship-v1&compat=20260914-hide-native-user-roles-v1",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
 	"/assets/hrms/js/hrms_file_uploader.js?v=20260912a",
 	"/assets/hrms/js/hrms_entry.js?v=20260912-intranet-entry-v1",
 	"/assets/hrms/js/hrms_employee_registration_entry.js?v=20260915-qr-entry-v1",
-	"/assets/hrms/js/hrms_employee_form_entry.js?v=20260916-three-form-pages-v7-current-employee-info-copy",
+	"/assets/hrms/js/hrms_employee_form_entry.js?v=20260916-three-form-pages-v9-record-breadcrumb",
+	"/assets/hrms/js/hrms_announcement.js?v=20260916-announcement-v13-signed-version-lock",
 ]
 app_include_css = [
 	"hrms.bundle.css",
@@ -42,6 +43,7 @@ app_include_css = [
 	"/assets/hrms/css/hrms_entry.css?v=20260912-intranet-entry-v1",
 	"/assets/hrms/css/hrms_loading.css?v=20260909-black-loader",
 	"/assets/hrms/css/hrms_employee_registration.css?v=20260915a",
+	"/assets/hrms/css/hrms_announcement.css?v=20260916-announcement-v6-directory-version-rows",
 ]
 
 # website

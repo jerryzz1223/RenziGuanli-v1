@@ -346,10 +346,10 @@
 				"personnel",
 				"employee",
 				"employee-detail",
+				"employee-relationship",
 				"employee-roster-import",
 				"employee-roster-export",
 				"personnel-reports",
-				"employee-form-entry",
 				"employee-talk-form",
 				"employee-duty-change",
 				"employee-reward-form",
@@ -359,13 +359,13 @@
 				"employee-separation",
 				"employee-separation-application",
 				"employee-separation-approval",
+				"employee-separation-interview",
 				"employee-separation-records",
 				"employee-separation-effective",
 				"employee-transfer",
 				"employee-property-history",
 				"employee-skill-map",
 				"hrms-employee-reward-punishment",
-				"exit-interview",
 				"cross-department-support",
 				"cross-department-support-capability",
 			],
@@ -381,9 +381,15 @@
 				},
 				{
 					type: "section",
+					label: "员工关系",
+					children: [
+						{ label: "员工关系", route: "/desk/employee-relationship", slug: "employee-relationship" },
+					],
+				},
+				{
+					type: "section",
 					label: "员工表单录入",
 					children: [
-						{ label: "员工表单录入首页", route: "/desk/employee-form-entry", slug: "employee-form-entry" },
 						{ label: "员工谈话表", route: "/desk/employee-talk-form", slug: "employee-talk-form" },
 						{ label: "员工职务调动申请表", route: "/desk/employee-duty-change", slug: "employee-duty-change" },
 						{ label: "奖惩提报单", route: "/desk/employee-reward-form", slug: "employee-reward-form" },
@@ -391,14 +397,11 @@
 				},
 				{
 					type: "section",
-					label: "员工关系",
+					label: "员工管理",
 					children: [
 						{ label: "入职管理", route: "/desk/employee-onboarding", slug: "employee-onboarding" },
 						{ label: "转正管理", route: "/desk/employee-promotion", slug: "employee-promotion" },
 						{ label: "异动记录", route: "/desk/employee-property-history", slug: "employee-property-history" },
-						{ label: "培训经历", route: "/desk/employee-skill-map", slug: "employee-skill-map" },
-						{ label: "奖惩记录", route: "/desk/hrms-employee-reward-punishment", slug: "hrms-employee-reward-punishment" },
-						{ label: "离职面谈", route: "/desk/exit-interview", slug: "exit-interview" },
 					],
 				},
 				{
@@ -407,6 +410,7 @@
 					children: [
 						{ label: "离职申请", route: "/desk/employee-separation/view/list?docstatus=0", slug: "employee-separation-application" },
 						{ label: "离职审批", route: "/desk/employee-separation/view/list?docstatus=1&boarding_status=Pending", slug: "employee-separation-approval" },
+						{ label: "离职面谈", route: "/desk/employee-separation-interview", slug: "employee-separation-interview" },
 						{ label: "实际离职", route: "/desk/employee-separation-effective", slug: "employee-separation-effective" },
 						{ label: "离职记录", route: "/desk/employee-separation-records", slug: "employee-separation-records" },
 					],
@@ -416,6 +420,24 @@
 					label: "跨部门协作",
 					children: [
 						{ label: "跨部门支援", route: "/desk/cross-department-support", slug: "cross-department-support", active_slugs: ["cross-department-support-capability"] },
+					],
+				},
+			],
+		},
+		{
+			label: "公告",
+			route: "/desk/announcement-directory",
+			icon: "告",
+				keys: ["announcement-directory", "announcement-submit", "announcement-submission-records", "announcement-approval", "announcement-approval-records", "announcement-signed-upload", "announcement-signed-records"],
+			items: [
+				{ type: "link", label: "公告目录", route: "/desk/announcement-directory", slug: "announcement-directory" },
+				{
+					type: "section",
+					label: "公告办理",
+					children: [
+						{ label: "提交公告", route: "/desk/announcement-submit", slug: "announcement-submit" },
+						{ label: "公告审批", route: "/desk/announcement-approval", slug: "announcement-approval" },
+						{ label: "上传签字版", route: "/desk/announcement-signed-upload", slug: "announcement-signed-upload" },
 					],
 				},
 			],
@@ -795,6 +817,22 @@
 
 	function current_route_slug() {
 		var current_path = window.location.pathname.replace(/\/$/, "");
+		// Frappe can briefly report the previous workspace/page route while a
+		// custom Page is being mounted. These announcement record pages are
+		// standalone HRMS pages, so their URL is the authoritative module route;
+		// otherwise the drawer is removed before the router catches up.
+		var direct_announcement_page_slug = normalize_slug(current_path);
+		if ([
+			"announcement-directory",
+			"announcement-submit",
+			"announcement-submission-records",
+			"announcement-approval",
+			"announcement-approval-records",
+			"announcement-signed-upload",
+			"announcement-signed-records",
+		].indexOf(direct_announcement_page_slug) !== -1) {
+			return direct_announcement_page_slug;
+		}
 		if (current_path === "/desk/employee-separation" || current_path === "/desk/employee-separation/view/list") {
 			var location_separation_view = separation_view_from_location();
 			if (location_separation_view === "application" || location_separation_view === "approval") {
@@ -821,7 +859,10 @@
 				if (route[0] === "organizational-chart" && route[1] === "report") {
 					return "organization-report";
 				}
-		if ((route[0] === "attendance-import-center" || route[0] === "payroll-input-center" || route[0] === "apple-tree-center") && route[1]) {
+				if (["employee-talk-form", "employee-duty-change", "employee-reward-form"].indexOf(route[0]) !== -1 && route[1]) {
+					return normalize_slug(route[0] + "/" + route[1]);
+				}
+				if ((route[0] === "attendance-import-center" || route[0] === "payroll-input-center" || route[0] === "apple-tree-center") && route[1]) {
 					return normalize_slug(route[0] + "/" + route[1]);
 				}
 				return normalize_slug(route[0]);
@@ -935,6 +976,9 @@
 
 	function current_breadcrumb_label(route, parent, label_override) {
 		if (label_override) return String(label_override).trim();
+		if (["employee-talk-form", "employee-duty-change", "employee-reward-form"].indexOf(route[0]) !== -1 && route[1] === "records") {
+			return parent?.label ? `${parent.label}录入记录` : "录入记录";
+		}
 		if (normalize_slug(route[0]) === "employee-detail" && window.hrmsEmployeeDetailBreadcrumbLabel) {
 			return String(window.hrmsEmployeeDetailBreadcrumbLabel).trim();
 		}
@@ -969,11 +1013,12 @@
 
 		var parent = separation_breadcrumb_parent(route) || BREADCRUMB_PARENT_OVERRIDES[slug] || find_sidebar_item(module, slug);
 		var is_form = route[0] === "Form";
+		var is_employee_form_records = ["employee-talk-form", "employee-duty-change", "employee-reward-form"].indexOf(route[0]) !== -1 && route[1] === "records";
 		var current_label = current_breadcrumb_label(route, parent, label_override);
 		var trail = [{ label: "主页", route: "/desk/hrms-workbench", slug: "hrms-workbench" }];
 		if (module.label !== "主页") trail.push({ label: module.label, route: module.route, slug: normalize_slug(module.route) });
 		if (parent && parent.slug !== normalize_slug(module.route) && parent.label !== module.label) trail.push(parent);
-		if (is_form || !parent || !parent.current) trail.push({ label: current_label || parent?.label || module.label });
+		if (is_form || is_employee_form_records || !parent || !parent.current) trail.push({ label: current_label || parent?.label || module.label });
 
 		var unique_trail = trail.filter(function (item, index, items) {
 			return item.label && items.findIndex(function (candidate) { return candidate.label === item.label; }) === index;

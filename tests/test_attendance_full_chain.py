@@ -340,7 +340,7 @@ class AttendanceFullChainAcceptanceTest(unittest.TestCase):
 	def test_06_page_keeps_upload_inside_each_source_and_month_selection_interactive(self):
 		page = ATTENDANCE_PAGE.read_text(encoding="utf-8")
 		for marker in (
-			"data-slot-upload", "set_primary_action(null)", "render_month_control", "open_month_picker",
+			"data-slot-upload", "clear_primary_action()", "render_month_control", "open_month_picker",
 			"data-month-shift", "data-open-month-picker", "选择处理月份",
 		):
 			self.assertIn(marker, page)

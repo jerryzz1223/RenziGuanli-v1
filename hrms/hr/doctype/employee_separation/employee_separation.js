@@ -248,6 +248,7 @@ frappe.ui.form.on("Employee Separation", {
 			"table_for_activity",
 			"activities",
 			"notify_users_by_email",
+			"exit_interview",
 		].forEach((fieldname) => frm.toggle_display(fieldname, false));
 
 		const employee_label = [frm.doc.employee_code_display, frm.doc.employee_name].filter(Boolean).join(" · ");

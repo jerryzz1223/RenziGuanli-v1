@@ -66,17 +66,17 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 			{"department": "品管课", "employee_name": "王五", "employee_code": "003", "green_apples": 99, "red_apples": 0, "net_apples": 99, "reward_amount": 495, "record_count": 1},
 		]}
 		workbook = center._build_export_workbook(
-			"annual-summary", data, "2026年 苹果树个人汇总", '{"department":"连续课"}', "net_apples", "desc",
+			"annual-summary", data, "2026年 苹果树个人汇总", '{"department":"连续课"}', "green_apples", "desc",
 		)
 		sheet = workbook["苹果树统计"]
 		self.assertEqual(sheet["A1"].value, "2026年 苹果树个人汇总")
 		self.assertEqual(sheet.freeze_panes, "A3")
-		self.assertEqual(sheet.auto_filter.ref, "A2:H4")
-		self.assertEqual([sheet.cell(2, column).value for column in range(1, 9)], ["部门", "姓名", "工号", "绿苹果", "红苹果", "净苹果", "苹果金额", "记录数"])
+		self.assertEqual(sheet.auto_filter.ref, "A2:G4")
+		self.assertEqual([sheet.cell(2, column).value for column in range(1, 8)], ["部门", "姓名", "工号", "绿苹果", "红苹果", "苹果金额", "记录数"])
 		self.assertEqual(sheet["C3"].value, "002")
 		self.assertEqual(sheet["B4"].value, "'=CMD()")
 
-	def test_monthly_export_derives_net_apples_and_final_status(self):
+	def test_monthly_export_omits_net_apples_and_keeps_final_status(self):
 		center = apple_tree_center_module()
 		columns, rows = center._export_rows("monthly-detail", {"records": [{
 			"reward_date": "2026-08-12", "employee_code": "001", "green_apples": 4, "red_apples": 2,
@@ -84,7 +84,8 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 		}]})
 		self.assertEqual(columns[0], ("attendance_month", "月份"))
 		self.assertEqual(rows[0]["attendance_month"], "2026-08")
-		self.assertEqual(rows[0]["net_apples"], 2)
+		self.assertNotIn("net_apples", dict(rows[0]))
+		self.assertNotIn(("net_apples", "净苹果"), columns)
 		self.assertEqual(rows[0]["final_status"], "已确认 / 已锁定")
 
 	def test_person_export_uses_apple_reward_headers_and_total_at_the_bottom(self):
@@ -277,7 +278,34 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 			"company": "str",
 			"start_date": "str",
 			"end_date": "str",
+			"department": "str",
+			"designation": "str",
 		})
+
+	def test_data_filters_annual_records_by_department_and_designation(self):
+		center = apple_tree_center_module()
+		center.frappe.get_list = lambda *_args, **_kwargs: [{"attendance_month": "2026-08"}]
+		center._available_history_months = lambda _company: set()
+		center._list_active_month_records = lambda *_args: [
+			{"employee": "EMP-001", "employee_code": "001", "employee_name": "张三", "department": "制造", "green_apples": 3, "red_apples": 0},
+			{"employee": "EMP-002", "employee_code": "002", "employee_name": "李四", "department": "品管", "green_apples": 8, "red_apples": 1},
+		]
+		center.frappe.get_all = lambda doctype, **_kwargs: [{
+			"name": "EMP-001", "custom_employee_code": "001", "designation": "制造主管",
+		}, {"name": "EMP-002", "custom_employee_code": "002", "designation": "检验员"}] if doctype == "Employee" else []
+		result = center.get_data(year="2026", company="永新", department="制造", designation="制造主管")
+		self.assertEqual([row["employee_code"] for row in result["people"]], ["001"])
+		self.assertEqual(result["people"][0]["designation"], "制造主管")
+		self.assertEqual(result["filter_options"], {"departments": ["制造", "品管"], "designations": ["制造主管"]})
+
+	def test_annual_export_includes_position_when_the_summary_has_position_data(self):
+		center = apple_tree_center_module()
+		columns, rows = center._export_rows("annual-summary", {"people": [{
+			"department": "制造", "designation": "制造主管", "employee_name": "张三", "employee_code": "001",
+			"green_apples": 3, "red_apples": 0, "reward_amount": 15, "record_count": 1,
+		}]})
+		self.assertEqual([label for _field, label in columns], ["部门", "岗位", "姓名", "工号", "绿苹果", "红苹果", "苹果金额", "记录数"])
+		self.assertEqual(rows[0]["designation"], "制造主管")
 
 	def test_custom_date_range_validation(self):
 		center = apple_tree_center_module()
@@ -319,16 +347,18 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 		center = apple_tree_center_module()
 		summary, people, months = center._summarize_records(
 			[
-				{"reward_date": "2026-06-01", "employee": "EMP-001", "employee_code": "001", "employee_name": "张三", "department": "制造", "green_apples": 3, "red_apples": 1, "reward_amount": 10},
+				{"reward_date": "2026-06-01", "employee": "EMP-001", "employee_code": "001", "employee_name": "张三", "department": "制造", "green_apples": 3, "red_apples": 1, "reward_amount": 10, "source_row_count": 2},
 				{"reward_date": "2026-06-12", "employee": "EMP-001", "employee_code": "001", "employee_name": "张三", "department": "制造", "green_apples": 2, "red_apples": 0, "reward_amount": 10},
 				{"reward_date": "2026-07-03", "employee": "EMP-002", "employee_code": "002", "employee_name": "李四", "department": "品管", "green_apples": 1, "red_apples": 4, "reward_amount": -15},
 			]
 		)
 
-		self.assertEqual(summary, {"record_count": 3, "green_apples": 6, "red_apples": 5, "reward_amount": 5, "net_apples": 1, "employee_count": 2})
+		self.assertEqual(summary, {"record_count": 4, "green_apples": 6, "red_apples": 5, "reward_amount": 5, "net_apples": 1, "employee_count": 2})
 		self.assertEqual(people[0]["employee_name"], "张三")
+		self.assertEqual(people[0]["record_count"], 3)
 		self.assertEqual(people[0]["net_apples"], 4)
 		self.assertEqual(months[0], {"month": "2026-07", "record_count": 1, "green_apples": 1, "red_apples": 4, "reward_amount": -15, "net_apples": -3})
+		self.assertEqual(months[1]["record_count"], 3)
 
 	def test_month_must_belong_to_selected_year(self):
 		center = apple_tree_center_module()

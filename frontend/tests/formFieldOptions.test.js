@@ -58,3 +58,59 @@ test("filters nullish array entries while normalizing option objects", () => {
 		[{ label: "t:Draft", value: "draft" }]
 	)
 })
+
+test("preserves falsy option values used for clearing and boolean or numeric selections", () => {
+	assert.deepEqual(
+		normalizeSelectOptions([null, 0, false, "", undefined]),
+		[
+			{ label: 0, value: 0 },
+			{ label: false, value: false },
+			{ label: "", value: "" },
+		]
+	)
+	assert.deepEqual(
+		normalizeSelectOptions([
+			{ label: "Zero", value: 0 },
+			{ label: "No", value: false },
+			{ label: "Clear", value: "" },
+		]),
+		[
+			{ label: "Zero", value: 0 },
+			{ label: "No", value: false },
+			{ label: "Clear", value: "" },
+		]
+	)
+})
+
+test("falls back between labels and values without translating submitted values or mutating input", () => {
+	const options = Object.freeze([
+		Object.freeze({ value: "Draft", disabled: true }),
+		Object.freeze({ label: "Approved" }),
+		Object.freeze({ label: "", value: "blank-label" }),
+		Object.freeze({ value: 0 }),
+	])
+	const translated = []
+	const result = normalizeSelectOptions(options, (label) => {
+		translated.push(label)
+		return `t:${label}`
+	})
+	assert.deepEqual(result, [
+		{ label: "t:Draft", value: "Draft", disabled: true },
+		{ label: "t:Approved", value: "Approved" },
+		{ label: "t:", value: "blank-label" },
+		{ label: 0, value: 0 },
+	])
+	assert.deepEqual(translated, ["Draft", "Approved", ""])
+	assert.deepEqual(options[0], { value: "Draft", disabled: true })
+	assert.deepEqual(options[1], { label: "Approved" })
+})
+
+test("keeps the leading clear choice with Windows newlines and returns no choices for absent options", () => {
+	assert.deepEqual(normalizeSelectOptions("\r\nDraft\r\n\r\n"), [
+		{ label: "", value: "" },
+		{ label: "Draft", value: "Draft" },
+	])
+	for (const options of [undefined, null, "", []]) {
+		assert.deepEqual(normalizeSelectOptions(options), [])
+	}
+})

@@ -1,0 +1,20 @@
+{
+ "content": null,
+ "creation": "2026-09-16 00:00:00",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "list",
+ "idx": 0,
+ "modified": "2026-09-16 00:00:00",
+ "modified_by": "Administrator",
+ "module": "HR",
+ "name": "announcement-approval-records",
+ "owner": "Administrator",
+ "page_name": "announcement-approval-records",
+ "roles": [],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "公告审批记录"
+}
