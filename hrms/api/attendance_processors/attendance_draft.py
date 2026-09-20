@@ -25,7 +25,7 @@ REVIEW_REJECTED = "已驳回"
 
 NUMERIC_FIELDS = {
 	"standard_hours": ("标准工时", "标准工时（小时）"),
-	"actual_attendance_hours": ("实际出勤（小时）", "实际出勤"),
+	"actual_attendance_hours": ("实际出勤（小时）", "实际出勤(小时)", "实际出勤"),
 	"workday_overtime_hours": ("工作日加班（小时）", "工作日加班(小时)", "工作日加班"),
 	"restday_overtime_hours": ("休息日加班（小时）",),
 	"holiday_overtime_hours": ("节假日加班（小时）",),
@@ -33,15 +33,19 @@ NUMERIC_FIELDS = {
 	"large_night_shifts": ("大夜班",),
 	"small_night_shifts": ("小夜班",),
 	"personal_leave_hours": ("请假/事假(小时)", "事假(小时)"),
-	"sick_leave_hours": ("病假(小时)",),
-	"annual_leave_hours": ("特休(小时)",),
-	"work_injury_hours": ("工伤(小时)",),
+	"sick_leave_hours": ("请假/病假(小时)", "病假(小时)"),
+	"annual_leave_hours": ("请假/特休(小时)", "特休(小时)"),
+	"work_injury_hours": ("请假/工伤(小时)", "工伤(小时)"),
 	# DingTalk exports reunion leave in days.  Normalize it to hours at import so
 	# the monthly-final calculation can treat it as a paid, attendance-preserving
 	# leave without special cases in later payroll stages.
-	"reunion_leave_hours": ("请假/团圆假(天)", "团圆假(天)"),
-	"rest_arrangement_hours": ("排休(小时)",),
-	"absence_hours": ("旷工(小时)",),
+	"reunion_leave_hours": ("请假/团圆假(小时)", "团圆假(小时)", "请假/团圆假(天)", "团圆假(天)"),
+	"rest_arrangement_hours": ("请假/排休(小时)", "排休(小时)"),
+	"bereavement_leave_hours": ("请假/丧假(小时)", "丧假(小时)", "请假/丧假(天)", "丧假(天)"),
+	"marriage_leave_hours": ("请假/婚假(小时)", "婚假(小时)", "请假/婚假(天)", "婚假(天)"),
+	"public_leave_hours": ("请假/公假(小时)", "公假(小时)", "请假/公假(天)", "公假(天)"),
+	"maternity_leave_hours": ("请假/产假(小时)", "产假(小时)", "请假/产假(天)", "产假(天)"),
+	"absence_hours": ("请假/旷工(小时)", "旷工(小时)"),
 	# DingTalk's unitless marker becomes payroll absence hours only when the
 	# source row is a scheduled workday and the employee has unworked hours.
 	# Weekend/rest-day markers remain source evidence and never create a salary
@@ -62,8 +66,57 @@ IDENTITY_FIELDS = {
 	"department": ("实际部门", "部门", "department"),
 	"attendance_date": ("日期", "考勤日期", "attendance_date"),
 	"shift": ("班次", "shift"),
-	"approval": ("关联审批单", "审批单", "approval"),
+	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
+
+ATTENDANCE_POLICY_VERSION = 3
+LEAVE_FIELDS = tuple(field for field in NUMERIC_FIELDS if field.endswith("leave_hours")) + ("work_injury_hours", "rest_arrangement_hours")
+LEAVE_LABELS = dict(zip(
+	("personal_leave_hours", "sick_leave_hours", "annual_leave_hours", "work_injury_hours", "reunion_leave_hours", "rest_arrangement_hours", "bereavement_leave_hours", "marriage_leave_hours", "public_leave_hours", "maternity_leave_hours"),
+	("事假", "病假", "特休", "工伤", "团圆假", "排休", "丧假", "婚假", "公假", "产假"),
+))
+
+
+def is_calendar_weekend(attendance_date: Any) -> bool:
+	try:
+		return date.fromisoformat(str(attendance_date)[:10]).weekday() >= 5
+	except (TypeError, ValueError):
+		return False
+
+
+def daily_hours_balance(numbers: Mapping[str, Any]) -> dict[str, Any]:
+	"""Exact user-defined reconciliation, using exported actual attendance as-is."""
+	def hours(field):
+		return _decimal(numbers.get(field, 0)) or Decimal("0")
+	accounted = (
+		hours("actual_attendance_hours") + hours("personal_leave_hours")
+		+ hours("sick_leave_hours") / 2 + hours("reunion_leave_hours")
+		+ hours("rest_arrangement_hours") + hours("absence_hours")
+	)
+	difference = accounted - hours("standard_hours")
+	return {"accounted_hours": accounted, "hours_difference": difference, "hours_mismatch": difference != 0}
+
+
+def daily_hours_policy(numbers: Mapping[str, Any], attendance_date: Any) -> dict[str, Any]:
+	"""Apply weekend exclusions and full-day leave exemption before reconciliation."""
+	values = {key: _decimal(value) or Decimal("0") for key, value in numbers.items()}
+	weekend = is_calendar_weekend(attendance_date)
+	excluded = {}
+	if weekend:
+		for field in ("sick_leave_hours", "rest_arrangement_hours"):
+			excluded[field] = values.get(field, Decimal("0"))
+			values[field] = Decimal("0")
+		values["late_count"] = values["early_count"] = Decimal("0")
+	leave = sum((values.get(field, Decimal("0")) for field in LEAVE_FIELDS), Decimal("0"))
+	standard = values.get("standard_hours", Decimal("0"))
+	full_day_leave = standard > 0 and leave >= standard
+	if full_day_leave:
+		values["clock_in_missing_count"] = values["clock_out_missing_count"] = Decimal("0")
+	return {
+		"numbers": values, "is_weekend": weekend, "leave_hours": leave,
+		"excluded_leave_hours": excluded, **daily_hours_balance(values),
+		"full_day_leave": full_day_leave,
+	}
 
 # 深夜班是排班口径，不以实际打卡早到、迟到或跨夜来反推。只有生产夜班
 # 明确排为 20:00 至次日 08:00 的每日记录才计一次，避免把其他跨夜班次
@@ -86,6 +139,7 @@ EXCEPTION_MESSAGES = {
 	"EMPLOYEE_NOT_FOUND": "员工工号未匹配到员工目录。",
 	"EMPLOYEE_NAME_AMBIGUOUS": "姓名匹配到多个员工工号。",
 	"INVALID_NUMERIC_VALUE": "工时或次数字段不是有效数字。",
+	"ATTENDANCE_HOURS_MISMATCH": "实际出勤＋事假＋病假÷2＋团圆假＋排休＋旷工不等于标准工时；请按本日明细核对差额。",
 	"CLOCK_IN_MISSING": "钉钉明确存在上班未打卡记录；人员照常进入终稿，红苹果由忘打卡来源核算。",
 	"CLOCK_OUT_MISSING": "钉钉明确存在下班未打卡记录；人员照常进入终稿，红苹果由忘打卡来源核算。",
 	"LATE_MARKED": "上班打卡晚于应上班时间且无请假证据；无迟到宽限，待人工核验后再处理。",
@@ -136,6 +190,7 @@ ATTENDANCE_DETAIL_EXCEPTION_FIELDS = (
 	("EARLY_MARKED", "early_count"),
 	("ABSENCE_MARKED", "absence_marker_count"),
 	("RESTDAY_CLOCKED_WITHOUT_OVERTIME", "restday_clocked_without_overtime"),
+	("ATTENDANCE_HOURS_MISMATCH", "hours_mismatch"),
 )
 
 
@@ -571,12 +626,14 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			number = _source_marker_number(value) if fieldname in {
 				"clock_in_missing_count", "clock_out_missing_count", "late_count", "early_count", "absence_marker_count",
 			} else _decimal(value)
-			if number is None:
+			if number is None or number < 0:
 				_add_code(codes, "INVALID_NUMERIC_VALUE")
 				continue
-			if fieldname == "reunion_leave_hours":
+			selected_alias = next((alias for alias in aliases if alias in row and not _is_blank(row[alias])), "")
+			if fieldname in LEAVE_FIELDS and "(天)" in selected_alias:
 				number *= Decimal("8")
 			row_numbers[fieldname] = number
+		raw_numbers = dict(row_numbers)
 		is_deep_night_shift = (
 			row_numbers["deep_night_shifts"] > 0
 			if source_deep_night_present and _field_value(row, NUMERIC_FIELDS["deep_night_shifts"])[1]
@@ -584,10 +641,6 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		)
 		row_standard_hours = row_numbers["standard_hours"]
 		row_actual_attendance_hours = row_numbers["actual_attendance_hours"]
-		row_leave_hours = sum(
-			(row_numbers[fieldname] for fieldname in ("personal_leave_hours", "sick_leave_hours", "annual_leave_hours", "work_injury_hours", "reunion_leave_hours", "rest_arrangement_hours")),
-			Decimal("0"),
-		)
 		row_clock_in_missing = row_numbers["clock_in_missing_count"]
 		row_clock_out_missing = row_numbers["clock_out_missing_count"]
 		single_punch_missing_field = _single_punch_missing_field(row)
@@ -597,6 +650,11 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		elif single_punch_missing_field == "clock_out_missing":
 			row_clock_out_missing = max(row_clock_out_missing, Decimal("1"))
 			row_numbers["clock_out_missing_count"] = row_clock_out_missing
+		policy = daily_hours_policy(row_numbers, parsed_date)
+		row_numbers = policy["numbers"]
+		row_leave_hours = policy["leave_hours"]
+		row_clock_in_missing = row_numbers["clock_in_missing_count"]
+		row_clock_out_missing = row_numbers["clock_out_missing_count"]
 		row_late_count = row_numbers["late_count"]
 		row_early_count = row_numbers["early_count"]
 		row_absence_marker_count = row_numbers["absence_marker_count"]
@@ -613,7 +671,7 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			# time-only comparison into a late-review event when leave exists.
 			row_late_count = Decimal("0")
 			row_numbers["late_count"] = row_late_count
-		elif row_late_count <= 0 and _is_late_without_leave(
+		elif not policy["is_weekend"] and row_late_count <= 0 and _is_late_without_leave(
 			row,
 			standard_hours=row_standard_hours,
 			leave_hours=row_leave_hours,
@@ -636,6 +694,7 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		if row_absence_hours <= 0:
 			row_absence_hours = max(marker_absence_hours, early_absence_hours)
 		row_numbers["absence_hours"] = row_absence_hours
+		policy.update(daily_hours_balance(row_numbers))
 		for fieldname, number in row_numbers.items():
 			# Full-attendance late deductions apply to scheduled workdays.  Weekend
 			# overtime rows still retain the raw mark in attendance_details below,
@@ -662,6 +721,9 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		if exception_policy.get("restday_clock_without_overtime", True) and row_restday_clock_without_overtime:
 			_add_code(codes, "RESTDAY_CLOCKED_WITHOUT_OVERTIME")
 			exception_events.append(_exception_event("RESTDAY_CLOCKED_WITHOUT_OVERTIME", parsed_date, row_number))
+		if policy["hours_mismatch"]:
+			_add_code(codes, "ATTENDANCE_HOURS_MISMATCH")
+			exception_events.append(_exception_event("ATTENDANCE_HOURS_MISMATCH", parsed_date, row_number))
 		source_rows.append({
 			"source_file": _text(row.get("source_file") or source_file),
 			"source_sheet": _text(row.get("source_sheet") or source_sheet),
@@ -669,7 +731,21 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			"attendance_date": _text(date_value),
 		})
 		attendance_detail = {
+			**{field: _display_number(value) for field, value in row_numbers.items()},
 			"attendance_date": parsed_date or _text(date_value),
+			"date_type": _text(_value(row, ("日期类型", "date_type"))),
+			"is_weekend": policy["is_weekend"],
+			"leave_hours": _display_number(row_leave_hours),
+			"leave_breakdown": {LEAVE_LABELS[field]: _display_number(row_numbers[field]) for field in LEAVE_FIELDS},
+			"excluded_leave_hours": {LEAVE_LABELS[field]: _display_number(value) for field, value in policy["excluded_leave_hours"].items() if value},
+			"accounted_hours": _display_number(policy["accounted_hours"]),
+			"hours_difference": _display_number(policy["hours_difference"]),
+			"hours_mismatch": policy["hours_mismatch"],
+			"full_day_leave": policy["full_day_leave"],
+			"source_numbers": {field: _display_number(value) for field, value in raw_numbers.items()},
+			"approval": _text(_value(row, IDENTITY_FIELDS["approval"])),
+			"source_file": _text(row.get("source_file") or source_file),
+			"source_sheet": _text(row.get("source_sheet") or source_sheet),
 			"shift": _value(row, IDENTITY_FIELDS["shift"]),
 			"clock_in": _text(_value(row, ("上班时间", "上班打卡", "上班打卡时间", "clock_in"))),
 			"clock_out": _text(_value(row, ("下班时间", "下班打卡", "下班打卡时间", "clock_out"))),
@@ -697,6 +773,8 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 	exception_lines = exception_lines_from_attendance_details(attendance_details, codes)
 	deep_night_shifts = totals["deep_night_shifts"] if source_deep_night_present else Decimal(scheduled_deep_night_shifts)
 	proposed = {
+		"attendance_policy_version": ATTENDANCE_POLICY_VERSION,
+		"leave_hours": _display_number(sum((totals[field] for field in LEAVE_FIELDS), Decimal("0"))),
 		"employee_code": resolved_code or raw_code,
 		"employee_name": resolved_name or name,
 		"department": resolved_department or department,

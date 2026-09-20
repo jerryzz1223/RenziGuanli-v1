@@ -28,6 +28,7 @@ def load_processing_api():
 	frappe_utils = types.ModuleType("frappe.utils")
 	frappe_utils.cint = lambda value: int(value or 0)
 	frappe_utils.flt = lambda value: float(value or 0)
+	frappe_utils.getdate = lambda value: __import__("datetime").date.fromisoformat(str(value)[:10])
 	frappe_utils.now_datetime = lambda: __import__("datetime").datetime.now()
 	file_manager = types.ModuleType("frappe.utils.file_manager")
 	export_watermark = types.ModuleType("hrms.utils.export_watermark")

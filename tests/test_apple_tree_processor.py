@@ -64,6 +64,7 @@ def processing_center_module():
 	frappe_utils = ModuleType("frappe.utils")
 	frappe_utils.cint = lambda value: int(value or 0)
 	frappe_utils.flt = lambda value, *_args, **_kwargs: float(value or 0)
+	frappe_utils.getdate = lambda value: __import__("datetime").date.fromisoformat(str(value)[:10])
 	frappe_utils.now_datetime = lambda: None
 	file_manager = ModuleType("frappe.utils.file_manager")
 	frappe_utils.file_manager = file_manager

@@ -25,6 +25,7 @@ def load_processing_center():
 	frappe_utils = ModuleType("frappe.utils")
 	frappe_utils.cint = lambda value: int(value or 0)
 	frappe_utils.flt = lambda value, *_args, **_kwargs: float(value or 0)
+	frappe_utils.getdate = lambda value: datetime.fromisoformat(str(value)).date()
 	frappe_utils.now_datetime = lambda: None
 	hrms = ModuleType("hrms")
 	hrms.__path__ = [str(ROOT / "hrms")]

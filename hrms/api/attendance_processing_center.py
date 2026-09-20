@@ -27,6 +27,10 @@ from frappe.utils import cint, flt, getdate, now_datetime
 
 from hrms.api.attendance_processors.apple_tree import AppleTreeRules, preflight_apple_tree_rows, process_apple_tree_rows
 from hrms.api.attendance_processors.attendance_draft import (
+	ATTENDANCE_POLICY_VERSION,
+	LEAVE_FIELDS,
+	LEAVE_LABELS,
+	NUMERIC_FIELDS as ATTENDANCE_NUMERIC_FIELDS,
 	EXCEPTION_MESSAGES as ATTENDANCE_DRAFT_EXCEPTION_MESSAGES,
 	NON_BLOCKING_ATTENDANCE_EVENT_CODES,
 	dingtalk_daily_header_location,
@@ -200,6 +204,11 @@ ATTENDANCE_DRAFT_RESULT_COLUMNS = (
 	("work_injury_hours", "工伤（小时）"),
 	("reunion_leave_hours", "团圆假（小时）"),
 	("rest_arrangement_hours", "排休（小时）"),
+	("bereavement_leave_hours", "丧假（小时）"),
+	("marriage_leave_hours", "婚假（小时）"),
+	("public_leave_hours", "公假（小时）"),
+	("maternity_leave_hours", "产假（小时）"),
+	("leave_hours", "有效请假合计（小时）"),
 	("absence_hours", "旷工（小时）"),
 	("clock_in_missing_count", "上班漏打卡次数"),
 	("clock_out_missing_count", "下班漏打卡次数"),
@@ -209,6 +218,8 @@ ATTENDANCE_DRAFT_RESULT_COLUMNS = (
 # correction changes one original daily row and then re-aggregates that
 # employee's own monthly result; it never writes back to the uploaded workbook.
 ATTENDANCE_DAILY_EDIT_FIELDS = (
+	("日期类型", "日期类型", ("日期类型",)),
+	("关联审批单", "关联审批单", ("关联审批单", "关联的审批单", "审批单")),
 	("班次", "班次", ("班次",)),
 	("上班时间", "上班打卡", ("上班时间", "上班打卡", "上班打卡时间")),
 	("下班时间", "下班打卡", ("下班时间", "下班打卡", "下班打卡时间")),
@@ -218,14 +229,14 @@ ATTENDANCE_DAILY_EDIT_FIELDS = (
 	("早退次数", "早退次数", ("早退次数",)),
 	("旷工", "旷工标记", ("旷工", "旷工_2")),
 	("旷工(小时)", "旷工工时", ("旷工(小时)", "请假/旷工(小时)")),
-	("标准工时", "标准工时", ("标准工时", "标准工时（小时）")),
-	("实际出勤（小时）", "实际出勤（小时）", ("实际出勤（小时）", "实际出勤")),
-	("工作日加班（小时）", "工作日加班（小时）", ("工作日加班（小时）",)),
+	("标准工时", "标准工时", ATTENDANCE_NUMERIC_FIELDS["standard_hours"]),
+	("实际出勤（小时）", "实际出勤（小时）", ATTENDANCE_NUMERIC_FIELDS["actual_attendance_hours"]),
+	("工作日加班（小时）", "工作日加班（小时）", ("工作日加班（小时）", "工作日加班(小时)", "工作日加班")),
 	("休息日加班（小时）", "休息日加班（小时）", ("休息日加班（小时）",)),
 	("节假日加班（小时）", "节假日加班（小时）", ("节假日加班（小时）",)),
 	("大夜班", "大夜班", ("大夜班",)),
 	("小夜班", "小夜班", ("小夜班",)),
-)
+) + tuple((ATTENDANCE_NUMERIC_FIELDS[field][0], LEAVE_LABELS[field], ATTENDANCE_NUMERIC_FIELDS[field]) for field in LEAVE_FIELDS)
 
 # The review page remains a complete, columnar view of one approval per row.
 # The separate printable download contract is defined just below.
@@ -301,6 +312,7 @@ APPLE_TREE_SIGNOFF_COLUMNS = (
 )
 
 EXCEPTION_LABELS = {
+	"ATTENDANCE_HOURS_MISMATCH": "工时合计与标准工时不符",
 	"CLOCK_IN_MISSING": "上班漏打卡",
 	"CLOCK_OUT_MISSING": "下班漏打卡",
 	"SHIFT_MISSING": "班次缺失",
@@ -365,6 +377,8 @@ def _review_guidance(exception_codes: list[str], source_type: str) -> list[str]:
 	"""Return concrete, policy-safe choices for the shared human review queue."""
 	codes = set(exception_codes or [])
 	guidance = []
+	if "ATTENDANCE_HOURS_MISMATCH" in codes:
+		guidance.append("按具体日期核对标准工时、实际出勤与各类请假；使用“修改本日”更正，校验通过后才能进入终稿，不能仅确认通过。")
 	if {"CLOCK_IN_MISSING", "CLOCK_OUT_MISSING"} & codes:
 		guidance.append("先核对钉钉补卡审批；补卡审批已通过时，在“忘打卡”来源上传对应审批后再确认。")
 		guidance.append("确认确实未打卡且没有有效补卡时，可选择“确认未打卡（不计入下游）”。")
@@ -1437,7 +1451,7 @@ def _result_rows(batch, page_length: int = 5000, employee_code: str = ""):
 	return _hydrate_apple_tree_result_rows(batch, rows) if batch.source_type == "apple_tree" else rows
 
 
-def _restore_daily_exception_lines_from_source(record: dict[str, Any]) -> list[dict[str, Any]]:
+def _restore_daily_exception_lines_from_source(record: dict[str, Any], *, all_details: bool = False) -> list[dict[str, Any]]:
 	"""Rebuild date-level alerts from a historic record's original daily rows.
 
 	Older batches can contain an employee-level ``ABSENCE_MARKED`` code while
@@ -1445,8 +1459,7 @@ def _restore_daily_exception_lines_from_source(record: dict[str, Any]) -> list[d
 	corresponding per-day marker.  The raw DingTalk rows are retained precisely
 	for this audit case, so replay them read-only with the current field mapping.
 	"""
-	original = record.get("original_value") if isinstance(record.get("original_value"), dict) else {}
-	source_rows = original.get("rows") if isinstance(original, dict) else []
+	source_rows = _effective_daily_source_rows(record)
 	attendance_month = str(record.get("attendance_month") or "").strip()
 	if not isinstance(source_rows, list) or not source_rows or not re.fullmatch(r"\d{4}-\d{2}", attendance_month):
 		return []
@@ -1470,6 +1483,8 @@ def _restore_daily_exception_lines_from_source(record: dict[str, Any]) -> list[d
 	if not matching_row:
 		return []
 	details = (matching_row.get("proposed_value") or {}).get("attendance_details") or []
+	if all_details:
+		return details
 	return exception_lines_from_attendance_details(details, record.get("exception_codes") or [])
 
 
@@ -1501,6 +1516,7 @@ def _serialize_record(record):
 	result["review_options"] = _review_options(result["exception_codes"], result.get("source_type") or "")
 	if result.get("source_type") == "attendance_draft":
 		values = _effective_result_values(result)
+		result["attendance_policy_stale"] = values.get("attendance_policy_version") != ATTENDANCE_POLICY_VERSION
 		# New batches persist exception_lines.  Rebuild them from the retained
 		# daily facts for old batches.  If the historic projection itself lacks a
 		# marker (for example, 旷工), replay its retained original rows read-only.
@@ -1508,6 +1524,9 @@ def _serialize_record(record):
 			values.get("attendance_details") or [], result["exception_codes"]
 		) or _restore_daily_exception_lines_from_source(result)
 		result["daily_attendance_details"] = values.get("attendance_details") or []
+		if any("standard_hours" not in line for line in result["daily_exception_lines"]):
+			details = {str(line.get("source_row")): line for line in _restore_daily_exception_lines_from_source(result, all_details=True)}
+			result["daily_exception_lines"] = [{**details.get(str(line.get("source_row")), {}), **line} for line in result["daily_exception_lines"]]
 	return result
 
 
@@ -1553,6 +1572,8 @@ def _apply_daily_exception_decisions(row: dict[str, Any], decisions: dict[str, d
 	proposed = result.get("proposed_value") if isinstance(result.get("proposed_value"), dict) else {}
 
 	def is_resolved(source_row: Any, code: Any) -> bool:
+		if code == "ATTENDANCE_HOURS_MISMATCH":
+			return False
 		return bool(decisions.get(str(source_row), {}).get(str(code)))
 
 	events = [
@@ -1634,6 +1655,8 @@ def _daily_row_editor_payload(row: dict[str, Any]) -> list[dict[str, Any]]:
 		fields = []
 		for default_name, label, aliases in ATTENDANCE_DAILY_EDIT_FIELDS:
 			fieldname = next((alias for alias in aliases if alias in source), default_name)
+			if default_name in {ATTENDANCE_NUMERIC_FIELDS[field][0] for field in LEAVE_FIELDS}:
+				label += "（天）" if "(天)" in fieldname else "（小时）"
 			fields.append({"fieldname": fieldname, "label": label, "value": source.get(fieldname, "")})
 		items.append({
 			"source_row": source_row,
@@ -2590,6 +2613,8 @@ def update_processing_record(company: str, attendance_month: str, source_type: s
 	doc = frappe.get_doc(PROCESSING_RECORD_DOCTYPE, record_id)
 	if doc.company != company or doc.attendance_month != attendance_month or doc.source_type != source_type:
 		frappe.throw(_("无权修改该加工记录。"))
+	if source_type == "attendance_draft" and "ATTENDANCE_HOURS_MISMATCH" in _loads(doc.exception_codes, []):
+		frappe.throw(_("工时合计与标准工时不符，请按异常日期使用“修改本日”更正后重新校验。"))
 	proposed = _loads(doc.proposed_value_json, {})
 	confirmed = _loads(doc.confirmed_value_json, None) or dict(proposed)
 	decision_only = field_name == "__review_decision__"
@@ -2931,6 +2956,91 @@ def update_attendance_draft_daily_row(
 ATTENDANCE_SOURCE_TOTAL_REPAIR_FIELDS = ("workday_overtime_hours", "deep_night_shifts")
 
 
+def _attendance_policy_replacement(record, *, attendance_month, employee_directory, exception_policy):
+	"""Recheck retained daily facts without overwriting reviewed monthly totals."""
+	current = _effective_result_values(record)
+	if current.get("signed_final_override"):
+		return None, "该员工已有签字终稿人工修订，请逐日核对后处理。"
+	monthly_edits = {
+		entry.get("field_name") for entry in record.get("review_history") or [] if isinstance(entry, dict)
+	} & set(ATTENDANCE_NUMERIC_FIELDS)
+	if monthly_edits:
+		return None, "该员工已有月度工时人工调整，请逐日核对，避免覆盖已确认数值。"
+	source_rows = _effective_daily_source_rows(record)
+	if not source_rows:
+		return None, "缺少留存的每日来源数据，请重新上传考勤来源。"
+	rebuilt = process_attendance_draft_rows(
+		source_rows, attendance_month=attendance_month, employee_directory=employee_directory,
+		source_file=record.get("source_file") or "", source_sheet=record.get("source_sheet") or "每日统计",
+		exception_policy=exception_policy,
+	)
+	replacement = next((row for row in rebuilt["processed_rows"] if str(row["employee_code"]) == str(record.get("employee_code"))), None)
+	if replacement is None:
+		return None, "重新校验后工号无法唯一匹配。"
+	decisions = _daily_exception_decisions(current)
+	# A numerical conflict cannot be waived by an old human-review decision.
+	decisions = {key: {code: value for code, value in codes.items() if code != "ATTENDANCE_HOURS_MISMATCH"} for key, codes in decisions.items()}
+	replacement = _apply_daily_exception_decisions(replacement, decisions)
+	values = {**current, **replacement["proposed_value"], "_daily_exception_decisions": decisions}
+	status = record.get("review_status") if record.get("review_status") in {"已通过", "已驳回"} else "无需审核"
+	if status != "已驳回" and set(replacement["exception_codes"]) - NON_BLOCKING_ATTENDANCE_EVENT_CODES:
+		status = "待审核"
+	replacement.update(proposed_value=values, review_status=status, eligible_for_downstream=status in {"无需审核", "已通过"})
+	return replacement, ""
+
+
+@frappe.whitelist()
+def recheck_attendance_policy(company: str, attendance_month: str, execute: int = 0, preview_token: str = ""):
+	"""Preview/apply current rules to the latest month, with immutable sources and audit."""
+	_require_processing_manager()
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	batch = _latest_batch(company, attendance_month, "attendance_draft")
+	if not batch:
+		frappe.throw(_("尚未上传考勤初稿。"))
+	directory, policy = _employee_directory(company) or None, _attendance_draft_exception_policy()
+	preview, skipped, replacements = [], [], []
+	for record in _result_rows(batch, 0):
+		replacement, reason = _attendance_policy_replacement(record, attendance_month=attendance_month, employee_directory=directory, exception_policy=policy)
+		identity = {key: record.get(key) for key in ("record_id", "employee_code", "employee_name")}
+		if replacement is None:
+			skipped.append({**identity, "reason": reason})
+			continue
+		current = _effective_result_values(record)
+		values = replacement["proposed_value"]
+		if values == current and replacement["exception_codes"] == record["exception_codes"] and replacement["review_status"] == record["review_status"]:
+			continue
+		changes = {field: {"before": current.get(field) or 0, "after": values.get(field) or 0} for field in (*ATTENDANCE_NUMERIC_FIELDS, "leave_hours") if flt(current.get(field)) != flt(values.get(field))}
+		preview.append({**identity, "changes": changes, "exception_dates": [line["attendance_date"] for line in values["exception_lines"]], "hours_mismatch_lines": [line for line in values["exception_lines"] if "ATTENDANCE_HOURS_MISMATCH" in line["exception_codes"]], "exception_codes": replacement["exception_codes"], "review_status": replacement["review_status"]})
+		replacements.append((record, replacement))
+	token = hashlib.sha256(_json({"batch": batch.name, "replacements": replacements, "skipped": skipped}).encode()).hexdigest()
+	if cint(execute):
+		if not preview_token or preview_token != token:
+			frappe.throw(_("考勤数据已变化，请重新预览本月校验结果后再应用。"))
+		for record, replacement in replacements:
+			doc = frappe.get_doc(PROCESSING_RECORD_DOCTYPE, record["record_id"])
+			# Re-read immediately before saving so simultaneous corrections are not lost.
+			fresh = _serialize_record(doc.as_dict())
+			if _effective_result_values(fresh) != _effective_result_values(record) or fresh["review_history"] != record["review_history"] or fresh["exception_codes"] != record["exception_codes"] or fresh["review_status"] != record["review_status"]:
+				frappe.throw(_("记录已被其他操作修改，请重新预览。"))
+			values = replacement["proposed_value"]
+			history = list(record.get("review_history") or [])
+			history.append({"field_name": "__attendance_policy_recheck__", "old_value": _effective_result_values(record), "new_value": values, "reason": "按周末、全日请假及出勤工时规则重新校验", "reviewer": frappe.session.user, "reviewed_on": now_datetime().isoformat(), "review_status": replacement["review_status"]})
+			for field in ("processed_value_json", "proposed_value_json"):
+				setattr(doc, field, _json(values))
+			if record.get("confirmed_value") is not None:
+				doc.confirmed_value_json = _json(values)
+			doc.exception_codes, doc.exception_message = _json(replacement["exception_codes"]), replacement["exception_message"]
+			doc.review_status, doc.eligible_for_downstream = replacement["review_status"], int(replacement["eligible_for_downstream"])
+			doc.review_history_json = _json(history)
+			doc.save(ignore_permissions=True)
+		if replacements:
+			_refresh_batch_review_status(batch)
+			_invalidate_monthly_final_after_source_change(batch, "attendance_policy_recheck")
+			_save_batch_notes(batch, {"processed_result": _export_processed_result(batch), "attendance_policy_version": ATTENDANCE_POLICY_VERSION, "processed_result_refresh_reason": "attendance_policy_recheck"})
+		frappe.db.commit()
+	return {"batch": batch.name, "preview_token": token, "changed_count": len(preview), "preview": preview, "skipped": skipped, "execute": bool(cint(execute))}
+
+
 def _attendance_source_total_repairs(record: dict[str, Any], rebuilt_values: dict[str, Any]) -> dict[str, dict[str, Any]]:
 	"""Return parser-only corrections without overriding reviewed monthly fields."""
 	history = record.get("review_history") or []
@@ -3207,6 +3317,10 @@ def bulk_update_processing_records(
 		frappe.throw(_("所选记录不属于当前来源的最新加工版本，请刷新后重试。"))
 	if any(not _loads(row.exception_codes, []) for row in rows):
 		frappe.throw(_("批量处理仅适用于异常记录；正常记录无需审核。"))
+	if source_type == "attendance_draft" and review_status == "已通过" and any(
+		"ATTENDANCE_HOURS_MISMATCH" in _loads(row.exception_codes, []) for row in rows
+	):
+		frappe.throw(_("所选记录包含工时合计与标准工时不符的日期，请先逐日更正，不能批量确认通过。"))
 	if any(row.review_status != "待审核" for row in rows):
 		frappe.throw(_("所选记录已经处理。若需更正，请逐条使用“查看/更正记录”。"))
 
@@ -4460,7 +4574,7 @@ def _final_calculation(row: dict[str, Any]) -> dict[str, float]:
 	rest = _as_number(row.get("rest_arrangement_hours"))
 	absence = _as_number(row.get("absence_hours"))
 	bereavement = _as_number(row.get("bereavement_leave_hours"))
-	marriage = _as_number(row.get("marriage_leave_half_days"))
+	marriage = _as_number(row.get("marriage_leave_hours", row.get("marriage_leave_half_days")))
 	regular_special = _as_number(row.get("special_workday_hours"))
 	rest_special = _as_number(row.get("special_restday_hours"))
 	holiday_special = _as_number(row.get("special_holiday_hours"))

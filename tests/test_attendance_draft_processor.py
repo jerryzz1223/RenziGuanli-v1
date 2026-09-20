@@ -73,6 +73,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 				"班次": "白班",
 				"标准工时": "8",
 				"实际出勤（小时）": "7.5",
+				"事假(小时)": "0.5",
 				"工作日加班（小时）": "1",
 				"source_file": "sample.xlsx",
 				"source_sheet": "每日明细（钉钉导出）",
@@ -174,7 +175,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 	def test_explicit_dingtalk_missing_punch_counts_remain_downstream_attendance_facts(self):
 		rows = [{
 			"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "实际部门": "工程课", "班次": "白班",
-			"标准工时": 8, "上班时间": "08:01", "下班时间": "17:30", "上班未打卡次数": 1, "下班未打卡次数": 2,
+			"标准工时": 8, "实际出勤": 8, "上班时间": "08:01", "下班时间": "17:30", "上班未打卡次数": 1, "下班未打卡次数": 2,
 			"source_file": "sample.xlsx", "source_sheet": "每日明细（钉钉导出）", "source_row": 3,
 		}]
 		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")["processed_rows"][0]
@@ -184,11 +185,11 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertTrue({"CLOCK_IN_MISSING", "CLOCK_OUT_MISSING"}.issubset(row["exception_codes"]))
 		self.assertEqual(row["review_status"], "无需审核")
 		self.assertTrue(row["eligible_for_downstream"])
-		self.assertEqual(row["processed_value"]["attendance_details"], [{
+		self.assertEqual({key: row["processed_value"]["attendance_details"][0][key] for key in ("attendance_date", "shift", "clock_in", "clock_out", "clock_in_missing", "clock_out_missing", "late_count", "early_count", "absence_marker_count", "absence_hours", "source_row")}, {
 			"attendance_date": "2026-06-01", "shift": "白班", "clock_in": "08:01", "clock_out": "17:30",
 			"clock_in_missing": 1, "clock_out_missing": 2, "late_count": 0, "early_count": 0,
 			"absence_marker_count": 0, "absence_hours": 0, "source_row": 3,
-		}])
+		})
 
 	def test_daily_statistics_missing_card_markers_are_source_facts(self):
 		rows = [{
@@ -199,12 +200,12 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 
 		self.assertEqual(row["processed_value"]["clock_in_missing_count"], 1)
 		self.assertEqual(row["processed_value"]["clock_out_missing_count"], 1)
-		self.assertEqual(row["processed_value"]["exception_lines"], [{
+		self.assertEqual({key: row["processed_value"]["exception_lines"][0][key] for key in ("attendance_date", "shift", "clock_in", "clock_out", "clock_in_missing", "clock_out_missing", "late_count", "early_count", "absence_marker_count", "absence_hours", "source_row", "exception_codes")}, {
 			"attendance_date": "2026-06-01", "shift": "夜班", "clock_in": "", "clock_out": "",
 			"clock_in_missing": 1, "clock_out_missing": 1, "late_count": 0, "early_count": 0,
 			"absence_marker_count": 0, "absence_hours": 0, "source_row": 5,
 			"exception_codes": ["CLOCK_IN_MISSING", "CLOCK_OUT_MISSING"],
-		}])
+		})
 
 	def test_exactly_one_clock_time_creates_the_missing_side_review_event(self):
 		rows = [
@@ -254,14 +255,15 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(row["processed_value"]["absence_marker_count"], 2)
 		self.assertEqual(row["processed_value"]["absence_hours"], 10)
 		self.assertTrue({"CLOCK_IN_MISSING", "LATE_MARKED", "EARLY_MARKED", "ABSENCE_MARKED"}.issubset(row["exception_codes"]))
-		self.assertEqual(result["metrics"]["exception_events"], 4)
-		self.assertEqual(row["review_status"], "无需审核")
-		self.assertTrue(row["eligible_for_downstream"])
+		self.assertEqual(result["metrics"]["exception_events"], 5)
+		self.assertEqual(row["review_status"], "待审核")
+		self.assertFalse(row["eligible_for_downstream"])
 		self.assertEqual([(event["attendance_date"], event["code"]) for event in row["exception_events"]], [
 			("2026-06-08", "ABSENCE_MARKED"),
 			("2026-06-09", "CLOCK_IN_MISSING"),
 			("2026-06-09", "EARLY_MARKED"),
 			("2026-06-10", "LATE_MARKED"),
+			("2026-06-10", "ATTENDANCE_HOURS_MISMATCH"),
 		])
 
 	def test_rest_day_clock_without_overtime_application_requires_manual_hours_confirmation(self):
@@ -304,8 +306,11 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-06")["processed_rows"][0]
 
 		self.assertEqual(row["processed_value"]["absence_hours"], 0)
-		self.assertEqual(row["review_status"], "无需审核")
-		self.assertTrue(row["eligible_for_downstream"])
+		# Approval text is not a numeric duration. Missing daily leave hours must
+		# now remain a reconciliation error rather than silently passing.
+		self.assertEqual(row["review_status"], "待审核")
+		self.assertFalse(row["eligible_for_downstream"])
+		self.assertIn("ATTENDANCE_HOURS_MISMATCH", row["exception_codes"])
 
 	def test_historic_attendance_details_restore_only_actual_exception_dates(self):
 		lines = processor.exception_lines_from_attendance_details([
@@ -428,7 +433,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 
 	def test_department_group_and_section_suffixes_are_the_same_department(self):
 		rows = [{
-			"姓名": "朱耀辉", "工号": "164", "日期": "26-06-01", "实际部门": "设备组", "班次": "白班", "标准工时": 8,
+			"姓名": "朱耀辉", "工号": "164", "日期": "26-06-01", "实际部门": "设备组", "班次": "白班", "标准工时": 8, "实际出勤": 8,
 			"source_file": "sample.xlsx", "source_sheet": "每日明细（钉钉导出）", "source_row": 3,
 		}]
 		roster = [{"employee_code": "164", "employee_name": "朱耀辉", "department": "设备课"}]
@@ -441,11 +446,11 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 	def test_dingtalk_departed_name_suffix_does_not_create_identity_exception(self):
 		rows = [
 			{
-				"姓名": "张朋军（离职）", "工号": "4005", "日期": "26-07-01", "实际部门": "品保课", "班次": "生产夜班 20:00-次日08:00", "标准工时": 8,
+				"姓名": "张朋军（离职）", "工号": "4005", "日期": "26-07-01", "实际部门": "品保课", "班次": "生产夜班 20:00-次日08:00", "标准工时": 8, "实际出勤": 8,
 				"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 1029,
 			},
 			{
-				"姓名": "张朋军", "工号": "4005", "日期": "26-07-02", "实际部门": "品保课", "班次": "生产夜班 20:00-次日08:00", "标准工时": 8,
+				"姓名": "张朋军", "工号": "4005", "日期": "26-07-02", "实际部门": "品保课", "班次": "生产夜班 20:00-次日08:00", "标准工时": 8, "实际出勤": 8,
 				"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 1030,
 			},
 		]

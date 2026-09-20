@@ -1438,6 +1438,28 @@ def download_attendance_export(company: str, attendance_month: str, export_profi
 	}
 
 
+def _day_check_hours_policy(day_check):
+	from hrms.api.attendance_processors.attendance_draft import LEAVE_FIELDS, daily_hours_policy
+	aliases = {"work_injury_hours": "work_injury_leave_hours", "rest_arrangement_hours": "rest_leave_hours", "clock_in_missing_count": "missing_in", "clock_out_missing_count": "missing_out", "absence_hours": "absent_hours"}
+	fields = (*LEAVE_FIELDS, "standard_hours", "actual_attendance_hours", "late_count", "early_count", "clock_in_missing_count", "clock_out_missing_count", "absence_hours")
+	numbers = {field: getattr(day_check, aliases.get(field, field), 0) or 0 for field in fields}
+	# A single punch still needs review unless effective leave covers the day.
+	if bool(getattr(day_check, "actual_in_time", "")) != bool(getattr(day_check, "actual_out_time", "")):
+		missing = "clock_out_missing_count" if getattr(day_check, "actual_in_time", "") else "clock_in_missing_count"
+		numbers[missing] = max(flt(numbers[missing]), 1)
+	return daily_hours_policy(numbers, getattr(day_check, "attendance_date", ""))
+
+
+def _apply_day_check_hours_policy(day_check):
+	policy = _day_check_hours_policy(day_check)
+	aliases = {"work_injury_hours": "work_injury_leave_hours", "rest_arrangement_hours": "rest_leave_hours", "clock_in_missing_count": "missing_in", "clock_out_missing_count": "missing_out", "absence_hours": "absent_hours"}
+	for field, value in policy["numbers"].items():
+		setattr(day_check, aliases.get(field, field), float(value))
+	day_check.leave_hours = float(policy["leave_hours"])
+	day_check.attendance_result = "异常" if any((day_check.missing_in, day_check.missing_out, day_check.late_count, day_check.early_count, day_check.absent_hours, policy["hours_mismatch"])) else "正常"
+	return policy
+
+
 def _insert_day_check(batch_name, row, company, source_kind="旧模板", source_sheet="", correction_version=1, allow_unmatched=False):
 	employee_code = _first_value(row, "工号")
 	employee_name = _first_value(row, "姓名")
@@ -1541,6 +1563,7 @@ def _insert_day_check(batch_name, row, company, source_kind="旧模板", source_
 			"raw_row_json": json.dumps(row, ensure_ascii=False, default=str),
 		}
 	)
+	_apply_day_check_hours_policy(doc)
 	doc.insert(ignore_permissions=True)
 	return doc.name
 
@@ -1982,6 +2005,7 @@ def _make_exception(day_check, exception_type, handling_method="", deduct_absenc
 
 
 def _build_exception_candidates(day_check):
+	policy = _day_check_hours_policy(day_check)
 	candidates = []
 	if not day_check.employee:
 		candidates.append(
@@ -1991,7 +2015,7 @@ def _build_exception_candidates(day_check):
 				"remarks": "钉钉原始数据已保留，等待人事匹配员工。",
 			}
 		)
-	if day_check.missing_in or day_check.missing_out:
+	if policy["numbers"]["clock_in_missing_count"] or policy["numbers"]["clock_out_missing_count"]:
 		candidates.append(
 			{
 				"exception_type": "忘打卡",
@@ -2006,7 +2030,7 @@ def _build_exception_candidates(day_check):
 	late_minutes = 0
 	if shift_start_minutes is not None and actual_in_minutes is not None and actual_in_minutes > shift_start_minutes:
 		late_minutes = actual_in_minutes - shift_start_minutes
-	if flt(day_check.late_count) or late_minutes:
+	if not policy["is_weekend"] and (flt(day_check.late_count) or late_minutes):
 		deduct_hours = 0.5 if 0 < late_minutes <= 30 else round(late_minutes / 60, 2) if late_minutes else 0
 		candidates.append(
 			{
@@ -2016,7 +2040,7 @@ def _build_exception_candidates(day_check):
 				"full_attendance_deduction": 10 if 0 < late_minutes <= 30 else 0,
 			}
 		)
-	if flt(day_check.early_count):
+	if not policy["is_weekend"] and flt(day_check.early_count):
 		candidates.append(
 			{
 				"exception_type": "早退",
@@ -2045,6 +2069,12 @@ def _build_exception_candidates(day_check):
 				"remarks": "工作日/周末出勤存在加班时数但未匹配加班审批。",
 			}
 		)
+	if policy["hours_mismatch"]:
+		candidates.append({
+			"exception_type": "工时不符",
+			"handling_method": "实际出勤＋事假＋病假÷2＋团圆假＋排休＋旷工应等于标准工时；请逐日更正后确认。",
+			"remarks": "本日公式合计 %s 小时；标准 %s 小时；差额 %s 小时（正数为超出，负数为不足）。" % (policy["accounted_hours"], day_check.standard_hours, policy["hours_difference"]),
+		})
 	return candidates
 
 
@@ -3040,6 +3070,7 @@ def create_attendance_manual_adjustment(name: str, changes: str | dict, reason: 
 			**payload,
 		}
 	)
+	_apply_day_check_hours_policy(doc)
 	doc.insert(ignore_permissions=True)
 	frappe.db.commit()
 	return {
@@ -3265,6 +3296,21 @@ def review_attendance_exception(name: str, decision: str, remarks: str = ""):
 	if decision == "reject" and not (remarks or "").strip():
 		frappe.throw(_("驳回异常时必须填写原因，便于审计追溯。"))
 	doc = frappe.get_doc(EXCEPTION_DOCTYPE, name)
+	if decision == "confirm" and doc.exception_type == "工时不符" and doc.day_check:
+		day_check = frappe.get_doc(DAY_CHECK_DOCTYPE, doc.day_check)
+		# Corrections are new versions; the exception keeps its original source link.
+		if day_check.employee_code:
+			versions = frappe.get_all(
+				DAY_CHECK_DOCTYPE,
+				filters={"company": day_check.company, "employee_code": day_check.employee_code, "attendance_date": day_check.attendance_date},
+				fields=["*"],
+				limit_page_length=0,
+			)
+			effective = _prefer_manual_daily_rows(versions)
+			if len(effective) == 1:
+				day_check = effective[0]
+		if _day_check_hours_policy(day_check)["hours_mismatch"]:
+			frappe.throw(_("本日工时合计仍不等于标准工时，请先更正每日数据，不能直接确认通过。"))
 	doc.confirmation_status = "已确认" if decision == "confirm" else "已驳回"
 	doc.confirmed_by = frappe.session.user
 	doc.confirmed_on = now_datetime()
@@ -3436,11 +3482,12 @@ def _rule_hit_rows(rule_code, day_checks):
 	hits = []
 	for row in day_checks:
 		reason = ""
+		policy = _day_check_hours_policy(row)
 		if rule_code == "ATT-MISSING-CARD":
 			parts = []
-			if getattr(row, "missing_in", 0):
+			if policy["numbers"]["clock_in_missing_count"]:
 				parts.append("上班缺卡")
-			if getattr(row, "missing_out", 0):
+			if policy["numbers"]["clock_out_missing_count"]:
 				parts.append("下班缺卡")
 			reason = "、".join(parts)
 		elif rule_code == "ATT-ABSENT-NO-LEAVE":
@@ -3452,7 +3499,7 @@ def _rule_hit_rows(rule_code, day_checks):
 				reason = "应出勤且无上班打卡、无有效请假"
 		elif rule_code == "ATT-LATE-30":
 			late_minutes = _late_minutes_for_rule(row)
-			if late_minutes is not None and late_minutes > 0 and flt(getattr(row, "valid_leave_hours", 0)) <= 0:
+			if not policy["is_weekend"] and late_minutes is not None and late_minutes > 0 and flt(getattr(row, "valid_leave_hours", 0)) <= 0:
 				reason = "实际上班晚于排班开始 %s 分钟" % late_minutes
 		if reason:
 			hits.append({"row": row, "reason": reason})
