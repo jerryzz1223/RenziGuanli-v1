@@ -11,7 +11,14 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COMPOSE_FILE="${PROJECT_ROOT}/docker/docker-compose.yml"
 SITE_NAME="hrms.localhost"
 PULL_CODE=0
-ORIGINAL_ARGS=("$@")
+INSTALL_DEPS=1
+
+# Re-exec before parsing arguments. With no arguments, Bash nounset mode can
+# treat an empty array expansion as unset.
+if [[ ${EUID} -ne 0 ]]; then
+	echo "Docker deployment needs elevated permissions; restarting with sudo..."
+	exec sudo bash "$0" "$@"
+fi
 
 usage() {
 	cat <<'EOF'
@@ -20,6 +27,7 @@ Usage: sudo bash scripts/deploy_docker.sh [--pull] [--site SITE_NAME]
 Options:
   --pull              Run a fast-forward-only git pull before deploying.
   --site SITE_NAME     Frappe site to migrate (default: hrms.localhost).
+  --skip-deps          Skip Yarn dependency installation when lockfiles did not change.
   -h, --help           Show this help.
 
 Examples:
@@ -39,6 +47,9 @@ while [[ $# -gt 0 ]]; do
 		--site)
 			SITE_NAME="${2:?--site requires a site name}"
 			shift
+			;;
+		--skip-deps)
+			INSTALL_DEPS=0
 			;;
 		-h|--help)
 			usage
@@ -61,11 +72,6 @@ fi
 if [[ ! -f "${COMPOSE_FILE}" ]]; then
 	echo "Compose file not found: ${COMPOSE_FILE}" >&2
 	exit 1
-fi
-
-if [[ ${EUID} -ne 0 ]]; then
-	echo "Docker deployment needs elevated permissions; restarting with sudo..."
-	exec sudo "$0" "${ORIGINAL_ARGS[@]}"
 fi
 
 compose() {
@@ -117,25 +123,31 @@ for directory in \
   /workspace/node_modules \
   /workspace/frontend/node_modules \
   /workspace/roster/node_modules \
-  /workspace/hrms/public/dist \
-  /workspace/hrms/public/frontend \
-  /workspace/hrms/public/roster \
-  /workspace/hrms/www; do
-  mkdir -p "${directory}"
-  chown -R frappe:frappe "${directory}"
+	  /workspace/hrms/public/dist \
+	  /workspace/hrms/public/frontend \
+	  /workspace/hrms/public/roster; do
+	  mkdir -p "${directory}"
+	  chown -R frappe:frappe "${directory}"
 done
 # Vite creates a short-lived config module next to vite.config.js, so the
 # source directory itself (not only node_modules) must be writable by frappe.
 chown frappe:frappe /workspace/frontend /workspace/roster
-chown frappe:frappe /workspace/yarn.lock
 '
 
-echo "Installing locked frontend dependencies..."
-compose exec -T frappe bash -lc '
-set -euo pipefail
-cd /workspace
-yarn install --frozen-lockfile
-'
+if [[ ${INSTALL_DEPS} -eq 1 ]]; then
+	echo "Installing locked frontend dependencies..."
+	compose exec -T frappe bash -lc '
+	set -euo pipefail
+	cd /workspace
+	yarn install --frozen-lockfile --ignore-scripts
+	cd frontend
+	yarn install --frozen-lockfile --check-files --ignore-scripts
+	cd ../roster
+	yarn install --frozen-lockfile --check-files --ignore-scripts
+	'
+else
+	echo "Skipping frontend dependency installation (--skip-deps)."
+fi
 
 echo "Migrating ${SITE_NAME}, building HRMS assets, and clearing cache..."
 compose exec -T frappe bash -lc "

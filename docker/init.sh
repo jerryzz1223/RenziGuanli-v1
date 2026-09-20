@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+BENCH_DIR=/home/frappe/frappe-bench
+PERSISTENT_SITES_DIR=/home/frappe/frappe-sites
+
+link_persistent_sites() {
+    mkdir -p "${PERSISTENT_SITES_DIR}"
+    if [ -L "${BENCH_DIR}/sites" ]; then
+        return
+    fi
+    if [ -d "${BENCH_DIR}/sites" ]; then
+        if find "${PERSISTENT_SITES_DIR}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+            echo "Persistent sites directory is not empty; refusing to merge site data automatically." >&2
+            exit 1
+        fi
+        cp -a "${BENCH_DIR}/sites/." "${PERSISTENT_SITES_DIR}/"
+        rm -rf "${BENCH_DIR}/sites"
+    fi
+    ln -s "${PERSISTENT_SITES_DIR}" "${BENCH_DIR}/sites"
+}
+
 if [ -n "${NVM_DIR:-}" ] && [ -n "${NODE_VERSION_DEVELOP:-}" ]; then
     export PATH="${NVM_DIR}/versions/node/v${NODE_VERSION_DEVELOP}/bin/:${PATH}"
 elif [ -n "${NVM_DIR:-}" ]; then
@@ -54,9 +73,10 @@ configure_web_bind() {
     fi
 }
 
-if [ -d "/home/frappe/frappe-bench/apps/frappe" ]; then
+if [ -d "${BENCH_DIR}/apps/frappe" ]; then
     echo "Bench already exists, skipping init"
-    cd frappe-bench
+    cd "${BENCH_DIR}"
+    link_persistent_sites
     link_hrms_assets
     configure_web_bind
     bench start
@@ -74,7 +94,8 @@ sed -i 's|"gunicorn @ git+https://github.com/frappe/gunicorn@[^"]*"|"gunicorn~=2
 
 bench init --skip-redis-config-generation --frappe-path /home/frappe/frappe-src frappe-bench
 
-cd frappe-bench
+cd "${BENCH_DIR}"
+link_persistent_sites
 patch_chinese_chart_periods
 
 # Use containers instead of localhost
@@ -94,16 +115,14 @@ fi
 add_local_hrms_app
 link_hrms_assets
 
-bench new-site hrms.localhost \
---force \
---mariadb-root-password 123 \
---admin-password admin \
---no-mariadb-socket
+if [ -f "sites/hrms.localhost/site_config.json" ]; then
+    echo "Existing site configuration found; preserving the existing database."
+else
+    echo "Site configuration sites/hrms.localhost/site_config.json is missing." >&2
+    echo "Refusing to create a new empty site. Restore the existing site configuration first." >&2
+    exit 1
+fi
 
-bench --site hrms.localhost install-app erpnext
-bench --site hrms.localhost install-app hrms
-bench --site hrms.localhost execute hrms.localize_zh.apply_hrms_desktop_customizations
-bench --site hrms.localhost execute hrms.localize_zh.apply_expense_claim_translations
 bench --site hrms.localhost set-config developer_mode 1
 bench --site hrms.localhost enable-scheduler
 bench --site hrms.localhost clear-cache

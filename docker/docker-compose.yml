@@ -28,9 +28,10 @@ services:
     working_dir: /home/frappe
     volumes:
       - ..:/workspace
-      # Keep site configuration and uploaded private/public files when the
-      # frappe container is recreated. MariaDB alone cannot restore File data.
-      - frappe-sites:/home/frappe/frappe-bench/sites
+      # Keep site configuration and uploaded private/public files outside the
+      # bench root. Mounting this at bench/sites makes bench init think that a
+      # partial bench already exists.
+      - frappe-sites:/home/frappe/frappe-sites
     ports:
       - 8000:8000
       - 9000:9000
