@@ -241,7 +241,9 @@ cd /home/frappe/frappe-bench
         step("migration", lambda: bench("bench --site hrms.localhost migrate"))
     # Redis is provided by the existing service. Remove local Redis and watch
     # processes; init.sh supplies the explicit site's web command on restart.
-    bench("bench setup procfile; sed -i '/^redis_/d; /^watch:/d' Procfile; "
+    # An existing bench already has its Procfile. Regenerating it prompts for
+    # confirmation and aborts under non-interactive docker exec.
+    bench("test -s Procfile; sed -i '/^redis_/d; /^watch:/d' Procfile; "
           "bench --site hrms.localhost clear-cache")
     run(["docker", "exec", "--user", "root", cid, "rm", marker_path])
     run(["docker", "restart", cid])
