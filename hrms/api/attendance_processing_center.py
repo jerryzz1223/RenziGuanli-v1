@@ -23,7 +23,7 @@ from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, now_datetime
+from frappe.utils import cint, flt, getdate, now_datetime
 
 from hrms.api.attendance_processors.apple_tree import AppleTreeRules, preflight_apple_tree_rows, process_apple_tree_rows
 from hrms.api.attendance_processors.attendance_draft import (
@@ -42,6 +42,7 @@ from hrms.api.attendance_processors.missed_punch import MissedPunchRules, preche
 IMPORT_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
 PROCESSING_RECORD_DOCTYPE = "HRMS Attendance Processing Record"
 DEPARTMENT_MAPPING_DOCTYPE = "HRMS Attendance Department Mapping"
+DAILY_CLOSURE_DOCTYPE = "HRMS Attendance Daily Closure"
 SOURCE_TYPES = ("attendance_draft", "apple_tree", "missing_card")
 FIRST_SIGNED_SOURCE_TYPES = ("attendance_draft", "missing_card")
 # These three sources are independent monthly facts used to produce the locked
@@ -2076,6 +2077,7 @@ def get_processing_batch(company: str, attendance_month: str):
 	batch_statuses = [slot["status"] for slot in slots]
 	status = "未上传" if not slots else "已确认" if len(slots) == 3 and all(value == "已确认" for value in batch_statuses) else "待处理异常" if "待处理异常" in batch_statuses else "待确认" if "待确认" in batch_statuses else "待加工"
 	finalization_inputs = _finalization_inputs(company, attendance_month, slots)
+	daily_workflow = _daily_month_workflow(company, attendance_month)
 	anchor_batch = _latest_batch(company, attendance_month, "attendance_draft")
 	anchor_meta = _processing_meta(anchor_batch) if anchor_batch else {}
 	first_signed_inputs = _first_signed_inputs(company, attendance_month, slots)
@@ -2088,6 +2090,7 @@ def get_processing_batch(company: str, attendance_month: str):
 		"status": status,
 		"slots": slots,
 		"finalization_inputs": finalization_inputs,
+		"daily_workflow": daily_workflow,
 		"first_signed_inputs": first_signed_inputs,
 		"first_signed_outputs": first_signed_outputs,
 		"final_outputs": final_outputs,
@@ -2925,6 +2928,127 @@ def update_attendance_draft_daily_row(
 	return result
 
 
+ATTENDANCE_SOURCE_TOTAL_REPAIR_FIELDS = ("workday_overtime_hours", "deep_night_shifts")
+
+
+def _attendance_source_total_repairs(record: dict[str, Any], rebuilt_values: dict[str, Any]) -> dict[str, dict[str, Any]]:
+	"""Return parser-only corrections without overriding reviewed monthly fields."""
+	history = record.get("review_history") or []
+	manually_reviewed_fields = {
+		str(item.get("field_name") or "")
+		for item in history
+		if isinstance(item, dict)
+	}
+	current = _effective_result_values(record)
+	repairs = {}
+	for fieldname in ATTENDANCE_SOURCE_TOTAL_REPAIR_FIELDS:
+		if fieldname in manually_reviewed_fields:
+			continue
+		old_value = current.get(fieldname, 0) or 0
+		new_value = rebuilt_values.get(fieldname, 0) or 0
+		if _as_number(old_value) != _as_number(new_value):
+			repairs[fieldname] = {"old_value": old_value, "new_value": new_value}
+	return repairs
+
+
+@frappe.whitelist()
+def repair_attendance_draft_source_totals(company: str, attendance_month: str, execute: int = 0):
+	"""Repair historic draft totals from retained source rows after an alias fix.
+
+	The preview-first endpoint is deliberately limited to the two affected source
+	fields. It preserves daily overrides, explicit manual monthly edits and the
+	existing review decision/history.
+	"""
+	_require_processing_manager()
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	batch = _latest_batch(company, attendance_month, "attendance_draft")
+	if not batch:
+		frappe.throw(_("尚未上传考勤初稿。"))
+	records = _result_rows(batch, 5000)
+	preview = []
+	for record in records:
+		effective_rows = _effective_daily_source_rows(record)
+		if not effective_rows:
+			continue
+		rebuilt = process_attendance_draft_rows(
+			effective_rows,
+			attendance_month=attendance_month,
+			source_file=record.get("source_file") or batch.source_file,
+			source_sheet=record.get("source_sheet") or "每日统计",
+			employee_directory=_employee_directory(company) or None,
+			exception_policy=_attendance_draft_exception_policy(),
+		)
+		replacement = next(
+			(
+				row for row in rebuilt.get("processed_rows") or []
+				if str(row.get("employee_code") or "") == str(record.get("employee_code") or "")
+			),
+			None,
+		)
+		if not replacement:
+			continue
+		replacement = _apply_daily_exception_decisions(
+			replacement,
+			_daily_exception_decisions(_effective_result_values(record)),
+		)
+		rebuilt_values = replacement.get("proposed_value") or {}
+		repairs = _attendance_source_total_repairs(record, rebuilt_values)
+		if not repairs:
+			continue
+		preview.append({
+			"record_id": record["record_id"],
+			"employee_code": record.get("employee_code") or "",
+			"employee_name": record.get("employee_name") or "",
+			"repairs": repairs,
+		})
+		if not cint(execute):
+			continue
+		doc = frappe.get_doc(PROCESSING_RECORD_DOCTYPE, record["record_id"])
+		for json_field in ("processed_value_json", "proposed_value_json", "confirmed_value_json"):
+			serialized = getattr(doc, json_field, "")
+			if json_field == "confirmed_value_json" and not serialized:
+				continue
+			values = _loads(serialized, {})
+			if not isinstance(values, dict):
+				values = {}
+			for fieldname, change in repairs.items():
+				values[fieldname] = change["new_value"]
+			if "deep_night_shifts" in repairs:
+				values["attendance_details"] = rebuilt_values.get("attendance_details") or values.get("attendance_details") or []
+				values["night_shift_matching"] = rebuilt_values.get("night_shift_matching") or values.get("night_shift_matching") or {}
+			setattr(doc, json_field, _json(values))
+		history = _loads(doc.review_history_json, [])
+		history.append({
+			"field_name": "__source_parser_repair__",
+			"old_value": {fieldname: change["old_value"] for fieldname, change in repairs.items()},
+			"new_value": {fieldname: change["new_value"] for fieldname, change in repairs.items()},
+			"original_value": {"retained_source_rows": len(effective_rows)},
+			"reason": "修复当前钉钉导出的工作日加班/深夜班字段映射",
+			"review_status": doc.review_status,
+			"reviewer": frappe.session.user,
+			"reviewed_on": now_datetime().isoformat(),
+		})
+		doc.review_history_json = _json(history)
+		doc.save(ignore_permissions=True)
+	if cint(execute) and preview:
+		_invalidate_monthly_final_after_source_change(batch, "attendance_source_total_parser_repair")
+		processed_result = _export_processed_result(batch)
+		_save_batch_notes(batch, {
+			"processed_result": processed_result,
+			"processed_result_refreshed_on": now_datetime().isoformat(),
+			"processed_result_refresh_reason": "attendance_source_total_parser_repair",
+			"source_total_repaired_rows": len(preview),
+		})
+		frappe.db.commit()
+	return {
+		"batch": batch.name,
+		"execute": bool(cint(execute)),
+		"scanned_rows": len(records),
+		"repaired_rows": len(preview),
+		"preview": preview,
+	}
+
+
 @frappe.whitelist()
 def review_attendance_draft_daily_exception(
 	company: str,
@@ -3480,6 +3604,223 @@ def list_processing_batches(company: str, attendance_month: str, page_length: in
 	}
 
 
+def _daily_checks_for_date(company: str, attendance_month: str, attendance_date: str):
+	"""Return effective canonical day checks for one business date.
+
+	The processing centre still supports uploaded workbooks, but the daily
+	workflow must use the canonical DingTalk/API day-check records when they are
+	available.  This keeps the employee/date match and the later monthly
+	generator on the same data set.
+	"""
+	from hrms.api import attendance_import
+
+	return attendance_import.list_attendance_day_checks(
+		company=company,
+		attendance_month=attendance_month,
+		attendance_date=attendance_date,
+		effective_only=1,
+		page_length=5000,
+	)
+
+
+def _daily_closure_document(company: str, attendance_date: str):
+	if not frappe.db.exists("DocType", DAILY_CLOSURE_DOCTYPE):
+		return None
+	name = frappe.db.get_value(
+		DAILY_CLOSURE_DOCTYPE,
+		{"company": company, "attendance_date": attendance_date},
+		"name",
+	)
+	return frappe.get_doc(DAILY_CLOSURE_DOCTYPE, name) if name else None
+
+
+def _daily_workflow_state(company: str, attendance_month: str, attendance_date: str):
+	"""Calculate the post-edit validation gate for one attendance date."""
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	try:
+		selected_date = getdate(attendance_date)
+	except Exception:
+		frappe.throw(_("考勤日期格式不正确。"))
+	if selected_date.strftime("%Y-%m") != attendance_month:
+		frappe.throw(_("考勤日期必须属于处理月份 {0}。" ).format(attendance_month))
+	date_text = selected_date.isoformat()
+	rows = _daily_checks_for_date(company, attendance_month, date_text)
+	row_names = [str(getattr(row, "name", "")) for row in rows if getattr(row, "name", "")]
+	pending_exceptions = []
+	if row_names:
+		pending_exceptions = frappe.get_all(
+			"HRMS Attendance Exception",
+			filters={"day_check": ["in", row_names], "confirmation_status": "待确认"},
+			fields=["name", "exception_type", "employee_code", "employee_name"],
+			limit_page_length=5000,
+		)
+	matched = [row for row in rows if getattr(row, "employee", "")]
+	unmatched = [row for row in rows if not getattr(row, "employee", "")]
+	batch_ids = sorted({str(getattr(row, "import_batch", "")) for row in rows if getattr(row, "import_batch", "")})
+	checksums = []
+	if batch_ids:
+		checksums = frappe.get_all(
+			IMPORT_BATCH_DOCTYPE,
+			filters={"name": ["in", batch_ids]},
+			pluck="source_checksum",
+			limit_page_length=5000,
+		)
+	checksum = hashlib.sha256(
+		_json({"date": date_text, "batches": batch_ids, "checksums": sorted(filter(None, checksums)), "rows": [getattr(row, "name", "") for row in rows]}).encode()
+	).hexdigest()
+	closure = _daily_closure_document(company, date_text)
+	ready = bool(rows) and not unmatched and not pending_exceptions
+	return {
+		"company": company,
+		"attendance_month": attendance_month,
+		"attendance_date": date_text,
+		"total_rows": len(rows),
+		"matched_rows": len(matched),
+		"unmatched_rows": len(unmatched),
+		"pending_exception_rows": len(pending_exceptions),
+		"corrected_rows": sum(1 for row in rows if getattr(row, "source_kind", "") == "人工调整"),
+		"source_batch_ids": batch_ids,
+		"source_checksum": checksum,
+		"validation_status": "通过" if ready else "存在异常" if rows else "未校验",
+		"validation_message": "修改后数据已完成员工匹配且没有待处理异常。" if ready else "请先处理未匹配员工或待确认异常。" if rows else "当天没有可校验的考勤记录。",
+		"status": getattr(closure, "status", "待校验") if closure else "待锁定" if ready else "待校验",
+		"locked": bool(closure and getattr(closure, "status", "") == "已锁定"),
+		"can_validate": bool(rows),
+		"can_lock": ready and not (closure and getattr(closure, "status", "") == "已锁定"),
+		"pending_exceptions": [dict(item) for item in pending_exceptions],
+	}
+
+
+def _daily_month_workflow(company: str, attendance_month: str):
+	"""Summarize daily closures used as the monthly-final hard gate."""
+	if not frappe.db.exists("DocType", "HRMS Attendance Day Check"):
+		return {"required": False, "ready": True, "reason": "尚未启用日考勤核对记录。", "dates": [], "missing_dates": [], "pending_dates": []}
+	from hrms.api import attendance_import
+
+	rows = frappe.get_all(
+		"HRMS Attendance Day Check",
+		filters=[
+			["company", "=", company],
+			["attendance_date", ">=", f"{attendance_month}-01"],
+			["attendance_date", "<", _next_month_boundary_date(attendance_month)],
+		],
+		fields=["*"],
+		limit_page_length=5000,
+	)
+	rows = attendance_import._prefer_manual_daily_rows(rows)
+	dates = sorted({str(getattr(row, "attendance_date", "")) for row in rows if getattr(row, "attendance_date", "")})
+	states = [_daily_workflow_state(company, attendance_month, value) for value in dates]
+	return {
+		"required": bool(dates),
+		"ready": not dates or all(state["locked"] for state in states),
+		"reason": "所有已同步日期均已锁定。" if dates and all(state["locked"] for state in states) else "每日考勤仍有日期未完成修改后校验和锁定。" if dates else "尚未产生日考勤记录。",
+		"dates": dates,
+		"closed_dates": [state["attendance_date"] for state in states if state["locked"]],
+		"missing_dates": [state["attendance_date"] for state in states if not state["locked"]],
+		"pending_dates": [state["attendance_date"] for state in states if state["pending_exception_rows"] or state["unmatched_rows"]],
+		"total_rows": sum(state["total_rows"] for state in states),
+		"pending_exception_rows": sum(state["pending_exception_rows"] for state in states),
+		"unmatched_rows": sum(state["unmatched_rows"] for state in states),
+	}
+
+
+@frappe.whitelist()
+def get_daily_attendance_workflow(company: str, attendance_month: str, attendance_date: str):
+	_require_processing_manager()
+	return _daily_workflow_state(company, attendance_month, attendance_date)
+
+
+@frappe.whitelist()
+def validate_daily_attendance_after_review(company: str, attendance_month: str, attendance_date: str):
+	_require_processing_manager()
+	state = _daily_workflow_state(company, attendance_month, attendance_date)
+	if not frappe.db.exists("DocType", DAILY_CLOSURE_DOCTYPE):
+		frappe.throw(_("每日考勤闭环记录尚未迁移，请先执行站点 migrate。"))
+	closure = _daily_closure_document(company, state["attendance_date"])
+	if closure and closure.status == "已锁定":
+		return {**state, "status": closure.status, "locked": True, "closure": closure.name}
+	closure = closure or frappe.new_doc(DAILY_CLOSURE_DOCTYPE)
+	closure.update({
+		"company": company,
+		"attendance_month": attendance_month,
+		"attendance_date": state["attendance_date"],
+		"status": "待锁定" if state["validation_status"] == "通过" else "待校验",
+		"validation_status": state["validation_status"],
+		"total_rows": state["total_rows"],
+		"matched_rows": state["matched_rows"],
+		"unmatched_rows": state["unmatched_rows"],
+		"pending_exception_rows": state["pending_exception_rows"],
+		"corrected_rows": state["corrected_rows"],
+		"source_batch_ids": ",".join(state["source_batch_ids"]),
+		"source_checksum": state["source_checksum"],
+		"validation_message": state["validation_message"],
+		"validated_by": frappe.session.user,
+		"validated_on": now_datetime(),
+	})
+	closure.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {**state, "status": closure.status, "closure": closure.name}
+
+
+@frappe.whitelist()
+def close_daily_attendance(company: str, attendance_month: str, attendance_date: str, remarks: str = ""):
+	_require_processing_manager()
+	from hrms.access_control import require_hrms_capability
+
+	require_hrms_capability("attendance_approve", legacy_roles=("HR Manager",))
+	state = _daily_workflow_state(company, attendance_month, attendance_date)
+	if not state["can_lock"]:
+		frappe.throw(_("当天不能锁定：{0}").format(state["validation_message"]))
+	if not frappe.db.exists("DocType", DAILY_CLOSURE_DOCTYPE):
+		frappe.throw(_("每日考勤闭环记录尚未迁移，请先执行站点 migrate。"))
+	closure = _daily_closure_document(company, state["attendance_date"]) or frappe.new_doc(DAILY_CLOSURE_DOCTYPE)
+	closure.update({
+		"company": company,
+		"attendance_month": attendance_month,
+		"attendance_date": state["attendance_date"],
+		"status": "已锁定",
+		"validation_status": "通过",
+		"total_rows": state["total_rows"],
+		"matched_rows": state["matched_rows"],
+		"unmatched_rows": 0,
+		"pending_exception_rows": 0,
+		"corrected_rows": state["corrected_rows"],
+		"source_batch_ids": ",".join(state["source_batch_ids"]),
+		"source_checksum": state["source_checksum"],
+		"validation_message": state["validation_message"],
+		"validated_by": frappe.session.user,
+		"validated_on": now_datetime(),
+		"locked_by": frappe.session.user,
+		"locked_on": now_datetime(),
+		"remarks": (remarks or "").strip(),
+	})
+	closure.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {**state, "status": closure.status, "locked": True, "closure": closure.name}
+
+
+def _daily_check_item(row):
+	"""Adapt the canonical DingTalk/API day-check row for the daily workbench."""
+	return {
+		"attendance_date": str(getattr(row, "attendance_date", "") or ""),
+		"employee_name": getattr(row, "employee_name", "") or "",
+		"employee_code": getattr(row, "employee_code", "") or "",
+		"department": _display_department(getattr(row, "department", "") or ""),
+		"date_type": getattr(row, "date_type", "") or "",
+		"shift": getattr(row, "shift_name", "") or "",
+		"clock_in": str(getattr(row, "actual_in_time", "") or ""),
+		"clock_out": str(getattr(row, "actual_out_time", "") or ""),
+		"standard_hours": getattr(row, "standard_hours", 0) or 0,
+		"actual_attendance_hours": getattr(row, "actual_attendance_hours", 0) or 0,
+		"workday_overtime_hours": getattr(row, "workday_overtime_hours", 0) or 0,
+		"restday_overtime_hours": getattr(row, "restday_overtime_hours", 0) or 0,
+		"holiday_overtime_hours": getattr(row, "holiday_overtime_hours", 0) or 0,
+		"clock_in_missing": getattr(row, "missing_in", 0) or 0,
+		"clock_out_missing": getattr(row, "missing_out", 0) or 0,
+		"source_kind": getattr(row, "source_kind", "") or "",
+	}
+
+
 @frappe.whitelist()
 def list_daily_attendance_records(company: str, attendance_month: str, attendance_date: str = "", page_length: int = 500):
 	"""Show the raw DingTalk daily-detail rows behind the monthly draft source.
@@ -3492,13 +3833,64 @@ def list_daily_attendance_records(company: str, attendance_month: str, attendanc
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
 	if attendance_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", attendance_date):
 		frappe.throw(_("查看日期格式应为 YYYY-MM-DD。"))
+	from hrms.api import attendance_import
+
+	canonical_rows = attendance_import.list_attendance_day_checks(
+		company=company,
+		attendance_month=attendance_month,
+		attendance_date=attendance_date,
+		effective_only=1,
+		page_length=5000,
+	)
+	if canonical_rows:
+		items = [_daily_check_item(row) for row in canonical_rows]
+		items.sort(key=lambda item: (item["attendance_date"], str(item["department"]), str(item["employee_code"])))
+		available_dates = sorted({item["attendance_date"] for item in items if item["attendance_date"]})
+		return {
+			"items": items[: min(max(cint(page_length), 1), 5000)],
+			"total_count": len(items),
+			"excluded_missing_employee_code_rows": 0,
+			"available_dates": available_dates,
+			"source_file_name": _("钉钉同步日考勤 / 有效核对记录"),
+			"source_file_url": "",
+			"batch_status": "已导入",
+			"daily_workflow": _daily_workflow_state(company, attendance_month, attendance_date) if attendance_date else _daily_month_workflow(company, attendance_month),
+			"notice": "",
+		}
 	batch = _latest_batch(company, attendance_month, "attendance_draft")
 	if not batch:
-		return {"items": [], "available_dates": [], "source_file_name": "", "notice": _("请先导入该月钉钉日考勤明细。")}
-	workbook = _load_workbook(batch.source_file)
+		return {
+			"items": [],
+			"available_dates": [],
+			"source_file_name": "",
+			"daily_workflow": _daily_workflow_state(company, attendance_month, attendance_date) if attendance_date else _daily_month_workflow(company, attendance_month),
+			"notice": _("请先导入该月钉钉日考勤明细。"),
+		}
+	try:
+		workbook = _load_workbook(batch.source_file)
+	except (FileNotFoundError, OSError):
+		# The File row can survive a container recreation even when the site
+		# volume was not persisted. Keep the daily page usable and tell HR how
+		# to recover the source instead of exposing a raw server traceback.
+		return {
+			"items": [],
+			"available_dates": [],
+			"source_file_name": batch.source_file.rsplit("/", 1)[-1],
+			"source_file_url": batch.source_file,
+			"batch_status": batch.status,
+			"daily_workflow": _daily_workflow_state(company, attendance_month, attendance_date) if attendance_date else _daily_month_workflow(company, attendance_month),
+			"notice": _("服务器文件存储中找不到来源文件“{0}”。请重新上传该月日考勤文件，或重新同步钉钉考勤；原导入记录仍保留。").format(batch.source_file.rsplit("/", 1)[-1]),
+			"error": "source_file_missing",
+		}
 	sheet = _attendance_draft_sheet(workbook)
 	if not sheet:
-		return {"items": [], "available_dates": [], "source_file_name": batch.source_file.rsplit("/", 1)[-1], "notice": _("考勤初稿中未找到可识别的钉钉每日数据表。")}
+		return {
+			"items": [],
+			"available_dates": [],
+			"source_file_name": batch.source_file.rsplit("/", 1)[-1],
+			"daily_workflow": _daily_workflow_state(company, attendance_month, attendance_date) if attendance_date else _daily_month_workflow(company, attendance_month),
+			"notice": _("考勤初稿中未找到可识别的钉钉每日数据表。"),
+		}
 	rows = rows_from_dingtalk_daily_sheet(sheet, source_file=batch.source_file)
 	available_dates = sorted({value for row in rows if (value := _daily_attendance_date(row.get("日期"))).startswith(attendance_month)})
 	items = []
@@ -3537,6 +3929,7 @@ def list_daily_attendance_records(company: str, attendance_month: str, attendanc
 		"source_file_name": batch.source_file.rsplit("/", 1)[-1],
 		"source_file_url": batch.source_file,
 		"batch_status": batch.status,
+		"daily_workflow": _daily_workflow_state(company, attendance_month, attendance_date) if attendance_date else _daily_month_workflow(company, attendance_month),
 		"notice": "",
 	}
 
@@ -3681,6 +4074,16 @@ def upsert_department_mapping(
 def _finalization_inputs(company, attendance_month, slots):
 	by_source = {slot["source_type"]: slot for slot in slots}
 	inputs = []
+	daily_workflow = _daily_month_workflow(company, attendance_month)
+	inputs.append({
+		"key": "daily_closure",
+		"source_type": "daily_closure",
+		"label": "日考勤修改后校验",
+		"kind": "日考勤闭环",
+		"status": "已锁定" if daily_workflow["ready"] and daily_workflow["required"] else "无需启用" if not daily_workflow["required"] else "待处理",
+		"ready": bool(daily_workflow["ready"]),
+		"daily_workflow": daily_workflow,
+	})
 	for source_type in SOURCE_TYPES:
 		slot = by_source.get(source_type)
 		# Confirmation is the final decision for a main source.  Rows that remain
@@ -3724,6 +4127,15 @@ def _first_signed_inputs(company, attendance_month, slots):
 	"""Build the narrower gate for the first-signature attendance form."""
 	by_source = {slot["source_type"]: slot for slot in slots}
 	inputs = []
+	daily_workflow = _daily_month_workflow(company, attendance_month)
+	inputs.append({
+		"key": "daily_closure",
+		"source_type": "daily_closure",
+		"label": "日考勤修改后校验",
+		"status": "已锁定" if daily_workflow["ready"] and daily_workflow["required"] else "无需启用" if not daily_workflow["required"] else "待处理",
+		"ready": bool(daily_workflow["ready"]),
+		"daily_workflow": daily_workflow,
+	})
 	for source_type in FIRST_SIGNED_SOURCE_TYPES:
 		slot = by_source.get(source_type)
 		ready = bool(slot and slot["status"] == "已确认")
@@ -3770,7 +4182,7 @@ FIRST_SIGNED_COLUMNS = (
 	("date_of_joining", "入职时间"), ("standard_hours", "标准工时（小时）"), ("actual_attendance_hours", "实际出勤（小时）"),
 	("special_workday_hours", "平特"), ("special_restday_hours", "周特"), ("special_holiday_hours", "节假日特"),
 	("workday_overtime_hours", "工作日加班（小时）"), ("restday_overtime_hours", "休息日加班（小时）"), ("holiday_overtime_hours", "节假日加班（小时）"),
-	("large_night_shifts", "大夜班（55元）"), ("large_night_shifts_45", "大夜班（45元）"), ("small_night_shifts", "小夜班"),
+	("deep_night_shifts", "深夜班"), ("large_night_shifts", "大夜班"), ("small_night_shifts", "小夜班"),
 	("personal_leave_hours", "事假(小时)"), ("sick_leave_hours", "病假(小时)"), ("annual_leave_hours", "特休(小时)"),
 	("work_injury_hours", "工伤(小时)"), ("rest_arrangement_hours", "排休(小时)"), ("absence_hours", "旷工(小时)"),
 	("reunion_leave_hours", "团圆假(小时)"), ("employee_signature", "签名"), ("review_note", "备注"),
@@ -3924,8 +4336,8 @@ def _attendance_final_excel_config_hash() -> str:
 
 # Version ten invalidates previous files and also fingerprints heading changes,
 # so an edited Settings table cannot accidentally keep an old export.
-MONTHLY_FINAL_LAYOUT_VERSION = 11
-FIRST_SIGNED_LAYOUT_VERSION = 1
+MONTHLY_FINAL_LAYOUT_VERSION = 12
+FIRST_SIGNED_LAYOUT_VERSION = 2
 
 
 # The employee-facing file deliberately follows the paper confirmation form
@@ -4209,9 +4621,6 @@ def _monthly_first_signed_rows(batches: dict[str, Any], employee_code: str = "")
 	for sequence, row in enumerate(rows, start=1):
 		row["sequence"] = sequence
 		row["date_of_joining"] = joining_dates.get(str(row.get("employee_code") or "").strip(), "")
-		# The supplied first-signature form has a 45-yuan column, but the current
-		# attendance source does not distinguish that rate at this stage.
-		row["large_night_shifts_45"] = ""
 		for field in ("special_workday_hours", "special_restday_hours", "special_holiday_hours"):
 			row.setdefault(field, "")
 	return rows
@@ -4311,7 +4720,7 @@ def _save_monthly_finance_confirmation_file(attendance_month: str, rows):
 	# span both heading rows; overtime columns sit beneath the grouped heading.
 	vertical_headers = {
 		"A": "序号", "B": "部门", "C": "姓名", "D": "标准工时\n（小时）", "E": "钉钉导出\n实际出勤\n（小时）",
-		"J": "大夜\n班（55\n元）", "K": "大夜\n班（45\n元）", "L": "小\n夜\n班", "M": "旷工\n（小时）\n工时扣3\n倍",
+		"J": "深\n夜\n班", "K": "大\n夜\n班", "L": "小\n夜\n班", "M": "旷工\n（小时）\n工时扣3\n倍",
 		"N": "绿\n苹\n果", "O": "红苹果\n（包含\n忘打卡）", "P": "住房\n补贴", "Q": "全勤\n（含迟\n到）", "R": "签名", "S": "备注",
 	}
 	for column, label in vertical_headers.items():
@@ -4377,8 +4786,8 @@ def _save_monthly_finance_confirmation_file(attendance_month: str, rows):
 			calculation["settlement_15"],
 			calculation["settlement_20"],
 			calculation["settlement_30"],
+			_as_number(row.get("deep_night_shifts")),
 			_as_number(row.get("large_night_shifts")),
-			"",  # The current source does not distinguish the 45-yuan large-night rate.
 			_as_number(row.get("small_night_shifts")),
 			_as_number(row.get("absence_hours")),
 			_as_number(row.get("green_apple_amount")),
@@ -4470,7 +4879,7 @@ def _save_monthly_first_signed_confirmation_file(attendance_month: str, rows, da
 		"B3": "序号", "C3": "部门", "D3": "姓名", "E3": "工号", "F3": "入职时间",
 		"G3": "标准工时\n（小时）", "H3": "实际出勤\n（小时）", "I3": "特殊工时",
 		"L3": "工作日加班\n（小时）", "M3": "休息日加班\n（小时）", "N3": "节假日加班\n（小时）",
-		"O3": "大夜班\n（55元）", "P3": "大夜班\n（45元）", "Q3": "小夜班",
+		"O3": "深夜班", "P3": "大夜班", "Q3": "小夜班",
 		"R3": "请假", "Y3": "签名", "Z3": "备注",
 	}
 	for coordinate, value in top_headers.items():
@@ -4518,7 +4927,7 @@ def _save_monthly_first_signed_confirmation_file(attendance_month: str, rows, da
 			row.get("sequence", excel_row - 4), _display_department(row.get("department")), row.get("employee_name") or "", row.get("employee_code") or "", row.get("date_of_joining") or "",
 			export_number(row.get("standard_hours")), export_number(row.get("actual_attendance_hours")),
 			export_number(row.get("special_workday_hours")), export_number(row.get("special_restday_hours")), export_number(row.get("special_holiday_hours")), export_number(row.get("workday_overtime_hours")), export_number(row.get("restday_overtime_hours")), export_number(row.get("holiday_overtime_hours")),
-			export_number(row.get("large_night_shifts")), "", export_number(row.get("small_night_shifts")), export_number(row.get("personal_leave_hours")), export_number(row.get("sick_leave_hours")),
+			export_number(row.get("deep_night_shifts")), export_number(row.get("large_night_shifts")), export_number(row.get("small_night_shifts")), export_number(row.get("personal_leave_hours")), export_number(row.get("sick_leave_hours")),
 			export_number(row.get("annual_leave_hours")), export_number(row.get("work_injury_hours")), export_number(row.get("rest_arrangement_hours")), export_number(row.get("absence_hours")), export_number(row.get("reunion_leave_hours")),
 			row.get("employee_signature") or "", row.get("review_note") or "",
 		]
@@ -4702,6 +5111,9 @@ def generate_first_signed_file(company: str, attendance_month: str, snapshot_ver
 	_require_processing_manager()
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
 	state = get_processing_batch(company, attendance_month)
+	daily_workflow = state.get("daily_workflow") or {}
+	if daily_workflow.get("required") and not daily_workflow.get("ready"):
+		return {"blocked": True, "reason": _("请先完成日考勤修改后校验和每日锁定。"), "daily_workflow": daily_workflow}
 	readiness = state["first_signed_inputs"]
 	blocked = [item for item in readiness if not item["ready"]]
 	if blocked:
@@ -4738,6 +5150,9 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 	_require_processing_manager()
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
 	state = get_processing_batch(company, attendance_month)
+	daily_workflow = state.get("daily_workflow") or {}
+	if daily_workflow.get("required") and not daily_workflow.get("ready"):
+		return {"blocked": True, "reason": _("请先完成日考勤修改后校验和每日锁定。"), "daily_workflow": daily_workflow}
 	readiness = state["finalization_inputs"]
 	blocked = [item for item in readiness if not item["ready"]]
 	if blocked:

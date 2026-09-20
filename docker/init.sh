@@ -46,10 +46,19 @@ patch_chinese_chart_periods() {
     ./env/bin/python /workspace/docker/patch_chinese_chart_periods.py
 }
 
+configure_web_bind() {
+    if grep -qE '^web:[[:space:]]*bench serve' ./Procfile; then
+        sed -i -E 's|^web:[[:space:]]*bench serve.*$|web: bench serve --host 0.0.0.0 --port 8000|' ./Procfile
+    elif ! grep -qE '^web:' ./Procfile; then
+        printf '\nweb: bench serve --host 0.0.0.0 --port 8000\n' >> ./Procfile
+    fi
+}
+
 if [ -d "/home/frappe/frappe-bench/apps/frappe" ]; then
     echo "Bench already exists, skipping init"
     cd frappe-bench
     link_hrms_assets
+    configure_web_bind
     bench start
 else
     echo "Creating new bench..."
@@ -77,6 +86,7 @@ bench set-redis-socketio-host redis://redis:6379
 # Remove redis, watch from Procfile
 sed -i '/redis/d' ./Procfile || true
 sed -i '/watch/d' ./Procfile || true
+configure_web_bind
 
 if [ ! -d "apps/erpnext" ]; then
     run_with_retries bench get-app --branch develop https://gitee.com/mirrors/erpnext.git

@@ -324,7 +324,7 @@ for (const forbiddenMarker of ["download_exception_workbook", "download_exceptio
 const attendanceViewGroupsStart = attendancePageJs.indexOf("this.view_groups = [");
 const attendanceViewGroupsEnd = attendancePageJs.indexOf("this.view_map =", attendanceViewGroupsStart);
 const attendanceViewGroups = attendancePageJs.slice(attendanceViewGroupsStart, attendanceViewGroupsEnd);
-for (const [earlier, later] of [["月度终稿", "异常处理"], ["异常处理", "加工结果"]]) {
+for (const [earlier, later] of [["异常处理", "加工结果"], ["加工结果", "月度终稿"], ["月度终稿", "日考勤"]]) {
 	if (attendanceViewGroups.indexOf(earlier) >= attendanceViewGroups.indexOf(later)) {
 		throw new Error(`Attendance workflow order must be ${earlier} → ${later}.`);
 	}
@@ -523,6 +523,9 @@ for (const marker of [
 	"unlock_attendance_month",
 	"list_attendance_department_confirmations",
 	"review_attendance_department_confirmation",
+	"get_daily_attendance_workflow",
+	"validate_daily_attendance_after_review",
+	"close_daily_attendance",
 	"HRMS Attendance Department Confirmation",
 	"_attendance_scope_filters",
 	"TEST_ATTENDANCE_DEMO_COMPANY",
@@ -540,6 +543,7 @@ for (const [folder, markers] of [
 	["hrms_attendance_month_lock", ["HRMS Attendance Month Lock", "company", "attendance_month", "active_version", "status"]],
 	["hrms_attendance_lock_audit", ["HRMS Attendance Lock Audit", "company", "attendance_month", "action", "reason", "lock_version"]],
 	["hrms_attendance_department_confirmation", ["HRMS Attendance Department Confirmation", "company", "attendance_month", "department", "confirmation_status", "attendance_lock_version"]],
+	["hrms_attendance_daily_closure", ["HRMS Attendance Daily Closure", "company", "attendance_month", "attendance_date", "validation_status", "source_checksum", "locked_by"]],
 ]) {
 	const jsonPath = mustExist(`hrms/hr/doctype/${folder}/${folder}.json`);
 	const pyPath = mustExist(`hrms/hr/doctype/${folder}/${folder}.py`);
@@ -579,6 +583,10 @@ for (const marker of [
 	"hrms-attendance-source-card",
 	"hrms-attendance-final-grid",
 	"hrms-attendance-trace",
+	"日考勤闭环",
+	"同步钉钉考勤",
+	"校验修改后数据",
+	"审核通过并锁定当天",
 ]) {
 	mustInclude(attendancePageJs, marker, `Attendance import center layout is missing marker: ${marker}`);
 }

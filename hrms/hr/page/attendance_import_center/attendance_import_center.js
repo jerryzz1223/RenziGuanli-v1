@@ -53,6 +53,7 @@ class AttendanceImportCenter {
 			{ key: "missing_card", label: "忘打卡" },
 		];
 		this.final_required_sources = [
+			{ key: "daily_closure", label: "日考勤修改后校验", kind: "日考勤闭环" },
 			{ key: "attendance_draft", label: "考勤初稿", kind: "主加工结果" },
 			{ key: "apple_tree", label: "苹果树", kind: "主加工结果" },
 			{ key: "missing_card", label: "忘打卡", kind: "主加工结果" },
@@ -73,19 +74,19 @@ class AttendanceImportCenter {
 		this.processing_result_sources = [...this.processing_sources, ...this.monthly_support_sources];
 		this.processing_statuses = ["未上传", "待加工", "导入异常", "待处理异常", "待确认", "已确认"];
 		this.workflow_views = [
-			{ key: "daily-attendance", label: "日考勤" },
-			{ key: "monthly-final", label: "月度终稿" },
 			{ key: "exceptions", label: "异常处理" },
 			{ key: "processing-results", label: "加工结果" },
+			{ key: "monthly-final", label: "月度终稿" },
+			{ key: "daily-attendance", label: "日考勤" },
 		];
 		this.view_groups = [
 			{
 				title: "考勤处理",
 				items: [
-					{ key: "daily-attendance", label: "日考勤" },
-					{ key: "monthly-final", label: "月度终稿" },
 					{ key: "exceptions", label: "异常处理" },
 					{ key: "processing-results", label: "加工结果" },
+					{ key: "monthly-final", label: "月度终稿" },
+					{ key: "daily-attendance", label: "日考勤" },
 				],
 			},
 			{
@@ -659,8 +660,12 @@ class AttendanceImportCenter {
 			"待确认": "is-review",
 			"已确认": "is-confirmed",
 			"已就绪": "is-confirmed",
+			"已锁定": "is-confirmed",
+			"通过": "is-confirmed",
 			"导入通过": "is-confirmed",
 			"导入错误": "is-warning",
+			"存在异常": "is-warning",
+			"无需启用": "is-neutral",
 		}[normalized] || "is-neutral";
 		return `<span class="hrms-attendance-processing-status ${className}">${this.escape(__(normalized))}</span>`;
 	}
@@ -730,19 +735,68 @@ class AttendanceImportCenter {
 		const excludedNotice = Number(data.excluded_missing_employee_code_rows || 0)
 			? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("已排除 {0} 条非员工账号记录", [data.excluded_missing_employee_code_rows]))}</strong><span>${this.escape(__("这些行缺少工号，可能是车间/设备等共享账号；不会显示为员工，也不会进入考勤初稿异常。"))}</span></div>`
 			: "";
-		return `<div class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("日考勤"))}</h3><small>${this.escape(__("导入钉钉每日明细后，可按日期查看原始打卡、班次、出勤、加班与缺卡。它与“考勤初稿”使用同一份来源文件，不会重复产生第二套数据。"))}</small></div><div><button class="btn btn-primary btn-sm" data-daily-upload>${this.escape(__(data.source_file_name ? "更新日考勤文件" : "导入日考勤文件"))}</button> <button class="btn btn-default btn-sm" data-daily-open-summary ${data.source_file_name ? "" : "disabled"}>${this.escape(__("进入考勤汇总加工"))}</button></div></div>${data.notice ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(data.error ? __("读取失败") : __("提示"))}</strong><span>${this.escape(data.notice)}</span></div>` : ""}${excludedNotice}<div class="hrms-attendance-result-controls"><label>${this.escape(__("查看日期"))}<select class="form-control input-sm" data-daily-date><option value="">${this.escape(__("全部日期"))}</option>${dates.map((value) => `<option value="${this.escape(value)}" ${value === this.daily_attendance_date ? "selected" : ""}>${this.escape(value)}</option>`).join("")}</select></label><span class="text-muted">${this.escape(data.source_file_name ? __("来源：{0}；当前显示 {1}/{2} 条", [data.source_file_name, rows.length, data.total_count ?? rows.length]) : __("尚未导入当月日考勤文件。"))}</span></div><div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr>${headers.map((header) => `<th>${this.escape(__(header))}</th>`).join("")}</tr></thead><tbody>${loading ? `<tr><td colspan="${headers.length}" class="text-muted">${this.escape(__("正在读取日考勤明细..."))}</td></tr>` : rows.length ? rows.map(renderRow).join("") : `<tr><td colspan="${headers.length}" class="text-muted">${this.escape(__(data.source_file_name ? "当前筛选没有日考勤记录。" : "请先导入钉钉每日明细文件。"))}</td></tr>`}</tbody></table></div></div>`;
+		const workflow = data.daily_workflow || {};
+		const selectedDate = this.daily_attendance_date || "";
+		const workflowLabel = workflow.required === false ? "当前来源尚未形成日考勤闭环记录" : workflow.locked ? "当天已锁定" : workflow.validation_status === "通过" ? "修改后校验通过，待锁定" : workflow.validation_status === "存在异常" ? `仍有 ${workflow.unmatched_rows || 0} 条未匹配、${workflow.pending_exception_rows || 0} 条待处理异常` : "待执行修改后校验";
+		const dailyWorkflow = selectedDate ? `<section class="hrms-attendance-daily-closure"><div><strong>${this.escape(__("日考勤闭环"))}</strong><span>${this.escape(__(workflowLabel))}</span>${workflow.total_rows ? `<small>${this.escape(__("记录 {0} 条；已匹配 {1} 条；修改 {2} 条", [workflow.total_rows, workflow.matched_rows || 0, workflow.corrected_rows || 0]))}</small>` : ""}</div><div><button class="btn btn-default btn-sm" data-daily-validate ${workflow.can_validate ? "" : "disabled"}>${this.escape(__("校验修改后数据"))}</button> <button class="btn btn-primary btn-sm" data-daily-close ${workflow.can_lock ? "" : "disabled"}>${this.escape(__("审核通过并锁定当天"))}</button></div></section>` : `<section class="hrms-attendance-daily-closure"><div><strong>${this.escape(__("日考勤闭环"))}</strong><span>${this.escape(__(workflowLabel))}</span><small>${this.escape(__("请选择日期后执行修改后校验；已锁定日期才允许进入月考勤。"))}</small></div></section>`;
+		return `<div class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("日考勤"))}</h3><small>${this.escape(__("日考勤来源、修改审批和修改后校验在这里完成；原始钉钉数据不会被覆盖。"))}</small></div><div><button class="btn btn-primary btn-sm" data-daily-sync>${this.escape(__("同步钉钉考勤"))}</button> <button class="btn btn-default btn-sm" data-daily-upload>${this.escape(__(data.source_file_name ? "更新日考勤文件" : "导入日考勤文件"))}</button> <button class="btn btn-default btn-sm" data-daily-open-summary ${data.source_file_name ? "" : "disabled"}>${this.escape(__("进入考勤汇总加工"))}</button></div></div>${data.notice ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(data.error ? __("读取失败") : __("提示"))}</strong><span>${this.escape(data.notice)}</span></div>` : ""}${excludedNotice}${dailyWorkflow}<div class="hrms-attendance-result-controls"><label>${this.escape(__("查看日期"))}<select class="form-control input-sm" data-daily-date><option value="">${this.escape(__("全部日期"))}</option>${dates.map((value) => `<option value="${this.escape(value)}" ${value === this.daily_attendance_date ? "selected" : ""}>${this.escape(value)}</option>`).join("")}</select></label><span class="text-muted">${this.escape(data.source_file_name ? __("来源：{0}；当前显示 {1}/{2} 条", [data.source_file_name, rows.length, data.total_count ?? rows.length]) : __("尚未导入当月日考勤文件。"))}</span></div><div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr>${headers.map((header) => `<th>${this.escape(__(header))}</th>`).join("")}</tr></thead><tbody>${loading ? `<tr><td colspan="${headers.length}" class="text-muted">${this.escape(__("正在读取日考勤明细..."))}</td></tr>` : rows.length ? rows.map(renderRow).join("") : `<tr><td colspan="${headers.length}" class="text-muted">${this.escape(__(data.source_file_name ? "当前筛选没有日考勤记录。" : "请先导入钉钉每日明细文件。"))}</td></tr>`}</tbody></table></div></div>`;
 	}
 
 	render_daily_attendance() {
 		const body = this.body();
 		if (!body) return;
 		body.innerHTML = this.render_daily_attendance_markup(this.daily_attendance_data || {}, false);
+		body.querySelector("[data-daily-sync]")?.addEventListener("click", () => this.sync_dingtalk_attendance_for_date());
 		body.querySelector("[data-daily-upload]")?.addEventListener("click", () => this.open_slot_uploader("attendance_draft"));
 		body.querySelector("[data-daily-open-summary]")?.addEventListener("click", () => this.set_view("monthly-final"));
+		body.querySelector("[data-daily-validate]")?.addEventListener("click", () => this.validate_daily_attendance_day());
+		body.querySelector("[data-daily-close]")?.addEventListener("click", () => this.close_daily_attendance_day());
 		body.querySelector("[data-daily-date]")?.addEventListener("change", (event) => {
 			this.daily_attendance_date = event.currentTarget.value;
 			this.load_daily_attendance();
 		});
+	}
+
+	validate_daily_attendance_day() {
+		if (!this.ensure_company() || !this.daily_attendance_date) return;
+		this.call_processing_api("validate_daily_attendance_after_review", {
+			company: this.company,
+			attendance_month: this.attendance_month,
+			attendance_date: this.daily_attendance_date,
+		}, {
+			freeze: true,
+			freeze_message: __("正在校验修改后的员工匹配、异常和来源版本..."),
+			on_success: (data) => {
+				frappe.show_alert({ message: data.validation_message || __("日考勤校验已完成。"), indicator: data.validation_status === "通过" ? "green" : "orange" });
+				this.load_daily_attendance();
+			},
+			on_error: (message) => frappe.msgprint(message),
+		});
+	}
+
+	close_daily_attendance_day() {
+		if (!this.ensure_company() || !this.daily_attendance_date) return;
+		const dialog = new frappe.ui.Dialog({
+			title: __("审核通过并锁定当天考勤"),
+			fields: [{ fieldtype: "Small Text", fieldname: "remarks", label: __("审核备注"), description: __("锁定后当天数据不能普通修改；后续修订必须新增版本。") }],
+			primary_action_label: __("确认锁定当天"),
+			primary_action: (values) => this.call_processing_api("close_daily_attendance", {
+				company: this.company,
+				attendance_month: this.attendance_month,
+				attendance_date: this.daily_attendance_date,
+				remarks: values.remarks || "",
+			}, {
+				freeze: true,
+				freeze_message: __("正在锁定当天考勤并记录审核人..."),
+				on_success: (data) => {
+					dialog.hide();
+					frappe.show_alert({ message: __("{0} 已锁定，月考勤将使用该版本。", [data.attendance_date]), indicator: "green" });
+					this.load_daily_attendance();
+				},
+				on_error: (message) => frappe.msgprint(message),
+			}),
+		});
+		dialog.show();
 	}
 
 	render_attendance_summary_markup(batch = this.processing_batch) {
@@ -1035,7 +1089,7 @@ class AttendanceImportCenter {
 			created_at: "创建时间", punch_time: "补卡时间", punch_type: "补卡类型", reason: "补卡理由", approval_result: "审批结果", approval_status: "审批状态",
 			included: "是否计入", red_apples: "红苹果", amount: "红苹果金额",
 			workday_overtime_hours: "工作日加班工时", restday_overtime_hours: "休息日加班工时", holiday_overtime_hours: "节假日加班工时",
-			large_night_shifts: "大夜班次数", small_night_shifts: "小夜班次数", personal_leave_hours: "事假工时", sick_leave_hours: "病假工时",
+			deep_night_shifts: "深夜班次数", large_night_shifts: "大夜班次数", small_night_shifts: "小夜班次数", personal_leave_hours: "事假工时", sick_leave_hours: "病假工时",
 			annual_leave_hours: "特休工时", work_injury_hours: "工伤工时", rest_arrangement_hours: "排休工时", absence_hours: "旷工工时",
 			absence_marker_count: "旷工标记次数", late_count: "迟到次数", early_count: "早退次数",
 			clock_in_missing_count: "上班漏打卡次数", clock_out_missing_count: "下班漏打卡次数", source_row_count: "来源明细行数",
@@ -1099,7 +1153,7 @@ class AttendanceImportCenter {
 		return [
 			["employee_name", "姓名"], ["employee_code", "工号"], ["department", "部门"], ["standard_hours", "标准工时"],
 			["actual_attendance_hours", "实际出勤"], ["workday_overtime_hours", "工作日加班"], ["restday_overtime_hours", "休息日加班"],
-			["holiday_overtime_hours", "节假日加班"], ["large_night_shifts", "大夜班"], ["small_night_shifts", "小夜班"],
+			["holiday_overtime_hours", "节假日加班"], ["deep_night_shifts", "深夜班"], ["large_night_shifts", "大夜班"], ["small_night_shifts", "小夜班"],
 			["personal_leave_hours", "事假"], ["sick_leave_hours", "病假"], ["annual_leave_hours", "特休"], ["work_injury_hours", "工伤"],
 			["rest_arrangement_hours", "排休"], ["absence_hours", "旷工工时"], ["absence_marker_count", "旷工标记"], ["late_count", "迟到"], ["early_count", "早退"],
 			["clock_in_missing_count", "上班漏打卡"], ["clock_out_missing_count", "下班漏打卡"], ["exception_events", "异常事件（员工＋日期）"], ["attendance_details", "异常日期"],
@@ -1486,6 +1540,23 @@ class AttendanceImportCenter {
 		);
 	}
 
+	parse_attendance_time_minutes(value) {
+		const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+		if (!match) return null;
+		const hour = Number(match[1]);
+		const minute = Number(match[2]);
+		if (!Number.isInteger(hour) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+		return hour * 60 + minute;
+	}
+
+	restday_overtime_hours_from_range(startTime, endTime) {
+		const startMinutes = this.parse_attendance_time_minutes(startTime);
+		const endMinutes = this.parse_attendance_time_minutes(endTime);
+		if (startMinutes === null || endMinutes === null || startMinutes === endMinutes) return null;
+		const durationMinutes = endMinutes > startMinutes ? endMinutes - startMinutes : endMinutes + 24 * 60 - startMinutes;
+		return Math.round((durationMinutes / 60) * 100) / 100;
+	}
+
 	open_attendance_daily_row_editor(recordId, sourceRow, restdayOvertimeCorrection = false) {
 		this.call_processing_api(
 			"get_processing_record",
@@ -1500,30 +1571,52 @@ class AttendanceImportCenter {
 					const editableFields = restdayOvertimeCorrection
 						? (dailyRow.editable_fields || []).filter((field) => field.label === "休息日加班（小时）")
 						: (dailyRow.editable_fields || []);
-					const fields = editableFields.map((field, index) => ({
-						fieldtype: "Data",
-						fieldname: `daily_value_${index}`,
-						label: field.label,
-						default: field.value ?? "",
-					}));
+					let dialog;
+					const fields = restdayOvertimeCorrection
+						? [
+							{ fieldtype: "Section Break", label: __("休息日加班时间段") },
+							{ fieldtype: "Data", fieldname: "restday_overtime_start", label: __("开始时间"), placeholder: "HH:mm", reqd: 1 },
+							{ fieldtype: "Column Break" },
+							{ fieldtype: "Data", fieldname: "restday_overtime_end", label: __("结束时间"), placeholder: "HH:mm", reqd: 1 },
+							{
+								fieldtype: "HTML",
+								fieldname: "restday_overtime_preview",
+								options: `<div class="hrms-attendance-time-range-preview text-muted">${this.escape(__("填写开始时间和结束时间，系统按时间段自动计算加班工时。"))}</div>`,
+							},
+						]
+						: editableFields.map((field, index) => ({
+							fieldtype: "Data",
+							fieldname: `daily_value_${index}`,
+							label: field.label,
+							default: field.value ?? "",
+						}));
 					fields.unshift({
 						fieldtype: "HTML",
-						options: `<div class="hrms-attendance-dialog-note"><strong>${this.escape(__("钉钉原始行：{0} / 第 {1} 行", [dailyRow.attendance_date || "--", dailyRow.source_row]))}</strong><br>${this.escape(__(restdayOvertimeCorrection ? "该日期是休息日且已有打卡。请按已核对的实际时长填写“休息日加班（小时）”；不会修改上传的 Excel 原件，并会保留原值、原因和操作人。" : "在这里修改的值会保留原值、原因和操作人，并重新汇总该员工当月数据；不会修改上传的 Excel 原件。"))}</div>`,
+						options: `<div class="hrms-attendance-dialog-note"><strong>${this.escape(__("钉钉原始行：{0} / 第 {1} 行", [dailyRow.attendance_date || "--", dailyRow.source_row]))}</strong><br>${this.escape(__(restdayOvertimeCorrection ? "该日期已由异常行确定。请填写已核对的休息日加班开始和结束时间，系统会自动换算加班工时；不会修改上传的 Excel 原件，并会保留原值、原因和操作人。" : "在这里修改的值会保留原值、原因和操作人，并重新汇总该员工当月数据；不会修改上传的 Excel 原件。"))}</div>`,
 					});
 					fields.push(
 						{ fieldtype: "Select", fieldname: "review_status", label: __("处理结果"), options: ["已通过", "待审核", "已驳回"].map((value) => __(value)).join("\n"), default: __("已通过"), reqd: 1 },
 						{ fieldtype: "Small Text", fieldname: "reason", label: __("修改原因"), reqd: 1 },
 					);
-					const dialog = new frappe.ui.Dialog({
+					dialog = new frappe.ui.Dialog({
 						title: __(restdayOvertimeCorrection ? "补录休息日加班：{0} {1}" : "修改钉钉每日数据：{0} {1}", [record.employee_code || "", record.employee_name || ""]),
 						fields,
 						primary_action_label: __("保存本日修改并重新汇总"),
 						primary_action: (values) => {
 							const changes = {};
-							editableFields.forEach((field, index) => {
-								const next = values[`daily_value_${index}`] ?? "";
-								if (String(next) !== String(field.value ?? "")) changes[field.fieldname] = next;
-							});
+							if (restdayOvertimeCorrection) {
+								const hours = this.restday_overtime_hours_from_range(values.restday_overtime_start, values.restday_overtime_end);
+								if (hours === null || hours <= 0) {
+									frappe.msgprint(__("请填写有效的开始和结束时间；结束时间可以小于开始时间，表示次日结束。"));
+									return;
+								}
+								if (editableFields[0]) changes[editableFields[0].fieldname] = hours;
+							} else {
+								editableFields.forEach((field, index) => {
+									const next = values[`daily_value_${index}`] ?? "";
+									if (String(next) !== String(field.value ?? "")) changes[field.fieldname] = next;
+								});
+							}
 							if (!Object.keys(changes).length) {
 								frappe.msgprint(__("未修改任何字段。"));
 								return;
@@ -1547,6 +1640,22 @@ class AttendanceImportCenter {
 						},
 					});
 					dialog.show();
+					if (restdayOvertimeCorrection) {
+						const updatePreview = () => {
+							const preview = dialog.get_field("restday_overtime_preview");
+							if (!preview) return;
+							const start = dialog.get_value("restday_overtime_start");
+							const end = dialog.get_value("restday_overtime_end");
+							const hours = this.restday_overtime_hours_from_range(start, end);
+							const message = hours === null
+								? __("填写开始时间和结束时间，系统按时间段自动计算加班工时。")
+								: __("当前时间段折算加班工时：{0} 小时", [hours]);
+							preview.$wrapper.find(".hrms-attendance-time-range-preview").text(message);
+						};
+						dialog.get_field("restday_overtime_start")?.$input?.on("change", updatePreview);
+						dialog.get_field("restday_overtime_end")?.$input?.on("change", updatePreview);
+						updatePreview();
+					}
 				},
 				on_error: (message) => frappe.msgprint(message),
 			},
@@ -1979,13 +2088,14 @@ class AttendanceImportCenter {
 		const supplied = new Map((batch.first_signed_inputs || []).map((item) => [item.source_type || item.key, item]));
 		const slots = new Map((batch.slots || []).map((slot) => [slot.source_type, slot]));
 		return [
+			{ key: "daily_closure", label: "日考勤修改后校验" },
 			{ key: "attendance_draft", label: "考勤初稿" },
 			{ key: "missing_card", label: "忘打卡" },
 		].map((source) => {
 			const external = supplied.get(source.key);
 			const slot = slots.get(source.key);
-			const status = external?.status || slot?.status || "未就绪";
-			return { ...source, ...(external || {}), ready: Boolean(external?.ready ?? slot?.status === "已确认"), status };
+			const status = external?.status || slot?.status || (source.key === "daily_closure" ? "待处理" : "未就绪");
+			return { ...source, ...(external || {}), ready: Boolean(external?.ready ?? (source.key === "daily_closure" ? batch.daily_workflow?.ready : slot?.status === "已确认")), status };
 		});
 	}
 

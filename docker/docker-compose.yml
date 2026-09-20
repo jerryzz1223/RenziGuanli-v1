@@ -28,6 +28,9 @@ services:
     working_dir: /home/frappe
     volumes:
       - ..:/workspace
+      # Keep site configuration and uploaded private/public files when the
+      # frappe container is recreated. MariaDB alone cannot restore File data.
+      - frappe-sites:/home/frappe/frappe-bench/sites
     ports:
       - 8000:8000
       - 9000:9000
@@ -37,3 +40,4 @@ services:
 
 volumes:
   mariadb-data:
+  frappe-sites:

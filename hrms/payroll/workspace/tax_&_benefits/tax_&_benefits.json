@@ -1,7 +1,7 @@
 {
  "app": "hrms",
  "charts": [],
- "content": "[{\"id\":\"MUnSuJ_4ZW\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Masters &amp; Reports</b></span>\",\"col\":12}},{\"id\":\"rgbG6r_PeK\",\"type\":\"card\",\"data\":{\"card_name\":\"Tax Setup\",\"col\":4}},{\"id\":\"yJJhpwR32W\",\"type\":\"card\",\"data\":{\"card_name\":\"Exemption\",\"col\":4}},{\"id\":\"fklpIA_dvG\",\"type\":\"card\",\"data\":{\"card_name\":\"Benefits\",\"col\":4}},{\"id\":\"V_L6VdkAlV\",\"type\":\"card\",\"data\":{\"card_name\":\"Reports\",\"col\":4}}]",
+ "content": "[{\"id\":\"MUnSuJ_4ZW\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>社保个税服务</b></span>\",\"col\":12}},{\"id\":\"social_security_card\",\"type\":\"card\",\"data\":{\"card_name\":\"社保与公积金\",\"col\":3}},{\"id\":\"income_tax_card\",\"type\":\"card\",\"data\":{\"card_name\":\"个人所得税\",\"col\":3}},{\"id\":\"benefits_card\",\"type\":\"card\",\"data\":{\"card_name\":\"福利服务\",\"col\":3}},{\"id\":\"reports_card\",\"type\":\"card\",\"data\":{\"card_name\":\"报表\",\"col\":3}}]",
  "creation": "2022-08-20 17:04:52.350699",
  "custom_blocks": [],
  "docstatus": 0,
@@ -11,132 +11,26 @@
  "icon": "money-coins-1",
  "idx": 1,
  "is_hidden": 0,
- "label": "Tax & Benefits",
+ "label": "社保个税",
  "links": [
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Benefits",
-   "link_count": 2,
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Employee Benefit Application",
-   "link_count": 0,
-   "link_to": "Employee Benefit Application",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Employee Benefit Claim",
-   "link_count": 0,
-   "link_to": "Employee Benefit Claim",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Tax Setup",
-   "link_count": 3,
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Income Tax Slab",
-   "link_count": 0,
-   "link_to": "Income Tax Slab",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Employee Tax Exemption Category",
-   "link_count": 0,
-   "link_to": "Employee Tax Exemption Category",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Employee Tax Exemption Sub Category",
-   "link_count": 0,
-   "link_to": "Employee Tax Exemption Sub Category",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Exemption",
-   "link_count": 2,
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Employee Tax Exemption Declaration",
-   "link_count": 0,
-   "link_to": "Employee Tax Exemption Declaration",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Employee Tax Exemption Proof Submission",
-   "link_count": 0,
-   "link_to": "Employee Tax Exemption Proof Submission",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "Reports",
-   "link_count": 2,
-   "onboard": 0,
-   "type": "Card Break"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 1,
-   "label": "Income Tax Computation",
-   "link_count": 0,
-   "link_to": "Income Tax Computation",
-   "link_type": "Report",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 1,
-   "label": "Income Tax Deductions",
-   "link_count": 0,
-   "link_to": "Income Tax Deductions",
-   "link_type": "Report",
-   "onboard": 0,
-   "type": "Link"
-  }
+  {"hidden": 0, "is_query_report": 0, "label": "社保与公积金", "link_count": 4, "onboard": 0, "type": "Card Break"},
+  {"hidden": 0, "is_query_report": 0, "label": "社保公积金输入", "link_count": 0, "link_to": "/desk/payroll-input-center/contribution-register", "link_type": "URL", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "社保公积金查看", "link_count": 0, "link_to": "/desk/payroll-input-center/contribution-view", "link_type": "URL", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "社保公积金申请修改", "link_count": 0, "link_to": "/desk/payroll-input-center/contribution-changes", "link_type": "URL", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "社保公积金审批", "link_count": 0, "link_to": "/desk/payroll-input-center/contribution-approvals", "link_type": "URL", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "个人所得税", "link_count": 4, "onboard": 0, "type": "Card Break"},
+  {"hidden": 0, "is_query_report": 0, "label": "所得税税率表", "link_count": 0, "link_to": "Income Tax Slab", "link_type": "DocType", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "个税免税类别", "link_count": 0, "link_to": "Employee Tax Exemption Category", "link_type": "DocType", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "个税免税子类别", "link_count": 0, "link_to": "Employee Tax Exemption Sub Category", "link_type": "DocType", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "个税月度变量", "link_count": 0, "link_to": "/desk/payroll-input-center/variables", "link_type": "URL", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "福利服务", "link_count": 2, "onboard": 0, "type": "Card Break"},
+  {"hidden": 0, "is_query_report": 0, "label": "福利申请", "link_count": 0, "link_to": "Employee Benefit Application", "link_type": "DocType", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "福利报销", "link_count": 0, "link_to": "Employee Benefit Claim", "link_type": "DocType", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "报表", "link_count": 2, "onboard": 0, "type": "Card Break"},
+  {"hidden": 0, "is_query_report": 1, "label": "所得税计算", "link_count": 0, "link_to": "Income Tax Computation", "link_type": "Report", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 1, "label": "所得税扣除", "link_count": 0, "link_to": "Income Tax Deductions", "link_type": "Report", "onboard": 0, "type": "Link"}
  ],
- "modified": "2026-01-09 17:58:37.952323",
+ "modified": "2026-09-18 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Payroll",
  "name": "Tax & Benefits",
@@ -148,6 +42,6 @@
  "roles": [],
  "sequence_id": 10.0,
  "shortcuts": [],
- "title": "Tax & Benefits",
+ "title": "社保个税",
  "type": "Workspace"
 }

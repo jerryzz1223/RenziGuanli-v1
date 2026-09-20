@@ -26,9 +26,10 @@ REVIEW_REJECTED = "已驳回"
 NUMERIC_FIELDS = {
 	"standard_hours": ("标准工时", "标准工时（小时）"),
 	"actual_attendance_hours": ("实际出勤（小时）", "实际出勤"),
-	"workday_overtime_hours": ("工作日加班（小时）",),
+	"workday_overtime_hours": ("工作日加班（小时）", "工作日加班(小时)", "工作日加班"),
 	"restday_overtime_hours": ("休息日加班（小时）",),
 	"holiday_overtime_hours": ("节假日加班（小时）",),
+	"deep_night_shifts": ("深夜班",),
 	"large_night_shifts": ("大夜班",),
 	"small_night_shifts": ("小夜班",),
 	"personal_leave_hours": ("请假/事假(小时)", "事假(小时)"),
@@ -525,7 +526,8 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 	department = next(iter(departments), "")
 	resolved_code, resolved_name, resolved_department, employee = _resolve_employee(raw_code, name, department, employee_index, codes)
 	totals = {field: Decimal("0") for field in NUMERIC_FIELDS}
-	deep_night_shifts = 0
+	scheduled_deep_night_shifts = 0
+	source_deep_night_present = False
 	source_rows = []
 	attendance_details = []
 	exception_events = []
@@ -543,8 +545,8 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		elif raw_code and date_counts[(raw_code, parsed_date)] > 1:
 			_add_code(codes, "ATTENDANCE_DATE_DUPLICATE")
 		shift = _value(row, IDENTITY_FIELDS["shift"])
-		is_deep_night_shift = is_production_deep_night_shift(shift)
-		deep_night_shifts += int(is_deep_night_shift)
+		is_scheduled_deep_night_shift = is_production_deep_night_shift(shift)
+		scheduled_deep_night_shifts += int(is_scheduled_deep_night_shift)
 		if not shift:
 			if _is_outside_employment_period(parsed_date, employee):
 				data_quality_events.append(_data_quality_event("BLANK_SHIFT_OUTSIDE_EMPLOYMENT", parsed_date, row_number))
@@ -562,6 +564,8 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		row_numbers = {fieldname: Decimal("0") for fieldname in NUMERIC_FIELDS}
 		for fieldname, aliases in NUMERIC_FIELDS.items():
 			value, exists = _field_value(row, aliases)
+			if fieldname == "deep_night_shifts" and exists:
+				source_deep_night_present = True
 			if not exists or _is_blank(value):
 				continue
 			number = _source_marker_number(value) if fieldname in {
@@ -573,6 +577,11 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			if fieldname == "reunion_leave_hours":
 				number *= Decimal("8")
 			row_numbers[fieldname] = number
+		is_deep_night_shift = (
+			row_numbers["deep_night_shifts"] > 0
+			if source_deep_night_present and _field_value(row, NUMERIC_FIELDS["deep_night_shifts"])[1]
+			else is_scheduled_deep_night_shift
+		)
 		row_standard_hours = row_numbers["standard_hours"]
 		row_actual_attendance_hours = row_numbers["actual_attendance_hours"]
 		row_leave_hours = sum(
@@ -686,6 +695,7 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 	# precisely which original daily rows caused the review.  These lines are a
 	# display/audit projection only; all their values come directly from DingTalk.
 	exception_lines = exception_lines_from_attendance_details(attendance_details, codes)
+	deep_night_shifts = totals["deep_night_shifts"] if source_deep_night_present else Decimal(scheduled_deep_night_shifts)
 	proposed = {
 		"employee_code": resolved_code or raw_code,
 		"employee_name": resolved_name or name,
@@ -695,6 +705,7 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		"night_shift_matching": {
 			"mode": "source_only",
 			"matched_large_night_shifts": 0,
+			"deep_night_source": "深夜班" if source_deep_night_present else "生产夜班排班兜底",
 			"deep_night_shift_rule": "生产夜班 20:00-次日08:00",
 		},
 		"attendance_details": attendance_details,

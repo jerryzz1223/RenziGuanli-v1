@@ -1678,6 +1678,14 @@ body.hrms-custom-drawer-active > .body-sidebar-container {
 	display: none !important;
 }
 
+/* The Desk dock is a second framework navigation rail. Leaving it in the
+ * flex row reserves another 220px behind the HRMS drawer and exposes its
+ * search/English menu through the drawer's translucent background. */
+body.hrms-custom-drawer-active > .dock,
+body.hrms-custom-drawer-active .dock {
+	display: none !important;
+}
+
 body.hrms-custom-drawer-active > .main-section {
 	flex: 1 1 auto !important;
 	margin-left: 0 !important;

@@ -25,6 +25,13 @@
 	color: var(--text-muted, #6b7280);
 }
 
+.hrms-attendance-time-range-preview {
+	background: var(--control-bg, #f8fafc);
+	border-radius: 4px;
+	margin-top: 2px;
+	padding: 8px 10px;
+}
+
 .hrms-attendance-list-actions {
 	align-items: flex-end;
 	display: flex;
@@ -1072,6 +1079,28 @@
 	align-items: center;
 	display: flex;
 	gap: 8px;
+}
+
+.hrms-attendance-daily-closure {
+	align-items: center;
+	background: var(--bg-light-gray, #f7f8fa);
+	border: 1px solid var(--border-color, #d1d8dd);
+	border-radius: 8px;
+	display: flex;
+	justify-content: space-between;
+	gap: 16px;
+	margin: 12px 0;
+	padding: 12px 16px;
+}
+
+.hrms-attendance-daily-closure > div:first-child {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+.hrms-attendance-daily-closure small {
+	color: var(--text-muted, #74808b);
 }
 
 @keyframes hrms-dingtalk-pulse {

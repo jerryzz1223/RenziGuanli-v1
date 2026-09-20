@@ -2992,6 +2992,11 @@ def create_attendance_manual_adjustment(name: str, changes: str | dict, reason: 
 	original = frappe.get_doc(DAY_CHECK_DOCTYPE, name)
 	attendance_month = getdate(original.attendance_date).strftime("%Y-%m")
 	_correction_version_for_import(original.company, attendance_month)
+	if frappe.db.exists("DocType", "HRMS Attendance Daily Closure") and frappe.db.exists(
+		"HRMS Attendance Daily Closure",
+		{"company": original.company, "attendance_date": original.attendance_date, "status": "已锁定"},
+	):
+		frappe.throw(_("{0} 已锁定，不能直接修改；请先按修订流程重新打开当天版本。").format(original.attendance_date))
 
 	matching_versions = frappe.get_all(
 		DAY_CHECK_DOCTYPE,

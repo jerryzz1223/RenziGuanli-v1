@@ -144,6 +144,7 @@
 			route: "/desk/payroll-input-center",
 			keys: [
 				"payroll-input-center",
+				"tax-&-benefits",
 				"payroll",
 				"salary-slip",
 				"salary-structure",

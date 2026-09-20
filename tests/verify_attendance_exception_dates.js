@@ -14,6 +14,11 @@ vm.runInNewContext(source, context, { filename: sourcePath });
 const center = Object.create(context.AttendanceImportCenter.prototype);
 center.attendance_month = "2026-07";
 
+assert.strictEqual(center.parse_attendance_time_minutes("08:30"), 510);
+assert.strictEqual(center.restday_overtime_hours_from_range("08:00", "17:30"), 9.5);
+assert.strictEqual(center.restday_overtime_hours_from_range("20:00", "04:30"), 8.5);
+assert.strictEqual(center.restday_overtime_hours_from_range("08:00", "08:00"), null);
+
 assert.strictEqual(center.processing_slot_status({status: "已确认", exception_count: 234}), "待处理异常");
 assert.strictEqual(center.processing_slot_status({status: "已确认", exception_count: 0}), "已确认");
 

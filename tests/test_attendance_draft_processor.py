@@ -403,6 +403,29 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 			[True, False, False],
 		)
 
+	def test_current_dingtalk_overtime_header_and_explicit_deep_night_are_loaded(self):
+		rows = [
+			{
+				"姓名": "张三", "工号": "E-001", "日期": "26-07-13", "实际部门": "连续课",
+				"班次": "生产夜班 20:00-次日04:30", "标准工时": 8, "工作日加班": 3.5, "深夜班": 1,
+				"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+			},
+			{
+				"姓名": "张三", "工号": "E-001", "日期": "26-07-14", "实际部门": "连续课",
+				"班次": "生产白班 08:00-16:30", "标准工时": 8, "工作日加班(小时)": 3, "深夜班": 0,
+				"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 4,
+			},
+		]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-07")["processed_rows"][0]
+
+		self.assertEqual(row["processed_value"]["workday_overtime_hours"], 6.5)
+		self.assertEqual(row["processed_value"]["deep_night_shifts"], 1)
+		self.assertEqual(row["processed_value"]["night_shift_matching"]["deep_night_source"], "深夜班")
+		self.assertEqual(
+			[detail.get("is_production_deep_night_shift", False) for detail in row["processed_value"]["attendance_details"]],
+			[True, False],
+		)
+
 	def test_department_group_and_section_suffixes_are_the_same_department(self):
 		rows = [{
 			"姓名": "朱耀辉", "工号": "164", "日期": "26-06-01", "实际部门": "设备组", "班次": "白班", "标准工时": 8,

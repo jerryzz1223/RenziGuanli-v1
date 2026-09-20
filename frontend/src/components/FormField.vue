@@ -154,6 +154,7 @@ import { Autocomplete, DateTimePicker, ErrorMessage, Input, TextEditor } from "f
 import { computed, onMounted, inject } from "vue"
 
 import Link from "@/components/Link.vue"
+import { hasFormFieldValue } from "@/utils/formFieldDefaults"
 import { normalizeSelectOptions } from "@/utils/formFieldOptions"
 
 const __ = inject("$translate")
@@ -215,7 +216,7 @@ const selectionList = computed(() => {
 
 function setDefaultValue() {
 	// set default values
-	if (props.modelValue) return
+	if (hasFormFieldValue(props.modelValue)) return
 
 	if (props.default) {
 		if (props.fieldtype === "Check") {
