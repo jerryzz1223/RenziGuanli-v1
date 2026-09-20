@@ -10,8 +10,8 @@ link_persistent_sites() {
         return
     fi
     if [ -d "${BENCH_DIR}/sites" ]; then
-        if find "${PERSISTENT_SITES_DIR}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
-            echo "Persistent sites directory is not empty; refusing to merge site data automatically." >&2
+        if find "${PERSISTENT_SITES_DIR}" -mindepth 1 -maxdepth 1 -type d -name '*.localhost' -print -quit | grep -q .; then
+            echo "Persistent sites directory already contains a site; refusing to merge site data automatically." >&2
             exit 1
         fi
         cp -a "${BENCH_DIR}/sites/." "${PERSISTENT_SITES_DIR}/"

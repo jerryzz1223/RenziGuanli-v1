@@ -113,6 +113,13 @@ if [[ ${PULL_CODE} -eq 1 ]]; then
 	pull_code
 fi
 
+echo "Preparing persistent Frappe sites volume..."
+compose run --rm --no-deps --user root --entrypoint bash frappe -lc '
+set -euo pipefail
+mkdir -p /home/frappe/frappe-sites
+chown -R frappe:frappe /home/frappe/frappe-sites
+'
+
 echo "Ensuring Docker services are running..."
 compose up -d
 
