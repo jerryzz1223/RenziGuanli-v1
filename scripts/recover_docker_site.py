@@ -234,7 +234,9 @@ cd /home/frappe/frappe-bench
     bench("./env/bin/python /workspace/docker/prepare_runtime_paths.py; "
           "./env/bin/python /workspace/docker/check_site_ready.py hrms.localhost; "
           "bench --site hrms.localhost list-apps")
-    step("assets", lambda: bench("bench build"))
+    # Default build probes a remote asset server without a request timeout.
+    # Dependencies are already installed; build locally with visible progress.
+    step("assets", lambda: bench("bench build --force --verbose"))
     if options.migrate:
         step("migration", lambda: bench("bench --site hrms.localhost migrate"))
     # Redis is provided by the existing service. Remove local Redis and watch

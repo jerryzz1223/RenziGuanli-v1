@@ -1,4 +1,4 @@
-"""Prepare logging paths for Frappe versions using ../logs from the sites CWD."""
+"""Prepare relative runtime paths when the physical sites CWD is external."""
 
 from pathlib import Path
 
@@ -20,6 +20,19 @@ def prepare_runtime_paths(bench):
             raise ValueError(f"Existing log path is not a usable directory: {runtime_logs}")
     # Preserve existing directories/symlinks; do not overwrite log files or
     # recursively change ownership. Let normal permission errors remain visible.
+    # The asset builder also uses ../apps, and commands may use ../env/config.
+    # Only link existing bench directories, and reject conflicting destinations.
+    physical_parent = sites.resolve().parent
+    if physical_parent != bench:
+        for name in ("apps", "env", "config"):
+            target = bench / name
+            if not target.is_dir():
+                continue
+            alias = physical_parent / name
+            if not alias.exists() and not alias.is_symlink():
+                alias.symlink_to(target, target_is_directory=True)
+            if alias.resolve() != target.resolve():
+                raise ValueError(f"Conflicting runtime path; refusing overwrite: {alias}")
     return runtime_logs
 
 

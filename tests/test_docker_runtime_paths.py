@@ -43,6 +43,29 @@ class RuntimePathsTests(unittest.TestCase):
         self.assertTrue((self.bench / "logs").is_dir())
         self.assertFalse((self.home / "logs").exists())
 
+    def test_builder_can_access_relative_apps_from_external_sites(self):
+        external = self.home / "frappe-sites"
+        external.mkdir()
+        (self.bench / "sites").symlink_to(external)
+        for name in ("apps", "env", "config"):
+            (self.bench / name).mkdir()
+        (self.bench / "apps/frappe").mkdir()
+        MODULE.prepare_runtime_paths(self.bench)
+        self.assertEqual((external / "../apps/frappe").resolve(), (self.bench / "apps/frappe").resolve())
+        for name in ("env", "config"):
+            self.assertEqual((external / ".." / name).resolve(), (self.bench / name).resolve())
+        MODULE.prepare_runtime_paths(self.bench)
+
+    def test_conflicting_app_directory_is_preserved(self):
+        external = self.home / "frappe-sites"
+        external.mkdir()
+        (self.bench / "sites").symlink_to(external)
+        (self.bench / "apps").mkdir()
+        (self.home / "apps").mkdir()
+        with self.assertRaisesRegex(ValueError, "Conflicting runtime"):
+            MODULE.prepare_runtime_paths(self.bench)
+        self.assertFalse((self.home / "apps").is_symlink())
+
     def test_existing_external_logs_are_preserved(self):
         external = self.home / "frappe-sites"
         external.mkdir()
