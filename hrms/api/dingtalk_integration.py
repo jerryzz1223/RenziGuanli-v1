@@ -2075,7 +2075,7 @@ def sync_approvals_from_dingtalk(company: str, business_date: str) -> dict:
 	log = _new_sync_log("审批同步", company=company, business_date=day)
 	received = failed = 0
 	try:
-		for _label, process_code in processes.items():
+		for label, process_code in processes.items():
 			cursor = 0
 			while True:
 				payload = _dingtalk_api_request(
@@ -2096,6 +2096,11 @@ def sync_approvals_from_dingtalk(company: str, business_date: str) -> dict:
 						detail = _dingtalk_api_request(
 							"POST", DINGTALK_PROCESS_INSTANCE_DETAIL_PATH, use_oapi=True, json_body={"process_instance_id": str(instance_id)}
 						)
+						# Retain the configured business label beside the immutable DingTalk
+						# response so attendance conversion can distinguish overtime, leave,
+						# and missed-card evidence without guessing from a process code.
+						if isinstance(detail, dict):
+							detail = {**detail, "hrms_approval_type": label}
 						upsert_raw_record(
 							DINGTALK_APPROVAL_SOURCE_TYPE,
 							str(instance_id),

@@ -146,6 +146,12 @@ def _event_time(event: dict[str, Any]) -> datetime | None:
 	)
 
 
+def _scheduled_event_time(event: dict[str, Any]) -> datetime | None:
+	return _event_datetime(
+		_first(event, "baseCheckTime", "base_check_time", "planCheckTime", "plan_check_time", "scheduledTime", "scheduled_time")
+	)
+
+
 def _time_text(value: datetime | None) -> str:
 	return value.strftime("%H:%M") if value else ""
 
@@ -187,14 +193,73 @@ def _mapping(company: str, user_id: str) -> Any:
 	return frappe.get_doc(USER_MAP_DOCTYPE, name) if name else None
 
 
-def _approval_references(company: str, user_id: str, business_date: date) -> list[str]:
+def _approval_evidence(company: str, user_id: str, business_date: date) -> list[dict[str, str]]:
 	rows = frappe.get_all(
 		RAW_DOCTYPE,
 		filters={"company": company, "source_type": "approval", "dingtalk_userid": user_id, "business_date": business_date},
-		fields=["external_id"],
+		fields=["external_id", "payload_json"],
 		limit_page_length=0,
 	)
-	return [str(row.external_id) for row in rows if row.external_id]
+	evidence = []
+	for row in rows:
+		payload = _payload(row.payload_json)
+		body = payload.get("result") if isinstance(payload, dict) and isinstance(payload.get("result"), dict) else payload
+		if not isinstance(body, dict):
+			body = {}
+		evidence.append(
+			{
+				"approval_no": str(row.external_id or ""),
+				"approval_type": str(
+					_first(payload, "hrms_approval_type")
+					or _first(body, "process_name", "processName", "title", "name")
+					or "未分类审批"
+				),
+				"approval_status": str(_first(body, "status", "approval_status", "approvalStatus")),
+				"approval_result": str(_first(body, "result", "approval_result", "approvalResult")),
+			}
+		)
+	return evidence
+
+
+def _approval_is_passed(item: dict[str, str]) -> bool:
+	value = f"{item.get('approval_status', '')} {item.get('approval_result', '')}".strip().lower()
+	return any(marker in value for marker in ("agree", "approved", "pass", "同意", "通过")) and not any(
+		marker in value for marker in ("disagree", "reject", "refuse", "驳回", "拒绝", "不同意")
+	)
+
+
+def _approval_state(item: dict[str, str]) -> str:
+	value = f"{item.get('approval_status', '')} {item.get('approval_result', '')}".strip().lower()
+	if _approval_is_passed(item):
+		return "passed"
+	if any(marker in value for marker in ("disagree", "reject", "refuse", "terminate", "驳回", "拒绝", "不同意", "撤销")):
+		return "rejected"
+	return "pending"
+
+
+def _late_minutes(event: dict[str, Any], actual_time: datetime | None, scheduled_time: datetime | None) -> int:
+	explicit = _first(event, "lateMinutes", "late_minutes", "lateMinute", "late_minute")
+	if explicit not in (None, ""):
+		try:
+			return max(int(float(explicit)), 0)
+		except (TypeError, ValueError):
+			pass
+	if actual_time and scheduled_time:
+		return max(int((actual_time - scheduled_time).total_seconds() // 60), 0)
+	return 0
+
+
+def _outside_shift_status(early_minutes: int, late_out_minutes: int, approvals: list[dict[str, str]]) -> str:
+	if not (early_minutes or late_out_minutes):
+		return ""
+	overtime_approvals = [item for item in approvals if "加班" in item.get("approval_type", "")]
+	if any(_approval_is_passed(item) for item in overtime_approvals):
+		return "有已通过加班审批的班次外打卡（待HRMS核定）"
+	if any(_approval_state(item) == "pending" for item in overtime_approvals):
+		return "加班审批待审的班次外打卡/候选加班"
+	if overtime_approvals:
+		return "加班审批已驳回的班次外打卡/候选加班"
+	return "无申请的班次外打卡/候选加班"
 
 
 def _draft_row(company: str, business_date: date, user_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -204,6 +269,8 @@ def _draft_row(company: str, business_date: date, user_id: str, events: list[dic
 	all_times = [item for item in (_event_time(event) for event in events) if item]
 	in_time = min((_event_time(event) for event in in_events if _event_time(event)), default=None)
 	out_time = max((_event_time(event) for event in out_events if _event_time(event)), default=None)
+	scheduled_in = min((_scheduled_event_time(event) for event in in_events if _scheduled_event_time(event)), default=None)
+	scheduled_out = max((_scheduled_event_time(event) for event in out_events if _scheduled_event_time(event)), default=None)
 	if not in_time and all_times:
 		in_time = min(all_times)
 	if not out_time and len(all_times) > 1:
@@ -215,7 +282,15 @@ def _draft_row(company: str, business_date: date, user_id: str, events: list[dic
 	if not actual_hours and in_time and out_time:
 		actual_hours = round(max((out_time - in_time).total_seconds() / 3600, 0), 2)
 	standard_hours = flt(_first(first_event, "standardHours", "standard_hours", "planWorkHours", "plan_work_hours")) or 8
-	approval_references = _approval_references(company, user_id, business_date)
+	approvals = _approval_evidence(company, user_id, business_date)
+	late_minutes = max((_late_minutes(event, _event_time(event), _scheduled_event_time(event)) for event in in_events), default=0)
+	late_count = int(late_minutes > 0 or any("late" in str(_first(event, "timeResult", "time_result")).lower() or "迟到" in str(_first(event, "timeResult", "time_result")) for event in in_events))
+	early_minutes = max(int((scheduled_in - in_time).total_seconds() // 60), 0) if scheduled_in and in_time else 0
+	late_out_minutes = max(int((out_time - scheduled_out).total_seconds() // 60), 0) if scheduled_out and out_time else 0
+	outside_shift_status = _outside_shift_status(early_minutes, late_out_minutes, approvals)
+	approval_summary = "、".join(
+		"{approval_type}[{approval_no}]:{approval_status}/{approval_result}".format(**item).rstrip("/") for item in approvals
+	)
 	return {
 		"工号": mapping.employee_code if mapping else _first(first_event, "jobNumber", "job_number", "employeeNo", "employee_code"),
 		"姓名": mapping.employee_name if mapping else _first(first_event, "name", "employeeName", "employee_name") or f"钉钉用户-{user_id}",
@@ -224,13 +299,27 @@ def _draft_row(company: str, business_date: date, user_id: str, events: list[dic
 		"考勤组": _first(first_event, "groupName", "group_name", "attendanceGroup", "attendance_group"),
 		"部门": mapping.department_name if mapping else _first(first_event, "departmentName", "department_name", "deptName"),
 		"班次": _first(first_event, "className", "class_name", "shiftName", "shift_name"),
+		"应上班时间": _time_text(scheduled_in),
+		"应下班时间": _time_text(scheduled_out),
 		"上班时间": _time_text(in_time),
 		"下班时间": _time_text(out_time),
 		"上班缺卡": missing_in,
 		"下班缺卡": missing_out,
 		"标准工时": standard_hours,
 		"实际出勤(小时)": actual_hours,
-		"关联审批单": "、".join(approval_references),
+		"迟到次数": late_count,
+		"迟到分钟": late_minutes,
+		"早到分钟": early_minutes,
+		"晚走分钟": late_out_minutes,
+		"关联审批单": approval_summary,
+		"关联审批明细": approvals,
+		"班次外打卡状态": outside_shift_status,
+		"无申请的班次外打卡": int(outside_shift_status.startswith("无申请")),
+		# DingTalk supplies facts and approval evidence only.  It never writes
+		# payroll-eligible overtime hours; HRMS decides that downstream.
+		"工作日加班(小时)": 0,
+		"休息日加班(小时)": 0,
+		"节假日加班(小时)": 0,
 		"_source_row": 0,
 		"_raw_events": events,
 	}
@@ -303,7 +392,9 @@ def convert_dingtalk_raw_attendance_to_daily_checks(
 			empty_raw_records += 1
 		for event in items:
 			user_id = str(_first(event, "userId", "userid", "user_id") or raw.dingtalk_userid or "")
-			if user_id and _event_day(event, day) == day:
+			# The raw record's business_date is authoritative.  DingTalk can return
+			# an off-duty punch after midnight for the previous day's night shift.
+			if user_id:
 				grouped[user_id].append(event)
 
 	created = rejected = 0

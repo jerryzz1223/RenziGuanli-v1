@@ -1505,7 +1505,7 @@ def _insert_day_check(batch_name, row, company, source_kind="旧模板", source_
 	)
 	approval_summary = _first_value(row, "关联审批单", "关联的审批单")
 	has_overtime = flt(_first_value(row, "工作日加班（小时）", "工作日加班(小时)")) or flt(_first_value(row, "休息日加班（小时）", "休息日加班(小时)")) or flt(_first_value(row, "节假日加班（小时）", "节假日加班(小时)"))
-	overtime_without_approval = 1 if has_overtime and "加班" not in approval_summary else 0
+	overtime_without_approval = 1 if _first_value(row, "无申请的班次外打卡") or (has_overtime and "加班" not in approval_summary) else 0
 	attendance_result = "异常" if missing_in or missing_out or absent_hours or _int_value(row, "迟到次数") or _int_value(row, "早退次数") else "正常"
 
 	doc = frappe.get_doc(
@@ -1559,6 +1559,9 @@ def _insert_day_check(batch_name, row, company, source_kind="旧模板", source_
 			"invalid_leave_hours": 0,
 			"overtime_without_approval": overtime_without_approval,
 			"late_count": _int_value(row, "迟到次数"),
+			"late_minutes": _int_value(row, "迟到分钟"),
+			"outside_shift_punch_status": _first_value(row, "班次外打卡状态"),
+			"approval_summary": approval_summary,
 			"early_count": _int_value(row, "早退次数"),
 			"raw_row_json": json.dumps(row, ensure_ascii=False, default=str),
 		}

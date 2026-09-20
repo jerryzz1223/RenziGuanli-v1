@@ -12,6 +12,7 @@ from types import ModuleType, SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "hrms" / "api" / "attendance_processing_center.py"
 RESTDAY_CODE = "RESTDAY_CLOCKED_WITHOUT_OVERTIME"
+CLOCK_IN_CODE = "CLOCK_IN_MISSING"
 
 
 def load_processing_center():
@@ -89,7 +90,22 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 		self.assertTrue(self.module._has_daily_exception(result, 20, RESTDAY_CODE))
 		self.assertEqual([line["source_row"] for line in result["proposed_value"]["exception_lines"]], [20])
 		self.assertEqual(result["exception_codes"], [RESTDAY_CODE])
-		self.assertEqual(self.module._attendance_draft_review_status(result["exception_codes"], "已通过"), "待审核")
+		self.assertEqual(self.module._attendance_draft_queue_rollup(result["exception_codes"], "已通过"), "待审核")
+
+	def test_resolving_blocking_date_keeps_nonblocking_sibling_visible(self):
+		row = self.employee_row()
+		row["proposed_value"]["exception_lines"][0]["exception_codes"] = [CLOCK_IN_CODE]
+		row["proposed_value"]["exception_events"][0]["code"] = CLOCK_IN_CODE
+		row["exception_codes"] = [CLOCK_IN_CODE, RESTDAY_CODE]
+
+		result = self.module._apply_daily_exception_decisions(
+			row,
+			{"20": {RESTDAY_CODE: True}},
+		)
+
+		self.assertEqual([line["attendance_date"] for line in result["proposed_value"]["exception_lines"]], ["2026-07-04"])
+		self.assertEqual(result["exception_codes"], [CLOCK_IN_CODE])
+		self.assertEqual(self.module._attendance_draft_queue_rollup(result["exception_codes"], "已通过"), "待审核")
 
 	def test_resolving_both_dates_completes_employee_record(self):
 		result = self.module._apply_daily_exception_decisions(
@@ -100,7 +116,29 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 		self.assertEqual(result["proposed_value"]["exception_lines"], [])
 		self.assertEqual(result["proposed_value"]["exception_events"], [])
 		self.assertEqual(result["exception_codes"], [])
-		self.assertEqual(self.module._attendance_draft_review_status(result["exception_codes"], "已通过"), "已通过")
+		self.assertEqual(self.module._attendance_draft_queue_rollup(result["exception_codes"], "已通过"), "已通过")
+
+	def test_same_row_number_in_two_sources_resolves_only_exact_exception(self):
+		lines = [
+			{"attendance_date": "2026-07-04", "source_file": "A.xlsx", "source_sheet": "每日统计", "source_row": 10, "exception_codes": [RESTDAY_CODE]},
+			{"attendance_date": "2026-07-05", "source_file": "B.xlsx", "source_sheet": "每日明细", "source_row": 10, "exception_codes": [RESTDAY_CODE]},
+		]
+		row = {
+			"proposed_value": {"exception_lines": lines, "exception_events": [
+				{**{key: line[key] for key in ("attendance_date", "source_file", "source_sheet", "source_row")}, "code": RESTDAY_CODE}
+				for line in lines
+			]},
+			"processed_value": {}, "exception_codes": [RESTDAY_CODE], "exception_message": "two sources",
+		}
+		first_key = self.module._daily_line_key(lines[0])
+
+		result = self.module._apply_daily_exception_decisions(row, {first_key: {RESTDAY_CODE: True}})
+
+		self.assertEqual(len(result["proposed_value"]["exception_lines"]), 1)
+		self.assertEqual(result["proposed_value"]["exception_lines"][0]["source_file"], "B.xlsx")
+		self.assertTrue(self.module._has_daily_exception(
+			result, 10, RESTDAY_CODE, source_file="B.xlsx", source_sheet="每日明细", attendance_date="2026-07-05",
+		))
 
 	def test_exception_queue_sort_accepts_mixed_review_timestamp_types(self):
 		rows = [
@@ -134,6 +172,11 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 		self.assertTrue(notes["concurrent"])
 		self.assertEqual(notes["processed_result_refresh_reason"], "daily_source_row_manual_update")
 		self.assertNotIn("stale", notes)
+
+	def test_overtime_reference_time_is_audit_only_and_normalized(self):
+		self.assertEqual(self.module._normalize_overtime_reference_time("7:59:00"), "07:59")
+		self.assertEqual(self.module._normalize_overtime_reference_time("15:08"), "15:08")
+		self.assertEqual(self.module._normalize_overtime_reference_time("24:00"), "")
 
 
 if __name__ == "__main__":

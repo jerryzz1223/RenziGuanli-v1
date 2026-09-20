@@ -15,9 +15,14 @@ const center = Object.create(context.AttendanceImportCenter.prototype);
 center.attendance_month = "2026-07";
 
 assert.strictEqual(center.parse_attendance_time_minutes("08:30"), 510);
+assert.strictEqual(center.parse_attendance_time_minutes("08:30:00"), 510);
+assert.strictEqual(center.attendance_time_control_value("7:59"), "07:59:00");
+assert.strictEqual(center.attendance_time_control_value("invalid"), "");
 assert.strictEqual(center.restday_overtime_hours_from_range("08:00", "17:30"), 9.5);
 assert.strictEqual(center.restday_overtime_hours_from_range("20:00", "04:30"), 8.5);
 assert.strictEqual(center.restday_overtime_hours_from_range("08:00", "08:00"), null);
+assert.strictEqual(center.restday_overtime_input_hours("6.25"), 6.25);
+assert.strictEqual(center.restday_overtime_input_hours("0"), null);
 
 assert.strictEqual(center.processing_slot_status({status: "已确认", exception_count: 234}), "待处理异常");
 assert.strictEqual(center.processing_slot_status({status: "已确认", exception_count: 0}), "已确认");
@@ -86,7 +91,35 @@ const twoRestdayMarkup = center.render_attendance_exception_lines([
 assert.strictEqual((twoRestdayMarkup.match(/data-confirm-attendance-daily-no-overtime=/g) || []).length, 2);
 assert.match(twoRestdayMarkup, /data-attendance-source-row="10"/);
 assert.match(twoRestdayMarkup, /data-attendance-source-row="20"/);
+assert.match(twoRestdayMarkup, /data-attendance-clock-in=/);
+assert.match(twoRestdayMarkup, /data-attendance-clock-out=/);
 assert.match(twoRestdayMarkup, />确认本日不计加班</);
 assert.strictEqual((twoRestdayMarkup.match(/>修改本日</g) || []).length, 2);
+
+const independentStatusMarkup = center.render_attendance_daily_statuses([
+	{ attendance_date: "2026-07-04", review_status: "待审核" },
+	{ attendance_date: "2026-07-25", review_status: "已驳回" },
+]);
+assert.match(independentStatusMarkup, /2026-07-04[\s\S]*待处理异常/);
+assert.match(independentStatusMarkup, /2026-07-25[\s\S]*已处理，不计入/);
+assert.strictEqual((independentStatusMarkup.match(/hrms-attendance-exception-line/g) || []).length, 2);
+
+assert.strictEqual((source.match(/fieldtype: "Time", fieldname: "restday_overtime_(?:start|end)"/g) || []).length, 2);
+assert.match(source, /data-use-source-clock-in/);
+assert.match(source, /data-use-source-clock-out/);
+assert.match(source, /开始时间带入打卡/);
+assert.match(source, /fieldtype: "Float",\s+fieldname: "restday_overtime_hours_input"/);
+assert.match(source, /只有这里填写的小时数会计入后续考勤汇总/);
+assert.doesNotMatch(source, /系统会自动换算加班工时/);
+assert.match(source, /overtime_start_time: values\.restday_overtime_start/);
+
+const auditedChanges = center.manual_adjustment_changes({
+	field_name: "__daily_row__:1224",
+	original_value: {restday_overtime_hours: 0},
+	new_value: {restday_overtime_hours: 6.5},
+	reference_values: {overtime_start_time: "07:59", overtime_end_time: "15:08"},
+});
+assert.deepStrictEqual(Array.from(auditedChanges, (item) => item.label), ["加班时间（小时数，计入后续）", "开始时间（仅查看）", "结束时间（仅查看）"]);
+assert.strictEqual(auditedChanges[0].modified, 6.5);
 
 console.log("Attendance exception-date display checks passed.");

@@ -34,9 +34,23 @@ for (const marker of [
 	"generate_attendance_exceptions",
 	"_assert_month_open",
 	"allow_unmatched=True",
+	'"迟到分钟"',
+	'"班次外打卡状态"',
+	'"无申请的班次外打卡"',
+	'"关联审批明细"',
 ]) {
 	assert(converter.includes(marker), `Daily raw-to-draft converter is missing: ${marker}`);
 }
+
+for (const field of ["late_minutes", "outside_shift_punch_status", "approval_summary"]) {
+	assert(
+		json("hrms/hr/doctype/hrms_attendance_day_check/hrms_attendance_day_check.json").fields.some((item) => item.fieldname === field),
+		`Daily attendance fact field is missing: ${field}`,
+	);
+}
+
+assert(integration.includes('"hrms_approval_type": label'), "Approval sync must retain its configured business type.");
+assert(attendance.includes('"无申请的班次外打卡"'), "Outside-shift punches without an application must reach the review flag.");
 
 assert(attendance.includes("allow_unmatched=False"), "Attendance import must keep its default employee-match protection.");
 assert(attendance.includes('"员工未匹配"'), "Unmapped DingTalk accounts must enter the existing exception queue.");

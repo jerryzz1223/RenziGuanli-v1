@@ -127,6 +127,28 @@ cd ~/Renzi/app
 sudo bash scripts/deploy_docker.sh --pull
 ```
 
+如果 SSH 登录用户不能进入 `/home/jerry/Renzi/app`，不要先执行普通用户的 `cd`；`sudo` 只提升后续命令权限，不会改变已经失败的当前目录。先用只读命令确认目录和仓库所有者：
+
+```bash
+sudo stat -c '%U:%G %A %n' /home/jerry /home/jerry/Renzi /home/jerry/Renzi/app
+sudo test -f /home/jerry/Renzi/app/scripts/deploy_docker.sh
+```
+
+确认脚本存在后，可由 root 在目标目录执行（整条命令中的 `cd` 也在 root shell 内）：
+
+```bash
+sudo bash -lc 'cd /home/jerry/Renzi/app && bash scripts/diagnose_docker.sh'
+```
+
+`--pull` 会尝试以 `sudo` 登录用户执行 Git。如果该用户没有仓库权限，应先由仓库所有者拉取代码，再由 root 执行部署，或先为登录用户补齐目录的 `x` 权限；不要在错误的 `~` 目录执行相对路径脚本：
+
+```bash
+sudo -u <仓库所有者> -H bash -lc 'cd /home/jerry/Renzi/app && git pull --ff-only'
+sudo bash -lc 'cd /home/jerry/Renzi/app && bash scripts/deploy_docker.sh --site hrms.localhost'
+```
+
+如果代码已通过 zip、SCP 等方式同步，则直接执行第二条，不加 `--pull`。
+
 `--pull` 只接受快进更新；如果服务器仓库有未提交改动，脚本会停止，避免意外覆盖。若你已经通过 zip、SCP 或其他方式把代码同步到服务器，则不加 `--pull`：
 
 ```sh

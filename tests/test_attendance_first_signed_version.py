@@ -107,7 +107,7 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		api_save_file = sys.modules["frappe.utils.file_manager"].save_file
 		sys.modules["frappe.utils.file_manager"].save_file = capture_save
 		try:
-			daily_row = ["张三", "E-001", "26-07-01 星期三", "工程课", "工作日", "长白班", "08:00", "17:00"] + [None] * 32
+			daily_row = ["张三", "E-001", "26-07-01 星期三", "工程课", "工作日", "长白班", "08:01", "17:00"] + [None] * 32 + ["08:00", "17:00", 0, 0, "无申请", "2026-07-01迟到1分钟（半小时以内）"]
 			result = api._save_monthly_first_signed_confirmation_file("2026-07", [{
 				"sequence": 1, "department": "工程课", "employee_name": "张三", "employee_code": "E-001",
 				"date_of_joining": "2008-06-16", "standard_hours": 176, "actual_attendance_hours": 168,
@@ -123,7 +123,9 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(daily.freeze_panes, "B3")
 		self.assertEqual(daily["A3"].value, "张三")
 		self.assertIn("T1:AD1", {str(item) for item in daily.merged_cells.ranges})
-		self.assertEqual(daily.max_column, 40)
+		self.assertEqual(daily.max_column, 46)
+		self.assertEqual(daily["AO1"].value, "计划上班")
+		self.assertEqual(daily["AT3"].value, "2026-07-01迟到1分钟（半小时以内）")
 		sheet = book["工时汇总"]
 		self.assertIn("B2:Z2", {str(item) for item in sheet.merged_cells.ranges})
 		self.assertIn("I3:K3", {str(item) for item in sheet.merged_cells.ranges})
@@ -137,6 +139,33 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertIsNone(sheet["K5"].value)
 		self.assertEqual(sheet.max_column, 29)
 
+	def test_daily_projection_exports_confirmed_overtime_late_leave_and_note(self):
+		api = self.api
+		batch = types.SimpleNamespace(source_type="attendance_draft")
+		api._result_rows = lambda *_args, **_kwargs: [{
+			"employee_code": "E-001", "employee_name": "张三", "department": "工程课", "eligible_for_downstream": True,
+			"source_file": "sample.xlsx", "source_sheet": "每日统计",
+			"original_value": {"rows": [{
+				"姓名": "张三", "工号": "E-001", "日期": "26-07-01", "实际部门": "工程课", "工作类型": "工作日",
+				"班次": "白班 08:00-17:00", "上班时间": "08:30", "下班时间": "18:00", "source_file": "sample.xlsx",
+				"source_sheet": "每日统计", "source_row": 3,
+			}]},
+			"processed_value": {"attendance_details": [{
+				"attendance_date": "2026-07-01", "source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+				"personal_leave_hours": 0.5, "late_count": 1, "scheduled_start": "08:00", "scheduled_end": "17:00",
+				"raw_outside_shift_hours": 1, "confirmed_overtime_hours": 0.75, "overtime_approval_status": "人工确认",
+				"attendance_note": "2026-07-01迟到30分钟（半小时以内）",
+			}]},
+		}]
+
+		rows = api._monthly_first_signed_daily_rows({"attendance_draft": batch})
+
+		self.assertEqual(rows[0][14], 0.75)
+		self.assertEqual(rows[0][19], 0.5)
+		self.assertEqual(rows[0][4], "工作日")
+		self.assertEqual(rows[0][38], 1)
+		self.assertEqual(rows[0][40:46], ["08:00", "17:00", 1, 0.75, "人工确认", "2026-07-01迟到30分钟（半小时以内）"])
+
 	def test_second_signed_workbook_matches_supplied_header_contract(self):
 		api = self.api
 		captured = {}
@@ -147,6 +176,7 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 			api._save_monthly_signed_confirmation_file("2026-07", [{
 				"employee_code": "E-001", "employee_name": "张三", "department": "工程课", "standard_hours": 176,
 				"actual_attendance_hours": 168, "reunion_leave_hours": 40, "special_workday_hours": 2,
+				"review_note": "2026-07-01迟到30分钟（半小时以内）",
 			}])
 		finally:
 			file_manager.save_file = old_save_file
@@ -161,6 +191,7 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(sheet["D1"].value, "7月工时奖惩确认表")
 		self.assertEqual(sheet["AG3"].value, "团圆假\n工时")
 		self.assertEqual(sheet["BJ2"].value, "备注")
+		self.assertEqual(sheet["BJ5"].value, "2026-07-01迟到30分钟（半小时以内）")
 		self.assertEqual(sheet["X5"].value, 40)
 		self.assertEqual(sheet["AJ5"].value, "=J5+K5")
 		self.assertEqual(sheet["AR4"].value, 7)

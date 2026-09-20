@@ -212,13 +212,15 @@ ATTENDANCE_DRAFT_RESULT_COLUMNS = (
 	("absence_hours", "旷工（小时）"),
 	("clock_in_missing_count", "上班漏打卡次数"),
 	("clock_out_missing_count", "下班漏打卡次数"),
+	("late_count", "迟到次数"),
+	("attendance_note", "备注"),
 )
 
 # These are the editable source columns from DingTalk's daily statistics.  A
 # correction changes one original daily row and then re-aggregates that
 # employee's own monthly result; it never writes back to the uploaded workbook.
 ATTENDANCE_DAILY_EDIT_FIELDS = (
-	("日期类型", "日期类型", ("日期类型",)),
+	("日期类型", "工作类型", ("日期类型", "工作类型")),
 	("关联审批单", "关联审批单", ("关联审批单", "关联的审批单", "审批单")),
 	("班次", "班次", ("班次",)),
 	("上班时间", "上班打卡", ("上班时间", "上班打卡", "上班打卡时间")),
@@ -232,6 +234,7 @@ ATTENDANCE_DAILY_EDIT_FIELDS = (
 	("标准工时", "标准工时", ATTENDANCE_NUMERIC_FIELDS["standard_hours"]),
 	("实际出勤（小时）", "实际出勤（小时）", ATTENDANCE_NUMERIC_FIELDS["actual_attendance_hours"]),
 	("工作日加班（小时）", "工作日加班（小时）", ("工作日加班（小时）", "工作日加班(小时)", "工作日加班")),
+	("确认计入的加班时长", "确认计入的加班时长（小时）", ("确认计入的加班时长", "confirmed_overtime_hours")),
 	("休息日加班（小时）", "休息日加班（小时）", ("休息日加班（小时）",)),
 	("节假日加班（小时）", "节假日加班（小时）", ("节假日加班（小时）",)),
 	("大夜班", "大夜班", ("大夜班",)),
@@ -338,6 +341,8 @@ EXCEPTION_LABELS = {
 	"EARLY_MARKED": "早退（钉钉标记）",
 	"ABSENCE_MARKED": "旷工标记待核验",
 	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "休息日有打卡未计加班",
+	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "班次外时段无加班申请",
+	"SHIFT_SCHEDULE_REVIEW_REQUIRED": "班次计划起止待复核",
 	"INVALID_NUMERIC_VALUE": "工时或次数格式无效",
 	"SOURCE_FILE_MISSING": "来源文件定位缺失",
 	"SOURCE_SHEET_MISSING": "来源工作表定位缺失",
@@ -390,6 +395,10 @@ def _review_guidance(exception_codes: list[str], source_type: str) -> list[str]:
 		guidance.append("旷工字段在该来源中没有小时单位；先核对排班、有效请假及主管确认，再决定是否形成薪资缺勤工时。")
 	if "RESTDAY_CLOCKED_WITHOUT_OVERTIME" in codes:
 		guidance.append("休息日已有钉钉打卡，但未匹配加班申请且加班工时为 0；请核对主管确认后，在该日期填写实际休息日加班工时，或确认本次打卡不计加班。")
+	if "WORKDAY_OUTSIDE_SHIFT_UNAPPROVED" in codes:
+		guidance.append("班次外原始时长已留痕并标记“无申请”；如需计入后续，请在“修改本日”同时填写确认计入的加班时长和原因。")
+	if "SHIFT_SCHEDULE_REVIEW_REQUIRED" in codes:
+		guidance.append("无法取得完整班次计划起止，不能从打卡或跨日文字凭空推算；请补齐班次后重新校验。")
 	if {"EMPLOYEE_DEPARTMENT_MISMATCH", "EMPLOYEE_DEPARTMENT_CONFLICT", "DEPARTMENT_CONFLICT"} & codes:
 		guidance.append("以花名册当前部门为准；花名册无误可通过，需变更部门时先更新花名册或部门映射。")
 	if {"EMPLOYEE_NOT_FOUND", "EMPLOYEE_MATCH_PENDING", "EMPLOYEE_CODE_MISSING", "EMPLOYEE_CODE_NAME_CONFLICT", "EMPLOYEE_NAME_MISMATCH", "EMPLOYEE_NAME_CONFLICT", "EMPLOYEE_NAME_AMBIGUOUS", "EMPLOYEE_AMBIGUOUS"} & codes:
@@ -856,6 +865,14 @@ def _as_nonnegative_number(value: Any):
 	except (TypeError, ValueError):
 		return None
 	return number if number >= 0 else None
+
+
+def _normalize_overtime_reference_time(value: Any) -> str:
+	"""Normalize an audit-only clock value without turning it into payable hours."""
+	match = re.fullmatch(r"(\d{1,2}):([0-5]\d)(?::[0-5]\d)?", str(value or "").strip())
+	if not match or int(match.group(1)) > 23:
+		return ""
+	return f"{int(match.group(1)):02d}:{match.group(2)}"
 
 
 def _process_monthly_support_rows(batch):
@@ -1527,6 +1544,13 @@ def _serialize_record(record):
 		if any("standard_hours" not in line for line in result["daily_exception_lines"]):
 			details = {str(line.get("source_row")): line for line in _restore_daily_exception_lines_from_source(result, all_details=True)}
 			result["daily_exception_lines"] = [{**details.get(str(line.get("source_row")), {}), **line} for line in result["daily_exception_lines"]]
+		# Every remaining date/source line is an independent pending record.  The
+		# parent document status is only a database queue roll-up and must not be
+		# presented as the business status of all dates under the employee.
+		result["daily_exception_lines"] = [
+			{**line, "daily_record_id": _daily_line_key(line), "review_status": "待审核"}
+			for line in result["daily_exception_lines"]
+		]
 	return result
 
 
@@ -1566,25 +1590,44 @@ def _daily_exception_decisions(values: dict[str, Any]) -> dict[str, dict[str, bo
 	}
 
 
+def _daily_source_key(source_row: Any, source_file: Any = "", source_sheet: Any = "", attendance_date: Any = "") -> str:
+	"""Use the full immutable source locator; retain row-only keys for old batches."""
+	if not any(str(value or "").strip() for value in (source_file, source_sheet, attendance_date)):
+		return str(source_row or "")
+	return _json([
+		str(source_file or "").strip(), str(source_sheet or "").strip(),
+		str(source_row or "").strip(), str(attendance_date or "").strip(),
+	])
+
+
+def _daily_line_key(line: dict[str, Any]) -> str:
+	return _daily_source_key(
+		line.get("source_row"), line.get("source_file"), line.get("source_sheet"), line.get("attendance_date")
+	)
+
+
 def _apply_daily_exception_decisions(row: dict[str, Any], decisions: dict[str, dict[str, bool]]) -> dict[str, Any]:
 	"""Remove only reviewed employee/date exceptions from a rebuilt draft row."""
 	result = deepcopy_json(row)
 	proposed = result.get("proposed_value") if isinstance(result.get("proposed_value"), dict) else {}
 
-	def is_resolved(source_row: Any, code: Any) -> bool:
+	def is_resolved(line: dict[str, Any], code: Any) -> bool:
 		if code == "ATTENDANCE_HOURS_MISMATCH":
 			return False
-		return bool(decisions.get(str(source_row), {}).get(str(code)))
+		return bool(
+			decisions.get(_daily_line_key(line), {}).get(str(code))
+			or decisions.get(str(line.get("source_row") or ""), {}).get(str(code))
+		)
 
 	events = [
 		event for event in proposed.get("exception_events") or []
-		if not (isinstance(event, dict) and is_resolved(event.get("source_row"), event.get("code")))
+		if not (isinstance(event, dict) and is_resolved(event, event.get("code")))
 	]
 	lines = []
 	for line in proposed.get("exception_lines") or []:
 		if not isinstance(line, dict):
 			continue
-		active_codes = [code for code in line.get("exception_codes") or [] if not is_resolved(line.get("source_row"), code)]
+		active_codes = [code for code in line.get("exception_codes") or [] if not is_resolved(line, code)]
 		if active_codes:
 			lines.append({**line, "exception_codes": active_codes})
 	active_daily_codes = {
@@ -1608,18 +1651,26 @@ def _apply_daily_exception_decisions(row: dict[str, Any], decisions: dict[str, d
 	return result
 
 
-def _has_daily_exception(row: dict[str, Any], source_row: int | str, exception_code: str) -> bool:
+def _has_daily_exception(row: dict[str, Any], source_row: int | str, exception_code: str, *, source_file: str = "", source_sheet: str = "", attendance_date: str = "") -> bool:
 	return any(
 		str(event.get("code") or "") == exception_code
 		and str(event.get("source_row") or "") == str(source_row)
+		and (not source_file or str(event.get("source_file") or "") == str(source_file))
+		and (not source_sheet or str(event.get("source_sheet") or "") == str(source_sheet))
+		and (not attendance_date or str(event.get("attendance_date") or "") == str(attendance_date))
 		for event in (row.get("proposed_value") or {}).get("exception_events") or []
 		if isinstance(event, dict)
 	)
 
 
-def _attendance_draft_review_status(exception_codes: list[str], requested_status: str) -> str:
-	"""Keep the employee pending until every blocking daily exception is handled."""
-	if requested_status == "已通过" and set(exception_codes or []) - set(NON_BLOCKING_ATTENDANCE_EVENT_CODES):
+def _attendance_draft_queue_rollup(exception_codes: list[str], requested_status: str) -> str:
+	"""Derive the parent document's internal queue status from dated records.
+
+	This is not an employee review decision.  Each remaining date/source record
+	is independently pending; the parent stays in the database queue while at
+	least one such record remains.
+	"""
+	if requested_status == "已通过" and exception_codes:
 		return "待审核"
 	return requested_status
 
@@ -1637,7 +1688,11 @@ def _effective_daily_source_rows(row: dict[str, Any]) -> list[dict[str, Any]]:
 		if not isinstance(source, dict):
 			continue
 		daily = dict(source)
-		override = overrides.get(str(daily.get("source_row") or daily.get("_source_row") or ""), {})
+		key = _daily_source_key(
+			daily.get("source_row") or daily.get("_source_row"), daily.get("source_file"), daily.get("source_sheet"),
+			_daily_attendance_date(daily.get("日期") or daily.get("考勤日期")),
+		)
+		override = overrides.get(key, overrides.get(str(daily.get("source_row") or daily.get("_source_row") or ""), {}))
 		if isinstance(override, dict):
 			daily.update(override)
 		effective_rows.append(daily)
@@ -1661,6 +1716,8 @@ def _daily_row_editor_payload(row: dict[str, Any]) -> list[dict[str, Any]]:
 		items.append({
 			"source_row": source_row,
 			"attendance_date": _daily_attendance_date(source.get("日期") or source.get("考勤日期")),
+			"source_file": source.get("source_file") or row.get("source_file") or "",
+			"source_sheet": source.get("source_sheet") or row.get("source_sheet") or "",
 			"source_values": source,
 			"editable_fields": fields,
 		})
@@ -2846,6 +2903,11 @@ def update_attendance_draft_daily_row(
 	changes: str | dict,
 	review_status: str = "已通过",
 	reason: str = "",
+	source_file: str = "",
+	source_sheet: str = "",
+	attendance_date: str = "",
+	overtime_start_time: str = "",
+	overtime_end_time: str = "",
 ):
 	"""Correct one DingTalk daily row, then rebuild only that employee's totals.
 
@@ -2872,18 +2934,39 @@ def update_attendance_draft_daily_row(
 		frappe.throw(_("无权修改该钉钉考勤记录。"))
 	serialized = _serialize_record(doc.as_dict())
 	daily_rows = _daily_row_editor_payload(serialized)
-	target = next((row for row in daily_rows if row["source_row"] == source_row), None)
+	candidates = [row for row in daily_rows if row["source_row"] == source_row]
+	if source_file:
+		candidates = [row for row in candidates if str(row.get("source_file") or "") == str(source_file)]
+	if source_sheet:
+		candidates = [row for row in candidates if str(row.get("source_sheet") or "") == str(source_sheet)]
+	if attendance_date:
+		candidates = [row for row in candidates if str(row.get("attendance_date") or "") == str(attendance_date)]
+	if len(candidates) > 1:
+		frappe.throw(_("来源行不唯一，请刷新后按日期、来源文件和工作表重新选择。"))
+	target = candidates[0] if candidates else None
 	if not target:
 		frappe.throw(_("未找到该员工的钉钉来源行。"))
 	allowed_fields = {field["fieldname"] for field in target["editable_fields"]}
 	invalid_fields = sorted(set(changes) - allowed_fields)
 	if invalid_fields:
 		frappe.throw(_("不能修改非钉钉每日统计字段：{0}").format("、".join(invalid_fields)))
+	restday_field = next((field["fieldname"] for field in target["editable_fields"] if field.get("label") == "休息日加班（小时）"), "")
+	reference_values = {}
+	if restday_field and restday_field in changes:
+		start_time = _normalize_overtime_reference_time(overtime_start_time)
+		end_time = _normalize_overtime_reference_time(overtime_end_time)
+		if not start_time or not end_time:
+			frappe.throw(_("请填写有效的加班开始和结束时间，用于修改记录查看。"))
+		entered_hours = _as_nonnegative_number(changes.get(restday_field))
+		if entered_hours is None or entered_hours <= 0:
+			frappe.throw(_("请填写大于 0 的加班时间（小时数）。"))
+		reference_values = {"overtime_start_time": start_time, "overtime_end_time": end_time}
 	old_effective_row = dict(target["source_values"])
 	confirmed_before = _loads(doc.confirmed_value_json, None) or {}
 	overrides = _daily_row_overrides(confirmed_before)
 	decisions = _daily_exception_decisions(confirmed_before)
-	overrides[str(source_row)] = {**overrides.get(str(source_row), {}), **changes}
+	target_key = _daily_source_key(source_row, target.get("source_file"), target.get("source_sheet"), target.get("attendance_date"))
+	overrides[target_key] = {**overrides.get(target_key, {}), **changes}
 
 	# Rebuild this employee from its original rows plus the approved overlay. The
 	# processor only reads DingTalk's explicit flags/counts; it does not derive
@@ -2908,10 +2991,14 @@ def update_attendance_draft_daily_row(
 	if not replacement:
 		frappe.throw(_("更正后无法重新生成该员工的考勤汇总。"))
 	replacement = _apply_daily_exception_decisions(replacement, decisions)
-	target_still_missing_overtime = _has_daily_exception(replacement, source_row, "RESTDAY_CLOCKED_WITHOUT_OVERTIME")
+	target_still_missing_overtime = _has_daily_exception(
+		replacement, source_row, "RESTDAY_CLOCKED_WITHOUT_OVERTIME",
+		source_file=target.get("source_file") or "", source_sheet=target.get("source_sheet") or "",
+		attendance_date=target.get("attendance_date") or "",
+	)
 	if review_status == "已通过" and target_still_missing_overtime:
 		frappe.throw(_("该休息日打卡仍未填写有效的休息日加班工时；请填写大于 0 的实际时长，或使用“确认打卡不计加班”仅记录处理决定。"))
-	effective_review_status = _attendance_draft_review_status(replacement.get("exception_codes") or [], review_status)
+	effective_review_status = _attendance_draft_queue_rollup(replacement.get("exception_codes") or [], review_status)
 	confirmed = dict(replacement["proposed_value"])
 	confirmed["_daily_row_overrides"] = overrides
 	confirmed["_daily_exception_decisions"] = decisions
@@ -2926,6 +3013,10 @@ def update_attendance_draft_daily_row(
 		"reviewer": frappe.session.user,
 		"reviewed_on": now_datetime().isoformat(),
 		"source_row": source_row,
+		"source_file": target.get("source_file") or "",
+		"source_sheet": target.get("source_sheet") or "",
+		"attendance_date": target.get("attendance_date") or "",
+		"reference_values": reference_values,
 	})
 	doc.processed_value_json = _json(confirmed)
 	doc.confirmed_value_json = _json(confirmed)
@@ -3167,6 +3258,9 @@ def review_attendance_draft_daily_exception(
 	source_row: int | str,
 	exception_code: str,
 	reason: str = "",
+	source_file: str = "",
+	source_sheet: str = "",
+	attendance_date: str = "",
 ):
 	"""Resolve one dated attendance exception without resolving sibling dates."""
 	_require_processing_manager()
@@ -3183,20 +3277,24 @@ def review_attendance_draft_daily_exception(
 	if doc.company != company or doc.attendance_month != attendance_month or doc.source_type != "attendance_draft":
 		frappe.throw(_("无权修改该钉钉考勤记录。"))
 	serialized = _serialize_record(doc.as_dict())
-	target = next(
-		(
-			line for line in serialized.get("daily_exception_lines") or []
-			if str(line.get("source_row") or "") == str(source_row)
-			and exception_code in (line.get("exception_codes") or [])
-		),
-		None,
-	)
+	candidates = [
+		line for line in serialized.get("daily_exception_lines") or []
+		if str(line.get("source_row") or "") == str(source_row)
+		and (not source_file or str(line.get("source_file") or "") == str(source_file))
+		and (not source_sheet or str(line.get("source_sheet") or "") == str(source_sheet))
+		and (not attendance_date or str(line.get("attendance_date") or "") == str(attendance_date))
+		and exception_code in (line.get("exception_codes") or [])
+	]
+	if len(candidates) > 1:
+		frappe.throw(_("来源异常不唯一，请刷新后按日期、来源文件和工作表重新选择。"))
+	target = candidates[0] if candidates else None
 	if not target:
 		frappe.throw(_("该日期异常已完成处理，请刷新后查看当前待处理日期。"))
 	confirmed_before = _loads(doc.confirmed_value_json, None) or {}
 	overrides = _daily_row_overrides(confirmed_before)
 	decisions = _daily_exception_decisions(confirmed_before)
-	decisions[str(source_row)] = {**decisions.get(str(source_row), {}), exception_code: True}
+	target_key = _daily_line_key(target)
+	decisions[target_key] = {**decisions.get(target_key, {}), exception_code: True}
 
 	batch = frappe.get_doc(IMPORT_BATCH_DOCTYPE, doc.import_batch)
 	rebuilt = process_attendance_draft_rows(
@@ -3211,7 +3309,7 @@ def review_attendance_draft_daily_exception(
 	if not replacement:
 		frappe.throw(_("处理后无法重新生成该员工的考勤汇总。"))
 	replacement = _apply_daily_exception_decisions(replacement, decisions)
-	effective_review_status = _attendance_draft_review_status(replacement.get("exception_codes") or [], "已通过")
+	effective_review_status = _attendance_draft_queue_rollup(replacement.get("exception_codes") or [], "已通过")
 	confirmed = dict(replacement["proposed_value"])
 	confirmed["_daily_row_overrides"] = overrides
 	confirmed["_daily_exception_decisions"] = decisions
@@ -3227,6 +3325,9 @@ def review_attendance_draft_daily_exception(
 		"reviewer": frappe.session.user,
 		"reviewed_on": processed_at.isoformat(),
 		"source_row": source_row,
+		"source_file": target.get("source_file") or "",
+		"source_sheet": target.get("source_sheet") or "",
+		"attendance_date": target.get("attendance_date") or "",
 	})
 	doc.processed_value_json = _json(confirmed)
 	doc.confirmed_value_json = _json(confirmed)
@@ -4088,7 +4189,7 @@ def list_manual_adjustments(company: str, attendance_month: str, page_length: in
 	items = []
 	for record in records:
 		for event in _loads(record.review_history_json, []):
-			items.append({"record_id": record.name, "employee_code": record.employee_code, "employee_name": record.employee_name, "source_type": record.source_type, "field_name": event.get("field_name", ""), "original_value": event.get("old_value"), "new_value": event.get("new_value"), "review_status": event.get("review_status", ""), "reason": event.get("reason", ""), "modified_by": event.get("reviewer", ""), "modified_at": event.get("reviewed_on", "")})
+			items.append({"record_id": record.name, "employee_code": record.employee_code, "employee_name": record.employee_name, "source_type": record.source_type, "field_name": event.get("field_name", ""), "original_value": event.get("old_value"), "new_value": event.get("new_value"), "reference_values": event.get("reference_values") or {}, "review_status": event.get("review_status", ""), "reason": event.get("reason", ""), "modified_by": event.get("reviewer", ""), "modified_at": event.get("reviewed_on", "")})
 	return {"items": items[: min(max(cint(page_length), 1), 5000)]}
 
 
@@ -4750,6 +4851,10 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 		if not record.get("eligible_for_downstream"):
 			continue
 		values = _effective_result_values(record)
+		details_by_key = {
+			_daily_source_key(item.get("source_row"), item.get("source_file"), item.get("source_sheet"), item.get("attendance_date")): item
+			for item in values.get("attendance_details") or [] if isinstance(item, dict)
+		}
 		for raw in _effective_daily_source_rows(record):
 			if not isinstance(raw, dict):
 				continue
@@ -4759,18 +4864,25 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 					if raw.get(key) not in (None, ""):
 						return raw.get(key)
 				return ""
+			detail_key = _daily_source_key(
+				raw.get("source_row") or raw.get("_source_row"), raw.get("source_file") or record.get("source_file"),
+				raw.get("source_sheet") or record.get("source_sheet"), _daily_attendance_date(pick("日期", "考勤日期")),
+			)
+			detail = details_by_key.get(detail_key, {})
 
 			items.append([
 				pick("姓名", "员工姓名") or values.get("employee_name") or "",
 				pick("工号", "员工工号", "员工编号") or values.get("employee_code") or "",
 				pick("日期", "考勤日期"), pick("实际部门", "部门") or values.get("department") or "",
-				pick("日期类型"), pick("班次"), pick("上班时间", "上班打卡", "上班打卡时间"), pick("下班时间", "下班打卡", "下班打卡时间"),
+				pick("日期类型", "工作类型"), pick("班次"), pick("上班时间", "上班打卡", "上班打卡时间"), pick("下班时间", "下班打卡", "下班打卡时间"),
 				pick("上班缺卡", "上班未打卡次数"), pick("下班缺卡", "下班未打卡次数"), pick("旷工"), pick("标准工时", "标准工时（小时）"),
-				pick("实际出勤（小时）", "实际出勤工时"), pick("关联审批单", "审批单"), pick("工作日加班（小时）"), pick("休息日加班（小时）"), pick("节假日加班（小时）"),
-				pick("大夜班"), pick("小夜班"), pick("事假(小时)", "请假/事假(小时)"), pick("病假(小时)"), pick("婚假(天)"), pick("特休(小时)"),
+				pick("实际出勤（小时）", "实际出勤工时"), pick("关联审批单", "审批单"), detail.get("confirmed_overtime_hours", pick("工作日加班（小时）")), pick("休息日加班（小时）"), pick("节假日加班（小时）"),
+				pick("大夜班"), pick("小夜班"), detail.get("personal_leave_hours", pick("事假(小时)", "请假/事假(小时)")), pick("病假(小时)"), pick("婚假(天)"), pick("特休(小时)"),
 				pick("丧假(小时)"), pick("工伤(小时)"), pick("公假(天)"), pick("产假(天)"), pick("团圆假(天)"), pick("排休(小时)"), pick("旷工(小时)"),
 				pick("婚假"), pick("丧假"), pick("公假"), pick("产假"), pick("团圆假"), pick("旷工"),
-				pick("上班未打卡次数", "上班缺卡"), pick("下班未打卡次数", "下班缺卡"), pick("迟到次数"), pick("早退次数"),
+				pick("上班未打卡次数", "上班缺卡"), pick("下班未打卡次数", "下班缺卡"), detail.get("late_count", pick("迟到次数")), pick("早退次数"),
+				detail.get("scheduled_start", ""), detail.get("scheduled_end", ""), detail.get("raw_outside_shift_hours", 0),
+				detail.get("confirmed_overtime_hours", 0), detail.get("overtime_approval_status", ""), detail.get("attendance_note", ""),
 			])
 	return items
 
@@ -4942,9 +5054,10 @@ def _save_monthly_first_signed_confirmation_file(attendance_month: str, rows, da
 	thin = Side(style="thin", color="000000")
 	center = Alignment(horizontal="center", vertical="center", wrap_text=True)
 	daily_headers = [
-		"姓名", "工号", "日期", "实际部门", "日期类型", "班次", "上班时间", "下班时间", "上班缺卡", "下班缺卡", "旷工", "标准工时",
+		"姓名", "工号", "日期", "实际部门", "工作类型", "班次", "上班时间", "下班时间", "上班缺卡", "下班缺卡", "旷工", "标准工时",
 		"实际出勤（小时）", "关联审批单", "工作日加班（小时）", "休息日加班（小时）", "节假日加班（小时）", "大夜班", "小夜班", "请假",
 		None, None, None, None, None, None, None, None, None, None, "请假", None, None, None, None, "旷工", "上班未打卡次数", "下班未打卡次数", "迟到次数", "早退次数",
+		"计划上班", "计划下班", "班次外原始时长", "确认计入加班", "加班申请状态", "备注",
 	]
 	daily_subheaders = [None for _ in daily_headers]
 	daily_subheaders[19:30] = ["事假(小时)", "病假(小时)", "婚假(天)", "特休(小时)", "丧假(小时)", "工伤(小时)", "公假(天)", "产假(天)", "团圆假(天)", "排休(小时)", "旷工(小时)"]
@@ -4953,7 +5066,7 @@ def _save_monthly_first_signed_confirmation_file(attendance_month: str, rows, da
 		sheet.cell(row=1, column=column, value=value)
 	for column, value in enumerate(daily_subheaders, start=1):
 		sheet.cell(row=2, column=column, value=value or None)
-	for column in list(range(1, 20)) + list(range(36, 41)):
+	for column in list(range(1, 20)) + list(range(36, 47)):
 		sheet.merge_cells(start_row=1, start_column=column, end_row=2, end_column=column)
 	# The source form groups the first leave block and the final derived block.
 	sheet.merge_cells("T1:AD1")
@@ -4961,7 +5074,7 @@ def _save_monthly_first_signed_confirmation_file(attendance_month: str, rows, da
 
 	white_fill = PatternFill("solid", fgColor="FFFFFF")
 	daily_border = Border(left=thin, right=thin, top=thin, bottom=thin)
-	for row in sheet.iter_rows(min_row=1, max_row=2, min_col=1, max_col=40):
+	for row in sheet.iter_rows(min_row=1, max_row=2, min_col=1, max_col=46):
 		for cell in row:
 			cell.font = Font(name="宋体", size=10, bold=True)
 			cell.alignment = center

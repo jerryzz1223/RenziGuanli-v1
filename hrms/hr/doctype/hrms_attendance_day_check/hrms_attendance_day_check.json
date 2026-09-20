@@ -59,6 +59,9 @@
   "valid_leave_summary",
   "overtime_without_approval",
   "late_count",
+  "late_minutes",
+  "outside_shift_punch_status",
+  "approval_summary",
   "early_count",
   "raw_row_json"
  ],
@@ -375,6 +378,24 @@
    "fieldname": "late_count",
    "fieldtype": "Int",
    "label": "迟到"
+  },
+  {
+   "default": "0",
+   "fieldname": "late_minutes",
+   "fieldtype": "Int",
+   "label": "迟到分钟"
+  },
+  {
+   "fieldname": "outside_shift_punch_status",
+   "fieldtype": "Data",
+   "label": "班次外打卡状态",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approval_summary",
+   "fieldtype": "Small Text",
+   "label": "关联审批单及状态",
+   "read_only": 1
   },
   {
    "default": "0",

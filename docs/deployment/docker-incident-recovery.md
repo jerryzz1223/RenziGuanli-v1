@@ -36,6 +36,12 @@ cd /home/jerry/Renzi/app
 sudo bash scripts/diagnose_docker.sh
 ```
 
+如果登录用户无权进入该目录，使用 root shell 将目录切换和脚本执行放在同一条命令中：
+
+```bash
+sudo bash -lc 'cd /home/jerry/Renzi/app && bash scripts/diagnose_docker.sh'
+```
+
 This reports container mounts, runtime revisions, application availability and
 database version records without exposing passwords. It does not restart the
 service, install packages, or migrate the database. Its version query targets
