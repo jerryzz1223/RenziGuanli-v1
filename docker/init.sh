@@ -89,8 +89,24 @@ git config --global http.version HTTP/1.1 || true
 if [ ! -d "/home/frappe/frappe-src" ]; then
     run_with_retries git clone --depth 1 --branch develop --single-branch https://gitee.com/mirrors/frappe.git /home/frappe/frappe-src
 fi
-sed -i 's|"PyPika @ git+https://github.com/frappe/pypika@[^"]*"|"PyPika~=0.48.9"|' /home/frappe/frappe-src/pyproject.toml
-sed -i 's|"gunicorn @ git+https://github.com/frappe/gunicorn@[^"]*"|"gunicorn~=23.0.0"|' /home/frappe/frappe-src/pyproject.toml
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+pyproject = Path("/home/frappe/frappe-src/pyproject.toml")
+text = pyproject.read_text()
+text = re.sub(
+    r"PyPika\s*@\s*git\+https://github\.com/frappe/pypika@[^\s\"']+",
+    "PyPika~=0.48.9",
+    text,
+)
+text = re.sub(
+    r"gunicorn\s*@\s*git\+https://github\.com/frappe/gunicorn@[^\s\"']+",
+    "gunicorn~=23.0.0",
+    text,
+)
+pyproject.write_text(text)
+PY
 
 bench init --skip-redis-config-generation --frappe-path /home/frappe/frappe-src frappe-bench
 
