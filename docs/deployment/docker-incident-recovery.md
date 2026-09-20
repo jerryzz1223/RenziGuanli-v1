@@ -46,6 +46,40 @@ Preserve the current container and the SQL backup. Do not run `new-site`,
 
 ## Recovery conditions before a normal deployment
 
+The follow-up server report identified Frappe `5003055` and ERPNext `4545dd9`
+in the existing database. Their full upstream revisions were verified as
+`500305521544ed4e390535b84b142321c607d2db` and
+`4545dd939a522175de1274a4502db0ea593999c9`. Both require Python 3.14.
+The current container is missing ERPNext, HRMS and the site configuration.
+
+For this specific server, the recovery runner is now available:
+
+```bash
+cd /home/jerry/Renzi/app
+sudo python3 scripts/recover_docker_site.py --apply --migrate
+```
+
+Without `--apply` it only prints its plan. With `--apply` it pauses the existing
+container in maintenance mode, backs up the database, sites and bench under a
+root-only `/home/jerry/hrms-recovery-*` directory, then restores the pinned
+runtime. It retains the original environment and application source directories.
+It downloads the exact upstream dependency forks rather than replacing them with
+different PyPI releases. Network/dependency failures stop recovery and leave the
+maintenance marker in place. Use the exact `--resume` command printed by the
+runner; do not start a second new recovery.
+
+The runner creates a random dedicated database account restricted to the existing
+database, verifies access before writing site configuration, and preserves the
+old database account/password. It does not restore the missing encryption key or
+old attachments. Its private `state.json` contains credentials and must not be
+shared or committed. `--migrate` applies the current HRMS schema changes after
+backup and runtime reconstruction; omit it to reconstruct without migration.
+
+Success verifies host-local ping and the login route; browser login, old data,
+attachments and integration credentials still require acceptance. No remote
+server execution or end-to-end acceptance has been performed from the local
+development workspace.
+
 1. Confirm the old application's versions from database records or an original
    runtime backup, then restore/install matching runtime dependencies. This
    HRMS repository declares Frappe and ERPNext `>=17.0.0-dev,<18.0.0`; choosing

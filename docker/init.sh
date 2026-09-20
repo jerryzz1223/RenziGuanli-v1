@@ -4,6 +4,13 @@ set -euo pipefail
 BENCH_DIR=/home/frappe/frappe-bench
 PERSISTENT_SITES_DIR=/home/frappe/frappe-sites
 
+# Recovery intentionally keeps the existing container alive while replacing an
+# incomplete runtime. Keep the marker on failure so the next restart is safe.
+if [ -f "${PERSISTENT_SITES_DIR}/.hrms-recovery-in-progress" ]; then
+    echo "HRMS recovery is in progress. Resume the recovery script; web startup is paused."
+    exec sleep infinity
+fi
+
 link_persistent_sites() {
     mkdir -p "${PERSISTENT_SITES_DIR}"
     if [ -L "${BENCH_DIR}/sites" ]; then
@@ -72,10 +79,16 @@ patch_chinese_chart_periods() {
 }
 
 configure_web_bind() {
-    if grep -qE '^web:[[:space:]]*bench serve' ./Procfile; then
-        sed -i -E 's|^web:[[:space:]]*bench serve.*$|web: bench serve --host 0.0.0.0 --port 8000|' ./Procfile
-    elif ! grep -qE '^web:' ./Procfile; then
-        printf '\nweb: bench serve --host 0.0.0.0 --port 8000\n' >> ./Procfile
+    local site="${HRMS_SITE:-hrms.localhost}"
+    if [[ ! "${site}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+        echo "Invalid HRMS_SITE" >&2
+        exit 1
+    fi
+    # This Frappe version binds 0.0.0.0 itself and has no --host option.
+    if grep -qE '^web:' ./Procfile; then
+        sed -i -E "s|^web:.*$|web: bench --site ${site} serve --port 8000 --noreload|" ./Procfile
+    else
+        printf '\nweb: bench --site %s serve --port 8000 --noreload\n' "${site}" >> ./Procfile
     fi
 }
 
