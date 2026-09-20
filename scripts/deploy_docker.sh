@@ -81,7 +81,7 @@ compose() {
 wait_for_bench_runtime() {
 	local attempt
 	for attempt in $(seq 1 90); do
-		if ! docker inspect -f '{{.State.Running}}' docker-frappe-1 2>/dev/null | grep -q '^true$'; then
+		if ! docker inspect -f '{{.State.Running}}' "${FRAPPE_CONTAINER}" 2>/dev/null | grep -q '^true$'; then
 			echo "Frappe container stopped while bench was starting. Recent logs:" >&2
 			compose logs --tail=100 frappe >&2
 			exit 1
@@ -134,18 +134,39 @@ pull_code() {
 
 if [[ ${PULL_CODE} -eq 1 ]]; then
 	pull_code
+	# Run the newly fetched script, not the old shell body already in memory.
+	if [[ ${INSTALL_DEPS} -eq 0 ]]; then
+		exec bash "$0" --site "${SITE_NAME}" --skip-deps
+	fi
+	exec bash "$0" --site "${SITE_NAME}"
 fi
 
-echo "Preparing persistent Frappe sites volume..."
-compose run --rm --no-deps --user root --entrypoint bash frappe -lc '
-set -euo pipefail
-mkdir -p /home/frappe/frappe-sites
-chown -R frappe:frappe /home/frappe/frappe-sites
-'
-
-echo "Ensuring Docker services are running..."
-compose up -d
+FRAPPE_CONTAINER="$(compose ps -a -q frappe)"
+if [[ -z "${FRAPPE_CONTAINER}" ]]; then
+	echo "No existing Frappe container. This command updates an existing installation only." >&2
+	echo "Restore the runtime and site first; automatic container creation is disabled." >&2
+	exit 1
+fi
+# Bench currently lives in the container writable layer. `up` can recreate it
+# after a compose change, losing the only copy. `start` preserves the container.
+echo "Starting existing services without recreating containers..."
+compose start mariadb redis frappe
 wait_for_bench_runtime
+
+echo "Checking existing site and applications before deployment..."
+compose exec -T frappe bash -lc '
+set -euo pipefail
+cd /home/frappe/frappe-bench
+./env/bin/python /workspace/docker/check_site_ready.py "$1"
+bench --site "$1" list-apps
+' bash "${SITE_NAME}"
+
+echo "Backing up the existing database and site files before migration..."
+compose exec -T frappe bash -lc '
+set -euo pipefail
+cd /home/frappe/frappe-bench
+bench --site "$1" backup --with-files
+' bash "${SITE_NAME}"
 
 echo "Preparing generated asset and dependency directories..."
 compose exec -T --user root frappe bash -lc '
@@ -194,7 +215,11 @@ compose restart frappe
 
 echo "Waiting for Frappe to accept requests..."
 for attempt in $(seq 1 30); do
-	if compose exec -T frappe bash -lc "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/api/method/ping\", timeout=2).read()'" >/dev/null 2>&1; then
+	if compose exec -T frappe /home/frappe/frappe-bench/env/bin/python -c '
+import json, sys, urllib.request
+request = urllib.request.Request("http://127.0.0.1:8000/api/method/ping", headers={"Host": sys.argv[1]})
+with urllib.request.urlopen(request, timeout=2) as response:
+    assert json.load(response).get("message") == "pong"+' "${SITE_NAME}" >/dev/null 2>&1; then
 		echo "Deployment complete: ${SITE_NAME} is responding."
 		compose ps
 		exit 0

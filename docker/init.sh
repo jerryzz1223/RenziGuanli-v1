@@ -7,15 +7,21 @@ PERSISTENT_SITES_DIR=/home/frappe/frappe-sites
 link_persistent_sites() {
     mkdir -p "${PERSISTENT_SITES_DIR}"
     if [ -L "${BENCH_DIR}/sites" ]; then
+        if [ "$(readlink -f "${BENCH_DIR}/sites")" != "${PERSISTENT_SITES_DIR}" ]; then
+            echo "Unexpected sites symlink; inspect mounts before starting." >&2
+            exit 1
+        fi
         return
     fi
     if [ -d "${BENCH_DIR}/sites" ]; then
-        if find "${PERSISTENT_SITES_DIR}" -mindepth 1 -maxdepth 1 -type d -name '*.localhost' -print -quit | grep -q .; then
-            echo "Persistent sites directory already contains a site; refusing to merge site data automatically." >&2
+        if find "${PERSISTENT_SITES_DIR}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+            echo "Persistent sites directory is nonempty; refusing to overwrite or merge it automatically." >&2
             exit 1
         fi
         cp -a "${BENCH_DIR}/sites/." "${PERSISTENT_SITES_DIR}/"
-        rm -rf "${BENCH_DIR}/sites"
+        # Preserve the original directory even after a successful copy.
+        SITES_ARCHIVE="$(mktemp -d "${BENCH_DIR}/sites-before-link.XXXXXX")"
+        mv "${BENCH_DIR}/sites" "${SITES_ARCHIVE}/sites"
     fi
     ln -s "${PERSISTENT_SITES_DIR}" "${BENCH_DIR}/sites"
 }
@@ -87,18 +93,26 @@ if [ -d "${BENCH_DIR}/apps/frappe" ]; then
     echo "Bench already exists, skipping init"
     cd "${BENCH_DIR}"
     link_persistent_sites
+    ./env/bin/python /workspace/docker/check_site_ready.py "${HRMS_SITE:-hrms.localhost}"
     configure_container_hosts
     link_hrms_assets
     configure_web_bind
-    bench start
+    exec bench start
 else
-    echo "Creating new bench..."
+    echo "Bench runtime is missing. Automatic rebuilding is disabled to preserve recovery evidence." >&2
+    echo "Restore the original runtime/site and confirm application versions before bootstrapping." >&2
+    if [ "${HRMS_ALLOW_BOOTSTRAP:-0}" != "1" ]; then
+        exit 1
+    fi
+    : "${FRAPPE_REF:?Set the reviewed Frappe branch or tag before bootstrapping}"
+    : "${ERPNEXT_REF:?Set the matching ERPNext branch or tag before bootstrapping}"
+    echo "Creating explicitly requested bench..."
 fi
 
 git config --global http.version HTTP/1.1 || true
 
 if [ ! -d "/home/frappe/frappe-src" ]; then
-    run_with_retries git clone --depth 1 --branch develop --single-branch https://gitee.com/mirrors/frappe.git /home/frappe/frappe-src
+    run_with_retries git clone --depth 1 --branch "${FRAPPE_REF}" --single-branch https://gitee.com/mirrors/frappe.git /home/frappe/frappe-src
 fi
 python3 - <<'PY'
 from pathlib import Path
@@ -134,7 +148,7 @@ sed -i '/watch/d' ./Procfile || true
 configure_web_bind
 
 if [ ! -d "apps/erpnext" ]; then
-    run_with_retries bench get-app --branch develop https://gitee.com/mirrors/erpnext.git
+    run_with_retries bench get-app --branch "${ERPNEXT_REF}" https://gitee.com/mirrors/erpnext.git
 fi
 add_local_hrms_app
 link_hrms_assets
@@ -152,4 +166,5 @@ bench --site hrms.localhost enable-scheduler
 bench --site hrms.localhost clear-cache
 bench use hrms.localhost
 
-bench start
+./env/bin/python /workspace/docker/check_site_ready.py hrms.localhost
+exec bench start
