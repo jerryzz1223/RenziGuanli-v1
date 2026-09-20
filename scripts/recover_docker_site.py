@@ -231,7 +231,8 @@ fi
 cd /home/frappe/frappe-bench
 """ + command])
 
-    bench("./env/bin/python /workspace/docker/check_site_ready.py hrms.localhost; "
+    bench("./env/bin/python /workspace/docker/prepare_runtime_paths.py; "
+          "./env/bin/python /workspace/docker/check_site_ready.py hrms.localhost; "
           "bench --site hrms.localhost list-apps")
     step("assets", lambda: bench("bench build"))
     if options.migrate:

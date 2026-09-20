@@ -157,6 +157,7 @@ echo "Checking existing site and applications before deployment..."
 compose exec -T frappe bash -lc '
 set -euo pipefail
 cd /home/frappe/frappe-bench
+./env/bin/python /workspace/docker/prepare_runtime_paths.py
 ./env/bin/python /workspace/docker/check_site_ready.py "$1"
 bench --site "$1" list-apps
 ' bash "${SITE_NAME}"

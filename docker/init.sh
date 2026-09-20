@@ -106,6 +106,7 @@ if [ -d "${BENCH_DIR}/apps/frappe" ]; then
     echo "Bench already exists, skipping init"
     cd "${BENCH_DIR}"
     link_persistent_sites
+    ./env/bin/python /workspace/docker/prepare_runtime_paths.py
     ./env/bin/python /workspace/docker/check_site_ready.py "${HRMS_SITE:-hrms.localhost}"
     configure_container_hosts
     link_hrms_assets
@@ -150,6 +151,7 @@ bench init --skip-redis-config-generation --frappe-path /home/frappe/frappe-src 
 
 cd "${BENCH_DIR}"
 link_persistent_sites
+./env/bin/python /workspace/docker/prepare_runtime_paths.py
 patch_chinese_chart_periods
 
 # Use containers instead of localhost
