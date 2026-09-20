@@ -73,10 +73,21 @@ configure_web_bind() {
     fi
 }
 
+configure_container_hosts() {
+    # These settings must also be applied when an already-created bench is
+    # restarted. Otherwise an old Procfile/common_site_config can still point
+    # to localhost and socketio will try 127.0.0.1:11000.
+    bench set-mariadb-host mariadb
+    bench set-redis-cache-host redis://redis:6379
+    bench set-redis-queue-host redis://redis:6379
+    bench set-redis-socketio-host redis://redis:6379
+}
+
 if [ -d "${BENCH_DIR}/apps/frappe" ]; then
     echo "Bench already exists, skipping init"
     cd "${BENCH_DIR}"
     link_persistent_sites
+    configure_container_hosts
     link_hrms_assets
     configure_web_bind
     bench start
@@ -115,10 +126,7 @@ link_persistent_sites
 patch_chinese_chart_periods
 
 # Use containers instead of localhost
-bench set-mariadb-host mariadb
-bench set-redis-cache-host redis://redis:6379
-bench set-redis-queue-host redis://redis:6379
-bench set-redis-socketio-host redis://redis:6379
+configure_container_hosts
 
 # Remove redis, watch from Procfile
 sed -i '/redis/d' ./Procfile || true

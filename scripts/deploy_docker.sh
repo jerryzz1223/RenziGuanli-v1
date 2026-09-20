@@ -78,6 +78,29 @@ compose() {
 	docker compose -f "${COMPOSE_FILE}" "$@"
 }
 
+wait_for_bench_runtime() {
+	local attempt
+	for attempt in $(seq 1 90); do
+		if ! docker inspect -f '{{.State.Running}}' docker-frappe-1 2>/dev/null | grep -q '^true$'; then
+			echo "Frappe container stopped while bench was starting. Recent logs:" >&2
+			compose logs --tail=100 frappe >&2
+			exit 1
+		fi
+		if compose exec -T frappe bash -lc '
+			set -e
+			test -x /home/frappe/frappe-bench/env/bin/python
+			cd /home/frappe/frappe-bench
+			./env/bin/python -c "import frappe"
+		' >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 2
+	done
+	echo "Frappe bench did not become usable within 180 seconds. Recent logs:" >&2
+	compose logs --tail=100 frappe >&2
+	exit 1
+}
+
 if ! command -v docker >/dev/null 2>&1; then
 	echo "Docker is not installed." >&2
 	exit 1
@@ -122,6 +145,7 @@ chown -R frappe:frappe /home/frappe/frappe-sites
 
 echo "Ensuring Docker services are running..."
 compose up -d
+wait_for_bench_runtime
 
 echo "Preparing generated asset and dependency directories..."
 compose exec -T --user root frappe bash -lc '
