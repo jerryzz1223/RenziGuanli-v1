@@ -2869,13 +2869,99 @@ def list_dingtalk_attendance_sync_runs(company: str = "", attendance_month: str 
 
 
 @frappe.whitelist()
-def sync_dingtalk_directory(company: str = ""):
-	"""Sync departments followed by users; mappings remain reviewable drafts."""
+def queue_dingtalk_directory_sync(company: str = ""):
+	"""Queue the full directory pull so a large tree does not time out the browser."""
 	_require_dingtalk_manager()
 	company = _require_api_sync_enabled(company)
-	departments = sync_departments_from_dingtalk(company=company)
-	users = sync_users_from_dingtalk(company=company)
-	return {"company": company, "departments": departments, "users": users, "mappings": _count_dingtalk_mappings(company)}
+	active = frappe.get_all(
+		DINGTALK_SYNC_LOG_DOCTYPE,
+		filters={
+			"company": company,
+			"sync_type": DINGTALK_DIRECTORY_SYNC_TYPE,
+			"status": ["in", ["已排队", "运行中"]],
+		},
+		fields=["name", "status"],
+		order_by="modified desc",
+		limit_page_length=1,
+	)
+	if active:
+		return {"company": company, "sync_log": active[0].name, "status": active[0].status, "duplicate": True}
+	log = _new_sync_log(DINGTALK_DIRECTORY_SYNC_TYPE, company=company)
+	log.status = "已排队"
+	log.save(ignore_permissions=False)
+	frappe.enqueue(
+		"hrms.api.dingtalk_integration.run_queued_dingtalk_directory_sync",
+		queue="long",
+		timeout=3600,
+		enqueue_after_commit=True,
+		company=company,
+		sync_log=log.name,
+	)
+	return {"company": company, "sync_log": log.name, "status": log.status, "duplicate": False}
+
+
+def run_queued_dingtalk_directory_sync(company: str, sync_log: str):
+	"""Run the two-stage directory pull in a worker and retain partial evidence."""
+	log = frappe.get_doc(DINGTALK_SYNC_LOG_DOCTYPE, sync_log)
+	try:
+		log.status = "运行中"
+		log.save(ignore_permissions=False)
+		frappe.db.commit()
+		departments = sync_departments_from_dingtalk(company=company)
+		if departments.get("failed"):
+			message = departments.get("error_message") or "组织同步部分失败；已停止员工同步。"
+			_finish_sync_log(
+				log,
+				"部分失败",
+				received=departments.get("received", 0),
+				failed=departments.get("failed", 0),
+				error_message=message,
+			)
+			frappe.db.commit()
+			return {"sync_log": log.name, "status": "部分失败", "departments": departments, "users": {}}
+		users = sync_users_from_dingtalk(company=company)
+		failed = int(departments.get("failed", 0)) + int(users.get("failed", 0))
+		message = "\n".join(filter(None, [departments.get("error_message", ""), users.get("error_message", "")]))
+		_finish_sync_log(
+			log,
+			"已完成" if not failed else "部分失败",
+			received=int(departments.get("received", 0)) + int(users.get("received", 0)),
+			created=max(int(users.get("received", 0)) - int(users.get("failed", 0)), 0),
+			failed=failed,
+			error_message=message,
+		)
+		frappe.db.commit()
+		return {"sync_log": log.name, "status": log.status, "departments": departments, "users": users}
+	except Exception as exc:
+		_finish_sync_log(log, "失败", failed=1, error_message=str(exc))
+		frappe.db.commit()
+		return {"sync_log": log.name, "status": "失败", "error_message": str(exc)}
+
+
+@frappe.whitelist()
+def get_dingtalk_directory_sync_status(sync_log: str, company: str = ""):
+	"""Return the queued directory task state without exposing credentials."""
+	_require_dingtalk_manager()
+	company = _require_sync_company(company)
+	log = frappe.get_doc(DINGTALK_SYNC_LOG_DOCTYPE, sync_log)
+	if log.company != company or log.sync_type != DINGTALK_DIRECTORY_SYNC_TYPE:
+		frappe.throw(_("目录同步任务与当前公司不匹配。"))
+	return {
+		"sync_log": log.name,
+		"company": company,
+		"status": log.status,
+		"records_received": log.records_received or 0,
+		"records_created": log.records_created or 0,
+		"records_failed": log.records_failed or 0,
+		"error_message": log.error_message or "",
+		"finished_at": log.finished_at,
+	}
+
+
+@frappe.whitelist()
+def sync_dingtalk_directory(company: str = ""):
+	"""Compatibility entrypoint: full directory pulls now run asynchronously."""
+	return queue_dingtalk_directory_sync(company)
 
 
 def _event_value(event, *keys):

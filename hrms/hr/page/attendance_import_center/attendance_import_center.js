@@ -4119,22 +4119,37 @@ class AttendanceImportCenter {
 		if (!this.ensure_company()) return;
 		this.set_dingtalk_sync_progress({ step: "连接检查", title: __("正在连接钉钉"), message: __("正在验证应用凭证并准备同步范围..."), summary: __("请保持当前页面打开；每个阶段完成后会显示实际数量。") });
 		frappe.call({
-			method: "hrms.api.dingtalk_integration.sync_departments_from_dingtalk",
+			method: "hrms.api.dingtalk_integration.queue_dingtalk_directory_sync",
 			args: { company: this.company },
 			callback: (response) => {
-				const departments = response.message || {};
-				if (departments.failed) {
-					this.set_dingtalk_sync_progress({ step: "组织同步", title: __("组织同步部分失败"), message: __("已停止员工同步，避免在组织数据不完整时建立错误映射。"), failed: true, summary: __("已接收 {0} 条，失败 {1} 条。", [departments.received || 0, departments.failed || 0]), error: departments.error_message || __("请查看最近同步日志中的失败原因。") });
-					this.load_dingtalk_status();
-					return;
-				}
-				this.set_dingtalk_sync_progress({ step: "员工同步", title: __("组织同步完成，正在同步员工"), message: __("组织记录已接收 {0} 条；正在按部门拉取员工并建立待核对映射。", [departments.received || 0]), summary: __("组织同步完成：{0} 条。", [departments.received || 0]) });
-				this.sync_dingtalk_users_after_departments(departments);
+				const task = response.message || {};
+				this.set_dingtalk_sync_progress({ step: "连接检查", title: task.duplicate ? __("已有组织员工同步正在执行") : __("组织员工同步已进入后台队列"), message: __("服务器会分段读取组织和员工；不会因浏览器超时而中断。"), sync_log: task.sync_log, summary: __("同步任务：{0}", [task.sync_log || "--"]) });
+				this.watch_dingtalk_directory_sync(task.sync_log);
 			},
 			error: (response) => {
 				this.set_dingtalk_sync_progress({ step: "组织同步", title: __("组织同步失败"), message: __("没有继续同步员工。"), failed: true, error: this.read_dingtalk_error(response) });
 				this.load_dingtalk_status();
 			},
+		});
+	}
+
+	watch_dingtalk_directory_sync(syncLog, attempt = 0) {
+		if (!syncLog || attempt > 1800) return;
+		frappe.call({
+			method: "hrms.api.dingtalk_integration.get_dingtalk_directory_sync_status",
+			args: { company: this.company, sync_log: syncLog },
+			callback: (response) => {
+				const task = response.message || {};
+				const status = task.status || "已排队";
+				if (["已排队", "运行中"].includes(status)) {
+					this.set_dingtalk_sync_progress({ step: status === "已排队" ? "连接检查" : "组织同步", title: status === "已排队" ? __("组织员工同步等待执行") : __("正在同步组织和员工"), message: __("正在分批读取钉钉数据；请不要重复点击同步按钮。"), sync_log: syncLog, summary: __("已接收 {0} 条，失败 {1} 条。", [task.records_received || 0, task.records_failed || 0]) });
+					return setTimeout(() => this.watch_dingtalk_directory_sync(syncLog, attempt + 1), 2000);
+				}
+				const failed = ["失败", "部分失败"].includes(status);
+				this.set_dingtalk_sync_progress({ step: failed ? "组织同步" : "映射汇总", title: failed ? __("组织员工同步未完成") : __("组织与员工同步完成"), message: failed ? __("已保留成功记录；请查看同步记录后按失败阶段重试。") : __("请进入员工映射，核对待匹配或冲突记录。"), done: !failed, failed, summary: __("接收 {0} 条；新建 {1} 条；失败 {2} 条。", [task.records_received || 0, task.records_created || 0, task.records_failed || 0]), error: task.error_message || "" });
+				this.load_dingtalk_status();
+			},
+			error: () => setTimeout(() => this.watch_dingtalk_directory_sync(syncLog, attempt + 1), 3000),
 		});
 	}
 

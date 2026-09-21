@@ -814,9 +814,13 @@ def _attendance_shift_rule_bundle(company: str) -> dict[str, Any]:
 	rules.sort(key=lambda rule: str(rule["rule_code"]))
 	rules.sort(key=lambda rule: str(rule.get("effective_from") or ""), reverse=True)
 	rules.sort(key=lambda rule: (len(rule["tokens"]), sum(len(token) for token in rule["tokens"])), reverse=True)
-	version_source = [{key: row.get(key) for key in sorted(row) if key not in {"name", "modified", "modified_by"}} for row in active_rows]
-	version = hashlib.sha256(_json(version_source).encode("utf-8")).hexdigest()[:16] if active_rows else f"builtin-{ATTENDANCE_POLICY_VERSION}"
-	return {"rules": rules if active_rows else None, "version": version, "items": items}
+	version_rows = active_rows if active_rows else items
+	version_source = [{key: row.get(key) for key in sorted(row) if key not in {"name", "modified", "modified_by"}} for row in version_rows]
+	version = hashlib.sha256(_json(version_source).encode("utf-8")).hexdigest()[:16] if version_source else f"builtin-{ATTENDANCE_POLICY_VERSION}"
+	# None means the company has never configured schedule rules and may use the
+	# built-in compatibility fallback. An explicit empty list means rules exist
+	# but are all disabled; disabling must never silently reactivate built-ins.
+	return {"rules": rules if items else None, "version": version, "items": items}
 
 
 def _latest_batch(company: str, attendance_month: str, source_type: str):

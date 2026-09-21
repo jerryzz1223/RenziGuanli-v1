@@ -43,7 +43,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "同步类型",
-   "options": "部门同步\n员工同步\n员工档案同步\n入职同步\n考勤同步\n审批同步\n状态同步"
+   "options": "组织员工同步\n部门同步\n员工同步\n员工档案同步\n入职同步\n考勤同步\n审批同步\n状态同步"
   },
   {
    "default": "钉钉到人资系统",
