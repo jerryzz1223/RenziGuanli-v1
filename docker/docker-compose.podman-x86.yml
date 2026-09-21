@@ -1,0 +1,60 @@
+services:
+  mariadb:
+    image: localhost/mariadb:10.8
+    platform: linux/amd64
+    container_name: hrms_x86_mariadb
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+      - --skip-innodb-read-only-compressed
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD:-123}"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    restart: unless-stopped
+
+  redis:
+    image: localhost/redis:alpine
+    platform: linux/amd64
+    container_name: hrms_x86_redis
+    restart: unless-stopped
+
+  frappe:
+    image: localhost/frappe/bench:latest
+    platform: linux/amd64
+    container_name: hrms_x86_frappe
+    command: bash /workspace/docker/init_podman_x86.sh
+    environment:
+      SHELL: /bin/bash
+      HRMS_SITE: "${HRMS_SITE:-hrms.localhost}"
+      PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+      UV_DEFAULT_INDEX: https://pypi.tuna.tsinghua.edu.cn/simple
+      UV_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+      npm_config_registry: https://registry.npmmirror.com
+      YARN_NPM_REGISTRY_SERVER: https://registry.npmmirror.com
+      GIT_TERMINAL_PROMPT: "0"
+    working_dir: /home/frappe
+    volumes:
+      # The :Z suffix is required for this rootless Podman SELinux host.
+      - ..:/workspace:Z
+      - frappe-bench:/home/frappe/frappe-bench
+      - frappe-sites:/home/frappe/frappe-sites
+    ports:
+      - 8000:8000
+      - 9000:9000
+    depends_on:
+      - mariadb
+      - redis
+    restart: unless-stopped
+
+volumes:
+  mariadb-data:
+    external: true
+    name: docker_mariadb-data
+  frappe-bench:
+    external: true
+    name: hrms-x86-frappe-bench
+  frappe-sites:
+    external: true
+    name: hrms-x86-frappe-sites
