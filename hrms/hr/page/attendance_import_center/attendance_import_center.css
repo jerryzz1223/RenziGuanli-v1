@@ -32,6 +32,109 @@
 	padding: 8px 10px;
 }
 
+.hrms-overtime-wheel-picker {
+	display: grid;
+	gap: 20px;
+	grid-template-columns: repeat(2, minmax(220px, 1fr));
+	margin: 8px 0 4px;
+}
+
+.hrms-overtime-wheel-group {
+	min-width: 0;
+}
+
+.hrms-overtime-wheel-label {
+	color: var(--text-color, #36414c);
+	font-weight: 500;
+	margin-bottom: 6px;
+}
+
+.hrms-overtime-wheel-input {
+	font-variant-numeric: tabular-nums;
+	margin-bottom: 8px;
+	max-width: 180px;
+}
+
+.hrms-overtime-wheel-input.is-invalid {
+	border-color: var(--red-500, #ef4444);
+}
+
+.hrms-overtime-wheel {
+	background: var(--control-bg, #f8fafc);
+	border: 1px solid var(--border-color, #d1d8dd);
+	border-radius: 8px;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr);
+	height: 132px;
+	overflow: hidden;
+	position: relative;
+}
+
+.hrms-overtime-wheel-selection {
+	border-bottom: 1px solid var(--primary, #2490ef);
+	border-top: 1px solid var(--primary, #2490ef);
+	height: 44px;
+	left: 8px;
+	pointer-events: none;
+	position: absolute;
+	right: 8px;
+	top: 44px;
+	z-index: 2;
+}
+
+.hrms-overtime-wheel-column {
+	height: 132px;
+	overflow-y: auto;
+	scroll-snap-type: y mandatory;
+	scrollbar-width: none;
+	touch-action: pan-y;
+}
+
+.hrms-overtime-wheel-column::-webkit-scrollbar {
+	display: none;
+}
+
+.hrms-overtime-wheel-option,
+.hrms-overtime-wheel-spacer {
+	align-items: center;
+	display: flex;
+	height: 44px;
+	justify-content: center;
+	scroll-snap-align: start;
+}
+
+.hrms-overtime-wheel-option {
+	color: var(--text-color, #36414c);
+	cursor: pointer;
+	font-size: 18px;
+	font-variant-numeric: tabular-nums;
+	user-select: none;
+}
+
+.hrms-overtime-wheel-option:focus {
+	background: rgba(36, 144, 239, 0.08);
+	outline: none;
+}
+
+.hrms-overtime-wheel-separator {
+	align-items: center;
+	display: flex;
+	font-size: 20px;
+	font-weight: 600;
+	justify-content: center;
+	position: relative;
+	z-index: 3;
+}
+
+.hrms-overtime-wheel-clear {
+	padding-left: 0;
+	padding-right: 0;
+}
+
+.hrms-overtime-wheel-help {
+	margin-top: 4px;
+}
+
 .hrms-attendance-list-actions {
 	align-items: flex-end;
 	display: flex;
@@ -873,6 +976,18 @@
 	padding: 0 14px 12px;
 }
 
+.hrms-attendance-exception-query {
+	align-items: center;
+	display: inline-flex;
+	flex: 1 1 520px;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.hrms-attendance-exception-query .form-control {
+	max-width: 150px;
+}
+
 .hrms-attendance-result-summary {
 	align-items: stretch;
 	border: 1px solid var(--border-color, #e5e7eb);
@@ -1164,6 +1279,10 @@
 	.hrms-attendance-monthly-support-grid,
 	.hrms-attendance-final-recognition,
 	.hrms-attendance-final-readiness {
+		grid-template-columns: 1fr;
+	}
+
+	.hrms-overtime-wheel-picker {
 		grid-template-columns: 1fr;
 	}
 

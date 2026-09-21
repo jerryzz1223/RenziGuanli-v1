@@ -69,8 +69,29 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 6
+ATTENDANCE_POLICY_VERSION = 9
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
+
+# 永新班别排配表 V3.0 的固定加班规则。每条规则分别保存：班次关键词、平日
+# 自动生成时数、应打卡至的平日加班结束时间，以及周末是否免加班单。规则顺序
+# 从具体到通用，避免 CCD 白班被“生产白班”等较宽泛规则覆盖。
+#
+# 中班是特殊边界：平日自动生成 2.5 小时，但周末栏明确写“加班单”。
+# 间接人员、药水分析组和生管仓库没有列在这里，因为平日/周末均须加班单。
+SCHEDULE_OVERTIME_RULES = (
+	{"name": "CCD人员夜班", "tokens": ("CCD人员", "夜班"), "workday_hours": Decimal("3.5"), "workday_end_minutes": 8 * 60, "restday_auto": True},
+	{"name": "CCD人员白班", "tokens": ("CCD人员",), "workday_hours": Decimal("2.5"), "workday_end_minutes": 20 * 60, "restday_auto": True},
+	{"name": "品保10点生产白班", "tokens": ("品保10点生产",), "workday_hours": Decimal("3"), "workday_end_minutes": 22 * 60, "restday_auto": True},
+	{"name": "生产夜班", "tokens": ("生产", "夜班"), "workday_hours": Decimal("3.5"), "workday_end_minutes": 8 * 60, "restday_auto": True},
+	{"name": "生产白班", "tokens": ("生产", "白班"), "workday_hours": Decimal("3"), "workday_end_minutes": 20 * 60, "restday_auto": True},
+	{"name": "警卫夜班", "tokens": ("警卫", "夜班"), "workday_hours": Decimal("3.5"), "workday_end_minutes": 7 * 60 + 30, "restday_auto": True},
+	{"name": "警卫白班", "tokens": ("警卫", "白班"), "workday_hours": Decimal("2.5"), "workday_end_minutes": 19 * 60 + 30, "restday_auto": True},
+	{"name": "烧饭阿姨夜班", "tokens": ("烧饭阿姨", "夜班"), "workday_hours": Decimal("3"), "workday_end_minutes": 0, "restday_auto": True},
+	{"name": "烧饭阿姨白班", "tokens": ("烧饭阿姨",), "workday_hours": Decimal("2.5"), "workday_end_minutes": 18 * 60, "restday_auto": True},
+	{"name": "清洁阿姨", "tokens": ("清洁阿姨",), "workday_hours": Decimal("2.5"), "workday_end_minutes": 17 * 60, "restday_auto": True},
+	{"name": "IQC白班", "tokens": ("IQC",), "workday_hours": Decimal("3"), "workday_end_minutes": 19 * 60, "restday_auto": True},
+	{"name": "中班", "tokens": ("中班",), "workday_hours": Decimal("2.5"), "workday_end_minutes": 60, "restday_auto": False},
+)
 LEAVE_FIELDS = tuple(field for field in NUMERIC_FIELDS if field.endswith("leave_hours")) + ("work_injury_hours", "rest_arrangement_hours")
 LEAVE_LABELS = dict(zip(
 	("personal_leave_hours", "sick_leave_hours", "annual_leave_hours", "work_injury_hours", "reunion_leave_hours", "rest_arrangement_hours", "bereavement_leave_hours", "marriage_leave_hours", "public_leave_hours", "maternity_leave_hours"),
@@ -126,6 +147,7 @@ _PRODUCTION_DEEP_NIGHT_SHIFT = "生产夜班"
 _PRODUCTION_DEEP_NIGHT_START_MINUTES = 20 * 60
 _PRODUCTION_DEEP_NIGHT_END_MINUTES = 8 * 60
 _SHIFT_CLOCK_RE = re.compile(r"(?<!\d)([01]?\d|2[0-3])[:：]([0-5]\d)(?!\d)")
+_PUNCH_RANGE_CLOCK_RE = re.compile(r"(?<!\d)([01]?\d|2[0-4])[:：]([0-5]\d)(?!\d)")
 
 EXCEPTION_MESSAGES = {
 	"ATTENDANCE_DATE_MISSING": "考勤日期为空。",
@@ -143,6 +165,8 @@ EXCEPTION_MESSAGES = {
 	"ATTENDANCE_HOURS_MISMATCH": "实际出勤＋事假＋病假÷2＋团圆假＋排休＋旷工不等于标准工时；请按本日明细核对差额。",
 	"CLOCK_IN_MISSING": "钉钉明确存在上班未打卡记录；人员照常进入终稿，红苹果由忘打卡来源核算。",
 	"CLOCK_OUT_MISSING": "钉钉明确存在下班未打卡记录；人员照常进入终稿，红苹果由忘打卡来源核算。",
+	"CLOCK_IN_OUTSIDE_PICK_RANGE": "上班打卡不在该班次允许的可取卡时段内，请人工核对班次或打卡。",
+	"CLOCK_OUT_OUTSIDE_PICK_RANGE": "下班打卡不在该班次允许的可取卡时段内，请人工核对班次或打卡。",
 	"LATE_MARKED": "上班打卡晚于计划上班时间；迟到缺口已按时长叠加到事假，原始打卡和迟到次数仍保留审计。",
 	"EARLY_MARKED": "钉钉明确标记早退；工作日无请假证据时按实际早退时长计旷工工时。",
 	"ABSENCE_MARKED": "工作日无出勤且无可抵扣请假，已按未出勤工时计入旷工并进入薪资三倍扣款。",
@@ -178,6 +202,8 @@ DEFAULT_EXCEPTION_POLICY = {
 NON_BLOCKING_ATTENDANCE_EVENT_CODES = frozenset({
 	"CLOCK_IN_MISSING",
 	"CLOCK_OUT_MISSING",
+	"CLOCK_IN_OUTSIDE_PICK_RANGE",
+	"CLOCK_OUT_OUTSIDE_PICK_RANGE",
 	"LATE_MARKED",
 	"EARLY_MARKED",
 	"ABSENCE_MARKED",
@@ -190,6 +216,8 @@ NON_BLOCKING_ATTENDANCE_EVENT_CODES = frozenset({
 ATTENDANCE_DETAIL_EXCEPTION_FIELDS = (
 	("CLOCK_IN_MISSING", "clock_in_missing"),
 	("CLOCK_OUT_MISSING", "clock_out_missing"),
+	("CLOCK_IN_OUTSIDE_PICK_RANGE", "clock_in_outside_pick_range"),
+	("CLOCK_OUT_OUTSIDE_PICK_RANGE", "clock_out_outside_pick_range"),
 	("LATE_MARKED", "late_count"),
 	("EARLY_MARKED", "early_count"),
 	("ABSENCE_MARKED", "absence_marker_count"),
@@ -274,6 +302,79 @@ def _has_overtime_approval(row: Mapping[str, Any]) -> bool:
 	return "加班" in approval or "overtime" in approval.casefold()
 
 
+def _schedule_overtime_rule(row: Mapping[str, Any], shift_rules: Sequence[Mapping[str, Any]] | None = None) -> Mapping[str, Any] | None:
+	"""Return the configured schedule row matched by the assigned shift."""
+	shift = re.sub(r"\s+", "", _text(_value(row, IDENTITY_FIELDS["shift"]))).casefold()
+	for raw_rule in shift_rules if shift_rules is not None else SCHEDULE_OVERTIME_RULES:
+		rule = dict(raw_rule)
+		effective_from = _parse_date(rule.get("effective_from"), "")
+		attendance_date = _parse_date(_value(row, IDENTITY_FIELDS["attendance_date"]), "")
+		if effective_from and attendance_date and attendance_date < effective_from:
+			continue
+		if rule.get("tokens") and all(token.casefold() in shift for token in rule["tokens"]):
+			rule["workday_hours"] = _decimal(rule.get("workday_hours")) or Decimal("0")
+			rule["workday_auto"] = bool(rule.get("workday_auto", True))
+			return rule
+	return None
+
+
+def _schedule_overtime_mode(row: Mapping[str, Any], shift_rules: Sequence[Mapping[str, Any]] | None = None) -> str:
+	"""Return the weekday overtime-source mode declared by the assigned shift."""
+	rule = _schedule_overtime_rule(row, shift_rules)
+	return "schedule_auto" if rule and rule.get("workday_auto") else "overtime_application"
+
+
+def _schedule_restday_overtime_mode(row: Mapping[str, Any], shift_rules: Sequence[Mapping[str, Any]] | None = None) -> str:
+	"""Return the weekend overtime-source mode from the schedule's weekend column."""
+	rule = _schedule_overtime_rule(row, shift_rules)
+	return "schedule_auto" if rule and rule["restday_auto"] else "overtime_application"
+
+
+def _schedule_auto_overtime_hours(row: Mapping[str, Any], shift_rules: Sequence[Mapping[str, Any]] | None = None) -> Decimal | None:
+	rule = _schedule_overtime_rule(row, shift_rules)
+	return rule["workday_hours"] if rule and rule.get("workday_auto") else None
+
+
+def _schedule_auto_overtime_reached(row: Mapping[str, Any], raw_hours: Decimal, shift_rules: Sequence[Mapping[str, Any]] | None = None) -> bool:
+	"""Whether source hours or the actual clock-out reaches the fixed schedule row."""
+	rule = _schedule_overtime_rule(row, shift_rules)
+	if not rule or not rule.get("workday_auto") or rule["workday_hours"] <= 0:
+		return False
+	if raw_hours >= rule["workday_hours"]:
+		return True
+	bounds = _shift_bounds_minutes(row, rule)
+	if not bounds:
+		return False
+	start, _end = bounds
+	_actual_in, actual_out = _actual_bounds_minutes(row, start, rule)
+	if actual_out is None:
+		return False
+	if rule.get("workday_end_minutes") is None:
+		return False
+	target = int(rule["workday_end_minutes"])
+	if target <= start:
+		target += 24 * 60
+	return actual_out >= target
+
+
+def _schedule_auto_overtime_excess_minutes(row: Mapping[str, Any], shift_rules: Sequence[Mapping[str, Any]] | None = None) -> int:
+	"""Return minutes after the fixed overtime end; a pre-shift punch is irrelevant."""
+	rule = _schedule_overtime_rule(row, shift_rules)
+	if not rule or not rule.get("workday_auto") or rule.get("workday_end_minutes") is None:
+		return 0
+	bounds = _shift_bounds_minutes(row, rule)
+	if not bounds:
+		return 0
+	start, _end = bounds
+	_actual_in, actual_out = _actual_bounds_minutes(row, start, rule)
+	if actual_out is None:
+		return 0
+	target = int(rule["workday_end_minutes"])
+	if target <= start:
+		target += 24 * 60
+	return max(actual_out - target, 0)
+
+
 def _clock_minutes(value: Any) -> int | None:
 	"""Read the final HH:MM value from a DingTalk clock or shift label."""
 	matches = _SHIFT_CLOCK_RE.findall(_text(value))
@@ -301,7 +402,7 @@ def _shift_start_minutes(row: Mapping[str, Any]) -> int | None:
 	return int(hour) * 60 + int(minute)
 
 
-def _shift_bounds_minutes(row: Mapping[str, Any]) -> tuple[int, int] | None:
+def _shift_bounds_minutes(row: Mapping[str, Any], shift_rule: Mapping[str, Any] | None = None) -> tuple[int, int] | None:
 	"""Return a complete scheduled interval, preserving overnight shifts."""
 	start_text = _text(_value(row, ("应上班时间", "应打卡时间", "scheduled_in_time")))
 	end_text = _text(_value(row, ("应下班时间", "scheduled_out_time")))
@@ -310,6 +411,9 @@ def _shift_bounds_minutes(row: Mapping[str, Any]) -> tuple[int, int] | None:
 	else:
 		shift = _text(_value(row, IDENTITY_FIELDS["shift"]))
 		clocks = _SHIFT_CLOCK_RE.findall(shift)
+		if len(clocks) < 2 and shift_rule:
+			shift = _text(shift_rule.get("basic_time"))
+			clocks = _SHIFT_CLOCK_RE.findall(shift)
 		if len(clocks) < 2:
 			return None
 		start = int(clocks[0][0]) * 60 + int(clocks[0][1])
@@ -322,7 +426,35 @@ def _shift_bounds_minutes(row: Mapping[str, Any]) -> tuple[int, int] | None:
 	return start, end
 
 
-def _actual_bounds_minutes(row: Mapping[str, Any], scheduled_start: int) -> tuple[int | None, int | None]:
+def _punch_range_bounds(value: Any) -> tuple[int, int] | None:
+	"""Parse a configured inclusive range, accepting 24:00 and next-day text."""
+	matches = _PUNCH_RANGE_CLOCK_RE.findall(_text(value))
+	if len(matches) < 2:
+		return None
+	start = int(matches[0][0]) * 60 + int(matches[0][1])
+	end = int(matches[1][0]) * 60 + int(matches[1][1])
+	if start > 24 * 60 or end > 24 * 60:
+		return None
+	if "次日" in _text(value) or end <= start:
+		end += 24 * 60
+	return start, end
+
+
+def _punch_in_configured_range(actual_minutes: int | None, configured_range: Any) -> bool | None:
+	"""Return None when no range is configured, otherwise an inclusive match."""
+	bounds = _punch_range_bounds(configured_range)
+	if actual_minutes is None or not bounds:
+		return None
+	start, end = bounds
+	candidate = actual_minutes
+	if end > 24 * 60 and candidate < start:
+		candidate += 24 * 60
+	return start <= candidate <= end
+
+
+def _actual_bounds_minutes(
+	row: Mapping[str, Any], scheduled_start: int, shift_rule: Mapping[str, Any] | None = None,
+) -> tuple[int | None, int | None]:
 	in_text = _text(_value(row, ("上班时间", "上班打卡", "上班打卡时间", "clock_in")))
 	out_text = _text(_value(row, ("下班时间", "下班打卡", "下班打卡时间", "clock_out")))
 	actual_in, actual_out = _clock_minutes(in_text), _clock_minutes(out_text)
@@ -330,16 +462,24 @@ def _actual_bounds_minutes(row: Mapping[str, Any], scheduled_start: int) -> tupl
 		actual_in += 24 * 60
 	if actual_out is not None and ("次日" in out_text or actual_out <= scheduled_start):
 		actual_out += 24 * 60
+	if shift_rule:
+		if _punch_in_configured_range(actual_in, shift_rule.get("punch_in_range")) is False:
+			actual_in = None
+		if _punch_in_configured_range(actual_out, shift_rule.get("punch_out_range")) is False:
+			actual_out = None
 	return actual_in, actual_out
 
 
-def _shift_time_facts(row: Mapping[str, Any]) -> dict[str, Any]:
+def _shift_time_facts(row: Mapping[str, Any], shift_rule: Mapping[str, Any] | None = None) -> dict[str, Any]:
 	"""Calculate auditable late and outside-shift durations without guessing."""
-	bounds = _shift_bounds_minutes(row)
+	bounds = _shift_bounds_minutes(row, shift_rule)
 	if not bounds:
 		return {"schedule_available": False}
 	start, end = bounds
-	actual_in, actual_out = _actual_bounds_minutes(row, start)
+	raw_actual_in, raw_actual_out = _actual_bounds_minutes(row, start)
+	actual_in, actual_out = _actual_bounds_minutes(row, start, shift_rule)
+	punch_in_range_valid = _punch_in_configured_range(raw_actual_in, (shift_rule or {}).get("punch_in_range"))
+	punch_out_range_valid = _punch_in_configured_range(raw_actual_out, (shift_rule or {}).get("punch_out_range"))
 	early_minutes = max(start - actual_in, 0) if actual_in is not None else 0
 	late_out_minutes = max(actual_out - end, 0) if actual_out is not None else 0
 	late_minutes = max(actual_in - start, 0) if actual_in is not None else 0
@@ -350,11 +490,59 @@ def _shift_time_facts(row: Mapping[str, Any]) -> dict[str, Any]:
 		"late_minutes": late_minutes,
 		"pre_shift_minutes": early_minutes,
 		"post_shift_minutes": late_out_minutes,
+		"punch_in_range": (shift_rule or {}).get("punch_in_range") or "",
+		"punch_out_range": (shift_rule or {}).get("punch_out_range") or "",
+		"punch_in_range_valid": punch_in_range_valid,
+		"punch_out_range_valid": punch_out_range_valid,
 		# Early arrival is not working time or overtime.  Keep it separately for
 		# audit, while the workday tolerance and raw overtime candidate use only
 		# the time after the scheduled shift end.
 		"outside_shift_minutes": late_out_minutes,
 	}
+
+
+def _night_condition_matches(condition: Mapping[str, Any] | None, *, duration_hours: Decimal, actual_out: int, scheduled_start: int) -> bool:
+	if not condition or duration_hours < (_decimal(condition.get("minimum_hours")) or Decimal("0")):
+		return False
+	start = int(condition.get("start_minutes") or 0)
+	if condition.get("mode") == "区间":
+		end = int(condition.get("end_minutes") or 0)
+		if start <= scheduled_start:
+			start += 24 * 60
+			end += 24 * 60
+		elif end <= start:
+			end += 24 * 60
+		candidate = actual_out + (24 * 60 if end > 24 * 60 and actual_out < start else 0)
+		return start <= candidate <= end
+	if condition.get("mode") == "不早于":
+		target = start
+		if target <= scheduled_start:
+			target += 24 * 60
+		return actual_out >= target
+	return False
+
+
+def _configured_night_allowances(row: Mapping[str, Any], shift_rule: Mapping[str, Any] | None) -> tuple[bool, bool]:
+	"""Return small/large night matches from structured workbook conditions."""
+	if not shift_rule:
+		return False, False
+	bounds = _shift_bounds_minutes(row, shift_rule)
+	if not bounds:
+		return False, False
+	start, _end = bounds
+	actual_in, actual_out = _actual_bounds_minutes(row, start, shift_rule)
+	if actual_in is None or actual_out is None or actual_out < actual_in:
+		return False, False
+	duration_hours = Decimal(actual_out - actual_in) / Decimal("60")
+	large = _night_condition_matches(
+		shift_rule.get("large_night_condition"), duration_hours=duration_hours,
+		actual_out=actual_out, scheduled_start=start,
+	)
+	small = not large and _night_condition_matches(
+		shift_rule.get("small_night_condition"), duration_hours=duration_hours,
+		actual_out=actual_out, scheduled_start=start,
+	)
+	return small, large
 
 
 def is_production_deep_night_shift(shift: Any) -> bool:
@@ -549,6 +737,8 @@ def process_attendance_draft_rows(
 	source_sheet: str = "每日明细（钉钉导出）",
 	employee_directory: Iterable[Mapping[str, Any]] | None = None,
 	exception_policy: Mapping[str, Any] | None = None,
+	shift_rules: Sequence[Mapping[str, Any]] | None = None,
+	shift_rule_version: str = "",
 ) -> dict[str, Any]:
 	"""Aggregate a DingTalk daily-detail export into one employee dataset."""
 	if not _MONTH_RE.fullmatch(_text(attendance_month)):
@@ -599,6 +789,8 @@ def process_attendance_draft_rows(
 			employee_index=employee_index,
 			date_counts=date_counts,
 			exception_policy=policy,
+			shift_rules=shift_rules,
+			shift_rule_version=shift_rule_version,
 		)
 		for _key, rows in sorted(groups.items(), key=lambda item: _group_sort_key(item[1]))
 	]
@@ -641,7 +833,7 @@ def process_attendance_draft_rows(
 	}
 
 
-def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_sheet, structure, employee_index, date_counts, exception_policy=None):
+def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_sheet, structure, employee_index, date_counts, exception_policy=None, shift_rules=None, shift_rule_version=""):
 	first = rows[0]
 	raw_code = _value(first, IDENTITY_FIELDS["employee_code"])
 	names = {_value(row, IDENTITY_FIELDS["employee_name"]) for row in rows if _value(row, IDENTITY_FIELDS["employee_name"])}
@@ -661,6 +853,7 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 	totals = {field: Decimal("0") for field in NUMERIC_FIELDS}
 	scheduled_deep_night_shifts = 0
 	source_deep_night_present = False
+	configured_night_rule_used = False
 	source_rows = []
 	attendance_details = []
 	exception_events = []
@@ -733,7 +926,25 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 				row, parsed_date, row_number, raw_numbers, source_file, source_sheet, employment_scope_reason,
 			))
 			continue
-		shift_facts = _shift_time_facts(row)
+		matched_shift_rule = _schedule_overtime_rule(row, shift_rules)
+		shift_facts = _shift_time_facts(row, matched_shift_rule)
+		if matched_shift_rule and (matched_shift_rule.get("small_night_condition") or matched_shift_rule.get("large_night_condition")):
+			configured_night_rule_used = True
+		configured_small_night, configured_large_night = _configured_night_allowances(row, matched_shift_rule)
+		if configured_large_night and row_numbers["large_night_shifts"] <= 0:
+			row_numbers["large_night_shifts"] = Decimal("1")
+		if configured_small_night and row_numbers["small_night_shifts"] <= 0 and row_numbers["large_night_shifts"] <= 0:
+			row_numbers["small_night_shifts"] = Decimal("1")
+		for valid_key, exception_code in (
+			("punch_in_range_valid", "CLOCK_IN_OUTSIDE_PICK_RANGE"),
+			("punch_out_range_valid", "CLOCK_OUT_OUTSIDE_PICK_RANGE"),
+		):
+			if shift_facts.get(valid_key) is False:
+				_add_code(codes, exception_code)
+				exception_events.append(_exception_event(exception_code, parsed_date, row_number))
+		schedule_overtime_mode = _schedule_overtime_mode(row, shift_rules)
+		schedule_restday_overtime_mode = _schedule_restday_overtime_mode(row, shift_rules)
+		schedule_auto_overtime_hours = _schedule_auto_overtime_hours(row, shift_rules)
 		manual_overtime_value, manual_overtime_present = _field_value(
 			row, ("确认计入的加班时长", "confirmed_overtime_hours")
 		)
@@ -743,10 +954,17 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			manual_overtime_hours = None
 		raw_workday_overtime_hours = row_numbers["workday_overtime_hours"]
 		has_overtime_approval = _has_overtime_approval(row)
+		raw_outside_shift_hours = Decimal(shift_facts.get("outside_shift_minutes") or 0) / Decimal("60")
+		schedule_fixed_hours_reached = _schedule_auto_overtime_reached(row, raw_workday_overtime_hours, shift_rules)
+		schedule_auto_excess_minutes = _schedule_auto_overtime_excess_minutes(row, shift_rules)
 		confirmed_workday_overtime_hours = (
 			manual_overtime_hours
 			if manual_overtime_hours is not None
-			else raw_workday_overtime_hours if has_overtime_approval else Decimal("0")
+			else raw_workday_overtime_hours if has_overtime_approval
+			else schedule_auto_overtime_hours
+			if schedule_fixed_hours_reached
+			else raw_workday_overtime_hours if schedule_overtime_mode == "schedule_auto"
+			else Decimal("0")
 		)
 		row_numbers["workday_overtime_hours"] = confirmed_workday_overtime_hours
 		is_deep_night_shift = (
@@ -798,11 +1016,29 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		row_early_count = row_numbers["early_count"]
 		row_absence_marker_count = row_numbers["absence_marker_count"]
 		row_absence_hours = row_numbers["absence_hours"]
+		# Only schedule rows whose weekend column says “不提交加班单” may generate
+		# rest-day overtime from actual hours.  中班 is deliberately excluded: its
+		# weekday amount is automatic, but its weekend column still says “加班单”.
+		if (
+			schedule_restday_overtime_mode == "schedule_auto"
+			and _is_rest_day(row)
+			and row_numbers["restday_overtime_hours"] <= 0
+			and row_actual_attendance_hours > 0
+		):
+			row_numbers["restday_overtime_hours"] = row_actual_attendance_hours
+		schedule_auto_restday_covered = bool(
+			schedule_restday_overtime_mode == "schedule_auto"
+			and (
+				row_numbers["restday_overtime_hours"] > 0
+				or row_actual_attendance_hours > 0
+			)
+		)
 		row_restday_clock_without_overtime = (
 			_is_rest_day(row)
 			and _has_clock_punch(row)
 			and row_numbers["restday_overtime_hours"] <= 0
 			and not _has_overtime_approval(row)
+			and not schedule_auto_restday_covered
 		)
 		if row_late_count <= 0 and late_minutes > 0:
 			row_late_count = Decimal("1")
@@ -811,8 +1047,17 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			_is_scheduled_workday(row_standard_hours)
 			and not policy["is_weekend"]
 			and (
-				(shift_facts.get("outside_shift_minutes") or 0) > OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES
-				or raw_workday_overtime_hours > 0
+				(
+					schedule_overtime_mode == "schedule_auto"
+					and schedule_auto_excess_minutes > OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES
+				)
+				or (
+					schedule_overtime_mode != "schedule_auto"
+					and (
+						(shift_facts.get("outside_shift_minutes") or 0) > OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES
+						or raw_workday_overtime_hours > 0
+					)
+				)
 			)
 			and not has_overtime_approval
 			and manual_overtime_hours is None
@@ -904,15 +1149,41 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			"full_day_leave": policy["full_day_leave"],
 			"source_numbers": {field: _display_number(value) for field, value in raw_numbers.items()},
 			"approval": _text(_value(row, IDENTITY_FIELDS["approval"])),
-			"overtime_approval_status": "人工确认" if manual_overtime_hours is not None else "已匹配申请" if has_overtime_approval else "无申请",
+			"overtime_approval_status": (
+				"人工确认" if manual_overtime_hours is not None
+				else "排班自动生成" if schedule_overtime_mode == "schedule_auto"
+				else "已匹配申请" if has_overtime_approval else "无申请"
+			),
+			"overtime_source_mode": schedule_overtime_mode,
+			"shift_rule_code": matched_shift_rule.get("rule_code", "builtin") if matched_shift_rule else "",
+			"shift_rule_name": matched_shift_rule.get("name", "") if matched_shift_rule else "",
+			"shift_rule_snapshot": {
+				key: matched_shift_rule.get(key)
+				for key in (
+					"basic_time", "basic_hours", "weekday_overtime_time", "weekend_overtime_time",
+					"overtime_begin_time", "weekday_overtime_mode", "weekend_overtime_mode",
+					"holiday_overtime_mode", "extended_shift_rule", "overnight", "meal_deduction_rule",
+					"meal_deduction_hours", "punch_in_range", "punch_out_range", "small_night_rule",
+					"large_night_rule", "remarks", "suggested_positions",
+				)
+			} if matched_shift_rule else {},
+			"restday_overtime_source_mode": schedule_restday_overtime_mode,
+			"schedule_auto_overtime_hours": _display_number(schedule_auto_overtime_hours) if schedule_auto_overtime_hours is not None else 0,
 			"raw_workday_overtime_hours": _display_number(raw_workday_overtime_hours),
-			"raw_outside_shift_hours": _display_number(Decimal(shift_facts.get("outside_shift_minutes") or 0) / Decimal("60")),
+			"raw_outside_shift_hours": _display_number(raw_outside_shift_hours),
+			"schedule_auto_excess_minutes": schedule_auto_excess_minutes,
 			"confirmed_overtime_hours": _display_number(confirmed_workday_overtime_hours),
 			"late_minutes": late_minutes,
 			"late_personal_leave_hours": _display_number(late_personal_leave_hours),
 			"attendance_note": attendance_notes[-1] if late_minutes else "",
 			"scheduled_start": _format_minutes(shift_facts.get("scheduled_start_minutes")),
 			"scheduled_end": _format_minutes(shift_facts.get("scheduled_end_minutes")),
+			"punch_in_range": shift_facts.get("punch_in_range") or "",
+			"punch_out_range": shift_facts.get("punch_out_range") or "",
+			"clock_in_outside_pick_range": shift_facts.get("punch_in_range_valid") is False,
+			"clock_out_outside_pick_range": shift_facts.get("punch_out_range_valid") is False,
+			"configured_small_night_shift": configured_small_night,
+			"configured_large_night_shift": configured_large_night,
 			"source_file": _text(row.get("source_file") or source_file),
 			"source_sheet": _text(row.get("source_sheet") or source_sheet),
 			"shift": _value(row, IDENTITY_FIELDS["shift"]),
@@ -945,6 +1216,7 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 	deep_night_shifts = totals["deep_night_shifts"] if source_deep_night_present else Decimal(scheduled_deep_night_shifts)
 	proposed = {
 		"attendance_policy_version": ATTENDANCE_POLICY_VERSION,
+		"shift_rule_version": shift_rule_version or f"builtin-{ATTENDANCE_POLICY_VERSION}",
 		"leave_hours": _display_number(sum((totals[field] for field in LEAVE_FIELDS), Decimal("0"))),
 		"employee_code": resolved_code or raw_code,
 		"employee_name": resolved_name or name,
@@ -952,8 +1224,9 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		**{field: _display_number(value) for field, value in totals.items()},
 		"deep_night_shifts": deep_night_shifts,
 		"night_shift_matching": {
-			"mode": "source_only",
-			"matched_large_night_shifts": 0,
+			"mode": "source_or_configured_schedule" if configured_night_rule_used else "source_only",
+			"matched_small_night_shifts": _display_number(totals["small_night_shifts"]),
+			"matched_large_night_shifts": _display_number(totals["large_night_shifts"]),
 			"deep_night_source": "深夜班" if source_deep_night_present else "生产夜班排班兜底",
 			"deep_night_shift_rule": "生产夜班 20:00-次日08:00",
 		},

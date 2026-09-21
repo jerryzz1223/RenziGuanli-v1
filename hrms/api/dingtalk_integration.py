@@ -2,6 +2,8 @@ import hashlib
 import json
 import os
 import re
+import threading
+import time as time_module
 from datetime import date, datetime, time, timedelta
 from urllib.parse import quote, unquote, urlparse
 
@@ -98,6 +100,7 @@ DINGTALK_API_SYNC_MODE = "内网服务器主动拉取API"
 DINGTALK_ATTENDANCE_SOURCE_TYPE = "attendance"
 DINGTALK_APPROVAL_SOURCE_TYPE = "approval"
 DINGTALK_PREENTRY_SOURCE_TYPE = "preentry"
+DINGTALK_DIRECTORY_SYNC_TYPE = "组织员工同步"
 LOCAL_PILOT_MAX_USERS = 5
 DINGTALK_LEGACY_DEPLOYMENT_NOTE = (
 	"当前方案：管理后台仍在公司人资系统；钉钉只作为员工入口和数据源。"
@@ -107,6 +110,14 @@ DINGTALK_PHASE_ONE_DEPLOYMENT_NOTE = (
 	"第一期：服务器主动拉取钉钉考勤与审批，先写入原始记录和考勤草稿，"
 	"经过人事确认后才影响月度汇总与薪资。员工端和公网小网关属于后续阶段。"
 )
+
+# ``department/listsub`` and ``user/list`` are paginated one-parent-at-a-time
+# endpoints.  A full directory can therefore generate hundreds of requests.
+# Keep a small process-local guard in addition to the queued job below; this
+# prevents a single worker from bursting through DingTalk's shared QPS bucket.
+_DINGTALK_REQUEST_RATE_LOCK = threading.Lock()
+_DINGTALK_LAST_REQUEST_AT = {}
+DINGTALK_DIRECTORY_REQUEST_INTERVAL = 0.12
 
 
 def _config_value(key, default=""):
@@ -394,6 +405,41 @@ def get_dingtalk_access_token_value():
 	return access_token
 
 
+def _dingtalk_request_interval(path: str) -> float:
+	"""Return the minimum gap for DingTalk endpoints with shared QPS limits."""
+	if path in {DINGTALK_DEPARTMENT_LIST_PATH, DINGTALK_DEPARTMENT_USERS_PATH}:
+		return DINGTALK_DIRECTORY_REQUEST_INTERVAL
+	return 0.0
+
+
+def _wait_for_dingtalk_request(path: str):
+	"""Serialize directory requests inside one worker process."""
+	interval = _dingtalk_request_interval(path)
+	if not interval:
+		return
+	with _DINGTALK_REQUEST_RATE_LOCK:
+		now = time_module.monotonic()
+		last = _DINGTALK_LAST_REQUEST_AT.get(path, 0.0)
+		wait_for = max(0.0, interval - (now - last))
+		if wait_for:
+			time_module.sleep(wait_for)
+		_DINGTALK_LAST_REQUEST_AT[path] = time_module.monotonic()
+
+
+def _dingtalk_error_details(payload):
+	"""Normalise both OAPI and v1.0 error envelopes without exposing tokens."""
+	if not isinstance(payload, dict):
+		return "", ""
+	code = payload.get("errcode") or payload.get("code") or payload.get("errorCode") or ""
+	message = payload.get("errmsg") or payload.get("message") or payload.get("errorMessage") or ""
+	return str(code).strip(), str(message).strip()
+
+
+def _is_dingtalk_rate_limit(code: str, message: str) -> bool:
+	text = f"{code} {message}".lower()
+	return any(marker in text for marker in ("90002", "qps", "too many", "rate limit", "429"))
+
+
 def _dingtalk_api_request(method, path, params=None, json_body=None, use_oapi=False, form_body=None, allow_not_found=False):
 	import requests
 	from requests.adapters import HTTPAdapter
@@ -419,6 +465,7 @@ def _dingtalk_api_request(method, path, params=None, json_body=None, use_oapi=Fa
 		url = f"{DINGTALK_API_BASE_URL}{path}"
 		request_params = params
 
+	_wait_for_dingtalk_request(path)
 	try:
 		response = session.request(
 			method,

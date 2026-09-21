@@ -13,6 +13,25 @@ vm.runInNewContext(source, context, { filename: sourcePath });
 
 const center = Object.create(context.AttendanceImportCenter.prototype);
 center.attendance_month = "2026-07";
+const makeCard = (record, date, row) => ({ dataset: { exceptionCardRecord: record, attendanceDate: date, attendanceSourceRow: String(row), attendanceSourceFile: "A.xlsx", attendanceSourceSheet: "每日统计" } });
+const previousCard = makeCard("employee-4076", "2026-07-13", 6961);
+const editedCard = makeCard("employee-4076", "2026-07-14", 6962);
+const nextCard = makeCard("employee-4076", "2026-07-15", 6963);
+const otherCard = makeCard("another-employee", "2026-07-14", 6962);
+let visibleCards = [otherCard, previousCard, editedCard, nextCard];
+center.body = () => ({ querySelectorAll: () => visibleCards });
+const anchor = {recordId: "employee-4076", attendanceDate: "2026-07-14", sourceRow: "6962", sourceFile: "A.xlsx", sourceSheet: "每日统计"};
+assert.strictEqual(center.exception_scroll_target(anchor), editedCard);
+visibleCards = [otherCard, previousCard, nextCard];
+assert.strictEqual(center.exception_scroll_target(anchor), nextCard);
+visibleCards = [otherCard, previousCard];
+assert.strictEqual(center.exception_scroll_target(anchor), previousCard);
+visibleCards = [otherCard];
+assert.strictEqual(center.exception_scroll_target(anchor), null);
+delete center.body;
+const recheckChanges = center.manual_adjustment_changes({field_name: "__attendance_policy_recheck__", original_value: {}, new_value: {exception_lines: [], night_shift_matching: {}, deep_night_shifts: 5}});
+assert.strictEqual(recheckChanges.length, 1);
+assert.match(recheckChanges[0].label, /整月规则重新校验/);
 
 assert.strictEqual(center.parse_attendance_time_minutes("08:30"), 510);
 assert.strictEqual(center.parse_attendance_time_minutes("08:30:00"), 510);
@@ -104,14 +123,39 @@ assert.match(independentStatusMarkup, /2026-07-04[\s\S]*待处理异常/);
 assert.match(independentStatusMarkup, /2026-07-25[\s\S]*已处理，不计入/);
 assert.strictEqual((independentStatusMarkup.match(/hrms-attendance-exception-line/g) || []).length, 2);
 
-assert.strictEqual((source.match(/fieldtype: "Time", fieldname: "restday_overtime_(?:start|end)"/g) || []).length, 2);
+assert.doesNotMatch(source, /fieldtype: "Time", fieldname: "restday_overtime_(?:start|end)"/);
+assert.match(source, /data-overtime-wheel-picker/);
+assert.match(source, /overtime_wheel_column_markup\("hour", 24\)/);
+assert.match(source, /overtime_wheel_column_markup\("minute", 60\)/);
+assert.match(source, /overtime_wheel_time\(dialog, "start"\)/);
+assert.match(source, /overtime_wheel_time\(dialog, "end"\)/);
+assert.match(source, /data-overtime-wheel-input/);
+assert.match(source, /sync_overtime_wheel_input/);
 assert.match(source, /data-use-source-clock-in/);
 assert.match(source, /data-use-source-clock-out/);
 assert.match(source, /开始时间带入打卡/);
+assert.match(source, /<input type="date" class="form-control input-sm" data-daily-date/);
+assert.match(source, /data-daily-date-clear/);
+assert.match(source, /开始时间（可选）/);
+assert.match(source, /结束时间（可选）/);
 assert.match(source, /fieldtype: "Float",\s+fieldname: "restday_overtime_hours_input"/);
-assert.match(source, /只有这里填写的小时数会计入后续考勤汇总/);
+assert.match(source, /fieldname: "restday_overtime_hours_input"[\s\S]*?reqd: 1/);
+assert.doesNotMatch(source, /请上下滑动小时和分钟滚轮选择/);
+assert.doesNotMatch(source, /只有这里填写的小时数会计入后续考勤汇总/);
+assert.doesNotMatch(source, /restday_overtime_preview/);
+assert.match(source, /restdayOvertimeCorrection[\s\S]*dailyRow\.attendance_date/);
 assert.doesNotMatch(source, /系统会自动换算加班工时/);
-assert.match(source, /overtime_start_time: values\.restday_overtime_start/);
+assert.match(source, /overtime_start_time: overtimeStartValue/);
+assert.match(source, /overtime_end_time: overtimeEndValue/);
+assert.match(source, /data-exception-employee-code-filter/);
+assert.match(source, /data-exception-employee-name-filter/);
+assert.match(source, /data-exception-sort-field/);
+assert.match(source, /data-exception-sort-order/);
+assert.match(source, /employee_code: this\.exception_employee_code_filter/);
+assert.match(source, /employee_name: this\.exception_employee_name_filter/);
+assert.match(source, /capture_exception_scroll_position/);
+assert.match(source, /restore_exception_scroll_position/);
+assert.match(source, /preserveScroll/);
 
 const auditedChanges = center.manual_adjustment_changes({
 	field_name: "__daily_row__:1224",

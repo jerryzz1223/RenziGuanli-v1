@@ -13,6 +13,7 @@ API_PATH = ROOT / "hrms" / "api" / "attendance_processing_center.py"
 PROCESSOR_PATH = ROOT / "hrms" / "api" / "attendance_processors" / "attendance_draft.py"
 DOCTYPE_DIR = ROOT / "hrms" / "hr" / "doctype" / "hrms_attendance_processing_record"
 DEPARTMENT_MAPPING_DIR = ROOT / "hrms" / "hr" / "doctype" / "hrms_attendance_department_mapping"
+SHIFT_RULE_DIR = ROOT / "hrms" / "hr" / "doctype" / "hrms_attendance_shift_rule"
 BATCH_JSON = ROOT / "hrms" / "hr" / "doctype" / "hrms_attendance_import_batch" / "hrms_attendance_import_batch.json"
 STATUS_SYNC_PATCH = ROOT / "hrms" / "patches" / "v16_0" / "sync_attendance_import_batch_status_options.py"
 PATCHES_FILE = ROOT / "hrms" / "patches.txt"
@@ -27,6 +28,7 @@ for path in (
 	API_PATH, PROCESSOR_PATH,
 	DOCTYPE_DIR / "hrms_attendance_processing_record.json", DOCTYPE_DIR / "hrms_attendance_processing_record.py",
 	DEPARTMENT_MAPPING_DIR / "hrms_attendance_department_mapping.json", DEPARTMENT_MAPPING_DIR / "hrms_attendance_department_mapping.py",
+	SHIFT_RULE_DIR / "hrms_attendance_shift_rule.json", SHIFT_RULE_DIR / "hrms_attendance_shift_rule.py",
 	STATUS_SYNC_PATCH,
 ):
 	if not path.exists():
@@ -67,6 +69,9 @@ for method in (
 	"reset_attendance_month",
 	"list_manual_adjustments",
 	"get_processing_configuration",
+	"list_attendance_shift_rules",
+	"import_attendance_shift_rules",
+	"upsert_attendance_shift_rule",
 	"list_department_mappings",
 	"upsert_department_mapping",
 	"generate_monthly_final_files",
@@ -74,6 +79,19 @@ for method in (
 	"update_monthly_final_rows",
 ):
 	require(api, f"def {method}(", f"Processing-center API is missing {method}.")
+
+for marker in (
+	"employee_code: str = \"\"",
+	"employee_name: str = \"\"",
+	"sort_field: str = \"employee_code\"",
+	"sort_order: str = \"asc\"",
+	"employee_code_filter",
+	"employee_name_filter",
+	"employee_matches(row)",
+	"sort_order == \"desc\"",
+	"pending_filters",
+):
+	require(api, marker, f"Exception queue must support employee filtering and sorting: {marker}")
 
 require(api, "hide_logo: int = 0", "Processing-result export must allow a no-logo copy.")
 
@@ -115,8 +133,24 @@ for marker in (
 	"全勤奖",
 	"特殊工时",
 	"Source file, sheet and row stay in the audit record",
+	"SHIFT_RULE_DOCTYPE",
+	"_schedule_rule_import_rows",
+	"_attendance_shift_rule_bundle",
+	"shift_rule_version",
+	"punch_in_range",
+	"punch_out_range",
+	"_schedule_night_condition",
 ):
 	require(api, marker)
+
+for marker in (
+	"CLOCK_IN_OUTSIDE_PICK_RANGE",
+	"CLOCK_OUT_OUTSIDE_PICK_RANGE",
+	"_punch_range_bounds",
+	"_configured_night_allowances",
+	"source_or_configured_schedule",
+):
+	require(processor, marker, f"Structured shift-rule processing is missing: {marker}")
 
 for forbidden_export_marker in (
 	'"来源文件", "来源工作表", "来源行"',
@@ -339,7 +373,7 @@ for method in (
 	"get_processing_batch", "register_source_file", "register_monthly_support_file", "bulk_import_and_process_sources", "precheck_monthly_support_file", "process_monthly_support_file", "confirm_monthly_support_file", "precheck_source_slot", "process_source_slot",
 	"list_processing_results", "export_processing_result", "get_processing_record", "update_processing_record", "update_special_hours_manual_entry", "review_attendance_draft_daily_exception", "bulk_update_processing_records", "confirm_source_result",
 	"list_processing_exceptions", "list_processing_batches", "list_daily_attendance_records", "reset_attendance_month", "list_manual_adjustments",
-	"get_processing_configuration", "list_department_mappings", "upsert_department_mapping", "generate_monthly_final_files", "get_monthly_final_preview", "update_monthly_final_rows",
+	"get_processing_configuration", "list_attendance_shift_rules", "import_attendance_shift_rules", "upsert_attendance_shift_rule", "list_department_mappings", "upsert_department_mapping", "generate_monthly_final_files", "get_monthly_final_preview", "update_monthly_final_rows",
 ):
 	start = api.find(f"def {method}(")
 	end = api.find("\n@frappe.whitelist()", start + 1)
@@ -356,7 +390,7 @@ for marker in ("page_start", "RESTDAY_CLOCKED_WITHOUT_OVERTIME", "limit_page_len
 bulk_start = api.find("def bulk_update_processing_records(")
 bulk_end = api.find("\n\n@frappe.whitelist()", bulk_start)
 bulk_body = api[bulk_start:] if bulk_end == -1 else api[bulk_start:bulk_end]
-for marker in ("select_all_pending", 'filters={"import_batch": batch.name, "exception_codes": ["!=", "[]"], "review_status": "待审核"}', "limit_page_length=501", "当前筛选待处理异常超过 500 条"):
+for marker in ("select_all_pending", "pending_filters", "employee_code", "employee_name", "limit_page_length=501", "当前筛选待处理异常超过 500 条"):
 	require(bulk_body, marker, f"All-filtered bulk processing guard is incomplete: {marker}")
 
 for marker in (

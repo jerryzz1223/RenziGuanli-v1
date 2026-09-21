@@ -46,6 +46,7 @@ from hrms.api.attendance_processors.missed_punch import MissedPunchRules, preche
 IMPORT_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
 PROCESSING_RECORD_DOCTYPE = "HRMS Attendance Processing Record"
 DEPARTMENT_MAPPING_DOCTYPE = "HRMS Attendance Department Mapping"
+SHIFT_RULE_DOCTYPE = "HRMS Attendance Shift Rule"
 DAILY_CLOSURE_DOCTYPE = "HRMS Attendance Daily Closure"
 SOURCE_TYPES = ("attendance_draft", "apple_tree", "missing_card")
 FIRST_SIGNED_SOURCE_TYPES = ("attendance_draft", "missing_card")
@@ -326,6 +327,8 @@ EXCEPTION_LABELS = {
 	"ATTENDANCE_HOURS_MISMATCH": "工时合计与标准工时不符",
 	"CLOCK_IN_MISSING": "上班漏打卡",
 	"CLOCK_OUT_MISSING": "下班漏打卡",
+	"CLOCK_IN_OUTSIDE_PICK_RANGE": "上班卡不在可取时段",
+	"CLOCK_OUT_OUTSIDE_PICK_RANGE": "下班卡不在可取时段",
 	"SHIFT_MISSING": "班次缺失",
 	"EMPLOYEE_DEPARTMENT_MISMATCH": "部门信息不一致",
 	"EMPLOYEE_DEPARTMENT_CONFLICT": "来源部门信息冲突",
@@ -345,6 +348,8 @@ EXCEPTION_LABELS = {
 	"SHIFT_MISSING": "班次缺失（数据质量）",
 	"CLOCK_IN_MISSING": "上班缺卡",
 	"CLOCK_OUT_MISSING": "下班缺卡",
+	"CLOCK_IN_OUTSIDE_PICK_RANGE": "上班卡超出班次可取时段",
+	"CLOCK_OUT_OUTSIDE_PICK_RANGE": "下班卡超出班次可取时段",
 	"LATE_MARKED": "迟到（钉钉标记）",
 	"EARLY_MARKED": "早退（钉钉标记）",
 	"ABSENCE_MARKED": "旷工标记待核验",
@@ -591,6 +596,227 @@ def _load_workbook(file_url: str):
 	from openpyxl import load_workbook
 
 	return load_workbook(BytesIO(_file_doc(file_url).get_content()), data_only=True, read_only=True)
+
+
+def _schedule_cell_text(value: Any) -> str:
+	if value in (None, ""):
+		return ""
+	if hasattr(value, "hour") and hasattr(value, "minute"):
+		return f"{int(value.hour):02d}:{int(value.minute):02d}"
+	return str(value).strip()
+
+
+def _schedule_time_end_minutes(value: Any) -> int | None:
+	matches = re.findall(r"(\d{1,2})\s*[:：]\s*(\d{2})", _schedule_cell_text(value))
+	if not matches:
+		return None
+	hour, minute = (int(part) for part in matches[-1])
+	if hour == 24 and minute == 0:
+		return 0
+	if hour > 23 or minute > 59:
+		return None
+	return hour * 60 + minute
+
+
+def _schedule_night_condition(value: Any) -> dict[str, Any] | None:
+	"""Extract the workbook's supported night-allowance conditions safely."""
+	text = re.sub(r"\s+", "", _schedule_cell_text(value)).replace("：", ":")
+	if not text or text == "无":
+		return None
+	hours_match = re.search(r"(?:>=|≥|满)(\d+(?:\.\d+)?)\s*(?:小时|H)", text, re.IGNORECASE)
+	clocks = re.findall(r"(?<!\d)([01]?\d|2[0-4]):([0-5]\d)(?!\d)", text)
+	if not clocks:
+		clocks = [(hour, "00") for hour in re.findall(r"(?<!\d)([01]?\d|2[0-4])点", text)]
+	if not hours_match or not clocks:
+		return None
+	minutes = [int(hour) * 60 + int(minute) for hour, minute in clocks]
+	if "之间" in text and len(minutes) >= 2:
+		return {"minimum_hours": float(hours_match.group(1)), "mode": "区间", "start_minutes": minutes[-2], "end_minutes": minutes[-1]}
+	if "晚于" in text or ">=" in text or "≥" in text:
+		return {"minimum_hours": float(hours_match.group(1)), "mode": "不早于", "start_minutes": minutes[-1], "end_minutes": None}
+	return None
+
+
+def _schedule_meal_deduction_hours(value: Any) -> float:
+	text = _schedule_cell_text(value)
+	if not text or "不扣" in text:
+		return 0
+	return sum(float(number) for number in re.findall(r"扣(?:除)?\s*(\d+(?:\.\d+)?)\s*H", text, re.IGNORECASE))
+
+
+def _schedule_match_tokens(employee_group: str, shift_name: str) -> str:
+	group = re.sub(r"\s+", "", employee_group or "")
+	shift = re.sub(r"\s+", "", shift_name or "")
+	if group == "生产人员":
+		group = "生产"
+	if shift and shift not in group:
+		return "|".join(part for part in (group, shift) if part)
+	return group or shift
+
+
+def _schedule_range_is_valid(value: Any) -> bool:
+	text = _schedule_cell_text(value)
+	clocks = re.findall(r"(?<!\d)([01]?\d|2[0-4])\s*[:：]\s*([0-5]\d)(?!\d)", text)
+	return len(clocks) == 2 and all(int(hour) < 24 or int(minute) == 0 for hour, minute in clocks)
+
+
+def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
+	workbook = _load_workbook(file_url)
+	checksum = _file_checksum(file_url)
+	file_doc = _file_doc(file_url)
+	sheet = workbook.worksheets[0]
+	header_row = None
+	for row_number, row in enumerate(sheet.iter_rows(min_row=1, max_row=min(sheet.max_row, 12), values_only=True), start=1):
+		headers = {_normalized_header(value) for value in row if value not in (None, "")}
+		if {"序号", "班别名称", "基本工时上下班时间"}.issubset(headers):
+			header_row = row_number
+			break
+	if not header_row:
+		frappe.throw(_("排班表缺少“序号、班别名称、基本工时上下班时间”表头。"))
+	version = ""
+	for row in sheet.iter_rows(min_row=1, max_row=min(header_row, 5), values_only=True):
+		for value in row:
+			match = re.search(r"版本\s*[：:]\s*(\S+)", str(value or ""))
+			if match:
+				version = match.group(1)
+	current_group = ""
+	items = []
+	issues = []
+	for source_row, values in enumerate(sheet.iter_rows(min_row=header_row + 2, values_only=True), start=header_row + 2):
+		values = list(values) + [None] * max(0, 21 - len(values))
+		if "特别说明" in _schedule_cell_text(values[1]):
+			break
+		if values[2] not in (None, ""):
+			current_group = re.sub(r"\s+", "", _schedule_cell_text(values[2]))
+		shift_name = re.sub(r"\s+", "", _schedule_cell_text(values[3]))
+		basic_time = _schedule_cell_text(values[4])
+		if not current_group or not basic_time:
+			continue
+		sequence_value = cint(values[1]) if values[1] not in (None, "") else len(items) + 1
+		rule_name = current_group if not shift_name or shift_name in current_group else f"{current_group}{shift_name}"
+		weekday_value = values[11]
+		weekday_hours = flt(weekday_value) if isinstance(weekday_value, (int, float)) else 0
+		weekday_mode = "不提交加班单" if weekday_hours > 0 else "加班单" if "加班单" in _schedule_cell_text(weekday_value) else "无"
+		match_tokens = _schedule_match_tokens(current_group, shift_name)
+		weekday_time = _schedule_cell_text(values[5])
+		if not match_tokens:
+			issues.append({"source_row": source_row, "message": "班次匹配关键词为空"})
+			continue
+		item = {
+			"rule_code": f"SHIFT-{sequence_value:03d}",
+			"rule_name": rule_name,
+			"sequence": sequence_value,
+			"match_tokens": match_tokens,
+			"basic_time": basic_time,
+			"weekday_overtime_time": weekday_time,
+			"weekend_overtime_time": _schedule_cell_text(values[6]),
+			"overtime_begin_time": _schedule_cell_text(values[7]),
+			"overnight": 1 if "是" in _schedule_cell_text(values[8]) else 0,
+			"meal_deduction_rule": _schedule_cell_text(values[9]),
+			"basic_hours": flt(values[10]),
+			"weekday_overtime_hours": weekday_hours,
+			"weekday_overtime_mode": weekday_mode,
+			"extended_shift_rule": _schedule_cell_text(values[12]),
+			"weekend_overtime_mode": _schedule_cell_text(values[13]),
+			"holiday_overtime_mode": _schedule_cell_text(values[14]),
+			"small_night_rule": _schedule_cell_text(values[15]),
+			"large_night_rule": _schedule_cell_text(values[16]),
+			"remarks": _schedule_cell_text(values[17]),
+			"suggested_positions": _schedule_cell_text(values[18]),
+			"punch_in_range": _schedule_cell_text(values[19]),
+			"punch_out_range": _schedule_cell_text(values[20]),
+			"source_version": version,
+			"source_file": file_doc.file_name or file_url,
+			"source_sheet": sheet.title,
+			"source_row": source_row,
+			"source_checksum": checksum,
+			"source_payload_json": _json([_schedule_cell_text(value) for value in values[:21]]),
+			"workday_end_minutes": _schedule_time_end_minutes(weekday_time),
+		}
+		if weekday_mode == "不提交加班单" and (weekday_hours <= 0 or item["workday_end_minutes"] is None):
+			issues.append({"source_row": source_row, "message": "免申请平日加班缺少固定小时或结束时间"})
+		for label, fieldname in (("可取上班卡时段", "punch_in_range"), ("可取下班卡时段", "punch_out_range")):
+			if not _schedule_range_is_valid(item[fieldname]):
+				issues.append({"source_row": source_row, "message": f"{label}不是有效的 HH:MM-HH:MM 范围"})
+		for label, fieldname in (("小夜班", "small_night_rule"), ("大夜班", "large_night_rule")):
+			text = item[fieldname]
+			if text and text != "无" and _schedule_night_condition(text) is None:
+				issues.append({"source_row": source_row, "message": f"{label}规则无法转换为固定判断条件"})
+		items.append(item)
+	return {
+		"items": items,
+		"issues": issues,
+		"source_version": version,
+		"source_file": file_doc.file_name or file_url,
+		"source_sheet": sheet.title,
+		"source_checksum": checksum,
+	}
+
+
+def _attendance_shift_rule_bundle(company: str) -> dict[str, Any]:
+	if not company or not frappe.db.exists("DocType", SHIFT_RULE_DOCTYPE):
+		return {"rules": None, "version": f"builtin-{ATTENDANCE_POLICY_VERSION}", "items": []}
+	rows = frappe.get_all(
+		SHIFT_RULE_DOCTYPE,
+		filters={"company": company},
+		fields=[
+			"name", "enabled", "rule_code", "rule_name", "sequence", "match_tokens", "basic_time",
+			"weekday_overtime_time", "weekend_overtime_time", "overtime_begin_time", "basic_hours",
+			"weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule",
+			"weekend_overtime_mode", "holiday_overtime_mode", "overnight", "meal_deduction_rule",
+			"small_night_rule", "large_night_rule", "remarks", "suggested_positions", "punch_in_range",
+			"punch_out_range", "effective_from", "source_version", "source_file", "source_sheet",
+			"source_row", "source_checksum", "modified", "modified_by",
+		],
+		order_by="sequence asc, rule_code asc",
+		limit_page_length=500,
+	)
+	items = [dict(row) for row in rows]
+	active_rows = [row for row in items if cint(row.get("enabled"))]
+	rules = []
+	for row in active_rows:
+		tokens = tuple(part.strip() for part in str(row.get("match_tokens") or "").split("|") if part.strip())
+		if not tokens:
+			continue
+		rules.append({
+			"name": row.get("rule_name") or row.get("rule_code"),
+			"rule_code": row.get("rule_code"),
+			"tokens": tokens,
+			"effective_from": row.get("effective_from") or "",
+			"workday_hours": str(row.get("weekday_overtime_hours") or 0),
+			"workday_end_minutes": _schedule_time_end_minutes(row.get("weekday_overtime_time")),
+			"workday_auto": row.get("weekday_overtime_mode") == "不提交加班单",
+			"restday_auto": "不提交加班单" in str(row.get("weekend_overtime_mode") or ""),
+			"basic_time": row.get("basic_time") or "",
+			"basic_hours": str(row.get("basic_hours") or 0),
+			"weekday_overtime_time": row.get("weekday_overtime_time") or "",
+			"weekend_overtime_time": row.get("weekend_overtime_time") or "",
+			"overtime_begin_time": row.get("overtime_begin_time") or "",
+			"weekday_overtime_mode": row.get("weekday_overtime_mode") or "",
+			"weekend_overtime_mode": row.get("weekend_overtime_mode") or "",
+			"holiday_overtime_mode": row.get("holiday_overtime_mode") or "",
+			"extended_shift_rule": row.get("extended_shift_rule") or "",
+			"overnight": bool(cint(row.get("overnight"))),
+			"meal_deduction_rule": row.get("meal_deduction_rule") or "",
+			"meal_deduction_hours": _schedule_meal_deduction_hours(row.get("meal_deduction_rule")),
+			"punch_in_range": row.get("punch_in_range") or "",
+			"punch_out_range": row.get("punch_out_range") or "",
+			"small_night_rule": row.get("small_night_rule") or "",
+			"large_night_rule": row.get("large_night_rule") or "",
+			"small_night_condition": _schedule_night_condition(row.get("small_night_rule")),
+			"large_night_condition": _schedule_night_condition(row.get("large_night_rule")),
+			"remarks": row.get("remarks") or "",
+			"suggested_positions": row.get("suggested_positions") or "",
+		})
+	# For equally specific matchers, prefer the newest rule that is already
+	# effective for the attendance date. Stable sorting keeps the code as the
+	# final deterministic tie-breaker.
+	rules.sort(key=lambda rule: str(rule["rule_code"]))
+	rules.sort(key=lambda rule: str(rule.get("effective_from") or ""), reverse=True)
+	rules.sort(key=lambda rule: (len(rule["tokens"]), sum(len(token) for token in rule["tokens"])), reverse=True)
+	version_source = [{key: row.get(key) for key in sorted(row) if key not in {"name", "modified", "modified_by"}} for row in active_rows]
+	version = hashlib.sha256(_json(version_source).encode("utf-8")).hexdigest()[:16] if active_rows else f"builtin-{ATTENDANCE_POLICY_VERSION}"
+	return {"rules": rules if active_rows else None, "version": version, "items": items}
 
 
 def _latest_batch(company: str, attendance_month: str, source_type: str):
@@ -1204,6 +1430,7 @@ def _process_batch(batch) -> dict[str, Any]:
 	employees = _employee_directory(batch.company)
 	if batch.source_type == "attendance_draft":
 		exception_policy = _attendance_draft_exception_policy()
+		shift_bundle = _attendance_shift_rule_bundle(batch.company)
 		return process_attendance_draft_rows(
 			rows,
 			attendance_month=batch.attendance_month,
@@ -1211,6 +1438,8 @@ def _process_batch(batch) -> dict[str, Any]:
 			source_sheet=sheet_name,
 			employee_directory=employees or None,
 			exception_policy=exception_policy,
+			shift_rules=shift_bundle["rules"],
+			shift_rule_version=shift_bundle["version"],
 		)
 	source_rows = rows
 	rows, excluded = _filter_approval_source_rows(batch, rows)
@@ -1468,11 +1697,12 @@ def _result_rows(batch, page_length: int = 5000, employee_code: str = ""):
 	records = frappe.get_all(
 		PROCESSING_RECORD_DOCTYPE,
 		filters=filters,
-		fields=["name", "attendance_month", "employee_code", "employee_name", "department", "source_type", "processed_value_json", "original_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "reviewer", "reviewed_on", "review_note", "review_history_json", "eligible_for_downstream", "source_file", "source_sheet", "source_row", "source_id", "approval_no"],
+		fields=["name", "company", "attendance_month", "employee_code", "employee_name", "department", "source_type", "processed_value_json", "original_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "reviewer", "reviewed_on", "review_note", "review_history_json", "eligible_for_downstream", "source_file", "source_sheet", "source_row", "source_id", "approval_no"],
 		order_by="employee_code asc, source_row asc",
 		limit_page_length=page_length,
 	)
-	rows = [_serialize_record(row) for row in records]
+	shift_rule_version = _attendance_shift_rule_bundle(batch.company)["version"] if batch.source_type == "attendance_draft" else None
+	rows = [_serialize_record(row, shift_rule_version) for row in records]
 	return _hydrate_apple_tree_result_rows(batch, rows) if batch.source_type == "apple_tree" else rows
 
 
@@ -1489,11 +1719,14 @@ def _restore_daily_exception_lines_from_source(record: dict[str, Any], *, all_de
 	if not isinstance(source_rows, list) or not source_rows or not re.fullmatch(r"\d{4}-\d{2}", attendance_month):
 		return []
 	try:
+		shift_bundle = _attendance_shift_rule_bundle(record.get("company") or "")
 		replayed = process_attendance_draft_rows(
 			source_rows,
 			attendance_month=attendance_month,
 			source_file=record.get("source_file") or "",
 			source_sheet=record.get("source_sheet") or "每日统计",
+			shift_rules=shift_bundle["rules"],
+			shift_rule_version=shift_bundle["version"],
 		)
 	except Exception:
 		return []
@@ -1513,7 +1746,7 @@ def _restore_daily_exception_lines_from_source(record: dict[str, Any], *, all_de
 	return exception_lines_from_attendance_details(details, record.get("exception_codes") or [])
 
 
-def _serialize_record(record):
+def _serialize_record(record, current_shift_rule_version: str | None = None):
 	result = dict(record)
 	result["record_id"] = result.pop("name")
 	result["processed_value"] = _loads(result.pop("processed_value_json", ""), {})
@@ -1541,7 +1774,12 @@ def _serialize_record(record):
 	result["review_options"] = _review_options(result["exception_codes"], result.get("source_type") or "")
 	if result.get("source_type") == "attendance_draft":
 		values = _effective_result_values(result)
-		result["attendance_policy_stale"] = values.get("attendance_policy_version") != ATTENDANCE_POLICY_VERSION
+		if current_shift_rule_version is None:
+			current_shift_rule_version = _attendance_shift_rule_bundle(result.get("company") or "")["version"]
+		result["attendance_policy_stale"] = (
+			values.get("attendance_policy_version") != ATTENDANCE_POLICY_VERSION
+			or values.get("shift_rule_version") != current_shift_rule_version
+		)
 		# New batches persist exception_lines.  Rebuild them from the retained
 		# daily facts for old batches.  If the historic projection itself lacks a
 		# marker (for example, 旷工), replay its retained original rows read-only.
@@ -1657,6 +1895,94 @@ def _apply_daily_exception_decisions(row: dict[str, Any], decisions: dict[str, d
 		ATTENDANCE_DRAFT_EXCEPTION_MESSAGES.get(code, EXCEPTION_LABELS.get(code, "待人工确认")) for code in codes
 	)
 	return result
+
+
+def _preserve_unedited_daily_exceptions(row: dict[str, Any], previous_values: dict[str, Any], edited_keys: set[str]) -> dict[str, Any]:
+	"""Keep unresolved sibling dates when one daily source row is saved.
+
+	The employee result is rebuilt after every edit. Older imported projections
+	can omit a sibling line during that rebuild even though its source row was not
+	changed. Such a line is still pending business work and must remain visible;
+	only the explicitly edited source locator may be replaced by the new result.
+	"""
+	result = deepcopy_json(row)
+	proposed = result.get("proposed_value") if isinstance(result.get("proposed_value"), dict) else {}
+	old_lines = previous_values.get("exception_lines") if isinstance(previous_values, dict) else []
+	new_lines = proposed.get("exception_lines") if isinstance(proposed.get("exception_lines"), list) else []
+	if not isinstance(old_lines, list) or not old_lines:
+		return result
+	# Preserve the entire old sibling card, even when recalculation returns the
+	# same locator with fewer exception codes or changed derived values.
+	siblings = {
+		_daily_line_key(line): line for line in old_lines
+		if isinstance(line, dict) and line.get("exception_codes") and _daily_line_key(line) not in edited_keys
+	}
+	new_lines = [line for line in new_lines if _daily_line_key(line) not in siblings]
+	proposed["exception_events"] = [
+		event for event in proposed.get("exception_events") or [] if _daily_line_key(event) not in siblings
+	]
+	known_keys = {_daily_line_key(line) for line in new_lines if isinstance(line, dict)}
+	added_events = []
+	for old_line in old_lines:
+		if not isinstance(old_line, dict) or not old_line.get("exception_codes"):
+			continue
+		key = _daily_line_key(old_line)
+		if key in edited_keys or key in known_keys:
+			continue
+		new_lines.append(deepcopy_json(old_line))
+		known_keys.add(key)
+		for code in old_line.get("exception_codes") or []:
+			if code not in result.setdefault("exception_codes", []):
+				result["exception_codes"].append(code)
+		added_events.extend({
+				"code": code,
+				"attendance_date": old_line.get("attendance_date") or "",
+				"source_row": old_line.get("source_row"),
+				"source_file": old_line.get("source_file") or "",
+				"source_sheet": old_line.get("source_sheet") or "",
+			} for code in old_line.get("exception_codes") or [])
+	if not added_events:
+		return result
+	proposed["exception_lines"] = new_lines
+	proposed["exception_events"] = list(proposed.get("exception_events") or []) + added_events
+	result["proposed_value"] = proposed
+	result["processed_value"] = deepcopy_json(proposed)
+	result["exception_events"] = proposed["exception_events"]
+	result["exception_message"] = "；".join(
+		ATTENDANCE_DRAFT_EXCEPTION_MESSAGES.get(code, EXCEPTION_LABELS.get(code, "待人工确认"))
+		for code in result.get("exception_codes") or []
+	)
+	return result
+
+
+def _isolate_daily_edit(replacement, baseline, serialized, target):
+	"""Apply only the selected source row's numeric delta and daily projections."""
+	previous = _effective_result_values(serialized)
+	key = _daily_line_key(target)
+	values = deepcopy_json(previous)
+	before = baseline["proposed_value"]
+	after = replacement["proposed_value"]
+	for field in set(ATTENDANCE_NUMERIC_FIELDS) | {"leave_hours"}:
+		delta = _as_number(after.get(field)) - _as_number(before.get(field))
+		if delta:
+			values[field] = round(_as_number(previous.get(field)) + delta, 8)
+	for field in ("attendance_details", "exception_lines", "exception_events", "data_quality_events"):
+		old_items = previous.get(field) or []
+		if field == "exception_lines":
+			old_items = serialized.get("daily_exception_lines") or old_items
+		values[field] = [deepcopy_json(item) for item in old_items if _daily_line_key(item) != key]
+		values[field].extend(deepcopy_json(item) for item in after.get(field) or [] if _daily_line_key(item) == key)
+	# Month-wide rule upgrades are separate actions; a single card cannot approve
+	# new calculations or remove pending cards elsewhere in the month.
+	old_daily_codes = {code for line in serialized.get("daily_exception_lines") or [] for code in line.get("exception_codes") or []}
+	codes = [code for code in serialized.get("exception_codes") or [] if code not in old_daily_codes]
+	for line in values["exception_lines"]:
+		for code in line.get("exception_codes") or []:
+			if code not in codes:
+				codes.append(code)
+	return {**replacement, "proposed_value": values, "processed_value": deepcopy_json(values),
+		"exception_events": values["exception_events"], "exception_codes": codes,
+		"exception_message": "；".join(ATTENDANCE_DRAFT_EXCEPTION_MESSAGES.get(code, EXCEPTION_LABELS.get(code, "待人工确认")) for code in codes)}
 
 
 def _has_daily_exception(row: dict[str, Any], source_row: int | str, exception_code: str, *, source_file: str = "", source_sheet: str = "", attendance_date: str = "") -> bool:
@@ -3015,12 +3341,19 @@ def update_attendance_draft_daily_row(
 	if restday_field and restday_field in changes:
 		start_time = _normalize_overtime_reference_time(overtime_start_time)
 		end_time = _normalize_overtime_reference_time(overtime_end_time)
-		if not start_time or not end_time:
-			frappe.throw(_("请填写有效的加班开始和结束时间，用于修改记录查看。"))
+		if (overtime_start_time or "").strip() and not start_time:
+			frappe.throw(_("加班开始时间无效；如填写请使用有效时间。"))
+		if (overtime_end_time or "").strip() and not end_time:
+			frappe.throw(_("加班结束时间无效；如填写请使用有效时间。"))
 		entered_hours = _as_nonnegative_number(changes.get(restday_field))
 		if entered_hours is None or entered_hours <= 0:
 			frappe.throw(_("请填写大于 0 的加班时间（小时数）。"))
-		reference_values = {"overtime_start_time": start_time, "overtime_end_time": end_time}
+		reference_values = {
+			key: value for key, value in {
+				"overtime_start_time": start_time,
+				"overtime_end_time": end_time,
+			}.items() if value
+		}
 	old_effective_row = dict(target["source_values"])
 	confirmed_before = _loads(doc.confirmed_value_json, None) or {}
 	overrides = _daily_row_overrides(confirmed_before)
@@ -3028,9 +3361,9 @@ def update_attendance_draft_daily_row(
 	target_key = _daily_source_key(source_row, target.get("source_file"), target.get("source_sheet"), target.get("attendance_date"))
 	overrides[target_key] = {**overrides.get(target_key, {}), **changes}
 
-	# Rebuild this employee from its original rows plus the approved overlay. The
-	# processor only reads DingTalk's explicit flags/counts; it does not derive
-	# missing punches, lateness or night shifts from local schedule rules.
+	# Rebuild this employee from its original rows plus the approved overlay and
+	# the company's current structured shift rules. The uploaded source remains
+	# immutable; the rule version is persisted with the rebuilt projection.
 	effective_rows = _effective_daily_source_rows({
 		"original_value": serialized.get("original_value"),
 		"processed_value": serialized.get("processed_value"),
@@ -3039,6 +3372,15 @@ def update_attendance_draft_daily_row(
 		"eligible_for_downstream": serialized.get("eligible_for_downstream"),
 	})
 	batch = frappe.get_doc(IMPORT_BATCH_DOCTYPE, doc.import_batch)
+	shift_bundle = _attendance_shift_rule_bundle(company)
+	baseline_rows = process_attendance_draft_rows(
+		_effective_daily_source_rows(serialized), attendance_month=attendance_month,
+		source_file=doc.source_file or batch.source_file, source_sheet=doc.source_sheet or "每日统计",
+		employee_directory=_employee_directory(company) or None,
+		exception_policy=_attendance_draft_exception_policy(),
+		shift_rules=shift_bundle["rules"], shift_rule_version=shift_bundle["version"],
+	)["processed_rows"]
+	baseline = next(row for row in baseline_rows if str(row.get("employee_code") or "") == str(doc.employee_code or ""))
 	rebuilt = process_attendance_draft_rows(
 		effective_rows,
 		attendance_month=attendance_month,
@@ -3046,11 +3388,14 @@ def update_attendance_draft_daily_row(
 		source_sheet=doc.source_sheet or "每日统计",
 		employee_directory=_employee_directory(company) or None,
 		exception_policy=_attendance_draft_exception_policy(),
+		shift_rules=shift_bundle["rules"],
+		shift_rule_version=shift_bundle["version"],
 	)
 	replacement = next((row for row in rebuilt["processed_rows"] if str(row.get("employee_code") or "") == str(doc.employee_code or "")), None)
 	if not replacement:
 		frappe.throw(_("更正后无法重新生成该员工的考勤汇总。"))
 	replacement = _apply_daily_exception_decisions(replacement, decisions)
+	replacement = _isolate_daily_edit(replacement, baseline, serialized, target)
 	target_still_missing_overtime = _has_daily_exception(
 		replacement, source_row, "RESTDAY_CLOCKED_WITHOUT_OVERTIME",
 		source_file=target.get("source_file") or "", source_sheet=target.get("source_sheet") or "",
@@ -3064,8 +3409,8 @@ def update_attendance_draft_daily_row(
 	confirmed["_daily_exception_decisions"] = decisions
 	history = _loads(doc.review_history_json, [])
 	history.append({
-		"old_value": old_effective_row,
-		"new_value": {**old_effective_row, **changes},
+		"old_value": {field: old_effective_row.get(field) for field in changes},
+		"new_value": deepcopy_json(changes),
 		"field_name": f"__daily_row__:{source_row}",
 		"original_value": old_effective_row,
 		"reason": (reason or "").strip(),
@@ -3107,7 +3452,7 @@ def update_attendance_draft_daily_row(
 ATTENDANCE_SOURCE_TOTAL_REPAIR_FIELDS = ("workday_overtime_hours", "deep_night_shifts")
 
 
-def _attendance_policy_replacement(record, *, attendance_month, employee_directory, exception_policy):
+def _attendance_policy_replacement(record, *, attendance_month, employee_directory, exception_policy, shift_rules=None, shift_rule_version=""):
 	"""Recheck retained daily facts without overwriting reviewed monthly totals."""
 	current = _effective_result_values(record)
 	if current.get("signed_final_override"):
@@ -3124,6 +3469,7 @@ def _attendance_policy_replacement(record, *, attendance_month, employee_directo
 		source_rows, attendance_month=attendance_month, employee_directory=employee_directory,
 		source_file=record.get("source_file") or "", source_sheet=record.get("source_sheet") or "每日统计",
 		exception_policy=exception_policy,
+		shift_rules=shift_rules, shift_rule_version=shift_rule_version,
 	)
 	replacement = next((row for row in rebuilt["processed_rows"] if str(row["employee_code"]) == str(record.get("employee_code"))), None)
 	if replacement is None:
@@ -3156,9 +3502,13 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 	if not batch:
 		frappe.throw(_("尚未上传考勤初稿。"))
 	directory, policy = _employee_directory(company) or None, _attendance_draft_exception_policy()
+	shift_bundle = _attendance_shift_rule_bundle(company)
 	preview, skipped, replacements = [], [], []
 	for record in _result_rows(batch, 0):
-		replacement, reason = _attendance_policy_replacement(record, attendance_month=attendance_month, employee_directory=directory, exception_policy=policy)
+		replacement, reason = _attendance_policy_replacement(
+			record, attendance_month=attendance_month, employee_directory=directory, exception_policy=policy,
+			shift_rules=shift_bundle["rules"], shift_rule_version=shift_bundle["version"],
+		)
 		identity = {key: record.get(key) for key in ("record_id", "employee_code", "employee_name")}
 		if replacement is None:
 			skipped.append({**identity, "reason": reason})
@@ -3203,6 +3553,7 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 			_save_batch_notes(batch, {
 				"processed_result": _export_processed_result(batch),
 				"attendance_policy_version": ATTENDANCE_POLICY_VERSION,
+				"shift_rule_version": shift_bundle["version"],
 				"processed_result_refresh_reason": "attendance_policy_recheck",
 				"data_quality": data_quality,
 			})
@@ -3244,6 +3595,7 @@ def repair_attendance_draft_source_totals(company: str, attendance_month: str, e
 	if not batch:
 		frappe.throw(_("尚未上传考勤初稿。"))
 	records = _result_rows(batch, 5000)
+	shift_bundle = _attendance_shift_rule_bundle(company)
 	preview = []
 	for record in records:
 		effective_rows = _effective_daily_source_rows(record)
@@ -3256,6 +3608,8 @@ def repair_attendance_draft_source_totals(company: str, attendance_month: str, e
 			source_sheet=record.get("source_sheet") or "每日统计",
 			employee_directory=_employee_directory(company) or None,
 			exception_policy=_attendance_draft_exception_policy(),
+			shift_rules=shift_bundle["rules"],
+			shift_rule_version=shift_bundle["version"],
 		)
 		replacement = next(
 			(
@@ -3375,18 +3729,14 @@ def review_attendance_draft_daily_exception(
 	decisions[target_key] = {**decisions.get(target_key, {}), exception_code: True}
 
 	batch = frappe.get_doc(IMPORT_BATCH_DOCTYPE, doc.import_batch)
-	rebuilt = process_attendance_draft_rows(
-		_effective_daily_source_rows(serialized),
-		attendance_month=attendance_month,
-		source_file=doc.source_file or batch.source_file,
-		source_sheet=doc.source_sheet or "每日统计",
-		employee_directory=_employee_directory(company) or None,
-		exception_policy=_attendance_draft_exception_policy(),
-	)
-	replacement = next((row for row in rebuilt["processed_rows"] if str(row.get("employee_code") or "") == str(doc.employee_code or "")), None)
-	if not replacement:
-		frappe.throw(_("处理后无法重新生成该员工的考勤汇总。"))
-	replacement = _apply_daily_exception_decisions(replacement, decisions)
+	# This action records a decision only; it must not adopt recalculated hours
+	# or statuses for any other card.
+	current = _effective_result_values(serialized)
+	current["exception_lines"] = deepcopy_json(serialized.get("daily_exception_lines") or [])
+	replacement = _apply_daily_exception_decisions({
+		"proposed_value": current, "processed_value": current,
+		"exception_codes": serialized.get("exception_codes") or [],
+	}, {target_key: {exception_code: True}})
 	effective_review_status = _attendance_draft_queue_rollup(replacement.get("exception_codes") or [], "已通过")
 	confirmed = dict(replacement["proposed_value"])
 	confirmed["_daily_row_overrides"] = overrides
@@ -3444,6 +3794,8 @@ def bulk_update_processing_records(
 	page_length: int = 20,
 	review_status: str = "待审核",
 	reason: str = "",
+	employee_code: str = "",
+	employee_name: str = "",
 ):
 	"""Apply one reviewed decision to explicitly selected exception records.
 
@@ -3473,9 +3825,14 @@ def bulk_update_processing_records(
 		# so every pending record is included even when the browser only displays
 		# one page.  The source boundary remains mandatory: different source types
 		# can carry different review semantics.
+		pending_filters = {"import_batch": batch.name, "exception_codes": ["!=", "[]"], "review_status": "待审核"}
+		if (employee_code or "").strip():
+			pending_filters["employee_code"] = ["like", f"%{employee_code.strip()}%"]
+		if (employee_name or "").strip():
+			pending_filters["employee_name"] = ["like", f"%{employee_name.strip()}%"]
 		record_ids = [row.name for row in frappe.get_all(
 			PROCESSING_RECORD_DOCTYPE,
-			filters={"import_batch": batch.name, "exception_codes": ["!=", "[]"], "review_status": "待审核"},
+			filters=pending_filters,
 			fields=["name"],
 			order_by="modified desc",
 			limit_page_length=501,
@@ -3821,7 +4178,18 @@ def confirm_source_result(company: str, attendance_month: str, source_type: str)
 
 
 @frappe.whitelist()
-def list_processing_exceptions(company: str, attendance_month: str, source_type: str = "", page_length: int = 20, page_start: int = 0):
+def list_processing_exceptions(
+	company: str,
+	attendance_month: str,
+	source_type: str = "",
+	page_length: int = 20,
+	page_start: int = 0,
+	employee_code: str = "",
+	employee_name: str = "",
+	sort_field: str = "employee_code",
+	sort_order: str = "asc",
+	focus_record_id: str = "",
+):
 	_require_processing_manager()
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
 	if source_type:
@@ -3831,26 +4199,44 @@ def list_processing_exceptions(company: str, attendance_month: str, source_type:
 	batches = [_latest_batch(company, attendance_month, source) for source in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES]
 	all_batch_names = [batch.name for batch in batches if batch]
 	batch_names = [batch.name for batch in batches if batch and (not source_type or batch.source_type == source_type)]
-	# Keep the count and page query identical; otherwise the page indicator could
-	# promise records that cannot appear in the exception work queue.
-	total_pending_count = frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": ["in", all_batch_names], "exception_codes": ["!=", "[]"], "review_status": "待审核"}) if all_batch_names else 0
-	filtered_pending_count = frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": ["in", batch_names], "exception_codes": ["!=", "[]"], "review_status": "待审核"}) if batch_names else 0
+	# Attendance-draft records are one employee summary containing many dated
+	# lines. The parent review_status must not hide sibling dates after one date
+	# is saved; the queue is pending while persisted daily lines remain.
+	queue_fields = ["name", "company", "import_batch", "attendance_month", "employee_code", "employee_name", "department", "source_type", "original_value_json", "processed_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "reviewer", "reviewed_on", "review_note", "review_history_json", "eligible_for_downstream", "source_file", "source_sheet", "source_row", "source_id", "approval_no"]
+	all_records = frappe.get_all(
+		PROCESSING_RECORD_DOCTYPE,
+		filters={"import_batch": ["in", all_batch_names]} if all_batch_names else {"name": "__none__"},
+		fields=queue_fields,
+		order_by="modified desc",
+		limit_page_length=5000,
+	) if all_batch_names else []
+	current_shift_rule_version = _attendance_shift_rule_bundle(company)["version"]
+	all_rows = [_serialize_record(row, current_shift_rule_version) for row in all_records]
+	def normalise_employee_filter(value):
+		return re.sub(r"\s+", "", str(value or "").casefold())
+	employee_code_filter = normalise_employee_filter(employee_code)
+	employee_name_filter = normalise_employee_filter(employee_name)
+	sort_field = sort_field if sort_field in {"employee_code", "employee_name"} else "employee_code"
+	sort_order = "desc" if str(sort_order or "").strip().lower() == "desc" else "asc"
+	def employee_matches(row):
+		return (
+			(not employee_code_filter or employee_code_filter in normalise_employee_filter(row.get("employee_code")))
+			and (not employee_name_filter or employee_name_filter in normalise_employee_filter(row.get("employee_name")))
+		)
+	def pending_filter(row):
+		if row.get("source_type") == "attendance_draft":
+			return bool(row.get("daily_exception_lines"))
+		return bool(row.get("exception_codes")) and row.get("review_status") == "待审核"
+	total_pending_count = sum(1 for row in all_rows if pending_filter(row))
+	filtered_pending_count = sum(1 for row in all_rows if row.get("import_batch") in batch_names and pending_filter(row) and employee_matches(row))
 	if not batch_names:
 		return {"review_rows": [], "total_pending_count": total_pending_count, "filtered_pending_count": 0, "source_type": source_type, "page_start": page_start, "page_length": page_length}
-	records = frappe.get_all(
-		PROCESSING_RECORD_DOCTYPE,
-		# The work queue contains only unresolved records.  Resolved exceptions
-		# remain in the source result and manual-adjustment ledger for traceability.
-		filters={"import_batch": ["in", batch_names], "exception_codes": ["!=", "[]"], "review_status": "待审核"},
-		fields=["name", "attendance_month", "employee_code", "employee_name", "department", "source_type", "original_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "reviewer", "reviewed_on", "review_note", "source_file", "source_sheet", "source_row", "source_id", "approval_no"],
-		order_by="modified desc",
-		# Keep the exceptional queue bounded but sort in Python because the
-		# priority lives inside the JSON exception-code column.  A rest-day
-		# punch with no overtime is actionable before the generic queue.
-		limit_page_length=5000,
-	)
-	rows = [_serialize_record(row) for row in records]
-	rows.sort(key=_processing_exception_sort_key)
+	rows = [row for row in all_rows if row.get("import_batch") in batch_names and pending_filter(row) and employee_matches(row)]
+	rows.sort(key=lambda row: (str(row.get(sort_field) or "").casefold(), _processing_exception_sort_key(row)), reverse=sort_order == "desc")
+	if focus_record_id:
+		focus_index = next((index for index, row in enumerate(rows) if row.get("record_id") == focus_record_id), None)
+		if focus_index is not None:
+			page_start = (focus_index // page_length) * page_length
 	return {"review_rows": rows[page_start : page_start + page_length], "total_pending_count": total_pending_count, "filtered_pending_count": filtered_pending_count, "source_type": source_type, "page_start": page_start, "page_length": page_length}
 
 
@@ -4312,6 +4698,7 @@ def list_manual_adjustments(company: str, attendance_month: str, page_length: in
 	for record in records:
 		for event in _loads(record.review_history_json, []):
 			items.append({"record_id": record.name, "employee_code": record.employee_code, "employee_name": record.employee_name, "source_type": record.source_type, "field_name": event.get("field_name", ""), "original_value": event.get("old_value"), "new_value": event.get("new_value"), "reference_values": event.get("reference_values") or {}, "review_status": event.get("review_status", ""), "reason": event.get("reason", ""), "modified_by": event.get("reviewer", ""), "modified_at": event.get("reviewed_on", "")})
+			items[-1]["attendance_date"] = event.get("attendance_date") or ""
 	return {"items": items[: min(max(cint(page_length), 1), 5000)]}
 
 
@@ -4319,6 +4706,112 @@ def list_manual_adjustments(company: str, attendance_month: str, page_length: in
 def list_attendance_manual_adjustments(company: str, attendance_month: str, page_length: int = 500):
 	"""Named attendance ledger API; retain the legacy API for existing callers."""
 	return list_manual_adjustments(company, attendance_month, page_length)
+
+
+@frappe.whitelist()
+def list_attendance_shift_rules(company: str):
+	_require_processing_manager()
+	company = _require_company(company)
+	bundle = _attendance_shift_rule_bundle(company)
+	return {
+		"items": bundle["items"],
+		"rule_version": bundle["version"],
+		"using_builtin_fallback": bundle["rules"] is None,
+	}
+
+
+@frappe.whitelist()
+def import_attendance_shift_rules(company: str, file_url: str, preview_only: int = 1):
+	"""Preview, then import the complete schedule workbook without deleting history."""
+	_require_processing_manager()
+	company = _require_company(company)
+	if not frappe.db.exists("DocType", SHIFT_RULE_DOCTYPE):
+		frappe.throw(_("班次规则数据表尚未安装，请先完成站点更新。"))
+	parsed = _schedule_rule_import_rows(file_url)
+	existing = {
+		row.rule_code: row.name
+		for row in frappe.get_all(
+			SHIFT_RULE_DOCTYPE,
+			filters={"company": company},
+			fields=["name", "rule_code"],
+			limit_page_length=500,
+		)
+	}
+	preview = [{**item, "import_action": "更新" if item["rule_code"] in existing else "新增"} for item in parsed["items"]]
+	if cint(preview_only):
+		return {
+			**{key: parsed[key] for key in ("source_version", "source_file", "source_sheet", "source_checksum", "issues")},
+			"items": preview,
+			"existing_count": len(existing),
+			"created_count": sum(1 for item in preview if item["import_action"] == "新增"),
+			"updated_count": sum(1 for item in preview if item["import_action"] == "更新"),
+		}
+	if parsed["issues"]:
+		frappe.throw(_("排班表仍有结构问题，请先按预览提示修正后再导入。"))
+	write_fields = (
+		"rule_code", "rule_name", "sequence", "match_tokens", "basic_time", "weekday_overtime_time",
+		"weekend_overtime_time", "overtime_begin_time", "overnight", "meal_deduction_rule", "basic_hours",
+		"weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule", "weekend_overtime_mode",
+		"holiday_overtime_mode", "small_night_rule", "large_night_rule", "remarks", "suggested_positions",
+		"punch_in_range", "punch_out_range", "source_version", "source_file", "source_sheet", "source_row",
+		"source_checksum", "source_payload_json",
+	)
+	created = updated = 0
+	for item in parsed["items"]:
+		values = {field: item.get(field) for field in write_fields}
+		if item["rule_code"] in existing:
+			doc = frappe.get_doc(SHIFT_RULE_DOCTYPE, existing[item["rule_code"]])
+			doc.update(values)
+			updated += 1
+		else:
+			doc = frappe.get_doc({"doctype": SHIFT_RULE_DOCTYPE, "company": company, "enabled": 1, **values})
+			created += 1
+		doc.save(ignore_permissions=True)
+	frappe.db.commit()
+	bundle = _attendance_shift_rule_bundle(company)
+	return {"created_count": created, "updated_count": updated, "rule_version": bundle["version"], "notice": _("排班规则已导入；历史考勤需在异常处理页按新规则预览并应用。")}
+
+
+@frappe.whitelist()
+def upsert_attendance_shift_rule(company: str, rule: str | dict):
+	_require_processing_manager()
+	company = _require_company(company)
+	if not frappe.db.exists("DocType", SHIFT_RULE_DOCTYPE):
+		frappe.throw(_("班次规则数据表尚未安装，请先完成站点更新。"))
+	if isinstance(rule, str):
+		rule = _loads(rule, {})
+	if not isinstance(rule, dict):
+		frappe.throw(_("班次规则格式不正确。"))
+	rule = frappe._dict(rule)
+	rule_code = str(rule.rule_code or "").strip()
+	if not rule_code:
+		seed = f"{company}:{rule.get('rule_name') or ''}:{now_datetime().isoformat()}"
+		rule_code = f"SHIFT-CUSTOM-{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:10].upper()}"
+		rule.rule_code = rule_code
+	existing = str(rule.name or "").strip() or frappe.db.get_value(
+		SHIFT_RULE_DOCTYPE, {"company": company, "rule_code": rule_code}, "name"
+	)
+	if existing:
+		doc = frappe.get_doc(SHIFT_RULE_DOCTYPE, existing)
+		if doc.company != company:
+			frappe.throw(_("无权修改其他公司的班次规则。"))
+	else:
+		doc = frappe.get_doc({"doctype": SHIFT_RULE_DOCTYPE, "company": company})
+	write_fields = (
+		"enabled", "rule_code", "rule_name", "sequence", "match_tokens", "effective_from", "basic_time",
+		"weekday_overtime_time", "weekend_overtime_time", "overtime_begin_time", "overnight",
+		"meal_deduction_rule", "basic_hours", "weekday_overtime_hours", "weekday_overtime_mode",
+		"extended_shift_rule", "weekend_overtime_mode", "holiday_overtime_mode", "small_night_rule",
+		"large_night_rule", "remarks", "suggested_positions", "punch_in_range", "punch_out_range",
+	)
+	for field in write_fields:
+		if field in rule:
+			setattr(doc, field, rule.get(field))
+	doc.enabled = cint(rule.get("enabled", 1))
+	doc.save(ignore_permissions=True)
+	frappe.db.commit()
+	bundle = _attendance_shift_rule_bundle(company)
+	return {"name": doc.name, "rule_code": doc.rule_code, "rule_version": bundle["version"], "notice": _("班次规则已保存；历史考勤需按新规则重新校验后才会更新。")}
 
 
 @frappe.whitelist()

@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +22,7 @@ def load_processing_center():
 	frappe.PermissionError = PermissionError
 	frappe.session = SimpleNamespace(user="reviewer@example.com")
 	frappe.get_all = lambda *args, **kwargs: []
-	frappe.db = SimpleNamespace(count=lambda *args, **kwargs: 0, get_value=lambda *args, **kwargs: None)
+	frappe.db = SimpleNamespace(count=lambda *args, **kwargs: 0, get_value=lambda *args, **kwargs: None, exists=lambda *args, **kwargs: False)
 	frappe.whitelist = lambda function=None, **_kwargs: (lambda decorated: decorated) if function is None else function
 	frappe_utils = ModuleType("frappe.utils")
 	frappe_utils.cint = lambda value: int(value or 0)
@@ -118,6 +119,108 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 		self.assertEqual(result["exception_codes"], [])
 		self.assertEqual(self.module._attendance_draft_queue_rollup(result["exception_codes"], "已通过"), "已通过")
 
+	def test_single_daily_edit_preserves_unedited_sibling_exception_line(self):
+		old_line = {"attendance_date": "2026-07-02", "source_row": 11, "exception_codes": ["WORKDAY_OUTSIDE_SHIFT_UNAPPROVED"]}
+		rebuilt = {
+			"proposed_value": {"exception_lines": [], "exception_events": []},
+			"processed_value": {}, "exception_codes": [], "exception_message": "",
+		}
+		result = self.module._preserve_unedited_daily_exceptions(
+			rebuilt,
+			{"exception_lines": [old_line]},
+			{self.module._daily_line_key({"attendance_date": "2026-07-01", "source_row": 10})},
+		)
+
+		self.assertEqual(result["proposed_value"]["exception_lines"], [old_line])
+		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", result["exception_codes"])
+		self.assertEqual(result["proposed_value"]["exception_events"][0]["source_row"], 11)
+
+	def test_single_daily_edit_preserves_restored_historic_exception_lines(self):
+		old_line = {"attendance_date": "2026-07-02", "source_row": 11, "exception_codes": [RESTDAY_CODE]}
+		rebuilt = {
+			"proposed_value": {"exception_lines": [], "exception_events": []},
+			"processed_value": {}, "exception_codes": [], "exception_message": "",
+		}
+		serialized = {
+			"processed_value": {}, "proposed_value": {}, "confirmed_value": None,
+			"daily_exception_lines": [old_line],
+		}
+		previous_values = self.module._effective_result_values(serialized)
+		if not previous_values.get("exception_lines") and serialized.get("daily_exception_lines"):
+			previous_values["exception_lines"] = serialized["daily_exception_lines"]
+		result = self.module._preserve_unedited_daily_exceptions(
+			rebuilt,
+			previous_values,
+			{self.module._daily_line_key({"attendance_date": "2026-07-01", "source_row": 10})},
+		)
+
+		self.assertEqual(result["proposed_value"]["exception_lines"], [old_line])
+		self.assertIn(RESTDAY_CODE, result["exception_codes"])
+
+	def test_save_endpoint_only_changes_selected_card_and_roundtrips_siblings(self):
+		m = self.module
+		sources = [{
+			"姓名": "测试员工", "工号": "E-001", "日期": day, "日期类型": "休息日",
+			"实际部门": "工程课", "班次": "休息", "上班时间": "09:00", "下班时间": "12:00",
+			"实际出勤（小时）": 0, "休息日加班（小时）": 0,
+			"source_file": "A.xlsx", "source_sheet": "每日统计", "source_row": index,
+		} for index, day in enumerate(("2026-07-04", "2026-07-11", "2026-07-25"), 10)]
+		row = m.process_attendance_draft_rows(sources, attendance_month="2026-07")["processed_rows"][0]
+		# A historic month has a reviewed total and sibling data which differ from
+		# today's processor. Saving one card must not silently upgrade that month.
+		row["proposed_value"]["workday_overtime_hours"] = 123
+		row["proposed_value"]["exception_lines"][1]["exception_codes"].append(CLOCK_IN_CODE)
+		row["exception_codes"].append(CLOCK_IN_CODE)
+		batch = SimpleNamespace(name="B", company="C", attendance_month="2026-07", source_type="attendance_draft", source_file="A.xlsx")
+		doc = SimpleNamespace(**m._record_payload(batch, row), name="R")
+		doc.as_dict = lambda: {key: value for key, value in vars(doc).items() if not callable(value)}
+		doc.save = lambda **kwargs: None
+		patches = dict(
+			_require_processing_manager=lambda: None, _require_company=lambda value: value,
+			_employee_directory=lambda company: [], _attendance_draft_exception_policy=lambda: {},
+			_refresh_batch_review_status=lambda batch: "待审核", _export_processed_result=lambda batch: {},
+			_invalidate_monthly_final_after_source_change=lambda *args: None, _save_batch_notes=lambda *args: None,
+			now_datetime=lambda: datetime(2026, 9, 21),
+		)
+		with patch.multiple(m, **patches), patch.object(m.frappe, "get_doc", lambda doctype, name: doc if name == "R" else batch, create=True), patch.object(m.frappe.db, "commit", lambda: None, create=True):
+			before = m._serialize_record(doc.as_dict())
+			result = m.update_attendance_draft_daily_row("C", "2026-07", "R", 10, {"休息日加班（小时）": 3}, reason="补录", source_file="A.xlsx", source_sheet="每日统计", attendance_date="2026-07-04")
+			reopened = m._serialize_record(doc.as_dict())
+			self.assertEqual(result["daily_exception_lines"], before["daily_exception_lines"][1:])
+			self.assertEqual(reopened["daily_exception_lines"], result["daily_exception_lines"])
+			self.assertEqual(reopened["review_status"], "待审核")
+			values = m._effective_result_values(reopened)
+			self.assertEqual(values["workday_overtime_hours"], 123)
+			self.assertEqual(values["restday_overtime_hours"], 3)
+			self.assertEqual(values["attendance_details"][0:2], before["proposed_value"]["attendance_details"][1:])
+			self.assertEqual(reopened["review_history"][-1]["new_value"], {"休息日加班（小时）": 3})
+			self.assertEqual(len(reopened["review_history"]), 1)
+			# Saving another card keeps the remaining one and both explicit edits.
+			result2 = m.update_attendance_draft_daily_row("C", "2026-07", "R", 12, {"休息日加班（小时）": 2}, reason="补录", source_file="A.xlsx", source_sheet="每日统计", attendance_date="2026-07-25")
+			self.assertEqual(result2["daily_exception_lines"], before["daily_exception_lines"][1:2])
+			self.assertEqual(m._effective_result_values(result2)["restday_overtime_hours"], 5)
+			self.assertEqual(len(result2["review_history"]), 2)
+			# A decision-only card also must not run a month-wide recalculation.
+			with patch.object(m, "process_attendance_draft_rows", side_effect=AssertionError("unexpected month rebuild")):
+				result3 = m.review_attendance_draft_daily_exception("C", "2026-07", "R", 11, RESTDAY_CODE, reason="核对不计加班", source_file="A.xlsx", source_sheet="每日统计", attendance_date="2026-07-11")
+			self.assertEqual(result3["daily_exception_lines"][0]["exception_codes"], [CLOCK_IN_CODE])
+			self.assertEqual(m._effective_result_values(result3)["restday_overtime_hours"], 5)
+			self.assertEqual(m._effective_result_values(result3)["workday_overtime_hours"], 123)
+
+	def test_queue_focus_returns_employee_page_without_changing_filter(self):
+		m = self.module
+		rows = [{"record_id": f"R{index}", "import_batch": "B", "employee_code": f"{index:04}",
+			"source_type": "attendance_draft", "daily_exception_lines": [{"source_row": index}],
+			"exception_codes": [RESTDAY_CODE]} for index in range(25)]
+		with patch.multiple(m, _require_processing_manager=lambda: None, _require_company=lambda value: value,
+			_latest_batch=lambda *args: SimpleNamespace(name="B"), _serialize_record=lambda row, *_args: row), patch.object(m.frappe, "get_all", return_value=rows):
+			result = m.list_processing_exceptions("C", "2026-07", page_length=20, focus_record_id="R24")
+			self.assertEqual(result["page_start"], 20)
+			self.assertIn("R24", [row["record_id"] for row in result["review_rows"]])
+			self.assertEqual(result["filtered_pending_count"], 25)
+			filtered = m.list_processing_exceptions("C", "2026-07", employee_code="0001", focus_record_id="R24")
+			self.assertEqual([row["record_id"] for row in filtered["review_rows"]], ["R1"])
+
 	def test_same_row_number_in_two_sources_resolves_only_exact_exception(self):
 		lines = [
 			{"attendance_date": "2026-07-04", "source_file": "A.xlsx", "source_sheet": "每日统计", "source_row": 10, "exception_codes": [RESTDAY_CODE]},
@@ -208,6 +311,7 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 		self.assertEqual(self.module._normalize_overtime_reference_time("7:59:00"), "07:59")
 		self.assertEqual(self.module._normalize_overtime_reference_time("15:08"), "15:08")
 		self.assertEqual(self.module._normalize_overtime_reference_time("24:00"), "")
+		self.assertEqual(self.module._normalize_overtime_reference_time(""), "")
 
 
 if __name__ == "__main__":
