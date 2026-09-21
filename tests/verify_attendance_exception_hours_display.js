@@ -42,5 +42,8 @@ for (const required of ["填写时核对", "班次：", "周末，只核对时�
 for (const value of ["dailyRow.shift", "dailyRow.clock_in", "dailyRow.clock_out", "dailyRow.raw_outside_shift_hours", "dailyRow.overtime_approval_status", "dailyRow.confirmed_overtime_hours", "dailyRow.standard_hours", "dailyRow.actual_attendance_hours"]) {
 	if (!editor.includes(value)) throw new Error(`Rest-day overtime editor must use ${value}`);
 }
+for (const required of ['includes("LATE_MARKED")', "field.late_editor", 'label: __("日期")', "attendance_date_display"]) {
+	if (!editor.includes(required)) throw new Error(`Late editor must keep the focused field contract: ${required}`);
+}
 
 console.log("Attendance exception hours display checks passed.");

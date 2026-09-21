@@ -27,8 +27,46 @@ BATCH_DOCTYPE = "HRMS Attendance Import Batch"
 DAY_CHECK_DOCTYPE = "HRMS Attendance Day Check"
 EXCEPTION_DOCTYPE = "HRMS Attendance Exception"
 MONTH_LOCK_DOCTYPE = "HRMS Attendance Month Lock"
+DAILY_CLOSURE_DOCTYPE = "HRMS Attendance Daily Closure"
 API_SOURCE_TYPE = "dingtalk_api"
 API_SOURCE_KIND = "钉钉API同步"
+
+DAILY_RESYNC_COMPARE_FIELDS = (
+	"employee",
+	"employee_code",
+	"user_id",
+	"date_type",
+	"shift_name",
+	"scheduled_in_time",
+	"scheduled_out_time",
+	"actual_in_time",
+	"actual_out_time",
+	"missing_in",
+	"missing_out",
+	"attendance_result",
+	"standard_hours",
+	"actual_attendance_hours",
+	"workday_overtime_hours",
+	"restday_overtime_hours",
+	"holiday_overtime_hours",
+	"leave_summary",
+	"leave_hours",
+	"late_count",
+	"late_minutes",
+	"outside_shift_punch_status",
+	"approval_summary",
+)
+
+EXCEPTION_REVIEW_FIELDS = (
+	"handling_method",
+	"deduct_absence_hours",
+	"full_attendance_deduction",
+	"red_apple_penalty",
+	"confirmation_status",
+	"confirmed_by",
+	"confirmed_on",
+	"remarks",
+)
 
 
 def _require_manager(enforce_role: bool) -> None:
@@ -196,7 +234,13 @@ def _mapping(company: str, user_id: str) -> Any:
 def _approval_evidence(company: str, user_id: str, business_date: date) -> list[dict[str, str]]:
 	rows = frappe.get_all(
 		RAW_DOCTYPE,
-		filters={"company": company, "source_type": "approval", "dingtalk_userid": user_id, "business_date": business_date},
+		filters={
+			"company": company,
+			"source_type": "approval",
+			"dingtalk_userid": user_id,
+			"business_date": business_date,
+			"sync_status": ["!=", "已失效"],
+		},
 		fields=["external_id", "payload_json"],
 		limit_page_length=0,
 	)
@@ -355,15 +399,126 @@ def _assert_month_open(company: str, business_date: date) -> None:
 		frappe.throw(_("{0} 的 {1} 考勤已锁定，钉钉同步不能覆盖历史草稿。").format(company, business_date.strftime("%Y-%m")))
 
 
+def _row_value(row: Any, fieldname: str) -> Any:
+	if isinstance(row, dict):
+		return row.get(fieldname)
+	return getattr(row, fieldname, None)
+
+
+def _daily_check_identity(row: Any) -> str:
+	return str(
+		_row_value(row, "employee")
+		or _row_value(row, "employee_code")
+		or _row_value(row, "user_id")
+		or _row_value(row, "name")
+		or ""
+	)
+
+
+def _daily_check_signature(row: Any) -> tuple[str, ...]:
+	return tuple(str(_row_value(row, fieldname) or "") for fieldname in DAILY_RESYNC_COMPARE_FIELDS)
+
+
+def _compare_daily_check_versions(previous_rows: list[Any], current_rows: list[Any]) -> dict[str, Any]:
+	"""Compare effective DingTalk drafts without relying on document names."""
+	previous = {_daily_check_identity(row): _daily_check_signature(row) for row in previous_rows if _daily_check_identity(row)}
+	current = {_daily_check_identity(row): _daily_check_signature(row) for row in current_rows if _daily_check_identity(row)}
+	created = sorted(set(current) - set(previous))
+	removed = sorted(set(previous) - set(current))
+	changed = sorted(key for key in set(previous) & set(current) if previous[key] != current[key])
+	unchanged = sorted(key for key in set(previous) & set(current) if previous[key] == current[key])
+	return {
+		"created": created,
+		"removed": removed,
+		"changed": changed,
+		"unchanged": unchanged,
+		"affected": sorted(set(created + removed + changed)),
+	}
+
+
+def _restore_unchanged_exception_reviews(batch_name: str, previous_rows: list[Any], unchanged_identities: list[str]) -> int:
+	unchanged = set(unchanged_identities)
+	if not previous_rows or not unchanged:
+		return 0
+	previous_by_key = {
+		(_daily_check_identity(row), str(_row_value(row, "exception_type") or "")): row
+		for row in previous_rows
+		if _daily_check_identity(row) in unchanged
+	}
+	if not previous_by_key:
+		return 0
+	current_rows = frappe.get_all(
+		EXCEPTION_DOCTYPE,
+		filters={"import_batch": batch_name},
+		fields=["name", "employee", "employee_code", "exception_type"],
+		limit_page_length=0,
+	)
+	restored = 0
+	for row in current_rows:
+		previous = previous_by_key.get((_daily_check_identity(row), str(_row_value(row, "exception_type") or "")))
+		if not previous:
+			continue
+		frappe.db.set_value(
+			EXCEPTION_DOCTYPE,
+			_row_value(row, "name"),
+			{fieldname: _row_value(previous, fieldname) for fieldname in EXCEPTION_REVIEW_FIELDS},
+			update_modified=False,
+		)
+		restored += 1
+	return restored
+
+
+def _daily_closure(company: str, business_date: date) -> Any:
+	if not frappe.db.exists("DocType", DAILY_CLOSURE_DOCTYPE):
+		return None
+	name = frappe.db.get_value(
+		DAILY_CLOSURE_DOCTYPE,
+		{"company": company, "attendance_date": business_date},
+		"name",
+	)
+	return frappe.get_doc(DAILY_CLOSURE_DOCTYPE, name) if name else None
+
+
+def _invalidate_daily_closure_after_resync(
+	company: str,
+	business_date: date,
+	resync_reason: str,
+	allow_locked_day_resync: bool,
+) -> dict[str, Any]:
+	closure = _daily_closure(company, business_date)
+	if not closure:
+		return {"invalidated": False, "previous_status": ""}
+	previous_status = str(closure.get("status") or "")
+	if previous_status == "已锁定" and not allow_locked_day_resync:
+		frappe.throw(_("{0} 的日考勤已经锁定；请由有审批权限的人员填写原因后重开当天。").format(business_date))
+	closure.status = "已重开" if previous_status == "已锁定" else "待校验"
+	closure.validation_status = "未校验"
+	closure.correction_version = int(closure.get("correction_version") or 1) + 1
+	closure.validation_message = _("钉钉数据重新同步后发生变化，请重新处理异常并校验当天数据。")
+	closure.validated_by = None
+	closure.validated_on = None
+	closure.locked_by = None
+	closure.locked_on = None
+	reason_text = (resync_reason or "钉钉来源数据发生变化").strip()
+	previous_remarks = str(closure.get("remarks") or "").strip()
+	closure.remarks = "\n".join(filter(None, (previous_remarks, _("重新同步：{0}").format(reason_text))))
+	closure.save(ignore_permissions=True)
+	return {"invalidated": True, "previous_status": previous_status, "status": closure.status}
+
+
 @frappe.whitelist()
 def convert_dingtalk_raw_attendance_to_daily_checks(
 	company: str,
 	business_date: str,
 	sync_log: str = "",
 	enforce_role: bool = True,
+	resync_reason: str = "",
+	allow_locked_day_resync: bool = False,
 ) -> dict[str, Any]:
 	"""Build replaceable daily-check drafts from raw API payloads for one company/date."""
-	_require_manager(enforce_role)
+	# This function is whitelisted, so permission checks must never depend on a
+	# caller-controlled flag. Background jobs run as the user who queued them.
+	_require_manager(True)
 	if not company or not frappe.db.exists("Company", company):
 		frappe.throw(_("请选择有效同步公司。"))
 	day = getdate(business_date)
@@ -377,11 +532,30 @@ def convert_dingtalk_raw_attendance_to_daily_checks(
 	batch = _batch_for_day(company, day, sync_log)
 
 	# API rows are drafts. Rebuild just this isolated API batch; manual rows stay intact.
-	old_exceptions = frappe.get_all(EXCEPTION_DOCTYPE, filters={"import_batch": batch.name}, pluck="name")
-	for name in old_exceptions:
-		frappe.delete_doc(EXCEPTION_DOCTYPE, name, ignore_permissions=True, force=True)
-	old_checks = frappe.get_all(DAY_CHECK_DOCTYPE, filters={"import_batch": batch.name, "source_kind": API_SOURCE_KIND}, pluck="name")
-	for name in old_checks:
+	old_checks = frappe.get_all(
+		DAY_CHECK_DOCTYPE,
+		filters={"import_batch": batch.name, "source_kind": API_SOURCE_KIND},
+		fields=["name", *DAILY_RESYNC_COMPARE_FIELDS],
+		limit_page_length=0,
+	)
+	if old_checks and not (resync_reason or "").strip():
+		frappe.throw(_("重新生成已有钉钉日考勤草稿必须填写原因。"))
+	closure = _daily_closure(company, day)
+	if closure and closure.get("status") == "已锁定" and not allow_locked_day_resync:
+		frappe.throw(_("{0} 的日考勤已经锁定；普通同步不能覆盖已审核版本。").format(day))
+	if closure and closure.get("status") == "已锁定" and allow_locked_day_resync:
+		from hrms.access_control import require_hrms_capability
+
+		require_hrms_capability("attendance_approve", legacy_roles=("HR Manager",))
+	old_exceptions = frappe.get_all(
+		EXCEPTION_DOCTYPE,
+		filters={"import_batch": batch.name},
+		fields=["name", "employee", "employee_code", "exception_type", *EXCEPTION_REVIEW_FIELDS],
+		limit_page_length=0,
+	)
+	for exception in old_exceptions:
+		frappe.delete_doc(EXCEPTION_DOCTYPE, exception.name, ignore_permissions=True, force=True)
+	for name in [row.name for row in old_checks]:
 		frappe.delete_doc(DAY_CHECK_DOCTYPE, name, ignore_permissions=True, force=True)
 
 	grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -397,7 +571,7 @@ def convert_dingtalk_raw_attendance_to_daily_checks(
 			if user_id:
 				grouped[user_id].append(event)
 
-	created = rejected = 0
+	drafts = rejected = 0
 	for user_id, events in grouped.items():
 		row = _draft_row(company, day, user_id, events)
 		row["_raw_events"] = events
@@ -411,11 +585,33 @@ def convert_dingtalk_raw_attendance_to_daily_checks(
 			allow_unmatched=True,
 		)
 		if created_name:
-			created += 1
+			drafts += 1
 		else:
 			rejected += 1
 
-	batch.daily_sheet_rows = created
+	new_checks = frappe.get_all(
+		DAY_CHECK_DOCTYPE,
+		filters={"import_batch": batch.name, "source_kind": API_SOURCE_KIND},
+		fields=["name", *DAILY_RESYNC_COMPARE_FIELDS],
+		limit_page_length=0,
+	)
+	diff = _compare_daily_check_versions(old_checks, new_checks)
+	manual_rows = frappe.get_all(
+		DAY_CHECK_DOCTYPE,
+		filters={"company": company, "attendance_date": day, "source_kind": "人工调整"},
+		fields=["name", "employee", "employee_code", "user_id"],
+		limit_page_length=0,
+	)
+	manual_identities = {_daily_check_identity(row) for row in manual_rows if _daily_check_identity(row)}
+	manual_conflicts = sorted(manual_identities & set(diff["affected"]))
+	change_detected = bool(diff["affected"])
+	closure_result = (
+		_invalidate_daily_closure_after_resync(company, day, resync_reason, allow_locked_day_resync)
+		if change_detected and old_checks
+		else {"invalidated": False, "previous_status": ""}
+	)
+
+	batch.daily_sheet_rows = drafts
 	batch.status = "已导入"
 	batch.notes = json.dumps(
 		{
@@ -424,21 +620,34 @@ def convert_dingtalk_raw_attendance_to_daily_checks(
 			"raw_records": len(raw_records),
 			"usable_clock_records": len(raw_records) - empty_raw_records,
 			"empty_clock_detail_records": empty_raw_records,
-			"drafts": created,
+			"drafts": drafts,
 			"rejected": rejected,
+			"new_drafts": len(diff["created"]),
+			"changed_drafts": len(diff["changed"]),
+			"removed_drafts": len(diff["removed"]),
+			"unchanged_drafts": len(diff["unchanged"]),
+			"manual_conflicts": len(manual_conflicts),
+			"resync_reason": (resync_reason or "").strip(),
 		},
 		ensure_ascii=False,
 	)
 	batch.save(ignore_permissions=True)
-	exceptions = attendance.generate_attendance_exceptions(batch.name) if created else {"created": 0}
+	exceptions = attendance.generate_attendance_exceptions(batch.name) if drafts else {"created": 0}
+	restored_exception_reviews = _restore_unchanged_exception_reviews(batch.name, old_exceptions, diff["unchanged"])
 	frappe.db.commit()
 	return {
 		"batch": batch.name,
 		"raw_records": len(raw_records),
 		"usable_clock_records": len(raw_records) - empty_raw_records,
 		"empty_clock_detail_records": empty_raw_records,
-		"created": created,
-		"updated": 0,
+		"created": len(diff["created"]),
+		"updated": len(diff["changed"]) + len(diff["removed"]),
+		"unchanged": len(diff["unchanged"]),
+		"drafts": drafts,
 		"rejected": rejected,
 		"exceptions": exceptions.get("created", 0),
+		"restored_exception_reviews": restored_exception_reviews,
+		"manual_conflicts": len(manual_conflicts),
+		"change_detected": change_detected,
+		"closure": closure_result,
 	}

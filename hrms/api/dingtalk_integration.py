@@ -16,6 +16,11 @@ DINGTALK_USER_MAP_DOCTYPE = "HRMS DingTalk User Map"
 DINGTALK_SYNC_LOG_DOCTYPE = "HRMS DingTalk Sync Log"
 DINGTALK_EMPLOYEE_IMPORT_DOCTYPE = "HRMS DingTalk Employee Import"
 ATTENDANCE_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
+ATTENDANCE_DAY_CHECK_DOCTYPE = "HRMS Attendance Day Check"
+ATTENDANCE_DAILY_CLOSURE_DOCTYPE = "HRMS Attendance Daily Closure"
+ATTENDANCE_MONTH_LOCK_DOCTYPE = "HRMS Attendance Month Lock"
+DINGTALK_RAW_SNAPSHOT_SOURCE_TYPE = "snapshot"
+ATTENDANCE_SYNC_DELAY_DAYS = 2
 DINGTALK_API_BASE_URL = "https://api.dingtalk.com"
 DINGTALK_OAPI_BASE_URL = "https://oapi.dingtalk.com"
 DINGTALK_ACCESS_TOKEN_URL = "https://api.dingtalk.com/v1.0/oauth2/accessToken"
@@ -200,6 +205,14 @@ def _payload_hash(payload):
 	return hashlib.sha256(_json_dumps(payload).encode()).hexdigest()
 
 
+def _raw_payload_hash(source_type: str, payload) -> str:
+	"""Ignore request metadata that cannot change an employee's attendance facts."""
+	payload = _json_loads(payload)
+	if source_type == DINGTALK_ATTENDANCE_SOURCE_TYPE and isinstance(payload, dict):
+		payload = {key: value for key, value in payload.items() if key not in {"request_count", "source_endpoint"}}
+	return _payload_hash(payload)
+
+
 def _first(payload, *keys):
 	for key in keys:
 		value = payload.get(key)
@@ -230,6 +243,23 @@ def _settings_doc():
 
 def _as_bool(value):
 	return bool(int(value or 0))
+
+
+def _attendance_sync_cutoff(today_value: date | str | None = None) -> date:
+	today_date = getdate(today_value or now_datetime())
+	return today_date - timedelta(days=ATTENDANCE_SYNC_DELAY_DAYS)
+
+
+def _validate_attendance_sync_date(work_date: date | str) -> date:
+	business_date = getdate(work_date)
+	cutoff = _attendance_sync_cutoff()
+	if business_date > cutoff:
+		frappe.throw(
+			_("考勤日期 {0} 尚未达到同步条件；当前最多只能同步到 {1}（目标日期两日后）。").format(
+				business_date, cutoff
+			)
+		)
+	return business_date
 
 
 def _settings_dict(doc=None, include_secret=False):
@@ -1735,6 +1765,89 @@ def _fetch_dingtalk_attendance_results(userids: list[str], business_date: date) 
 	return results_by_user, request_count, endpoint_by_user
 
 
+def _attendance_resync_preview(company: str, business_date: date) -> dict:
+	month = business_date.strftime("%Y-%m")
+	month_status = frappe.db.get_value(
+		ATTENDANCE_MONTH_LOCK_DOCTYPE,
+		{"company": company, "attendance_month": month},
+		"status",
+	) or ""
+	closure = frappe.db.get_value(
+		ATTENDANCE_DAILY_CLOSURE_DOCTYPE,
+		{"company": company, "attendance_date": business_date},
+		["name", "status", "validation_status", "correction_version"],
+		as_dict=True,
+	) if frappe.db.exists("DocType", ATTENDANCE_DAILY_CLOSURE_DOCTYPE) else None
+	previous_logs = frappe.get_all(
+		DINGTALK_SYNC_LOG_DOCTYPE,
+		filters={
+			"company": company,
+			"sync_type": "考勤同步",
+			"business_date": business_date,
+			"status": ["in", ["已完成", "部分失败"]],
+		},
+		fields=["name", "finished_at", "records_received", "records_created", "records_updated"],
+		order_by="modified desc",
+		limit_page_length=1,
+	)
+	active_logs = frappe.get_all(
+		DINGTALK_SYNC_LOG_DOCTYPE,
+		filters={
+			"company": company,
+			"sync_type": "考勤同步",
+			"business_date": business_date,
+			"status": ["in", ["已排队", "运行中", "取消请求"]],
+		},
+		fields=["name", "status"],
+		order_by="modified desc",
+		limit_page_length=1,
+	)
+	raw_records = frappe.db.count(
+		DINGTALK_RAW_RECORD_DOCTYPE,
+		{"company": company, "source_type": DINGTALK_ATTENDANCE_SOURCE_TYPE, "business_date": business_date},
+	)
+	api_rows = frappe.db.count(
+		ATTENDANCE_DAY_CHECK_DOCTYPE,
+		{"company": company, "source_kind": "钉钉API同步", "attendance_date": business_date},
+	)
+	manual_rows = frappe.db.count(
+		ATTENDANCE_DAY_CHECK_DOCTYPE,
+		{"company": company, "source_kind": "人工调整", "attendance_date": business_date},
+	)
+	previous = previous_logs[0] if previous_logs else None
+	active = active_logs[0] if active_logs else None
+	is_resync = bool(raw_records or api_rows or previous)
+	blocked_reason = ""
+	if month_status == "已锁定":
+		blocked_reason = _("{0} 月度考勤已经锁定；请先按月度更正流程重开，不能直接重新同步。").format(month)
+	return {
+		"company": company,
+		"business_date": str(business_date),
+		"latest_allowed_date": str(_attendance_sync_cutoff()),
+		"is_resync": is_resync,
+		"requires_reason": is_resync,
+		"raw_records": raw_records,
+		"api_rows": api_rows,
+		"manual_rows": manual_rows,
+		"month_status": month_status or "草稿",
+		"daily_closure": dict(closure) if closure else {},
+		"daily_locked": bool(closure and closure.status == "已锁定"),
+		"previous_sync": dict(previous) if previous else {},
+		"active_sync": dict(active) if active else {},
+		"blocked": bool(blocked_reason),
+		"blocked_reason": blocked_reason,
+	}
+
+
+@frappe.whitelist()
+def get_dingtalk_attendance_resync_preview(work_date: str, company: str = ""):
+	"""Return the exact lock/manual-impact boundary before a manual pull."""
+	_require_dingtalk_manager()
+	company = _require_api_sync_enabled(company)
+	business_date = _validate_attendance_sync_date(work_date)
+	return _attendance_resync_preview(company, business_date)
+
+
 @frappe.whitelist()
 def sync_attendance_from_dingtalk(
 	work_date: str,
@@ -1744,18 +1857,37 @@ def sync_attendance_from_dingtalk(
 	convert_to_draft: bool = True,
 	sync_log: str = "",
 	finalize_log: bool = True,
+	resync_reason: str = "",
+	allow_locked_day_resync: bool = False,
 ):
 	"""Read one business date into raw storage, then build draft daily checks only."""
 	_require_dingtalk_manager()
 	company = _require_api_sync_enabled(company)
-	business_date = getdate(work_date)
+	business_date = _validate_attendance_sync_date(work_date)
+	preview = _attendance_resync_preview(company, business_date)
+	if preview["blocked"]:
+		frappe.throw(preview["blocked_reason"])
+	if preview["is_resync"] and not (resync_reason or "").strip():
+		frappe.throw(_("重新同步必须填写原因，以便保留钉钉修改的审计记录。"))
+	if preview["daily_locked"] and not _as_bool(allow_locked_day_resync):
+		frappe.throw(_("当天日考勤已经锁定；请勾选重开当天并由有审批权限的人员执行。"))
+	if preview["daily_locked"] and _as_bool(allow_locked_day_resync):
+		from hrms.access_control import require_hrms_capability
+
+		require_hrms_capability("attendance_approve", legacy_roles=("HR Manager",))
 	log = _get_or_start_attendance_sync_log(sync_log, company, business_date)
+	log.is_resync = int(preview["is_resync"])
+	log.resync_reason = (resync_reason or "").strip()
+	if preview["previous_sync"] and not log.get("previous_sync_log"):
+		log.previous_sync_log = preview["previous_sync"].get("name")
+	log.save(ignore_permissions=False)
 	if _sync_cancel_requested(log.name):
 		if finalize_log:
 			_finish_sync_log(log, "已撤销", error_message="同步任务在开始前已取消；未写入考勤草稿。")
 		return {"sync_log": log.name, "received": 0, "failed": 0, "work_date": str(business_date), "cancelled": True}
 	userids = _userids_for_attendance_sync(userids_json, limit=limit, company=company)
 	received = 0
+	raw_created = raw_updated = raw_unchanged = 0
 	failed = 0
 	errors = []
 	try:
@@ -1783,7 +1915,7 @@ def sync_attendance_from_dingtalk(
 						"approve_list": [],
 					},
 				}
-				upsert_raw_record(
+				raw_doc = upsert_raw_record(
 					DINGTALK_ATTENDANCE_SOURCE_TYPE,
 					f"{userid}:{business_date}",
 					payload,
@@ -1792,6 +1924,12 @@ def sync_attendance_from_dingtalk(
 					business_date=business_date,
 					dingtalk_userid=userid,
 				)
+				if raw_doc.flags.hrms_created:
+					raw_created += 1
+				elif raw_doc.flags.hrms_payload_changed:
+					raw_updated += 1
+				else:
+					raw_unchanged += 1
 				received += 1
 			if _sync_cancel_requested(log.name):
 				if finalize_log:
@@ -1807,11 +1945,36 @@ def sync_attendance_from_dingtalk(
 		if convert_to_draft and not failed:
 			from hrms.api.dingtalk_attendance_sync import convert_dingtalk_raw_attendance_to_daily_checks
 
-			conversion = convert_dingtalk_raw_attendance_to_daily_checks(company, str(business_date), log.name, enforce_role=False)
+			conversion = convert_dingtalk_raw_attendance_to_daily_checks(
+				company,
+				str(business_date),
+				log.name,
+				enforce_role=False,
+				resync_reason=resync_reason,
+				allow_locked_day_resync=_as_bool(allow_locked_day_resync),
+			)
 		error_message = "\n".join(errors)
 		if finalize_log:
-			_finish_sync_log(log, "已完成" if not failed else "部分失败", received, conversion.get("created", 0), conversion.get("updated", 0), failed, error_message)
-		return {"sync_log": log.name, "received": received, "failed": failed, "work_date": str(business_date), "conversion": conversion, "error_message": error_message}
+			_finish_sync_log(
+				log,
+				"已完成" if not failed else "部分失败",
+				received,
+				conversion.get("created", 0),
+				conversion.get("updated", 0),
+				failed,
+				error_message,
+				unchanged=conversion.get("unchanged", 0),
+				manual_conflicts=conversion.get("manual_conflicts", 0),
+			)
+		return {
+			"sync_log": log.name,
+			"received": received,
+			"failed": failed,
+			"work_date": str(business_date),
+			"raw_changes": {"created": raw_created, "updated": raw_updated, "unchanged": raw_unchanged},
+			"conversion": conversion,
+			"error_message": error_message,
+		}
 	except Exception as exc:
 		if finalize_log:
 			_finish_sync_log(log, "失败", received, 0, received - failed, failed + 1, str(exc))
@@ -1837,14 +2000,42 @@ def _get_or_start_attendance_sync_log(sync_log: str, company: str, business_date
 
 
 @frappe.whitelist()
-def queue_dingtalk_attendance_sync(work_date: str, company: str = ""):
+def queue_dingtalk_attendance_sync(
+	work_date: str,
+	company: str = "",
+	resync_reason: str = "",
+	reopen_locked_day: bool = False,
+):
 	"""Queue a one-day pull so closing the browser does not interrupt the import."""
 	_require_dingtalk_manager()
 	company = _require_api_sync_enabled(company)
-	business_date = getdate(work_date)
+	business_date = _validate_attendance_sync_date(work_date)
+	preview = _attendance_resync_preview(company, business_date)
+	if preview["blocked"]:
+		frappe.throw(preview["blocked_reason"])
+	if preview["active_sync"]:
+		return {
+			"sync_log": preview["active_sync"]["name"],
+			"status": preview["active_sync"]["status"],
+			"business_date": str(business_date),
+			"duplicate": True,
+		}
+	reason = (resync_reason or "").strip()
+	if preview["requires_reason"] and not reason:
+		frappe.throw(_("重新同步必须填写原因。"))
+	allow_locked_day_resync = preview["daily_locked"] and _as_bool(reopen_locked_day)
+	if preview["daily_locked"] and not allow_locked_day_resync:
+		frappe.throw(_("当天日考勤已经锁定；请确认重开当天后重新同步。"))
+	if allow_locked_day_resync:
+		from hrms.access_control import require_hrms_capability
+
+		require_hrms_capability("attendance_approve", legacy_roles=("HR Manager",))
 	log = _new_sync_log("考勤同步", company=company, business_date=business_date)
+	log.is_resync = int(preview["is_resync"])
+	log.resync_reason = reason
+	log.previous_sync_log = preview["previous_sync"].get("name") if preview["previous_sync"] else None
 	log.status = "已排队"
-	log.error_message = "已提交后台任务；可在“钉钉同步记录”查看进度或撤销。"
+	log.error_message = "已提交重新同步；完成后将显示数据变化和人工修改冲突。" if preview["is_resync"] else "已提交后台任务；可在“钉钉同步记录”查看进度或撤销。"
 	log.save(ignore_permissions=False)
 	frappe.enqueue(
 		"hrms.api.dingtalk_integration.run_queued_dingtalk_attendance_sync",
@@ -1854,8 +2045,15 @@ def queue_dingtalk_attendance_sync(work_date: str, company: str = ""):
 		company=company,
 		work_date=str(business_date),
 		sync_log=log.name,
+		resync_reason=reason,
+		allow_locked_day_resync=allow_locked_day_resync,
 	)
-	return {"sync_log": log.name, "status": log.status, "business_date": str(business_date)}
+	return {
+		"sync_log": log.name,
+		"status": log.status,
+		"business_date": str(business_date),
+		"is_resync": preview["is_resync"],
+	}
 
 
 @frappe.whitelist()
@@ -1875,9 +2073,15 @@ def queue_dingtalk_local_pilot_sync(work_date: str, userids_json: str | list, co
 	if settings.get("daily_sync_enabled"):
 		frappe.throw(_("本地试运行要求“每日自动同步”保持关闭。"))
 
-	business_date = getdate(work_date)
+	business_date = _validate_attendance_sync_date(work_date)
 	userids = _parse_local_pilot_userids(userids_json)
+	preview = _attendance_resync_preview(company, business_date)
+	if preview["blocked"] or preview["daily_locked"]:
+		frappe.throw(preview["blocked_reason"] or _("本地试运行不能重开已锁定日考勤。"))
 	log = _new_sync_log("考勤同步", company=company, business_date=business_date)
+	log.is_resync = int(preview["is_resync"])
+	log.resync_reason = "本地试运行重新拉取" if preview["is_resync"] else ""
+	log.previous_sync_log = preview["previous_sync"].get("name") if preview["previous_sync"] else None
 	log.status = "已排队"
 	log.error_message = "已提交本地试运行：仅 {0} 名指定员工，未启用公网网关或自动同步。".format(len(userids))
 	log.save(ignore_permissions=False)
@@ -1890,6 +2094,7 @@ def queue_dingtalk_local_pilot_sync(work_date: str, userids_json: str | list, co
 		work_date=str(business_date),
 		sync_log=log.name,
 		userids_json=userids,
+		resync_reason=log.resync_reason,
 	)
 	return {
 		"sync_log": log.name,
@@ -1899,13 +2104,29 @@ def queue_dingtalk_local_pilot_sync(work_date: str, userids_json: str | list, co
 	}
 
 
-def run_queued_dingtalk_attendance_sync(company: str, work_date: str, sync_log: str, userids_json: str | list | None = None):
+def run_queued_dingtalk_attendance_sync(
+	company: str,
+	work_date: str,
+	sync_log: str,
+	userids_json: str | list | None = None,
+	resync_reason: str = "",
+	allow_locked_day_resync: bool = False,
+):
 	"""Worker entrypoint: raw evidence first, then replaceable daily drafts."""
 	log = frappe.get_doc(DINGTALK_SYNC_LOG_DOCTYPE, sync_log)
 	if _sync_cancel_requested(log.name):
 		_finish_sync_log(log, "已撤销", error_message="后台任务启动前已取消。")
 		return {"sync_log": log.name, "cancelled": True}
 	try:
+		approvals = sync_approvals_from_dingtalk(company, work_date)
+		if approvals.get("failed"):
+			_finish_sync_log(
+				log,
+				"部分失败",
+				failed=approvals.get("failed", 0),
+				error_message="审批数据同步不完整，未生成新的日考勤草稿。",
+			)
+			return {"sync_log": log.name, "failed": approvals.get("failed", 0), "approvals": approvals}
 		raw = sync_attendance_from_dingtalk(
 			work_date,
 			company=company,
@@ -1913,6 +2134,8 @@ def run_queued_dingtalk_attendance_sync(company: str, work_date: str, sync_log: 
 			convert_to_draft=False,
 			sync_log=log.name,
 			finalize_log=False,
+			resync_reason=resync_reason,
+			allow_locked_day_resync=allow_locked_day_resync,
 		)
 		if raw.get("cancelled") or _sync_cancel_requested(log.name):
 			_finish_sync_log(log, "已撤销", raw.get("received", 0), error_message="后台同步已取消；没有生成每日考勤草稿。")
@@ -1920,17 +2143,80 @@ def run_queued_dingtalk_attendance_sync(company: str, work_date: str, sync_log: 
 		if raw.get("failed"):
 			_finish_sync_log(log, "部分失败", raw.get("received", 0), 0, 0, raw.get("failed", 0), raw.get("error_message", ""))
 			return raw
+		raw_changes = raw.get("raw_changes") or {}
+		source_changed = bool(
+			raw_changes.get("created")
+			or raw_changes.get("updated")
+			or approvals.get("created")
+			or approvals.get("updated")
+		)
+		if _as_bool(log.get("is_resync")) and not source_changed:
+			existing_drafts = frappe.db.count(
+				ATTENDANCE_DAY_CHECK_DOCTYPE,
+				{"company": company, "source_kind": "钉钉API同步", "attendance_date": getdate(work_date)},
+			)
+			conversion = {
+				"created": 0,
+				"updated": 0,
+				"unchanged": existing_drafts,
+				"drafts": existing_drafts,
+				"manual_conflicts": 0,
+				"change_detected": False,
+				"skipped_rebuild": True,
+			}
+			_finish_sync_log(
+				log,
+				"已完成",
+				raw.get("received", 0),
+				0,
+				0,
+				0,
+				"钉钉原始数据与上次同步一致；保留已有草稿、异常处理和闭环状态。",
+				unchanged=existing_drafts,
+			)
+			return {**raw, "approvals": approvals, "conversion": conversion}
 		from hrms.api.dingtalk_attendance_sync import convert_dingtalk_raw_attendance_to_daily_checks
 
-		converted = convert_dingtalk_raw_attendance_to_daily_checks(company, work_date, log.name, enforce_role=False)
+		converted = convert_dingtalk_raw_attendance_to_daily_checks(
+			company,
+			work_date,
+			log.name,
+			enforce_role=False,
+			resync_reason=resync_reason,
+			allow_locked_day_resync=_as_bool(allow_locked_day_resync),
+		)
 		if _sync_cancel_requested(log.name):
+			if _as_bool(log.get("is_resync")):
+				message = "取消请求到达时重新同步已完成；为避免删除原有日考勤版本，本次结果已保留并进入待复核。"
+				_finish_sync_log(
+					log,
+					"已完成",
+					raw.get("received", 0),
+					converted.get("created", 0),
+					converted.get("updated", 0),
+					raw.get("failed", 0),
+					message,
+					unchanged=converted.get("unchanged", 0),
+					manual_conflicts=converted.get("manual_conflicts", 0),
+				)
+				return {**raw, "approvals": approvals, "conversion": converted, "cancel_too_late": True}
 			from hrms.api.attendance_import import revoke_attendance_import_batch
 
 			revoke_attendance_import_batch(converted["batch"], reason="人事在同步执行中请求撤销", enforce_role=False)
 			_finish_sync_log(log, "已撤销", raw.get("received", 0), error_message="已撤销本次同步生成的每日草稿。")
 			return {"sync_log": log.name, "cancelled": True}
-		_finish_sync_log(log, "已完成", raw.get("received", 0), converted.get("created", 0), converted.get("updated", 0), raw.get("failed", 0), raw.get("error_message", ""))
-		return {**raw, "conversion": converted}
+		_finish_sync_log(
+			log,
+			"已完成",
+			raw.get("received", 0),
+			converted.get("created", 0),
+			converted.get("updated", 0),
+			raw.get("failed", 0),
+			raw.get("error_message", ""),
+			unchanged=converted.get("unchanged", 0),
+			manual_conflicts=converted.get("manual_conflicts", 0),
+		)
+		return {**raw, "approvals": approvals, "conversion": converted}
 	except Exception as exc:
 		_finish_sync_log(log, "失败", error_message=str(exc))
 		raise
@@ -1951,6 +2237,12 @@ def cancel_dingtalk_attendance_sync(sync_log: str):
 		log.error_message = "人事已请求取消；系统将停止后续草稿生成并保留原始审计记录。"
 		log.save(ignore_permissions=False)
 		return {"sync_log": log.name, "status": "取消请求", "message": "已请求取消，正在等待当前接口请求结束。"}
+	if _as_bool(log.get("is_resync")):
+		return {
+			"sync_log": log.name,
+			"status": log.status,
+			"message": "重新同步已完成，不能通过撤销删除共享日考勤批次；如有问题请重新同步或按闭环流程复核。",
+		}
 	batch_name = frappe.db.get_value(ATTENDANCE_BATCH_DOCTYPE, {"dingtalk_sync_log": log.name}, "name")
 	if batch_name:
 		from hrms.api.attendance_import import revoke_attendance_import_batch
@@ -2073,7 +2365,15 @@ def sync_approvals_from_dingtalk(company: str, business_date: str) -> dict:
 
 	day = getdate(business_date)
 	log = _new_sync_log("审批同步", company=company, business_date=day)
+	existing_approvals = frappe.get_all(
+		DINGTALK_RAW_RECORD_DOCTYPE,
+		filters={"company": company, "source_type": DINGTALK_APPROVAL_SOURCE_TYPE, "business_date": day},
+		fields=["name", "external_id", "sync_status"],
+		limit_page_length=0,
+	)
+	seen_approval_ids: set[str] = set()
 	received = failed = 0
+	created = updated = unchanged = 0
 	try:
 		for label, process_code in processes.items():
 			cursor = 0
@@ -2093,6 +2393,7 @@ def sync_approvals_from_dingtalk(company: str, business_date: str) -> dict:
 				instance_ids = _extract_result_list(payload, "list", "result", "process_instance_ids")
 				for instance_id in instance_ids:
 					try:
+						seen_approval_ids.add(str(instance_id))
 						detail = _dingtalk_api_request(
 							"POST", DINGTALK_PROCESS_INSTANCE_DETAIL_PATH, use_oapi=True, json_body={"process_instance_id": str(instance_id)}
 						)
@@ -2101,7 +2402,7 @@ def sync_approvals_from_dingtalk(company: str, business_date: str) -> dict:
 						# and missed-card evidence without guessing from a process code.
 						if isinstance(detail, dict):
 							detail = {**detail, "hrms_approval_type": label}
-						upsert_raw_record(
+						raw_doc = upsert_raw_record(
 							DINGTALK_APPROVAL_SOURCE_TYPE,
 							str(instance_id),
 							detail,
@@ -2110,6 +2411,12 @@ def sync_approvals_from_dingtalk(company: str, business_date: str) -> dict:
 							business_date=day,
 							dingtalk_userid=_approval_originator_userid(detail),
 						)
+						if raw_doc.flags.hrms_created:
+							created += 1
+						elif raw_doc.flags.hrms_payload_changed or raw_doc.flags.hrms_status_changed:
+							updated += 1
+						else:
+							unchanged += 1
 						received += 1
 					except Exception:
 						failed += 1
@@ -2117,28 +2424,75 @@ def sync_approvals_from_dingtalk(company: str, business_date: str) -> dict:
 				if next_cursor in (None, "", cursor):
 					break
 				cursor = next_cursor
+		if not failed:
+			for previous in existing_approvals:
+				if str(previous.external_id) in seen_approval_ids or previous.sync_status == "已失效":
+					continue
+				frappe.db.set_value(
+					DINGTALK_RAW_RECORD_DOCTYPE,
+					previous.name,
+					{"sync_status": "已失效", "processed_at": now_datetime()},
+				)
+				updated += 1
 		_settings_doc().db_set("last_approval_sync_at", now_datetime())
-		_finish_sync_log(log, "已完成" if not failed else "部分失败", received, 0, received - failed, failed)
-		return {"received": received, "failed": failed, "log": log.name}
+		_finish_sync_log(
+			log,
+			"已完成" if not failed else "部分失败",
+			received,
+			created,
+			updated,
+			failed,
+			unchanged=unchanged,
+		)
+		return {"received": received, "created": created, "updated": updated, "unchanged": unchanged, "failed": failed, "log": log.name}
 	except Exception as exc:
 		_finish_sync_log(log, "失败", received, 0, received - failed, failed + 1, str(exc))
 		raise
 
 
 def run_scheduled_dingtalk_attendance_sync() -> dict:
-	"""T+1 sync with configurable seven-day backfill; disabled settings perform no IO."""
+	"""T+2 sync with a bounded lookback; locked days are reported, not overwritten."""
 	settings = _settings_doc()
 	if not settings.get("enabled") or settings.get("sync_mode") != DINGTALK_API_SYNC_MODE or not settings.get("daily_sync_enabled"):
 		return {"status": "skipped", "reason": "钉钉每日同步未启用"}
 	company = _require_sync_company(settings.get("company"))
 	lookback_days = max(1, min(int(settings.get("sync_lookback_days") or 7), 31))
-	end_day = getdate(now_datetime()) - timedelta(days=1)
+	end_day = _attendance_sync_cutoff()
 	results = []
 	for offset in range(lookback_days - 1, -1, -1):
 		business_date = end_day - timedelta(days=offset)
-		attendance = sync_attendance_from_dingtalk(str(business_date), company=company)
-		approvals = sync_approvals_from_dingtalk(company, str(business_date))
-		results.append({"business_date": str(business_date), "attendance": attendance, "approvals": approvals})
+		preview = _attendance_resync_preview(company, business_date)
+		if preview["blocked"] or preview["daily_locked"]:
+			results.append(
+				{
+					"business_date": str(business_date),
+					"status": "skipped_locked",
+					"reason": preview["blocked_reason"] or "当天日考勤已锁定，自动任务不会重开。",
+				}
+			)
+			continue
+		try:
+			reason = "每日自动复核最近 {0} 天".format(lookback_days) if preview["is_resync"] else ""
+			log = _new_sync_log("考勤同步", company=company, business_date=business_date)
+			log.is_resync = int(preview["is_resync"])
+			log.resync_reason = reason
+			log.previous_sync_log = preview["previous_sync"].get("name") if preview["previous_sync"] else None
+			log.save(ignore_permissions=False)
+			result = run_queued_dingtalk_attendance_sync(
+				company,
+				str(business_date),
+				log.name,
+				resync_reason=reason,
+			)
+			results.append(
+				{
+					"business_date": str(business_date),
+					"status": "failed" if result.get("failed") else "completed",
+					"result": result,
+				}
+			)
+		except Exception as exc:
+			results.append({"business_date": str(business_date), "status": "failed", "error": str(exc)})
 	return {"status": "completed", "company": company, "lookback_days": lookback_days, "results": results}
 
 
@@ -2192,6 +2546,36 @@ def upsert_raw_record(
 	external_id = str(external_id or _payload_hash(payload))
 	name = frappe.db.exists(DINGTALK_RAW_RECORD_DOCTYPE, {"company": company, "source_type": source_type, "external_id": external_id})
 	doc = frappe.get_doc(DINGTALK_RAW_RECORD_DOCTYPE, name) if name else frappe.new_doc(DINGTALK_RAW_RECORD_DOCTYPE)
+	new_payload_hash = _raw_payload_hash(source_type, payload)
+	previous_payload_hash = _raw_payload_hash(source_type, doc.get("payload_json")) if name and doc.get("payload_json") else ""
+	previous_sync_status = str(doc.get("sync_status") or "") if name else ""
+	payload_changed = bool(name and previous_payload_hash and previous_payload_hash != new_payload_hash)
+	status_changed = bool(name and previous_sync_status != sync_status)
+	if payload_changed:
+		external_key = hashlib.sha256(external_id.encode()).hexdigest()[:24]
+		snapshot_external_id = "snapshot:{0}:{1}:{2}".format(source_type, external_key, previous_payload_hash[:40])
+		if not frappe.db.exists(
+			DINGTALK_RAW_RECORD_DOCTYPE,
+			{"company": company, "source_type": DINGTALK_RAW_SNAPSHOT_SOURCE_TYPE, "external_id": snapshot_external_id},
+		):
+			snapshot = frappe.new_doc(DINGTALK_RAW_RECORD_DOCTYPE)
+			snapshot.update(
+				{
+					"company": company,
+					"source_type": DINGTALK_RAW_SNAPSHOT_SOURCE_TYPE,
+					"external_id": snapshot_external_id,
+					"dingtalk_userid": doc.get("dingtalk_userid"),
+					"business_date": doc.get("business_date"),
+					"sync_batch": doc.get("sync_batch"),
+					"payload_json": doc.get("payload_json"),
+					"payload_hash": previous_payload_hash,
+					"sync_status": "已处理",
+					"received_at": doc.get("received_at"),
+					"processed_at": now_datetime(),
+					"error_message": _("重新同步前的 {0} 原始数据快照").format(source_type),
+				}
+			)
+			snapshot.insert(ignore_permissions=False)
 	doc.update(
 		{
 			"company": company,
@@ -2201,12 +2585,16 @@ def upsert_raw_record(
 			"business_date": getdate(business_date) if business_date else None,
 			"sync_batch": sync_batch,
 			"payload_json": _json_dumps(payload),
-			"payload_hash": _payload_hash(payload),
+			"payload_hash": new_payload_hash,
 			"sync_status": sync_status,
 			"received_at": now_datetime(),
 		}
 	)
 	doc.save(ignore_permissions=False)
+	doc.flags.hrms_created = not bool(name)
+	doc.flags.hrms_payload_changed = payload_changed
+	doc.flags.hrms_status_changed = status_changed
+	doc.flags.hrms_previous_payload_hash = previous_payload_hash
 	return doc
 
 
@@ -2269,7 +2657,17 @@ def _new_sync_log(sync_type: str, sync_direction: str = "钉钉到人资系统",
 	return doc
 
 
-def _finish_sync_log(doc, status, received=0, created=0, updated=0, failed=0, error_message=""):
+def _finish_sync_log(
+	doc,
+	status,
+	received=0,
+	created=0,
+	updated=0,
+	failed=0,
+	error_message="",
+	unchanged=0,
+	manual_conflicts=0,
+):
 	# A queued attendance pull updates this same log while it stores raw evidence.
 	# Refresh first so the final status does not overwrite a newer modification
 	# timestamp with a stale in-memory document.
@@ -2281,6 +2679,8 @@ def _finish_sync_log(doc, status, received=0, created=0, updated=0, failed=0, er
 			"records_received": received,
 			"records_created": created,
 			"records_updated": updated,
+			"records_unchanged": unchanged,
+			"manual_conflicts": manual_conflicts,
 			"records_failed": failed,
 			"error_message": error_message,
 		}
@@ -2396,7 +2796,8 @@ def list_dingtalk_attendance_sync_runs(company: str = "", attendance_month: str 
 		filters=filters,
 		fields=[
 			"name", "business_date", "status", "started_at", "finished_at", "records_received",
-			"records_created", "records_updated", "records_failed", "error_message",
+			"records_created", "records_updated", "records_unchanged", "manual_conflicts",
+			"records_failed", "is_resync", "resync_reason", "previous_sync_log", "error_message",
 		],
 		order_by="modified desc",
 		limit_page_length=max(int(page_length or 50), 1),
@@ -2414,7 +2815,9 @@ def list_dingtalk_attendance_sync_runs(company: str = "", attendance_month: str 
 		row["batch"] = batch.name if batch else ""
 		row["batch_status"] = batch.status if batch else ""
 		row["daily_drafts"] = batch.daily_sheet_rows if batch else 0
-		row["can_cancel"] = row.status in {"已排队", "运行中", "取消请求"} or bool(batch and batch.status not in {"已撤销", "已生成月度终稿"})
+		row["can_cancel"] = row.status in {"已排队", "运行中", "取消请求"} or bool(
+			batch and not row.is_resync and batch.status not in {"已撤销", "已生成月度终稿"}
+		)
 	return logs
 
 
@@ -2629,15 +3032,20 @@ def ensure_dingtalk_company_scope(default_company: str = "永新") -> None:
 	if not frappe.db.exists("Company", default_company):
 		return
 	settings = _settings_doc()
+	updates = {}
 	# ``1`` is the legacy placeholder created by earlier local tests.  The
 	# approved first production scope is 永新, so never leave the integration on
 	# that empty shell company after a migration.
 	if settings.get("company") in (None, "", "1"):
-		settings.company = default_company
+		updates["company"] = default_company
 	if not settings.get("sync_lookback_days"):
-		settings.sync_lookback_days = 7
+		updates["sync_lookback_days"] = 7
 	if settings.get("server_deployment_note") in (None, "", DINGTALK_LEGACY_DEPLOYMENT_NOTE):
-		settings.server_deployment_note = DINGTALK_PHASE_ONE_DEPLOYMENT_NOTE
-	settings.save(ignore_permissions=True)
+		updates["server_deployment_note"] = DINGTALK_PHASE_ONE_DEPLOYMENT_NOTE
+	# This compatibility backfill must not validate or silently alter connection
+	# enablement. A partially configured API integration should remain visible for
+	# HR to repair, while unrelated schema migrations are still allowed to finish.
+	for fieldname, value in updates.items():
+		frappe.db.set_single_value(DINGTALK_SETTINGS_DOCTYPE, fieldname, value)
 	for doctype in (DINGTALK_RAW_RECORD_DOCTYPE, DINGTALK_USER_MAP_DOCTYPE, DINGTALK_SYNC_LOG_DOCTYPE):
 		frappe.db.sql(f"UPDATE `tab{doctype}` SET company = %s WHERE IFNULL(company, '') = ''", default_company)

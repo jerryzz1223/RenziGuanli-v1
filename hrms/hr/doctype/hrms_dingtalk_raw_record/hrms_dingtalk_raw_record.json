@@ -32,7 +32,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "来源类型",
-   "options": "department\nuser\npreentry\nemployee_roster\nattendance\napproval\nemployee_status",
+   "options": "department\nuser\npreentry\nemployee_roster\nattendance\napproval\nemployee_status\nsnapshot",
    "reqd": 1
   },
   {
@@ -76,7 +76,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "同步状态",
-   "options": "已接收\n已处理\n失败"
+   "options": "已接收\n已处理\n已失效\n失败"
   },
   {
    "fieldname": "received_at",

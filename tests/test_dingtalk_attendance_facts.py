@@ -135,6 +135,49 @@ class DingTalkAttendanceFactTests(unittest.TestCase):
 		self.assertIn("加班[OT-1]:COMPLETED/agree", row["关联审批单"])
 		self.assertIn("请假[LEAVE-1]:RUNNING", row["关联审批单"])
 
+	def test_resync_diff_separates_created_changed_removed_and_unchanged(self):
+		previous = [
+			{"employee_code": "YX-001", "shift_name": "白班", "actual_in_time": "08:00"},
+			{"employee_code": "YX-002", "shift_name": "白班", "actual_in_time": "08:00"},
+			{"employee_code": "YX-003", "shift_name": "白班", "actual_in_time": "08:00"},
+		]
+		current = [
+			{"employee_code": "YX-001", "shift_name": "白班", "actual_in_time": "08:00"},
+			{"employee_code": "YX-002", "shift_name": "中班", "actual_in_time": "12:00"},
+			{"employee_code": "YX-004", "shift_name": "白班", "actual_in_time": "08:00"},
+		]
+
+		diff = self.module._compare_daily_check_versions(previous, current)
+
+		self.assertEqual(diff["created"], ["YX-004"])
+		self.assertEqual(diff["changed"], ["YX-002"])
+		self.assertEqual(diff["removed"], ["YX-003"])
+		self.assertEqual(diff["unchanged"], ["YX-001"])
+		self.assertEqual(diff["affected"], ["YX-002", "YX-003", "YX-004"])
+
+	def test_resync_restores_review_only_for_unchanged_employee_exception(self):
+		previous = [
+			{
+				"employee_code": "YX-001", "exception_type": "迟到", "confirmation_status": "已确认",
+				"handling_method": "按事假处理", "remarks": "已核对钉钉审批",
+			},
+			{"employee_code": "YX-002", "exception_type": "缺卡", "confirmation_status": "已确认"},
+		]
+		current = [
+			{"name": "EX-001", "employee_code": "YX-001", "exception_type": "迟到"},
+			{"name": "EX-002", "employee_code": "YX-002", "exception_type": "缺卡"},
+		]
+		writes = []
+		self.module.frappe.get_all = lambda *_args, **_kwargs: current
+		self.module.frappe.db.set_value = lambda *args, **kwargs: writes.append((args, kwargs))
+
+		restored = self.module._restore_unchanged_exception_reviews("BATCH-1", previous, ["YX-001"])
+
+		self.assertEqual(restored, 1)
+		self.assertEqual(writes[0][0][1], "EX-001")
+		self.assertEqual(writes[0][0][2]["confirmation_status"], "已确认")
+		self.assertEqual(writes[0][0][2]["handling_method"], "按事假处理")
+
 
 if __name__ == "__main__":
 	unittest.main()

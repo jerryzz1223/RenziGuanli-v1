@@ -84,11 +84,12 @@ configure_web_bind() {
         echo "Invalid HRMS_SITE" >&2
         exit 1
     fi
-    # This Frappe version binds 0.0.0.0 itself and has no --host option.
+    # Bench defaults to 127.0.0.1. Bind all container interfaces so the
+    # published Docker port is reachable from the host and the LAN.
     if grep -qE '^web:' ./Procfile; then
-        sed -i -E "s|^web:.*$|web: bench --site ${site} serve --port 8000 --noreload|" ./Procfile
+        sed -i -E "s|^web:.*$|web: bench --site ${site} serve --host 0.0.0.0 --port 8000 --noreload|" ./Procfile
     else
-        printf '\nweb: bench --site %s serve --port 8000 --noreload\n' "${site}" >> ./Procfile
+        printf '\nweb: bench --site %s serve --host 0.0.0.0 --port 8000 --noreload\n' "${site}" >> ./Procfile
     fi
 }
 

@@ -54,7 +54,7 @@
    "default": "0",
    "fieldname": "daily_sync_enabled",
    "fieldtype": "Check",
-   "description": "启用后每天凌晨同步昨天，并回补最近 N 天；应在手工试运行通过后最后开启。",
+   "description": "启用后每天凌晨同步到前天，并复核最近 N 天；已锁定日期不会自动重开。应在手工试运行通过后最后开启。",
    "label": "启用每日自动同步"
   },
   {

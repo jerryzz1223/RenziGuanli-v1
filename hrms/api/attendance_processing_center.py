@@ -241,6 +241,14 @@ ATTENDANCE_DAILY_EDIT_FIELDS = (
 	("小夜班", "小夜班", ("小夜班",)),
 ) + tuple((ATTENDANCE_NUMERIC_FIELDS[field][0], LEAVE_LABELS[field], ATTENDANCE_NUMERIC_FIELDS[field]) for field in LEAVE_FIELDS)
 
+ATTENDANCE_LATE_DAILY_EDIT_FIELDS = frozenset({
+	"日期类型", "班次", "上班时间", "下班时间", "迟到次数", "标准工时", "实际出勤（小时）",
+	ATTENDANCE_NUMERIC_FIELDS["personal_leave_hours"][0],
+	ATTENDANCE_NUMERIC_FIELDS["sick_leave_hours"][0],
+	ATTENDANCE_NUMERIC_FIELDS["annual_leave_hours"][0],
+	ATTENDANCE_NUMERIC_FIELDS["rest_arrangement_hours"][0],
+})
+
 # The review page remains a complete, columnar view of one approval per row.
 # The separate printable download contract is defined just below.
 MISSED_PUNCH_RESULT_COLUMNS = (
@@ -1695,31 +1703,62 @@ def _effective_daily_source_rows(row: dict[str, Any]) -> list[dict[str, Any]]:
 		override = overrides.get(key, overrides.get(str(daily.get("source_row") or daily.get("_source_row") or ""), {}))
 		if isinstance(override, dict):
 			daily.update(override)
+			if any(fieldname in override for fieldname in ATTENDANCE_NUMERIC_FIELDS["personal_leave_hours"]):
+				daily["_personal_leave_includes_late"] = True
 		effective_rows.append(daily)
 	return effective_rows
 
 
 def _daily_row_editor_payload(row: dict[str, Any]) -> list[dict[str, Any]]:
 	items = []
+	values = _effective_result_values(row)
+	details_by_key = {
+		_daily_source_key(detail.get("source_row"), detail.get("source_file"), detail.get("source_sheet"), detail.get("attendance_date")): detail
+		for detail in values.get("attendance_details") or [] if isinstance(detail, dict)
+	}
+	lines_by_key = {
+		_daily_line_key(line): line
+		for line in values.get("exception_lines") or [] if isinstance(line, dict)
+	}
 	for source in _effective_daily_source_rows(row):
 		source_row = source.get("source_row") or source.get("_source_row")
 		try:
 			source_row = int(source_row)
 		except (TypeError, ValueError):
 			continue
+		attendance_date = _daily_attendance_date(source.get("日期") or source.get("考勤日期"))
+		source_file = source.get("source_file") or row.get("source_file") or ""
+		source_sheet = source.get("source_sheet") or row.get("source_sheet") or ""
+		key = _daily_source_key(source_row, source_file, source_sheet, attendance_date)
+		detail = details_by_key.get(key, {})
+		line = lines_by_key.get(key, {})
 		fields = []
 		for default_name, label, aliases in ATTENDANCE_DAILY_EDIT_FIELDS:
 			fieldname = next((alias for alias in aliases if alias in source), default_name)
 			if default_name in {ATTENDANCE_NUMERIC_FIELDS[field][0] for field in LEAVE_FIELDS}:
 				label += "（天）" if "(天)" in fieldname else "（小时）"
-			fields.append({"fieldname": fieldname, "label": label, "value": source.get(fieldname, "")})
+			value = source.get(fieldname, "")
+			if default_name == ATTENDANCE_NUMERIC_FIELDS["personal_leave_hours"][0] and detail:
+				value = detail.get("personal_leave_hours", value)
+				label = "事假（含迟到，小时）"
+			if default_name == "实际出勤（小时）":
+				label = "实际工时（小时）"
+			fields.append({
+				"fieldname": fieldname, "default_name": default_name, "label": label, "value": value,
+				"late_editor": default_name in ATTENDANCE_LATE_DAILY_EDIT_FIELDS,
+			})
 		items.append({
 			"source_row": source_row,
-			"attendance_date": _daily_attendance_date(source.get("日期") or source.get("考勤日期")),
-			"source_file": source.get("source_file") or row.get("source_file") or "",
-			"source_sheet": source.get("source_sheet") or row.get("source_sheet") or "",
+			"attendance_date": attendance_date,
+			"source_file": source_file,
+			"source_sheet": source_sheet,
 			"source_values": source,
 			"editable_fields": fields,
+			"exception_codes": line.get("exception_codes") or [],
+			**{field: detail.get(field) for field in (
+				"date_type", "shift", "clock_in", "clock_out", "late_count", "late_minutes",
+				"late_personal_leave_hours", "standard_hours", "actual_attendance_hours",
+			) if field in detail},
 		})
 	return items
 
@@ -2542,6 +2581,18 @@ def _attendance_draft_data_quality_item(row: dict[str, Any]) -> dict[str, Any]:
 	}
 
 
+def _attendance_draft_outside_employment(row: dict[str, Any], employees: dict[str, dict[str, Any]]) -> bool:
+	"""Match the processor's employment boundary rule for read-only source details."""
+	code = _attendance_draft_data_quality_value(row, "工号", "员工工号", "employee_code")
+	employee = employees.get(code)
+	attendance_date = _daily_attendance_date(_attendance_draft_data_quality_value(row, "日期", "考勤日期", "attendance_date"))
+	if not employee or not attendance_date:
+		return False
+	joined_on = str(employee.get("date_of_joining") or "")[:10]
+	relieved_on = str(employee.get("relieving_date") or "")[:10]
+	return bool((joined_on and attendance_date < joined_on) or (relieved_on and attendance_date > relieved_on))
+
+
 @frappe.whitelist()
 def get_attendance_data_quality_details(
 	company: str,
@@ -2566,6 +2617,7 @@ def get_attendance_data_quality_details(
 	quality_labels = {
 		"missing_employee_code": "无工号来源行",
 		"blank_shift": "入离职期间空班次",
+		"outside_employment": "非在职期间来源行",
 		"out_of_month_supplement": "跨月补充资料",
 	}
 	if quality_type not in quality_labels:
@@ -2591,6 +2643,13 @@ def get_attendance_data_quality_details(
 			if _attendance_draft_data_quality_value(row, "工号", "员工工号", "employee_code")
 			and not _attendance_draft_data_quality_value(row, "班次", "shift")
 		]
+	elif quality_type == "outside_employment":
+		employees = {
+			str(employee.get("employee_code") or "").strip(): employee
+			for employee in _employee_directory(company)
+			if str(employee.get("employee_code") or "").strip()
+		}
+		matched_rows = [row for row in rows if _attendance_draft_outside_employment(row, employees)]
 	else:
 		boundary_date = _next_month_boundary_date(attendance_month)
 		matched_rows = [
@@ -2611,6 +2670,7 @@ def get_attendance_data_quality_details(
 		"description": {
 			"missing_employee_code": "以下为工号为空、未进入员工异常的原始来源行。",
 			"blank_shift": "以下为有工号但班次为空、仅作为数据质量证据保留的原始来源行。",
+			"outside_employment": "以下为已匹配员工目录、但考勤日期在入职前或离职后的原始来源行；保留追溯，不参与日/月考勤计算。",
 			"out_of_month_supplement": "以下为来源文件附带的跨月边界行；仅作补充证据，不参与当月汇总且不进入异常。",
 		}[quality_type],
 		"source_file_name": Path(batch.source_file).name,
@@ -3076,7 +3136,14 @@ def _attendance_policy_replacement(record, *, attendance_month, employee_directo
 	status = record.get("review_status") if record.get("review_status") in {"已通过", "已驳回"} else "无需审核"
 	if status != "已驳回" and set(replacement["exception_codes"]) - NON_BLOCKING_ATTENDANCE_EVENT_CODES:
 		status = "待审核"
-	replacement.update(proposed_value=values, review_status=status, eligible_for_downstream=status in {"无需审核", "已通过"})
+	replacement.update(
+		proposed_value=values,
+		review_status=status,
+		eligible_for_downstream=(
+			status in {"无需审核", "已通过"}
+			and values.get("attendance_population_status") != "非本月在职"
+		),
+	)
 	return replacement, ""
 
 
@@ -3127,7 +3194,18 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 		if replacements:
 			_refresh_batch_review_status(batch)
 			_invalidate_monthly_final_after_source_change(batch, "attendance_policy_recheck")
-			_save_batch_notes(batch, {"processed_result": _export_processed_result(batch), "attendance_policy_version": ATTENDANCE_POLICY_VERSION, "processed_result_refresh_reason": "attendance_policy_recheck"})
+			employment_scope_excluded_rows = sum(
+				(_effective_result_values(record) or {}).get("employment_scope_summary", {}).get("out_of_scope_rows", 0)
+				for record in _result_rows(batch, 0)
+			)
+			data_quality = dict(_processing_meta(batch).get("data_quality") or {})
+			data_quality["employment_scope_excluded_rows"] = employment_scope_excluded_rows
+			_save_batch_notes(batch, {
+				"processed_result": _export_processed_result(batch),
+				"attendance_policy_version": ATTENDANCE_POLICY_VERSION,
+				"processed_result_refresh_reason": "attendance_policy_recheck",
+				"data_quality": data_quality,
+			})
 		frappe.db.commit()
 	return {"batch": batch.name, "preview_token": token, "changed_count": len(preview), "preview": preview, "skipped": skipped, "execute": bool(cint(execute))}
 
@@ -3946,6 +4024,49 @@ def get_daily_attendance_workflow(company: str, attendance_month: str, attendanc
 
 
 @frappe.whitelist()
+def list_daily_attendance_review_queue(company: str, attendance_month: str):
+	"""List every synced attendance date that needs HR validation or locking.
+
+	The queue is date-based on purpose: a daily closure locks the complete,
+	audited version used by monthly attendance. It reuses the same canonical
+	rows and workflow state as the daily page, so the queue cannot approve a
+	different copy of the data.
+	"""
+	_require_processing_manager()
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	rows = _daily_checks_for_date(company, attendance_month, "")
+	dates = sorted({str(getattr(row, "attendance_date", "")) for row in rows if getattr(row, "attendance_date", "")}, reverse=True)
+	items = []
+	for attendance_date in dates:
+		state = _daily_workflow_state(company, attendance_month, attendance_date)
+		items.append({
+			"attendance_date": attendance_date,
+			"total_rows": state["total_rows"],
+			"matched_rows": state["matched_rows"],
+			"unmatched_rows": state["unmatched_rows"],
+			"pending_exception_rows": state["pending_exception_rows"],
+			"corrected_rows": state["corrected_rows"],
+			"validation_status": state["validation_status"],
+			"status": state["status"],
+			"locked": state["locked"],
+			"can_validate": state["can_validate"],
+			"can_lock": state["can_lock"],
+			"validation_message": state["validation_message"],
+		})
+	return {
+		"company": company,
+		"attendance_month": attendance_month,
+		"items": items,
+		"total_dates": len(items),
+		"pending_dates": sum(1 for item in items if not item["locked"]),
+		"locked_dates": sum(1 for item in items if item["locked"]),
+		"total_rows": sum(item["total_rows"] for item in items),
+		"pending_exception_rows": sum(item["pending_exception_rows"] for item in items),
+		"unmatched_rows": sum(item["unmatched_rows"] for item in items),
+	}
+
+
+@frappe.whitelist()
 def validate_daily_attendance_after_review(company: str, attendance_month: str, attendance_date: str):
 	_require_processing_manager()
 	state = _daily_workflow_state(company, attendance_month, attendance_date)
@@ -4017,6 +4138,7 @@ def close_daily_attendance(company: str, attendance_month: str, attendance_date:
 def _daily_check_item(row):
 	"""Adapt the canonical DingTalk/API day-check row for the daily workbench."""
 	return {
+		"name": getattr(row, "name", "") or "",
 		"attendance_date": str(getattr(row, "attendance_date", "") or ""),
 		"employee_name": getattr(row, "employee_name", "") or "",
 		"employee_code": getattr(row, "employee_code", "") or "",

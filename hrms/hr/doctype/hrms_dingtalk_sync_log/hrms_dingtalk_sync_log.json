@@ -16,7 +16,12 @@
   "records_received",
   "records_created",
   "records_updated",
+  "records_unchanged",
+  "manual_conflicts",
   "records_failed",
+  "is_resync",
+  "resync_reason",
+  "previous_sync_log",
   "error_message"
  ],
  "fields": [
@@ -85,9 +90,40 @@
   },
   {
    "default": "0",
+   "fieldname": "records_unchanged",
+   "fieldtype": "Int",
+   "label": "未变化记录数"
+  },
+  {
+   "default": "0",
+   "fieldname": "manual_conflicts",
+   "fieldtype": "Int",
+   "label": "人工修改冲突数"
+  },
+  {
+   "default": "0",
    "fieldname": "records_failed",
    "fieldtype": "Int",
    "label": "失败记录数"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_resync",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "重新同步"
+  },
+  {
+   "fieldname": "resync_reason",
+   "fieldtype": "Small Text",
+   "label": "重新同步原因"
+  },
+  {
+   "fieldname": "previous_sync_log",
+   "fieldtype": "Link",
+   "label": "上次同步记录",
+   "options": "HRMS DingTalk Sync Log",
+   "read_only": 1
   },
   {
    "fieldname": "error_message",

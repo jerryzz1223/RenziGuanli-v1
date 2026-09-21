@@ -69,7 +69,7 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 4
+ATTENDANCE_POLICY_VERSION = 6
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
 LEAVE_FIELDS = tuple(field for field in NUMERIC_FIELDS if field.endswith("leave_hours")) + ("work_injury_hours", "rest_arrangement_hours")
 LEAVE_LABELS = dict(zip(
@@ -147,7 +147,7 @@ EXCEPTION_MESSAGES = {
 	"EARLY_MARKED": "钉钉明确标记早退；工作日无请假证据时按实际早退时长计旷工工时。",
 	"ABSENCE_MARKED": "工作日无出勤且无可抵扣请假，已按未出勤工时计入旷工并进入薪资三倍扣款。",
 	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "休息日存在打卡时间，但未匹配加班申请且休息日加班工时为 0；请人工确认是否补录休息日加班工时。",
-	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "工作日班次外打卡合计超过30分钟或存在加班时长，但无有效加班申请；原始时长仅供展示审计，未自动计入后续。",
+	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "工作日下班后班次外打卡超过30分钟或存在加班时长，但无有效加班申请；原始时长仅供展示审计，未自动计入后续。",
 	"SHIFT_SCHEDULE_REVIEW_REQUIRED": "有打卡或迟到标记，但无法取得完整班次计划起止；已标为待复核，未凭空推算。",
 	"SOURCE_FILE_MISSING": "来源文件定位为空。",
 	"SOURCE_SHEET_MISSING": "来源工作表定位为空。",
@@ -350,7 +350,10 @@ def _shift_time_facts(row: Mapping[str, Any]) -> dict[str, Any]:
 		"late_minutes": late_minutes,
 		"pre_shift_minutes": early_minutes,
 		"post_shift_minutes": late_out_minutes,
-		"outside_shift_minutes": early_minutes + late_out_minutes,
+		# Early arrival is not working time or overtime.  Keep it separately for
+		# audit, while the workday tolerance and raw overtime candidate use only
+		# the time after the scheduled shift end.
+		"outside_shift_minutes": late_out_minutes,
 	}
 
 
@@ -602,6 +605,10 @@ def process_attendance_draft_rows(
 	exception_rows = sum(1 for row in processed_rows if row["review_status"] == REVIEW_PENDING)
 	exception_events = sum(len(row.get("exception_events") or []) for row in processed_rows)
 	lifecycle_excluded_shift_rows = sum(len(row.get("data_quality_events") or []) for row in processed_rows)
+	employment_scope_excluded_rows = sum(
+		(row.get("processed_value") or {}).get("employment_scope_summary", {}).get("out_of_scope_rows", 0)
+		for row in processed_rows
+	)
 	supplemental_dates = sorted({
 		parsed_date
 		for row in supplemental_rows
@@ -615,6 +622,7 @@ def process_attendance_draft_rows(
 			"excluded_missing_employee_code_rows": len(missing_code_rows),
 			"excluded_missing_employee_code_accounts": _source_account_summaries(missing_code_rows),
 			"lifecycle_excluded_blank_shift_rows": lifecycle_excluded_shift_rows,
+			"employment_scope_excluded_rows": employment_scope_excluded_rows,
 			"supplemental_out_of_month_rows": len(supplemental_rows),
 			"supplemental_out_of_month_dates": supplemental_dates,
 			"notice": "工号为空的来源行不作为员工考勤处理；跨月边界行仅作补充证据，不参与当月汇总且不进入异常。",
@@ -658,6 +666,7 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 	exception_events = []
 	data_quality_events = []
 	attendance_notes = []
+	employment_scope_counts = Counter()
 	for row in rows:
 		event_start = len(exception_events)
 		row_number = _source_row(row)
@@ -672,21 +681,23 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		elif raw_code and date_counts[(raw_code, parsed_date)] > 1:
 			_add_code(codes, "ATTENDANCE_DATE_DUPLICATE")
 		shift = _value(row, IDENTITY_FIELDS["shift"])
+		employment_scope, employment_scope_reason = _employment_scope(parsed_date, employee)
+		employment_scope_counts[employment_scope] += 1
 		is_scheduled_deep_night_shift = is_production_deep_night_shift(shift)
-		scheduled_deep_night_shifts += int(is_scheduled_deep_night_shift)
+		scheduled_deep_night_shifts += int(is_scheduled_deep_night_shift and employment_scope != "out_of_scope")
 		if not shift:
-			if _is_outside_employment_period(parsed_date, employee):
+			if employment_scope == "out_of_scope":
 				data_quality_events.append(_data_quality_event("BLANK_SHIFT_OUTSIDE_EMPLOYMENT", parsed_date, row_number))
 			else:
 				# A blank class is retained as an import-quality note.  It is not
 				# evidence of missing attendance or an instruction to recreate a
 				# DingTalk schedule in HRMS.
 				data_quality_events.append(_data_quality_event("BLANK_SHIFT_SOURCE", parsed_date, row_number))
-		if not _text(row.get("source_file") or source_file):
+		if employment_scope != "out_of_scope" and not _text(row.get("source_file") or source_file):
 			_add_code(codes, "SOURCE_FILE_MISSING")
-		if not _text(row.get("source_sheet") or source_sheet):
+		if employment_scope != "out_of_scope" and not _text(row.get("source_sheet") or source_sheet):
 			_add_code(codes, "SOURCE_SHEET_MISSING")
-		if row_number is None:
+		if employment_scope != "out_of_scope" and row_number is None:
 			_add_code(codes, "SOURCE_ROW_MISSING")
 		row_numbers = {fieldname: Decimal("0") for fieldname in NUMERIC_FIELDS}
 		for fieldname, aliases in NUMERIC_FIELDS.items():
@@ -699,13 +710,29 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 				"clock_in_missing_count", "clock_out_missing_count", "late_count", "early_count", "absence_marker_count",
 			} else _decimal(value)
 			if number is None or number < 0:
-				_add_code(codes, "INVALID_NUMERIC_VALUE")
+				if employment_scope != "out_of_scope":
+					_add_code(codes, "INVALID_NUMERIC_VALUE")
 				continue
 			selected_alias = next((alias for alias in aliases if alias in row and not _is_blank(row[alias])), "")
 			if fieldname in LEAVE_FIELDS and "(天)" in selected_alias:
 				number *= Decimal("8")
 			row_numbers[fieldname] = number
 		raw_numbers = dict(row_numbers)
+		if employment_scope == "out_of_scope":
+			if shift:
+				data_quality_events.append(_data_quality_event(
+					"OUTSIDE_EMPLOYMENT_PERIOD", parsed_date, row_number, employment_scope_reason,
+				))
+			source_rows.append({
+				"source_file": _text(row.get("source_file") or source_file),
+				"source_sheet": _text(row.get("source_sheet") or source_sheet),
+				"source_row": row_number,
+				"attendance_date": _text(date_value),
+			})
+			attendance_details.append(_out_of_scope_attendance_detail(
+				row, parsed_date, row_number, raw_numbers, source_file, source_sheet, employment_scope_reason,
+			))
+			continue
 		shift_facts = _shift_time_facts(row)
 		manual_overtime_value, manual_overtime_present = _field_value(
 			row, ("确认计入的加班时长", "confirmed_overtime_hours")
@@ -747,9 +774,16 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		late_minutes = int(shift_facts.get("late_minutes") or 0) if is_attendance_workday else 0
 		late_personal_leave_hours = _late_hours(late_minutes)
 		if late_personal_leave_hours:
-			# Always derive from the retained source value. Reprocessing the same batch
-			# therefore recomputes the addition once instead of accumulating it again.
-			row_numbers["personal_leave_hours"] += late_personal_leave_hours
+			# Ordinary source rows add the derived late duration to their leave.  A
+			# reviewed override is the displayed final total (already including late),
+			# so retain it without adding the same late duration a second time.  The
+			# late duration itself remains the minimum that can flow downstream.
+			if row.get("_personal_leave_includes_late"):
+				row_numbers["personal_leave_hours"] = max(
+					row_numbers["personal_leave_hours"], late_personal_leave_hours,
+				)
+			else:
+				row_numbers["personal_leave_hours"] += late_personal_leave_hours
 			attendance_notes.append(
 				f"{parsed_date or _text(date_value)}迟到{late_minutes}分钟"
 				+ ("（半小时以内）" if late_minutes <= 30 else "（超过半小时）")
@@ -927,6 +961,16 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		"exception_lines": exception_lines,
 		"exception_events": exception_events,
 		"data_quality_events": data_quality_events,
+		"employment_scope_summary": {
+			"in_scope_rows": employment_scope_counts["in_scope"],
+			"out_of_scope_rows": employment_scope_counts["out_of_scope"],
+			"unknown_scope_rows": employment_scope_counts["unknown"],
+		},
+		"attendance_population_status": (
+			"非本月在职"
+			if employment_scope_counts["out_of_scope"] and not employment_scope_counts["in_scope"] and not employment_scope_counts["unknown"]
+			else "本月在职"
+		),
 		"attendance_note": "；".join(attendance_notes),
 		"review_note": "；".join(attendance_notes),
 		"source_row_count": len(rows),
@@ -951,7 +995,10 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		"reviewed_on": "",
 		"review_note": "",
 		"review_history": [],
-		"eligible_for_downstream": review_status == REVIEW_NOT_REQUIRED,
+		"eligible_for_downstream": (
+			review_status == REVIEW_NOT_REQUIRED
+			and proposed["attendance_population_status"] != "非本月在职"
+		),
 		"source_file": source_rows[0]["source_file"] if source_rows else _text(source_file),
 		"source_sheet": source_rows[0]["source_sheet"] if source_rows else _text(source_sheet),
 		"source_row": source_rows[0]["source_row"] if source_rows else None,
@@ -1021,13 +1068,24 @@ def _date_only(value: Any) -> date | None:
 
 
 def _is_outside_employment_period(attendance_date: str, employee: Mapping[str, Any] | None) -> bool:
-	"""Suppress blank-shift reviews only when the roster proves the date is out of scope."""
+	"""Return whether the roster proves the date is outside employment."""
+	return _employment_scope(attendance_date, employee)[0] == "out_of_scope"
+
+
+def _employment_scope(attendance_date: str, employee: Mapping[str, Any] | None) -> tuple[str, str]:
+	"""Classify a daily row without guessing when roster dates are unavailable."""
 	day = _date_only(attendance_date)
 	if not day or not employee:
-		return False
+		return "unknown", ""
 	joined_on = _date_only(employee.get("date_of_joining"))
 	relieved_on = _date_only(employee.get("relieving_date"))
-	return bool((joined_on and day < joined_on) or (relieved_on and day > relieved_on))
+	if not joined_on and not relieved_on:
+		return "unknown", ""
+	if joined_on and day < joined_on:
+		return "out_of_scope", f"入职前（入职日期 {joined_on.isoformat()}）"
+	if relieved_on and day > relieved_on:
+		return "out_of_scope", f"离职后（离职日期 {relieved_on.isoformat()}）"
+	return "in_scope", ""
 
 
 def _exception_event(code: str, attendance_date: str, source_row: int | None, count: Decimal | None = None) -> dict[str, Any]:
@@ -1037,8 +1095,57 @@ def _exception_event(code: str, attendance_date: str, source_row: int | None, co
 	return event
 
 
-def _data_quality_event(code: str, attendance_date: str, source_row: int | None) -> dict[str, Any]:
-	return {"code": code, "attendance_date": attendance_date or "", "source_row": source_row}
+def _data_quality_event(code: str, attendance_date: str, source_row: int | None, reason: str = "") -> dict[str, Any]:
+	event = {"code": code, "attendance_date": attendance_date or "", "source_row": source_row}
+	if reason:
+		event["reason"] = reason
+	return event
+
+
+def _out_of_scope_attendance_detail(row, parsed_date, row_number, raw_numbers, source_file, source_sheet, reason):
+	"""Keep a traceable daily row while removing it from attendance calculations."""
+	source_path = _text(row.get("source_file") or source_file)
+	source_tab = _text(row.get("source_sheet") or source_sheet)
+	return {
+		**{field: 0 for field in NUMERIC_FIELDS},
+		"attendance_date": parsed_date or _text(_value(row, IDENTITY_FIELDS["attendance_date"])),
+		"date_type": _text(_value(row, ("日期类型", "工作类型", "date_type", "work_type"))),
+		"is_weekend": is_calendar_weekend(parsed_date),
+		"leave_hours": 0,
+		"leave_breakdown": {LEAVE_LABELS[field]: 0 for field in LEAVE_FIELDS},
+		"excluded_leave_hours": {},
+		"accounted_hours": 0,
+		"hours_difference": 0,
+		"hours_mismatch": False,
+		"full_day_leave": False,
+		"source_numbers": {field: _display_number(value) for field, value in raw_numbers.items()},
+		"approval": _text(_value(row, IDENTITY_FIELDS["approval"])),
+		"overtime_approval_status": "不在职期间，未计入",
+		"raw_workday_overtime_hours": _display_number(raw_numbers["workday_overtime_hours"]),
+		"raw_outside_shift_hours": 0,
+		"confirmed_overtime_hours": 0,
+		"late_minutes": 0,
+		"late_personal_leave_hours": 0,
+		"attendance_note": reason,
+		"scheduled_start": "",
+		"scheduled_end": "",
+		"source_file": source_path,
+		"source_sheet": source_tab,
+		"shift": _value(row, IDENTITY_FIELDS["shift"]),
+		"clock_in": _text(_value(row, ("上班时间", "上班打卡", "上班打卡时间", "clock_in"))),
+		"clock_out": _text(_value(row, ("下班时间", "下班打卡", "下班打卡时间", "clock_out"))),
+		"clock_in_missing": 0,
+		"clock_out_missing": 0,
+		"late_count": 0,
+		"early_count": 0,
+		"absence_marker_count": 0,
+		"absence_hours": 0,
+		"workday_outside_shift_unapproved": False,
+		"shift_schedule_review_required": False,
+		"employment_scope": "out_of_scope",
+		"employment_scope_reason": reason,
+		"source_row": row_number,
+	}
 
 
 def _ordered_headers(rows):

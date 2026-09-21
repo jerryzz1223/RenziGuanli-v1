@@ -140,6 +140,37 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 			result, 10, RESTDAY_CODE, source_file="B.xlsx", source_sheet="每日明细", attendance_date="2026-07-05",
 		))
 
+	def test_late_editor_keeps_only_focused_fields_and_shows_leave_with_late(self):
+		source = {
+			"日期": "2026-07-03", "日期类型": "工作日", "班次": "白班 08:00-17:00",
+			"上班时间": "08:30", "下班时间": "17:00", "迟到次数": 1, "标准工时": 8,
+			"实际出勤（小时）": 7.5, "请假/事假(小时)": 0, "病假(小时)": 0,
+			"特休(小时)": 0, "排休(小时)": 0, "source_file": "A.xlsx",
+			"source_sheet": "每日统计", "source_row": 10,
+		}
+		detail = {
+			"attendance_date": "2026-07-03", "source_file": "A.xlsx", "source_sheet": "每日统计",
+			"source_row": 10, "personal_leave_hours": 0.5, "late_minutes": 30,
+		}
+		row = {
+			"original_value": {"rows": [source]}, "processed_value": {},
+			"proposed_value": {"attendance_details": [detail], "exception_lines": [
+				{**detail, "exception_codes": [CLOCK_IN_CODE, "LATE_MARKED"]},
+			]},
+			"confirmed_value": None, "exception_codes": [CLOCK_IN_CODE, "LATE_MARKED"],
+		}
+
+		payload = self.module._daily_row_editor_payload(row)[0]
+		late_fields = [field for field in payload["editable_fields"] if field["late_editor"]]
+
+		self.assertEqual(payload["exception_codes"], [CLOCK_IN_CODE, "LATE_MARKED"])
+		self.assertEqual(len(late_fields), 11)
+		self.assertEqual(
+			[field["label"] for field in late_fields],
+			["工作类型", "班次", "上班打卡", "下班打卡", "迟到次数", "标准工时", "实际工时（小时）", "事假（含迟到，小时）", "病假（小时）", "特休（小时）", "排休（小时）"],
+		)
+		self.assertEqual(next(field["value"] for field in late_fields if field["default_name"] == "请假/事假(小时)"), 0.5)
+
 	def test_exception_queue_sort_accepts_mixed_review_timestamp_types(self):
 		rows = [
 			{"record_id": "pending-day", "exception_codes": [RESTDAY_CODE], "reviewed_on": ""},

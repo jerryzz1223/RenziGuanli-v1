@@ -426,6 +426,9 @@ if (!homeRedirectJs.includes('label: "月度终稿", route: "/desk/attendance-im
 if (!homeRedirectJs.includes('label: "日考勤", route: "/desk/attendance-import-center/daily-attendance"')) {
 	throw new Error("The global attendance sidebar must provide the daily-attendance route.");
 }
+if (!homeRedirectJs.includes('label: "日考勤审核", route: "/desk/attendance-import-center/daily-review"')) {
+	throw new Error("The global attendance sidebar must provide the daily-review route.");
+}
 
 for (const marker of ["flex: 0 0 220px", "min-width: 220px", "white-space: nowrap", "text-overflow: ellipsis"]) {
 	mustInclude(topNavCss, marker, `Attendance sidebar header layout is missing ${marker}.`);
@@ -584,9 +587,13 @@ for (const marker of [
 	"hrms-attendance-final-grid",
 	"hrms-attendance-trace",
 	"日考勤闭环",
+	"日考勤审核",
+	"list_daily_attendance_review_queue",
+	"进入日考勤审核",
 	"同步钉钉考勤",
 	"校验修改后数据",
 	"审核通过并锁定当天",
+	"核对/人工更正",
 ]) {
 	mustInclude(attendancePageJs, marker, `Attendance import center layout is missing marker: ${marker}`);
 }
@@ -596,6 +603,7 @@ for (const marker of [
 	"attendance-import-center/processing-results",
 	"attendance-import-center/exceptions",
 	"attendance-import-center/monthly-final",
+	"attendance-import-center/daily-review",
 	"attendance-import-center/daily-attendance",
 	"attendance-import-center/import-batches",
 	"attendance-import-center/manual-adjustments",

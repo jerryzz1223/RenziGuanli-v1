@@ -559,6 +559,20 @@
 	transition: width 0.35s ease;
 }
 
+.hrms-dingtalk-progress-track.is-indeterminate i {
+	animation: hrms-dingtalk-indeterminate 1.25s ease-in-out infinite;
+	width: 34%;
+}
+
+.hrms-dingtalk-progress-track.is-complete i {
+	width: 100%;
+}
+
+@keyframes hrms-dingtalk-indeterminate {
+	0% { transform: translateX(-110%); }
+	100% { transform: translateX(310%); }
+}
+
 .hrms-dingtalk-sync-steps {
 	display: grid;
 	gap: 8px;

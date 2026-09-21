@@ -60,6 +60,7 @@ for method in (
 	"list_processing_exceptions",
 	"list_processing_batches",
 	"list_daily_attendance_records",
+	"list_daily_attendance_review_queue",
 	"get_daily_attendance_workflow",
 	"validate_daily_attendance_after_review",
 	"close_daily_attendance",

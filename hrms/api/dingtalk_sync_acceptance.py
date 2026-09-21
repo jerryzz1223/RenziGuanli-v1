@@ -78,7 +78,12 @@ def run_dingtalk_daily_sync_acceptance() -> dict:
 	raw.save(ignore_permissions=True)
 
 	first = convert_dingtalk_raw_attendance_to_daily_checks(TEST_COMPANY, TEST_DATE, enforce_role=False)
-	second = convert_dingtalk_raw_attendance_to_daily_checks(TEST_COMPANY, TEST_DATE, enforce_role=False)
+	second = convert_dingtalk_raw_attendance_to_daily_checks(
+		TEST_COMPANY,
+		TEST_DATE,
+		enforce_role=False,
+		resync_reason="重复转换验收",
+	)
 	batch = frappe.get_doc(BATCH_DOCTYPE, second["batch"])
 	day_checks = frappe.get_all(DAY_CHECK_DOCTYPE, filters={"import_batch": batch.name, "source_kind": "钉钉API同步"}, fields=["employee", "actual_in_time", "actual_out_time"])
 	if len(day_checks) != 1 or day_checks[0].employee != employee.name:
