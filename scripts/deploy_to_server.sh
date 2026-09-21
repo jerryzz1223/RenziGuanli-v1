@@ -51,60 +51,15 @@ fi
 git push origin main
 
 echo "Deploying ${PROJECT_ROOT} to ${REMOTE}:${REMOTE_ROOT}..."
-ssh -tt "${REMOTE}" bash -s -- "${REMOTE_ROOT}" "${SITE_NAME}" "${INSTALL_DEPS}" "${EXPECTED_ARCH}" <<'REMOTE_SCRIPT'
-set -euo pipefail
-
-REMOTE_ROOT="$1"
-SITE_NAME="$2"
-INSTALL_DEPS="$3"
-EXPECTED_ARCH="$4"
-cd "${REMOTE_ROOT}"
-
-if [[ -n "${EXPECTED_ARCH}" ]]; then
-	actual_arch="$(sudo docker info --format '{{.Architecture}}')"
-	case "${EXPECTED_ARCH}:${actual_arch}" in
-		arm64:arm64|arm64:aarch64|amd64:amd64|amd64:x86_64)
-			;;
-		*)
-			echo "Architecture mismatch: expected ${EXPECTED_ARCH}, got ${actual_arch}" >&2
-			exit 21
-			;;
-	esac
+printf -v remote_root_q '%q' "${REMOTE_ROOT}"
+printf -v site_name_q '%q' "${SITE_NAME}"
+remote_command="set -euo pipefail; cd ${remote_root_q}; actual_arch=\$(sudo docker info --format '{{.Architecture}}'); case '${EXPECTED_ARCH}:\${actual_arch}' in arm64:arm64|arm64:aarch64|amd64:amd64|amd64:x86_64) ;; *) echo 'Architecture mismatch: expected ${EXPECTED_ARCH}, got '\${actual_arch} >&2; exit 21 ;; esac; sudo bash scripts/deploy_docker.sh --pull --site ${site_name_q}"
+if [[ ${INSTALL_DEPS} -eq 0 ]]; then
+	remote_command+=" --skip-deps"
 fi
-
-status="$(git status --porcelain)"
-if [[ -n "${status}" ]]; then
-	if printf '%s\n' "${status}" | grep -q '^??'; then
-		echo "Untracked server files found; refusing to deploy:" >&2
-		echo "${status}" >&2
-		exit 20
-	fi
-	bad_paths="$(printf '%s\n' "${status}" | awk 'substr($0, 4) != "yarn.lock" {print}')"
-	if [[ -n "${bad_paths}" ]]; then
-		echo "Server worktree has unapproved changes; refusing to deploy:" >&2
-		echo "${status}" >&2
-		exit 20
-	fi
-	echo "Stashing only the server-generated yarn.lock..."
-	git stash push -m "server-generated yarn.lock before automated deploy $(date +%Y%m%d-%H%M%S)" -- yarn.lock
-fi
-
-if [[ "${INSTALL_DEPS}" == "0" ]]; then
-	sudo bash scripts/deploy_docker.sh --pull --site "${SITE_NAME}" --skip-deps
-else
-	sudo bash scripts/deploy_docker.sh --pull --site "${SITE_NAME}"
-fi
-
-for service in mariadb redis frappe; do
-	cid="$(sudo docker compose -f docker/docker-compose.yml ps -aq "${service}" | tail -1)"
-	if [[ -n "${cid}" ]]; then
-		sudo docker update --restart unless-stopped "${cid}" >/dev/null
-	fi
-done
-
-curl -fsS -H "Host: ${SITE_NAME}" \
-	http://127.0.0.1:8000/api/method/ping >/dev/null
-
-echo "Deployment complete: ${SITE_NAME} is responding."
-sudo docker compose -f docker/docker-compose.yml ps
-REMOTE_SCRIPT
+remote_command+='; for service in mariadb redis frappe; do cid=$(sudo docker compose -f docker/docker-compose.yml ps -aq "$service" | tail -1); if [[ -n "$cid" ]]; then sudo docker update --restart unless-stopped "$cid" >/dev/null; fi; done; curl -fsS -H "Host: '
+remote_command+="${SITE_NAME}"
+remote_command+='" http://127.0.0.1:8000/api/method/ping >/dev/null; echo "Deployment complete: '
+remote_command+="${SITE_NAME}"
+remote_command+=' is responding."; sudo docker compose -f docker/docker-compose.yml ps'
+ssh -tt "${REMOTE}" "bash -lc $(printf '%q' "${remote_command}")"

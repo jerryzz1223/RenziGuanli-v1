@@ -41,6 +41,15 @@ def load_module():
 
 
 class DingTalkRosterAttachmentTests(unittest.TestCase):
+	def test_directory_endpoints_are_rate_limited_and_qps_errors_are_detected(self):
+		module = load_module()
+
+		self.assertGreaterEqual(module._dingtalk_request_interval(module.DINGTALK_DEPARTMENT_LIST_PATH), 0.1)
+		self.assertGreaterEqual(module._dingtalk_request_interval(module.DINGTALK_DEPARTMENT_USERS_PATH), 0.1)
+		self.assertEqual(module._dingtalk_request_interval("/attendance/list"), 0.0)
+		self.assertEqual(module._dingtalk_error_details({"errcode": 88, "errmsg": "subcode=90002 qps"}), ("88", "subcode=90002 qps"))
+		self.assertTrue(module._is_dingtalk_rate_limit("88", "subcode=90002 qps"))
+
 	def test_photo_field_is_preserved_as_attachment_metadata(self):
 		module = load_module()
 		payload = {

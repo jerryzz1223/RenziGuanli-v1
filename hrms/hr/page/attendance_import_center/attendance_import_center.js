@@ -4123,7 +4123,7 @@ class AttendanceImportCenter {
 			args: { company: this.company },
 			callback: (response) => {
 				const task = response.message || {};
-				this.set_dingtalk_sync_progress({ step: "连接检查", title: task.duplicate ? __("已有组织员工同步正在执行") : __("组织员工同步已进入后台队列"), message: __("服务器会分段读取组织和员工；不会因浏览器超时而中断。"), sync_log: task.sync_log, summary: __("同步任务：{0}", [task.sync_log || "--"]) });
+				this.set_dingtalk_sync_progress({ step: "连接检查", title: task.duplicate ? __("已有组织员工同步正在执行") : __("组织员工同步已进入后台队列"), message: __("服务器会分段读取组织和员工；不会因浏览器超时而中断。"), sync_log: task.sync_log, cancelable: false, summary: __("同步任务：{0}", [task.sync_log || "--"]) });
 				this.watch_dingtalk_directory_sync(task.sync_log);
 			},
 			error: (response) => {
@@ -4142,7 +4142,7 @@ class AttendanceImportCenter {
 				const task = response.message || {};
 				const status = task.status || "已排队";
 				if (["已排队", "运行中"].includes(status)) {
-					this.set_dingtalk_sync_progress({ step: status === "已排队" ? "连接检查" : "组织同步", title: status === "已排队" ? __("组织员工同步等待执行") : __("正在同步组织和员工"), message: __("正在分批读取钉钉数据；请不要重复点击同步按钮。"), sync_log: syncLog, summary: __("已接收 {0} 条，失败 {1} 条。", [task.records_received || 0, task.records_failed || 0]) });
+					this.set_dingtalk_sync_progress({ step: status === "已排队" ? "连接检查" : "组织同步", title: status === "已排队" ? __("组织员工同步等待执行") : __("正在同步组织和员工"), message: __("正在分批读取钉钉数据；请不要重复点击同步按钮。"), sync_log: syncLog, cancelable: false, summary: __("已接收 {0} 条，失败 {1} 条。", [task.records_received || 0, task.records_failed || 0]) });
 					return setTimeout(() => this.watch_dingtalk_directory_sync(syncLog, attempt + 1), 2000);
 				}
 				const failed = ["失败", "部分失败"].includes(status);
@@ -4282,7 +4282,7 @@ class AttendanceImportCenter {
 		const steps = ["连接检查", "拉取原始数据", "校验打卡明细", "生成每日草稿", "生成异常队列"];
 		const current = Math.max(0, steps.indexOf(state.step));
 		const progressLabel = state.failed ? __("失败") : state.done ? __("已完成") : __("处理中");
-		panel.innerHTML = `<div class="hrms-dingtalk-sync-progress-head"><div><strong class="${state.failed ? "is-failed" : state.done ? "is-done" : "is-running"}">${this.escape(state.title || __("钉钉考勤同步"))}</strong><span>${this.escape(state.message || "")}</span></div><div class="hrms-attendance-sync-actions"><span class="hrms-dingtalk-sync-progress-percent">${this.escape(progressLabel)}</span>${state.sync_log && !state.done && !state.failed ? `<button class="btn btn-default btn-xs" data-cancel-dingtalk-sync="${this.escape(state.sync_log)}" title="${this.escape(__("撤销本次同步"))}">× ${this.escape(__("撤销"))}</button>` : ""}</div></div><div class="hrms-dingtalk-progress-track ${state.done || state.failed ? "is-complete" : "is-indeterminate"}"><i></i></div><div class="hrms-dingtalk-sync-steps hrms-attendance-sync-steps">${steps.map((step, index) => `<span class="${index < current || state.done ? "is-complete" : index === current && !state.done ? "is-active" : ""}"><b>${index + 1}</b>${this.escape(__(step))}</span>`).join("")}</div>${state.summary ? `<div class="hrms-dingtalk-sync-summary">${this.escape(state.summary)}</div>` : ""}${state.done && !state.failed ? `<div class="mt-2"><button class="btn btn-primary btn-sm" data-open-daily-review>${this.escape(__("进入日考勤审核"))}</button></div>` : ""}${state.error ? `<div class="hrms-dingtalk-sync-error">${this.escape(state.error)}</div>` : ""}`;
+		panel.innerHTML = `<div class="hrms-dingtalk-sync-progress-head"><div><strong class="${state.failed ? "is-failed" : state.done ? "is-done" : "is-running"}">${this.escape(state.title || __("钉钉考勤同步"))}</strong><span>${this.escape(state.message || "")}</span></div><div class="hrms-attendance-sync-actions"><span class="hrms-dingtalk-sync-progress-percent">${this.escape(progressLabel)}</span>${state.sync_log && state.cancelable !== false && !state.done && !state.failed ? `<button class="btn btn-default btn-xs" data-cancel-dingtalk-sync="${this.escape(state.sync_log)}" title="${this.escape(__("撤销本次同步"))}">× ${this.escape(__("撤销"))}</button>` : ""}</div></div><div class="hrms-dingtalk-progress-track ${state.done || state.failed ? "is-complete" : "is-indeterminate"}"><i></i></div><div class="hrms-dingtalk-sync-steps hrms-attendance-sync-steps">${steps.map((step, index) => `<span class="${index < current || state.done ? "is-complete" : index === current && !state.done ? "is-active" : ""}"><b>${index + 1}</b>${this.escape(__(step))}</span>`).join("")}</div>${state.summary ? `<div class="hrms-dingtalk-sync-summary">${this.escape(state.summary)}</div>` : ""}${state.done && !state.failed ? `<div class="mt-2"><button class="btn btn-primary btn-sm" data-open-daily-review>${this.escape(__("进入日考勤审核"))}</button></div>` : ""}${state.error ? `<div class="hrms-dingtalk-sync-error">${this.escape(state.error)}</div>` : ""}`;
 		panel.querySelectorAll("[data-cancel-dingtalk-sync]").forEach((button) => button.addEventListener("click", () => this.cancel_dingtalk_attendance_sync(button.dataset.cancelDingtalkSync)));
 		panel.querySelector("[data-open-daily-review]")?.addEventListener("click", () => this.set_view("daily-review"));
 	}

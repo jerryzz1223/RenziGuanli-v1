@@ -440,7 +440,7 @@ def _is_dingtalk_rate_limit(code: str, message: str) -> bool:
 	return any(marker in text for marker in ("90002", "qps", "too many", "rate limit", "429"))
 
 
-def _dingtalk_api_request(method, path, params=None, json_body=None, use_oapi=False, form_body=None, allow_not_found=False):
+def _dingtalk_api_request(method, path, params=None, json_body=None, use_oapi=False, form_body=None, allow_not_found=False, _rate_retry=0):
 	import requests
 	from requests.adapters import HTTPAdapter
 	from urllib3.util.retry import Retry
@@ -500,9 +500,21 @@ def _dingtalk_api_request(method, path, params=None, json_body=None, use_oapi=Fa
 			detail = " {0}{1}".format(error_code, (": " + error_message) if error_message else "")
 		frappe.throw(_("钉钉接口请求失败（HTTP {0}）。{1}").format(response.status_code, detail))
 	data = response.json()
-	errcode = data.get("errcode")
-	if errcode not in (None, 0):
-		frappe.throw(_("钉钉接口返回错误 {0}: {1}").format(errcode, data.get("errmsg") or frappe.as_json(data)))
+	error_code, error_message = _dingtalk_error_details(data)
+	if error_code not in ("", "0"):
+		if _is_dingtalk_rate_limit(error_code, error_message) and _rate_retry < 3:
+			time_module.sleep(2**_rate_retry)
+			return _dingtalk_api_request(
+				method,
+				path,
+				params=params,
+				json_body=json_body,
+				use_oapi=use_oapi,
+				form_body=form_body,
+				allow_not_found=allow_not_found,
+				_rate_retry=_rate_retry + 1,
+			)
+		frappe.throw(_("钉钉接口返回错误 {0}: {1}").format(error_code, error_message or frappe.as_json(data)))
 	return data
 
 

@@ -533,6 +533,18 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(row["processed_value"]["workday_overtime_hours"], 0)
 		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", row["exception_codes"])
 
+	def test_explicit_empty_company_shift_rules_do_not_reactivate_builtin_rules(self):
+		row = processor.process_attendance_draft_rows([{
+			"姓名": "王浩", "工号": "4145", "日期": "26-07-13", "日期类型": "工作日",
+			"实际部门": "生产课", "班次": "生产夜班 20:00-次日04:30", "标准工时": 8,
+			"实际出勤（小时）": 8, "上班时间": "19:41", "下班时间": "次日 08:00",
+			"工作日加班（小时）": 0, "关联审批单": "", "source_file": "sample.xlsx", "source_row": 2865,
+		}], attendance_month="2026-07", shift_rules=[], shift_rule_version="all-disabled")["processed_rows"][0]
+
+		self.assertEqual(row["processed_value"]["workday_overtime_hours"], 0)
+		self.assertEqual(row["processed_value"]["shift_rule_version"], "all-disabled")
+		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", row["exception_codes"])
+
 	def test_company_shift_rule_uses_configured_punch_pick_ranges(self):
 		base = {
 			"姓名": "王浩", "工号": "4145", "日期": "26-07-13", "日期类型": "工作日",
@@ -552,12 +564,20 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		outside = processor.process_attendance_draft_rows([
 			{**base, "下班时间": "次日 10:30"},
 		], attendance_month="2026-07", shift_rules=[rule], shift_rule_version="ranges-v1")["processed_rows"][0]
+		outside_with_source_hours = processor.process_attendance_draft_rows([
+			{**base, "下班时间": "次日 10:30", "工作日加班（小时）": 3.5},
+		], attendance_month="2026-07", shift_rules=[rule], shift_rule_version="ranges-v1")["processed_rows"][0]
+		approved_outside = processor.process_attendance_draft_rows([
+			{**base, "下班时间": "次日 10:30", "工作日加班（小时）": 3.5, "关联审批单": "加班审批已通过"},
+		], attendance_month="2026-07", shift_rules=[rule], shift_rule_version="ranges-v1")["processed_rows"][0]
 
 		self.assertEqual(valid["processed_value"]["workday_overtime_hours"], 3.5)
 		self.assertNotIn("CLOCK_OUT_OUTSIDE_PICK_RANGE", valid["exception_codes"])
 		self.assertEqual(outside["processed_value"]["workday_overtime_hours"], 0)
 		self.assertIn("CLOCK_OUT_OUTSIDE_PICK_RANGE", outside["exception_codes"])
 		self.assertEqual(outside["processed_value"]["attendance_details"][0]["punch_out_range"], "20:30-次日10:00")
+		self.assertEqual(outside_with_source_hours["processed_value"]["workday_overtime_hours"], 0)
+		self.assertEqual(approved_outside["processed_value"]["workday_overtime_hours"], 3.5)
 
 	def test_company_shift_rule_calculates_small_and_large_night_allowances(self):
 		base = {

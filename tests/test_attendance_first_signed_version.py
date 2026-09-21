@@ -202,6 +202,31 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(sheet["BA10"].value, "复核：")
 		self.assertEqual(sheet["BH10"].value, "制表：李微微2026.6.11")
 
+	def test_all_disabled_company_shift_rules_do_not_use_builtin_fallback(self):
+		api = self.api
+		row = {
+			"name": "RULE-1", "enabled": 0, "rule_code": "SHIFT-002", "rule_name": "生产夜班",
+			"sequence": 2, "match_tokens": "生产|夜班", "basic_time": "20:00-4:30",
+			"weekday_overtime_time": "4:30-8:00", "weekday_overtime_hours": 3.5,
+			"weekday_overtime_mode": "不提交加班单", "weekend_overtime_mode": "不提交加班单",
+			"punch_in_range": "18:00-20:29", "punch_out_range": "20:30-10:00",
+		}
+		old_get_all = api.frappe.get_all
+		old_exists = getattr(api.frappe.db, "exists", None)
+		try:
+			api.frappe.get_all = lambda *args, **kwargs: [row]
+			api.frappe.db.exists = lambda *args, **kwargs: True
+			bundle = api._attendance_shift_rule_bundle("永新")
+		finally:
+			api.frappe.get_all = old_get_all
+			if old_exists is None:
+				delattr(api.frappe.db, "exists")
+			else:
+				api.frappe.db.exists = old_exists
+
+		self.assertEqual(bundle["rules"], [])
+		self.assertFalse(bundle["version"].startswith("builtin-"))
+
 
 if __name__ == "__main__":
 	unittest.main()

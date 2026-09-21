@@ -340,13 +340,18 @@ def _schedule_auto_overtime_reached(row: Mapping[str, Any], raw_hours: Decimal, 
 	rule = _schedule_overtime_rule(row, shift_rules)
 	if not rule or not rule.get("workday_auto") or rule["workday_hours"] <= 0:
 		return False
-	if raw_hours >= rule["workday_hours"]:
-		return True
 	bounds = _shift_bounds_minutes(row, rule)
 	if not bounds:
 		return False
 	start, _end = bounds
 	_actual_in, actual_out = _actual_bounds_minutes(row, start, rule)
+	# When a pick range is configured, a source-exported overtime number cannot
+	# rescue an out-of-range or absent clock-out. Only a reviewed manual value or
+	# an approved application may override that attendance evidence later.
+	if _punch_range_bounds(rule.get("punch_out_range")) and actual_out is None:
+		return False
+	if raw_hours >= rule["workday_hours"]:
+		return True
 	if actual_out is None:
 		return False
 	if rule.get("workday_end_minutes") is None:
@@ -961,6 +966,7 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			manual_overtime_hours
 			if manual_overtime_hours is not None
 			else raw_workday_overtime_hours if has_overtime_approval
+			else Decimal("0") if shift_facts.get("punch_out_range_valid") is False
 			else schedule_auto_overtime_hours
 			if schedule_fixed_hours_reached
 			else raw_workday_overtime_hours if schedule_overtime_mode == "schedule_auto"
