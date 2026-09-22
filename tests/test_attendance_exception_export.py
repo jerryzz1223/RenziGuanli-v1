@@ -4,6 +4,8 @@ import importlib.util
 import unittest
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
+from zipfile import ZipFile
 
 from openpyxl import load_workbook
 
@@ -72,6 +74,39 @@ class AttendanceExceptionExportTest(unittest.TestCase):
 			self.assertIn(label, headers)
 		self.assertEqual(sheet.freeze_panes, "E2")
 		self.assertEqual(sheet.auto_filter.ref, "A1:AE2")
+
+	def test_exception_export_is_saved_without_watermark_media(self):
+		book = self.module._build_processing_exception_export_workbook([])
+		output = BytesIO()
+
+		self.module._save_processing_exception_export_workbook(book, output)
+
+		with ZipFile(BytesIO(output.getvalue())) as workbook:
+			names = workbook.namelist()
+			self.assertFalse(any(name.startswith("xl/media/") for name in names))
+			self.assertNotIn("xl/media/hrms-yongxin-watermark.png", names)
+			for name in names:
+				if name.startswith("xl/worksheets/") or name.startswith("xl/worksheets/_rels/"):
+					self.assertNotIn(b"picture", workbook.read(name).lower())
+
+	def test_stale_attendance_projection_is_blocked_before_export(self):
+		records = [
+			{"source_type": "attendance_draft", "attendance_policy_stale": True},
+			{"source_type": "apple_tree", "attendance_policy_stale": True},
+		]
+		with patch.object(self.module.frappe, "throw", side_effect=ValueError, create=True) as throw:
+			with self.assertRaises(ValueError):
+				self.module._require_current_exception_export_projection(records)
+
+		self.assertIn("按新规则校验本月", throw.call_args.args[0])
+		self.assertIn("1 个员工", throw.call_args.args[0])
+
+	def test_current_attendance_projection_can_be_exported(self):
+		records = [{"source_type": "attendance_draft", "attendance_policy_stale": False}]
+		with patch.object(self.module.frappe, "throw", create=True) as throw:
+			self.module._require_current_exception_export_projection(records)
+
+		throw.assert_not_called()
 
 	def test_page_passes_every_visible_filter_and_backend_enforces_export_permission(self):
 		page = PAGE_PATH.read_text(encoding="utf-8")

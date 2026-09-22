@@ -2154,12 +2154,13 @@ class AttendanceImportCenter {
 								filtered_pending_count: data.filtered_pending_count,
 								total_exception_count: data.total_exception_count,
 								filtered_exception_count: data.filtered_exception_count,
+								filtered_parent_count: data.filtered_parent_count,
 								available_departments: data.available_departments || [],
 							},
 						};
 					}
 					this.exception_department_options = Array.isArray(data.available_departments) ? data.available_departments : [];
-					const totalPages = Math.max(1, Math.ceil(Number(data.filtered_exception_count ?? data.filtered_pending_count ?? 0) / this.exception_page_size));
+					const totalPages = Math.max(1, Math.ceil(Number(data.filtered_parent_count ?? data.filtered_exception_count ?? data.filtered_pending_count ?? 0) / this.exception_page_size));
 					if (preserveScroll?.recordId && Number.isFinite(data.page_start)) {
 						this.exception_page = Math.floor(data.page_start / this.exception_page_size) + 1;
 					}
@@ -2223,12 +2224,12 @@ class AttendanceImportCenter {
 		});
 	}
 
-	render_exception_pagination(total) {
-		const pageCount = Math.max(1, Math.ceil(total / this.exception_page_size));
+	render_exception_pagination(parentTotal, exceptionTotal = parentTotal) {
+		const pageCount = Math.max(1, Math.ceil(parentTotal / this.exception_page_size));
 		const page = Math.min(this.exception_page, pageCount);
-		const start = total ? (page - 1) * this.exception_page_size + 1 : 0;
-		const end = Math.min(page * this.exception_page_size, total);
-		return `<div class="hrms-attendance-pagination"><small>${this.escape(__("显示第 {0}-{1} 条，共 {2} 条", [start, end, total]))}</small><div class="hrms-attendance-pagination-controls"><button class="btn btn-default btn-sm" data-exception-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>${this.escape(__("上一页"))}</button><span>${this.escape(__("第 {0} / {1} 页", [page, pageCount]))}</span><button class="btn btn-default btn-sm" data-exception-page="${page + 1}" ${page >= pageCount ? "disabled" : ""}>${this.escape(__("下一页"))}</button></div></div>`;
+		const start = parentTotal ? (page - 1) * this.exception_page_size + 1 : 0;
+		const end = Math.min(page * this.exception_page_size, parentTotal);
+		return `<div class="hrms-attendance-pagination"><small>${this.escape(__("按员工分组显示第 {0}-{1} 组，共 {2} 组；当前筛选异常记录 {3} 条", [start, end, parentTotal, exceptionTotal]))}</small><div class="hrms-attendance-pagination-controls"><button class="btn btn-default btn-sm" data-exception-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>${this.escape(__("上一页"))}</button><span>${this.escape(__("第 {0} / {1} 页", [page, pageCount]))}</span><button class="btn btn-default btn-sm" data-exception-page="${page + 1}" ${page >= pageCount ? "disabled" : ""}>${this.escape(__("下一页"))}</button></div></div>`;
 	}
 
 	render_exception_employee_controls() {
@@ -2292,6 +2293,19 @@ class AttendanceImportCenter {
 		</tr></thead>`;
 	}
 
+	exception_table_rows(rows = []) {
+		return rows.flatMap((row) => {
+			if (row.source_type !== "attendance_draft") return [row];
+			const dailyLines = this.attendance_exception_lines(row);
+			if (!dailyLines.length) return [row];
+			return dailyLines.map((line) => ({
+				...row,
+				daily_exception_lines: [line],
+				daily_pending_exception_lines: (!line.resolved && line.review_status !== "已处理异常") ? [line] : [],
+			}));
+		});
+	}
+
 	render_processing_exceptions(rows = [], loading = false, error = "", summary = {}) {
 		const canBulkProcess = Boolean(this.exception_source_filter);
 		const canSelectAllFiltered = canBulkProcess && !this.exception_department_filter && !this.exception_code_filter && !this.exception_processing_status_filter;
@@ -2299,14 +2313,16 @@ class AttendanceImportCenter {
 		const totalPending = Number(summary.total_pending_count || 0);
 		const currentPending = Number(summary.filtered_pending_count || 0);
 		const currentException = Number(summary.filtered_exception_count ?? rows.length);
+		const currentParentCount = Number(summary.filtered_parent_count ?? rows.length);
 		const selectedCount = this.select_all_filtered_exceptions ? currentPending : this.selected_exception_record_ids.size;
-		const pagination = !loading && !error ? this.render_exception_pagination(currentException) : "";
+		const pagination = !loading && !error ? this.render_exception_pagination(currentParentCount, currentException) : "";
 		const policyNotice = rows.some((row) => row.attendance_policy_stale) ? `<div class="hrms-attendance-api-notice"><strong>本月部分数据尚未按新规则重新校验</strong><span>当前异常标记仍保留上次处理结果。点击“按新规则校验本月”可预览并应用新口径。</span></div>` : "";
 		const countsReady = summary.filtered_exception_count !== undefined && summary.filtered_exception_count !== null;
 		const scopeSummary = loading && !countsReady ? __("正在读取异常数量...") : __("当前筛选：{0}，异常 {1} 条（待处理 {2} 条）；全部来源待处理 {3} 条。", [selectedSourceLabel, currentException, currentPending, totalPending]);
 		const filterNotice = !loading && this.exception_source_filter && !currentException && totalPending
 			? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("当前来源没有异常"))}</strong><span>${this.escape(__("其他来源仍有 {0} 条待处理异常；点击“全部来源”即可查看。", [totalPending]))}</span></div>`
 			: "";
+		const tableRows = this.exception_table_rows(rows);
 		const renderRow = (row) => {
 			const recordId = row.record_id || row.source_id || row.name || "";
 			const dailyLines = row.source_type === "attendance_draft" ? this.attendance_exception_lines(row) : [];
@@ -2316,12 +2332,12 @@ class AttendanceImportCenter {
 				? this.render_attendance_exception_lines(dailyLines, recordId)
 				: `<strong>${this.escape(__("问题日期：{0}", [this.attendance_exception_date_text(row)]))}</strong><br><strong>${this.escape(__("问题：{0}", [this.exception_label_text(row)]))}</strong><br><small>${this.escape(row.exception_detail || row.exception_message || "")}</small>`;
 			const operation = row.source_type === "attendance_draft" && dailyLines.length
-				? `<small>${this.escape(__("请按异常日期分别处理"))}</small>`
+				? `<small>${this.escape(__("本行对应一条日期记录"))}</small>`
 				: `<button class="btn btn-default btn-xs" data-edit-exception="${this.escape(row.record_id || row.source_id || row.name || "")}" data-exception-source-type="${this.escape(row.source_type || "")}">${this.escape(__("处理异常"))}</button>`;
 			const statusCell = row.source_type === "attendance_draft" && dailyLines.length
 				? this.render_attendance_daily_statuses(dailyLines)
 				: `${this.review_status_badge(row.review_status || "待审核")}<br><small>${this.escape(`${row.reviewer || "--"} ${row.reviewed_on || ""}`)}</small><br><small>${this.escape(row.review_note || "")}</small>`;
-			return `<tr>
+			return `<tr data-exception-table-row="1"${dailyLines.length ? ` data-exception-daily-record="${this.escape(dailyLines[0].daily_record_id || dailyLines[0].attendance_date || "")}"` : ""}>
 				<td><input type="checkbox" data-exception-record-select="${this.escape(recordId)}" ${canBulkProcess && recordId && hasPending ? "" : "disabled"} ${this.select_all_filtered_exceptions && hasPending ? "checked" : ""} title="${this.escape(canBulkProcess ? (hasPending ? __("选择后可批量处理") : __("已处理异常仅保留查看")) : __("请先按来源筛选，再进行批量处理"))}"></td>
 				<td>${this.escape(row.employee_name || "--")}</td>
 				<td>${this.escape(row.employee_code || "--")}</td>
@@ -2332,7 +2348,7 @@ class AttendanceImportCenter {
 				<td>${operation}</td>
 			</tr>`;
 		};
-		return `<div class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("异常处理"))}</h3><small>${this.escape(__("按员工显示具体异常日期与明细。迟到30分钟以内只标记迟到，超过30分钟时整段迟到时长计入事假；请满当日标准工时免缺卡。实际出勤＋事假＋病假÷2＋团圆假＋排休＋旷工必须等于标准工时。"))}</small></div><div class="hrms-attendance-list-actions"><strong>${this.escape(scopeSummary)}</strong><div><button class="btn btn-default btn-sm" data-bulk-exception-process ${canBulkProcess && selectedCount ? "" : "disabled"}>${this.escape(__(this.select_all_filtered_exceptions ? "处理当前筛选全部（{0}）" : "处理已勾选（{0}）", [selectedCount]))}</button> <button class="btn btn-default btn-sm" data-open-attendance-adjustments>${this.escape(__("修改记录"))}</button> <button type="button" class="btn btn-primary btn-sm" data-export-processing-exceptions>${this.escape(__("导出异常 Excel"))}</button></div></div></div><div class="hrms-attendance-result-controls">${this.render_exception_source_filter()}${this.render_exception_employee_controls()}${canSelectAllFiltered && currentPending ? `<button class="btn btn-default btn-sm" data-select-all-filtered-exceptions>${this.escape(__("全选当前筛选 {0} 条", [currentPending]))}</button>` : ""}${!canBulkProcess ? `<small class="text-muted">${this.escape(__("请选择一个来源后，可勾选并批量处理该来源的异常。"))}</small>` : ""}</div>${policyNotice}${filterNotice}${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}${pagination}<div class="hrms-attendance-table-wrap hrms-attendance-exception-table-wrap"><table class="table table-bordered hrms-attendance-table hrms-attendance-exception-table">${this.render_exception_table_header(canSelectAllFiltered, currentPending)}<tbody>${loading ? `<tr><td colspan="8" class="text-muted">${this.escape(__("正在读取统一异常队列..."))}</td></tr>` : rows.length ? rows.map(renderRow).join("") : `<tr><td colspan="8" class="text-muted">${this.escape(__("当前筛选下没有异常记录；已处理异常仍保留在本页查看。"))}</td></tr>`}</tbody></table></div>${pagination}</div>`;
+		return `<div class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("异常处理"))}</h3><small>${this.escape(__("每个异常日期单独显示一行，同一姓名有多条异常时会分行显示。迟到30分钟以内只标记迟到，超过30分钟时整段迟到时长计入事假；请满当日标准工时免缺卡。实际出勤＋事假＋病假÷2＋团圆假＋排休＋旷工必须等于标准工时。"))}</small></div><div class="hrms-attendance-list-actions"><strong>${this.escape(scopeSummary)}</strong><div><button class="btn btn-default btn-sm" data-bulk-exception-process ${canBulkProcess && selectedCount ? "" : "disabled"}>${this.escape(__(this.select_all_filtered_exceptions ? "处理当前筛选全部（{0}）" : "处理已勾选（{0}）", [selectedCount]))}</button> <button class="btn btn-default btn-sm" data-open-attendance-adjustments>${this.escape(__("修改记录"))}</button> <button type="button" class="btn btn-primary btn-sm" data-export-processing-exceptions>${this.escape(__("导出异常 Excel"))}</button></div></div></div><div class="hrms-attendance-result-controls">${this.render_exception_source_filter()}${this.render_exception_employee_controls()}${canSelectAllFiltered && currentPending ? `<button class="btn btn-default btn-sm" data-select-all-filtered-exceptions>${this.escape(__("全选当前筛选 {0} 条", [currentPending]))}</button>` : ""}${!canBulkProcess ? `<small class="text-muted">${this.escape(__("请选择一个来源后，可勾选并批量处理该来源的异常。"))}</small>` : ""}</div>${policyNotice}${filterNotice}${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}${pagination}<div class="hrms-attendance-table-wrap hrms-attendance-exception-table-wrap"><table class="table table-bordered hrms-attendance-table hrms-attendance-exception-table">${this.render_exception_table_header(canSelectAllFiltered, currentPending)}<tbody>${loading ? `<tr><td colspan="8" class="text-muted">${this.escape(__("正在读取统一异常队列..."))}</td></tr>` : tableRows.length ? tableRows.map(renderRow).join("") : `<tr><td colspan="8" class="text-muted">${this.escape(__("当前筛选下没有异常记录；已处理异常仍保留在本页查看。"))}</td></tr>`}</tbody></table></div>${pagination}</div>`;
 	}
 
 	bind_processing_exception_events() {

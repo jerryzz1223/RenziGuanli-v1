@@ -22,11 +22,35 @@ Object.assign(center, {
 	exception_department_filter: "", exception_department_options: ["工程课", "生产课"],
 	exception_employee_name_filter: "", exception_employee_code_filter: "",
 	exception_sort_field: "employee_code", exception_sort_order: "asc", select_all_filtered_exceptions: false,
+	selected_exception_record_ids: new Set(), exception_page: 1, exception_page_size: 20,
 });
 const exceptionHeader = center.render_exception_table_header(false, 0);
 assert.match(exceptionHeader, /<select[^>]+data-exception-department-filter/);
 assert.match(exceptionHeader, /<option value="工程课"/);
 assert.doesNotMatch(exceptionHeader, /<input[^>]+data-exception-department-filter/);
+const splitAttendanceRows = center.exception_table_rows([{
+	record_id: "employee-1", source_type: "attendance_draft", employee_name: "林俊松",
+	daily_exception_lines: [
+		{ daily_record_id: "day-1", attendance_date: "2026-07-01", exception_codes: ["LATE_MARKED"] },
+		{ daily_record_id: "day-2", attendance_date: "2026-07-02", exception_codes: ["CLOCK_OUT_MISSING"] },
+	],
+}]);
+assert.strictEqual(splitAttendanceRows.length, 2);
+assert.deepStrictEqual(Array.from(splitAttendanceRows, (item) => item.daily_exception_lines[0].attendance_date), ["2026-07-01", "2026-07-02"]);
+const splitAttendanceMarkup = center.render_processing_exceptions([{
+	record_id: "employee-1", source_type: "attendance_draft", source_label: "考勤初稿",
+	employee_name: "林俊松", employee_code: "0001", department: "总办室",
+	daily_exception_lines: [
+		{ daily_record_id: "day-1", attendance_date: "2026-07-01", exception_codes: ["LATE_MARKED"], review_status: "待审核" },
+		{ daily_record_id: "day-2", attendance_date: "2026-07-02", exception_codes: ["CLOCK_OUT_MISSING"], review_status: "待审核" },
+	],
+}], false, "", {filtered_exception_count: 2, filtered_pending_count: 2, filtered_parent_count: 1, total_pending_count: 2});
+assert.strictEqual((splitAttendanceMarkup.match(/data-exception-table-row="1"/g) || []).length, 2);
+assert.strictEqual((splitAttendanceMarkup.match(/data-exception-daily-record="day-[12]"/g) || []).length, 2);
+assert.strictEqual((splitAttendanceMarkup.match(/>林俊松</g) || []).length, 2);
+assert.match(splitAttendanceMarkup, /每个异常日期单独显示一行/);
+assert.match(splitAttendanceMarkup, /异常 \{1\} 条（待处理 \{2\} 条）/);
+assert.match(splitAttendanceMarkup, /当前筛选异常记录 \{3\} 条/);
 const makeCard = (record, date, row) => ({ dataset: { exceptionCardRecord: record, attendanceDate: date, attendanceSourceRow: String(row), attendanceSourceFile: "A.xlsx", attendanceSourceSheet: "每日统计" } });
 const previousCard = makeCard("employee-4076", "2026-07-13", 6961);
 const editedCard = makeCard("employee-4076", "2026-07-14", 6962);

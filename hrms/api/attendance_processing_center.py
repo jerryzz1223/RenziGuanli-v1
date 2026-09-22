@@ -4367,16 +4367,34 @@ def list_processing_exceptions(
 		if row.get("source_type") == "attendance_draft":
 			return bool(row.get("daily_exception_lines")) and record_matches(row)
 		return bool(row.get("exception_codes")) and record_matches(row)
-	total_pending_count = sum(1 for row in all_rows if pending_filter(row, apply_filters=False))
-	filtered_pending_count = sum(1 for row in all_rows if row.get("import_batch") in batch_names and pending_filter(row) and employee_matches(row) and record_matches(row))
-	total_exception_count = sum(
-		1 for row in all_rows
-		if (row.get("daily_exception_lines") if row.get("source_type") == "attendance_draft" else row.get("exception_codes"))
+	def exception_line_count(row, *, pending_only=False, apply_filters=True):
+		"""Count dated exception records, not employee-level storage documents."""
+		if row.get("source_type") == "attendance_draft":
+			return sum(
+				1 for line in (row.get("daily_exception_lines") or [])
+				if (not apply_filters or line_matches(line)) and (not pending_only or line_is_pending(line))
+			)
+		if not row.get("exception_codes") or (apply_filters and not record_matches(row)):
+			return 0
+		return int(not pending_only or row.get("review_status") == "待审核")
+	total_pending_count = sum(exception_line_count(row, pending_only=True, apply_filters=False) for row in all_rows)
+	filtered_pending_count = sum(
+		exception_line_count(row, pending_only=True)
+		for row in all_rows
+		if row.get("import_batch") in batch_names and employee_matches(row)
 	)
-	filtered_exception_count = sum(1 for row in all_rows if row.get("import_batch") in batch_names and display_filter(row) and employee_matches(row))
+	total_exception_count = sum(
+		exception_line_count(row, apply_filters=False) for row in all_rows
+	)
+	filtered_exception_count = sum(
+		exception_line_count(row)
+		for row in all_rows
+		if row.get("import_batch") in batch_names and employee_matches(row)
+	)
 	if not batch_names:
-		return {"review_rows": [], "available_departments": [], "total_pending_count": total_pending_count, "filtered_pending_count": 0, "total_exception_count": total_exception_count, "filtered_exception_count": 0, "source_type": source_type, "page_start": page_start, "page_length": page_length}
+		return {"review_rows": [], "available_departments": [], "total_pending_count": total_pending_count, "filtered_pending_count": 0, "total_exception_count": total_exception_count, "filtered_exception_count": 0, "filtered_parent_count": 0, "source_type": source_type, "page_start": page_start, "page_length": page_length}
 	rows = [row for row in all_rows if row.get("import_batch") in batch_names and display_filter(row) and employee_matches(row)]
+	filtered_parent_count = len(rows)
 	def apply_line_projection(row):
 		if not (exception_code_filter or processing_status_filter):
 			return row
@@ -4412,7 +4430,7 @@ def list_processing_exceptions(
 	for row in rows[page_start : page_start + page_length]:
 		raw = raw_records_by_id.get(str(row.get("record_id") or ""))
 		page_rows.append(apply_line_projection(_serialize_record(raw, current_shift_rule_version)) if raw else row)
-	return {"review_rows": page_rows, "snapshot_record_ids": [row.get("record_id") for row in rows if row.get("record_id")], "available_departments": available_departments, "total_pending_count": total_pending_count, "filtered_pending_count": filtered_pending_count, "total_exception_count": total_exception_count, "filtered_exception_count": filtered_exception_count, "source_type": source_type, "page_start": page_start, "page_length": page_length}
+	return {"review_rows": page_rows, "snapshot_record_ids": [row.get("record_id") for row in rows if row.get("record_id")], "available_departments": available_departments, "total_pending_count": total_pending_count, "filtered_pending_count": filtered_pending_count, "total_exception_count": total_exception_count, "filtered_exception_count": filtered_exception_count, "filtered_parent_count": filtered_parent_count, "source_type": source_type, "page_start": page_start, "page_length": page_length}
 
 
 PROCESSING_EXCEPTION_EXPORT_COLUMNS = (
@@ -4500,6 +4518,23 @@ def _build_processing_exception_export_workbook(rows: list[dict[str, Any]]):
 	return book
 
 
+def _save_processing_exception_export_workbook(book, output) -> None:
+	"""Save the review-oriented exception detail without a brand watermark."""
+	book.save(output)
+
+
+def _require_current_exception_export_projection(records: list[dict[str, Any]]) -> None:
+	"""Refuse to export attendance alerts calculated with an obsolete rule set."""
+	stale_count = sum(
+		1 for record in records
+		if record.get("source_type") == "attendance_draft" and record.get("attendance_policy_stale")
+	)
+	if stale_count:
+		frappe.throw(_(
+			"本月有 {0} 个员工的考勤异常尚未按当前规则重新校验。请先点击“按新规则校验本月”并应用结果，再导出异常 Excel。"
+		).format(stale_count))
+
+
 @frappe.whitelist()
 def export_processing_exceptions(
 	company: str, attendance_month: str, source_type: str = "", employee_code: str = "", employee_name: str = "", department: str = "",
@@ -4508,7 +4543,6 @@ def export_processing_exceptions(
 	"""Export all rows matching the current exception-page filters."""
 	from frappe.utils.file_manager import save_file
 	from hrms.access_control import require_hrms_capability
-	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
 	_require_processing_manager()
 	require_hrms_capability("attendance_export", legacy_roles=("HR Manager",))
@@ -4526,6 +4560,7 @@ def export_processing_exceptions(
 		limit_page_length=5000,
 	)
 	records = [_serialize_record(record) for record in stored_records]
+	_require_current_exception_export_projection(records)
 	def normalise(value):
 		return re.sub(r"\s+", "", str(value or "").casefold())
 	employee_code_filter, employee_name_filter, department_filter = normalise(employee_code), normalise(employee_name), normalise(department)
@@ -4580,7 +4615,7 @@ def export_processing_exceptions(
 	rows = _processing_exception_export_rows(records)
 	book = _build_processing_exception_export_workbook(rows)
 	output = BytesIO()
-	save_workbook_with_logo_watermark(book, output)
+	_save_processing_exception_export_workbook(book, output)
 	filename = f"{attendance_month}_考勤异常明细.xlsx"
 	file = save_file(filename, output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name, "employee_record_count": len(records), "exception_line_count": len(rows)}
