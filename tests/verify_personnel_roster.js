@@ -28,6 +28,7 @@ const topNavCss = fs.readFileSync(topNavCssPath, "utf8");
 const employeeForm = fs.readFileSync(employeeFormPath, "utf8");
 const employeeList = fs.readFileSync(employeeListPath, "utf8");
 const employeeApi = fs.readFileSync(employeeApiPath, "utf8");
+const employeeImportPage = fs.readFileSync(path.join(root, "hrms", "hr", "page", "employee_roster_import", "employee_roster_import.js"), "utf8");
 const personnel = JSON.parse(fs.readFileSync(personnelPath, "utf8"));
 const personnelSidebar = JSON.parse(fs.readFileSync(personnelSidebarPath, "utf8"));
 
@@ -39,6 +40,7 @@ function mustInclude(source, marker, message) {
 
 mustInclude(hooks, '"Employee": "public/js/erpnext/employee_list.js"', "Employee list view customization must be registered in hooks.py.");
 mustInclude(hooks, '"Employee": "public/js/erpnext/employee.js"', "Employee form customization must remain registered in hooks.py.");
+mustInclude(hooks, '"Employee": "hrms.access_control.employee_roster_permission_query"', "Employee reportview must enforce the roster-view capability.");
 mustInclude(topNavCss, "hrms-roster-toolbar-control-hidden", "员工花名册必须隐藏未启用的标准工具栏控件。");
 
 for (const label of ["桌面", "Desktop", "网站", "Website", "编辑侧边栏", "Edit Sidebar", "Delete Demo Data"]) {
@@ -79,6 +81,8 @@ for (const marker of [
 	"department_display",
 	"get_employee_by_business_code",
 	"page_length = min(max(frappe.utils.cint(page_length) or 20, 10), 500)",
+	'has_hrms_capability("personnel_view")',
+	'"rows": []',
 ]) {
 	mustInclude(employeeApi, marker, `Employee roster API is missing phase-one behavior: ${marker}`);
 }
@@ -169,8 +173,31 @@ for (const marker of [
 	"update_roster_filter_status",
 	"当前筛选",
 	"get_roster_probation_filters",
+	"get_current_hrms_capabilities",
+	'has_capability("roster_import_submit")',
+	"set_roster_action_permission(import_button",
 ]) {
 	mustInclude(employeeList, marker, `Employee list view is missing roster behavior marker: ${marker}`);
+}
+
+for (const marker of [
+	"get_current_hrms_capabilities",
+	"load_import_permission",
+	"require_import_permission",
+	'capabilities.includes("roster_import_submit")',
+	"show_import_permission_message",
+	"当前账户没有",
+]) {
+	mustInclude(employeeImportPage, marker, `Employee roster import page is missing permission enforcement: ${marker}`);
+}
+
+const parseRosterIndex = employeeApi.indexOf("def parse_employee_roster_file");
+const previewRosterIndex = employeeApi.indexOf("def preview_employee_roster_import");
+const importRosterIndex = employeeApi.indexOf("def import_employee_roster");
+for (const [label, index] of [["parse", parseRosterIndex], ["preview", previewRosterIndex], ["import", importRosterIndex]]) {
+	if (index < 0 || !employeeApi.slice(index, index + 450).includes('require_hrms_capability("roster_import_submit")')) {
+		throw new Error(`Employee roster ${label} endpoint must strictly require roster_import_submit.`);
+	}
 }
 
 for (const obsoleteMarker of ["hrms-roster-search-control", "hrms-roster-search-button"]) {

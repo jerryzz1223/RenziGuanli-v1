@@ -18,10 +18,44 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		request_id: 0,
 		import_progress_timer: null,
 		import_in_progress: false,
+		capabilities_loaded: false,
+		can_import: false,
 	};
 
 	$(page.body).addClass("hrms-roster-import-page");
 	page.set_secondary_action(__("返回"), () => go_back());
+
+	function show_import_permission_message() {
+		frappe.msgprint({
+			title: __("没有权限"),
+			indicator: "orange",
+			message: __("当前账户没有“花名册导入提交”权限。"),
+		});
+	}
+
+	function load_import_permission() {
+		if (frappe.session.user === "Administrator") {
+			state.capabilities_loaded = true;
+			state.can_import = true;
+			return Promise.resolve();
+		}
+		return frappe
+			.call("hrms.access_control.get_current_hrms_capabilities")
+			.then((response) => {
+				state.capabilities_loaded = true;
+				state.can_import = (response.message?.capabilities || []).includes("roster_import_submit");
+			})
+			.catch(() => {
+				state.capabilities_loaded = true;
+				state.can_import = false;
+			});
+	}
+
+	function require_import_permission() {
+		if (state.can_import) return true;
+		show_import_permission_message();
+		return false;
+	}
 
 	function download_template() {
 		window.open(
@@ -219,6 +253,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	}
 
 	function request_preview() {
+		if (!require_import_permission()) return;
 		const request_id = ++state.request_id;
 		frappe
 			.call({
@@ -342,6 +377,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	}
 
 	function confirm_import() {
+		if (!require_import_permission()) return;
 		const submit_import = () => {
 			if (state.import_in_progress) return;
 			state.import_in_progress = true;
@@ -523,6 +559,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	}
 
 	function open_uploader() {
+		if (!require_import_permission()) return;
 		new frappe.ui.FileUploader({
 			allow_multiple: false,
 			restrictions: { allowed_file_types: [".xlsx"] },
@@ -589,6 +626,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	$(page.body).on("click", "[data-action]", function () {
 		const action = this.dataset.action;
 		if (["start-insert", "start-update", "start-replace"].includes(action)) {
+			if (!require_import_permission()) return;
 			state.mode = { "start-insert": "insert", "start-update": "update", "start-replace": "replace" }[action];
 			state.step = 1;
 			render_upload();
@@ -630,12 +668,19 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		frappe.set_route(this.dataset.route);
 	});
 
-	function refresh() {
+	function render_current_state() {
 		if (state.step === 2 && state.parse_result) return render_match();
 		if (state.step === 3 && state.preview_result) return render_preview();
 		if (state.step === 4 && state.import_result) return render_result();
 		if (state.mode) return render_upload();
 		render_landing();
+	}
+
+	function refresh() {
+		state.capabilities_loaded = false;
+		page.set_primary_action(null);
+		$(page.body).html(`<div class="text-muted">${__("正在检查花名册导入权限...")}</div>`);
+		load_import_permission().then(render_current_state);
 	}
 
 	wrapper.employee_roster_import = { refresh };

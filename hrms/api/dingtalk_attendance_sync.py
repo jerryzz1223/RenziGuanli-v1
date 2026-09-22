@@ -546,7 +546,7 @@ def convert_dingtalk_raw_attendance_to_daily_checks(
 	if closure and closure.get("status") == "已锁定" and allow_locked_day_resync:
 		from hrms.access_control import require_hrms_capability
 
-		require_hrms_capability("attendance_approve", legacy_roles=("HR Manager",))
+		require_hrms_capability("attendance_approve")
 	old_exceptions = frappe.get_all(
 		EXCEPTION_DOCTYPE,
 		filters={"import_batch": batch.name},

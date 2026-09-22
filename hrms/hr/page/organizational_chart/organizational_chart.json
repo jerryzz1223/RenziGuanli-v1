@@ -10,17 +10,7 @@
  "name": "organizational-chart",
  "owner": "Administrator",
  "page_name": "Organizational Chart",
- "roles": [
-  {
-   "role": "HR User"
-  },
-  {
-   "role": "HR Manager"
-  },
-  {
-   "role": "Employee"
-  }
- ],
+ "roles": [],
  "script": null,
  "standard": "Yes",
  "style": null,

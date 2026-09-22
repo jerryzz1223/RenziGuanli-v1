@@ -51,8 +51,8 @@ body.hrms-login-page .page-card .page-card-actions :is(.btn-login,.btn-forgot):d
 body.hrms-login-page .page-card :is(a, button, [role="button"]):focus-visible { outline: 3px solid #aeb2b9; outline-offset: 3px; }
 body.hrms-login-page .page-card .login-error-banner { border-radius: 8px; font-size: 13px; }
 body.hrms-login-page .login-content.page-card .page-card-body .form-group.invalid .form-control { border-color: #bc5151; }
-.hrms-register-entry { display: flex; align-items: center; justify-content: center; gap: 2px; margin-top: -44px; font-size: 13px; color: #858a92; }
-.hrms-register-entry .btn-link { padding: 4px; color: #30343a; font-size: 13px; }
+.hrms-register-entry { display: flex; align-items: center; justify-content: center; margin-top: -16px; }
+.hrms-register-entry .btn-link { padding: 4px 12px; color: #30343a; font-size: 13px; }
 .hrms-register-panel { width: 100%; }
 .hrms-register-panel[hidden] { display: none !important; }
 .hrms-register-heading { display: grid; gap: 8px; margin-bottom: 22px; text-align: center; }

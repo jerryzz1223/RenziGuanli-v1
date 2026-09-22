@@ -83,7 +83,7 @@
 		if (!card || card.querySelector(".hrms-register-entry")) return;
 		const entry = document.createElement("div");
 		entry.className = "hrms-register-entry";
-		entry.innerHTML = '<span>还没有账号？</span><button type="button" class="btn btn-link">注册账号</button>';
+		entry.innerHTML = '<button type="button" class="btn btn-link">注册账号</button>';
 		card.appendChild(entry);
 
 		const panel = document.createElement("section");
@@ -96,9 +96,9 @@
 				<div class="hrms-register-match" data-register-match hidden></div>
 				<label>姓名（不填工号时必填）<input class="form-control" name="full_name" autocomplete="name" maxlength="140"></label>
 				<label>邮箱（登录账号）<input class="form-control" name="email" type="email" autocomplete="email" required></label>
-				<label>密码<input class="form-control" name="password" type="password" autocomplete="new-password" minlength="10" required></label>
-				<label>确认密码<input class="form-control" name="password_confirm" type="password" autocomplete="new-password" minlength="10" required></label>
-				<small>密码至少 10 位，并同时包含字母和数字。</small>
+				<label>密码<input class="form-control" name="password" type="password" autocomplete="new-password" minlength="4" required></label>
+				<label>确认密码<input class="form-control" name="password_confirm" type="password" autocomplete="new-password" minlength="4" required></label>
+				<small>密码至少 4 位，其他不限。</small>
 				<div class="hrms-register-status" role="status" aria-live="polite"></div>
 				<button type="submit" class="btn btn-primary btn-block">创建账号</button>
 				<button type="button" class="btn btn-link btn-block" data-register-back>返回登录</button>
@@ -166,6 +166,11 @@
 			const values = Object.fromEntries(new FormData(form).entries());
 			if (!values.employee_code.trim() && !values.full_name.trim()) {
 				status.textContent = "未填工号时，请填写姓名。";
+				status.className = "hrms-register-status is-error";
+				return;
+			}
+			if (values.password.length < 4) {
+				status.textContent = "密码至少 4 位。";
 				status.className = "hrms-register-status is-error";
 				return;
 			}

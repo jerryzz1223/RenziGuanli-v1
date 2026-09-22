@@ -144,12 +144,11 @@ def _require_dingtalk_manager():
 
 
 def _require_dingtalk_employee_import_approver():
-	"""Allow the dedicated approver role plus the existing HR Manager role."""
+	"""Require the dedicated business checkbox; broad HR roles do not bypass it."""
 	from hrms.access_control import require_hrms_capability
 
 	require_hrms_capability(
 		"dingtalk_employee_import_approve",
-		legacy_roles=("HR Manager",),
 		message=_("当前账户没有“钉钉员工导入审批”权限。"),
 	)
 
@@ -1528,7 +1527,7 @@ def sync_preentry_employees_from_dingtalk(company: str = ""):
 @frappe.whitelist()
 def sync_new_employees_from_dingtalk(company: str = ""):
 	"""Manual employee-roster action: pull and stage Smart HR data for approval."""
-	_require_dingtalk_manager()
+	_require_dingtalk_employee_import_approver()
 	return _sync_preentry_employees(company)
 
 
@@ -1933,7 +1932,7 @@ def sync_attendance_from_dingtalk(
 	if preview["daily_locked"] and _as_bool(allow_locked_day_resync):
 		from hrms.access_control import require_hrms_capability
 
-		require_hrms_capability("attendance_approve", legacy_roles=("HR Manager",))
+		require_hrms_capability("attendance_approve")
 	log = _get_or_start_attendance_sync_log(sync_log, company, business_date)
 	log.is_resync = int(preview["is_resync"])
 	log.resync_reason = (resync_reason or "").strip()
@@ -2088,7 +2087,7 @@ def queue_dingtalk_attendance_sync(
 	if allow_locked_day_resync:
 		from hrms.access_control import require_hrms_capability
 
-		require_hrms_capability("attendance_approve", legacy_roles=("HR Manager",))
+		require_hrms_capability("attendance_approve")
 	log = _new_sync_log("考勤同步", company=company, business_date=business_date)
 	log.is_resync = int(preview["is_resync"])
 	log.resync_reason = reason

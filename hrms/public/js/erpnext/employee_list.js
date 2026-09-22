@@ -4,6 +4,7 @@
 	const ROSTER_TABLE_PAGE_LENGTH = 20;
 	const ROSTER_TABLE_FILTER_DELAY_MS = 400;
 	const ROSTER_COLUMN_FILTER_STORAGE_KEY = "hrms_roster_column_filter";
+	let hrms_capabilities_request = null;
 	const roster_phase_one_markers = {
 		column_filter_mode: "表头联想筛选",
 		department_label: "部门筛选",
@@ -265,32 +266,70 @@
 	}
 
 	function setup_roster_actions(listview) {
+		if (listview.page.__hrms_roster_actions_ready || listview.page.__hrms_roster_actions_loading) return;
+		listview.page.__hrms_roster_actions_loading = true;
+		get_current_hrms_capabilities()
+			.then((capabilities) => install_roster_actions(listview, capabilities))
+			.finally(() => {
+				listview.page.__hrms_roster_actions_loading = false;
+			});
+	}
+
+	function get_current_hrms_capabilities() {
+		if (frappe.session.user === "Administrator") return Promise.resolve(new Set(["*"]));
+		if (!hrms_capabilities_request) {
+			hrms_capabilities_request = frappe
+				.call("hrms.access_control.get_current_hrms_capabilities")
+				.then((response) => new Set(response.message?.capabilities || []))
+				.catch(() => new Set());
+		}
+		return hrms_capabilities_request;
+	}
+
+	function set_roster_action_permission(button, allowed, capability_label) {
+		const control = button?.jquery ? button : $(button);
+		if (!control?.length || allowed) return;
+		control
+			.prop("disabled", true)
+			.attr("disabled", "disabled")
+			.attr("aria-disabled", "true")
+			.attr("title", __("没有“{0}”权限", [capability_label]))
+			.addClass("disabled");
+	}
+
+	function install_roster_actions(listview, capabilities) {
 		if (listview.page.__hrms_roster_actions_ready) return;
 		listview.page.__hrms_roster_actions_ready = true;
+		const has_capability = (key) => capabilities.has("*") || capabilities.has(key);
 
-		listview.page.add_inner_button(__("钉钉同步新员工"), function () {
+		const dingtalk_sync_button = listview.page.add_inner_button(__("钉钉同步新员工"), function () {
 			sync_new_employees_from_dingtalk(listview);
 		});
+		set_roster_action_permission(dingtalk_sync_button, has_capability("dingtalk_employee_import_approve"), "钉钉员工导入审批");
 
-		listview.page.add_inner_button(__("钉钉导入审批"), function () {
+		const dingtalk_approve_button = listview.page.add_inner_button(__("钉钉导入审批"), function () {
 			open_dingtalk_employee_import_approval(listview);
 		});
+		set_roster_action_permission(dingtalk_approve_button, has_capability("dingtalk_employee_import_approve"), "钉钉员工导入审批");
 
-		listview.page.add_inner_button(__("钉钉附件重试"), function () {
+		const dingtalk_retry_button = listview.page.add_inner_button(__("钉钉附件重试"), function () {
 			open_dingtalk_employee_import_approval(listview, { import_status: "已批准", retry_only: true });
 		});
+		set_roster_action_permission(dingtalk_retry_button, has_capability("dingtalk_employee_import_approve"), "钉钉员工导入审批");
 
-		listview.page.add_inner_button(__("表单导入"), function () {
+		const import_button = listview.page.add_inner_button(__("表单导入"), function () {
 			window.hrmsFormImport?.open("employee_roster") || frappe.set_route("employee-roster-import");
 		});
+		set_roster_action_permission(import_button, has_capability("roster_import_submit"), "花名册导入提交");
 
 		listview.page.add_inner_button(__("员工扫码填写"), function () {
 			open_employee_registration_link();
 		}, __("入职资料"));
 
-		listview.page.add_inner_button(__("导出"), function () {
+		const export_button = listview.page.add_inner_button(__("导出"), function () {
 			frappe.set_route("employee-roster-export");
 		});
+		set_roster_action_permission(export_button, has_capability("personnel_export"), "人事导出");
 
 		if (can_clear_current_company_roster()) {
 			listview.page.add_inner_button(__("清空花名册"), function () {

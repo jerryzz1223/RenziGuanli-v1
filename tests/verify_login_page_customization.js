@@ -32,9 +32,15 @@ assert(loginCss.includes(".login-content.page-card:has(.for-login) { visibility:
 assert(loginCss.includes("body.hrms-login-ready"), "The customized login must become visible only after initialization.");
 assert(loginJs.includes("installReadOnlyRegistration"), "The login page must expose read-only account registration.");
 assert(loginJs.includes("hrms.access_control.register_read_only_account"), "Registration must call the controlled backend endpoint.");
+assert(loginJs.includes("'<button type=\"button\" class=\"btn btn-link\">注册账号</button>'"), "The login page must show a single registration action.");
+assert(!loginJs.includes("还没有账号？"), "The redundant registration prompt must be removed.");
+assert(loginCss.includes(".hrms-register-entry { display: flex; align-items: center; justify-content: center; margin-top: -16px; }"), "The registration action must sit below the login button without overlap.");
 assert(loginJs.includes('name="employee_code"'), "Registration must keep the company employee code optional.");
 assert(loginJs.includes("hrms.access_control.preview_registration_employee"), "Employee code must preview a non-sensitive roster match.");
 assert(loginJs.includes("employee_code: values.employee_code"), "Registration must submit the employee code for server-side linking.");
+assert((loginJs.match(/minlength="4"/g) || []).length === 2, "Both registration password fields must accept four characters.");
+assert(loginJs.includes("密码至少 4 位，其他不限。"), "Registration must explain the relaxed password rule.");
+assert(loginJs.includes("values.password.length < 4"), "Registration must validate the four-character minimum before submission.");
 assert(accessControl.includes("@frappe.whitelist(allow_guest=True)"), "The registration endpoint must be callable before login.");
 assert(accessControl.includes("@rate_limit(limit=5, seconds=3600)"), "Public registration must be rate limited.");
 assert(accessControl.includes('READ_ONLY_ROLE = "HRMS 基础只读"'), "New accounts must receive the dedicated baseline role.");

@@ -118,18 +118,18 @@ class FormDataIntake {
 			<div class="hrms-form-template__meta"><span>${this.escape(item.module)}</span><small>${this.escape((item.source_sheets || []).join(" / "))}</small></div>
 			<h3>${this.escape(item.label)}</h3><p>${this.escape(item.description)}</p>
 			<div class="hrms-form-template__target">${this.escape(__("后续处理："))}${this.escape(item.processing_target)}</div>
-			<div class="hrms-form-template__actions"><button class="btn btn-default btn-sm" data-route="${this.escape(item.entry_route || "/desk/form-data-intake")}">${this.escape(__("进入对应模块"))}</button><button class="btn btn-default btn-sm" data-download="${this.escape(item.key)}">${this.escape(__("下载模板"))}</button><button class="btn btn-primary btn-sm" data-select="${this.escape(item.key)}">${this.escape(item.entry_mode === "employee_roster" ? "进入导入" : "填写后上传")}</button></div>
+			<div class="hrms-form-template__actions"><button class="btn btn-default btn-sm" data-route="${this.escape(item.entry_route || "/desk/form-data-intake")}">${this.escape(__("进入对应模块"))}</button><button class="btn btn-default btn-sm" data-download="${this.escape(item.key)}">${this.escape(__("下载模板"))}</button><button class="btn btn-primary btn-sm" data-select="${this.escape(item.key)}" data-hrms-capability="${this.escape(item.submit_capability || "")}">${this.escape(item.entry_mode === "employee_roster" ? "进入导入" : "填写后上传")}</button></div>
 		</article>`;
 	}
 
 	render_preview() {
 		if (!this.selected) return `<div class="text-muted">${this.escape(__("选择一张表单后，可下载模板或上传已填写的文件。"))}</div>`;
-		if (this.selected.entry_mode === "employee_roster") return `<div class="alert alert-info">${this.escape(__("员工花名册将进入智能花名册导入，以便安全创建或更新员工主档。"))} <button class="btn btn-primary btn-sm" data-roster>${this.escape(__("进入智能花名册导入"))}</button></div>`;
-		if (!this.file_url) return `<div><strong>${this.escape(this.selected.label)}</strong><p>${this.escape(__("先下载模板填写，再上传。系统会核验必填列、工号和部门，并只把有效行写入表单数据池。"))}</p><button class="btn btn-primary" data-upload>${this.escape(__("上传已填写文件"))}</button></div>`;
+		if (this.selected.entry_mode === "employee_roster") return `<div class="alert alert-info">${this.escape(__("员工花名册将进入智能花名册导入，以便安全创建或更新员工主档。"))} <button class="btn btn-primary btn-sm" data-roster data-hrms-capability="${this.escape(this.selected.submit_capability || "")}">${this.escape(__("进入智能花名册导入"))}</button></div>`;
+		if (!this.file_url) return `<div><strong>${this.escape(this.selected.label)}</strong><p>${this.escape(__("先下载模板填写，再上传。系统会核验必填列、工号和部门，并只把有效行写入表单数据池。"))}</p><button class="btn btn-primary" data-upload data-hrms-capability="${this.escape(this.selected.submit_capability || "")}">${this.escape(__("上传已填写文件"))}</button></div>`;
 		if (!this.preview) return `<div>${this.escape(__("正在读取并校验文件…"))}</div>`;
 		if (this.preview.missing_required?.length) return `<div class="alert alert-danger">${this.escape(__("缺少必填列："))}${this.escape(this.preview.missing_required.join("、"))}</div>`;
 		return `<div><div class="hrms-form-intake__preview-summary"><strong>${this.escape(this.selected.label)}</strong><span>${this.escape(__("工作表："))}${this.escape(this.preview.sheet_name)}</span><span>${this.escape(__("读取"))} ${this.escape(this.preview.total_rows)} ${this.escape(__("行"))}</span><span class="text-success">${this.escape(__("有效"))} ${this.escape(this.preview.valid_rows)} ${this.escape(__("行"))}</span><span class="text-danger">${this.escape(__("失败"))} ${this.escape(this.preview.failed_rows)} ${this.escape(__("行"))}</span></div>
-			${this.render_preview_rows()}<div class="hrms-form-intake__preview-actions"><button class="btn btn-default" data-upload>${this.escape(__("重新上传"))}</button><button class="btn btn-primary" data-import ${this.preview.failed_rows ? "disabled" : ""}>${this.escape(__("确认校验并入库"))}</button></div></div>`;
+			${this.render_preview_rows()}<div class="hrms-form-intake__preview-actions"><button class="btn btn-default" data-upload data-hrms-capability="${this.escape(this.selected.submit_capability || "")}">${this.escape(__("重新上传"))}</button><button class="btn btn-primary" data-import data-hrms-capability="${this.escape(this.selected.submit_capability || "")}" ${this.preview.failed_rows ? "disabled" : ""}>${this.escape(__("确认校验并入库"))}</button></div></div>`;
 	}
 
 	render_preview_rows() {
@@ -165,6 +165,7 @@ class FormDataIntake {
 
 	open_uploader() {
 		if (!this.selected) { frappe.show_alert({ message: __("请先选择表单类型"), indicator: "orange" }); return; }
+		if (!window.hrmsCapabilities?.require(this.selected.submit_capability)) return;
 		if (this.selected.entry_mode === "employee_roster") { frappe.set_route("employee-roster-import"); return; }
 		if (!this.company) { frappe.msgprint(__("请先在顶部公司切换器选择公司。")); return; }
 		new frappe.ui.FileUploader({ folder: "Home/Attachments", restrictions: { allowed_file_types: [".xlsx"] }, on_success: (file) => { this.file_url = file.file_url; this.preview = null; this.render(); this.preview_file(); } });
@@ -176,6 +177,7 @@ class FormDataIntake {
 
 	import_file() {
 		if (!this.preview || this.preview.failed_rows) return;
+		if (!window.hrmsCapabilities?.require(this.selected?.submit_capability)) return;
 		frappe.call({ method: "hrms.api.form_data_intake.import_form_workbook", args: { file_url: this.file_url, template_key: this.selected.key, company: this.company }, freeze: true, freeze_message: __("正在写入表单数据池…") }).then((response) => {
 			const result = response.message || {};
 			frappe.show_alert({ message: __("已导入 {0} 行，批次：{1}", [result.valid_rows || 0, result.batch_name || ""]), indicator: "green" });

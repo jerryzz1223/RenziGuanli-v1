@@ -84,12 +84,14 @@ configure_web_bind() {
         echo "Invalid HRMS_SITE" >&2
         exit 1
     fi
-    # The current Bench serve command does not accept ``--host``. Docker still
-    # publishes port 8000 from the process started by Bench's Procfile.
+    local web_command="web: bench --site ${site} serve --port 8000 --noreload"
+    if bench serve --help 2>&1 | grep -q -- '--host'; then
+        web_command="web: bench --site ${site} serve --host 0.0.0.0 --port 8000 --noreload"
+    fi
     if grep -qE '^web:' ./Procfile; then
-        sed -i -E "s|^web:.*$|web: bench --site ${site} serve --port 8000 --noreload|" ./Procfile
+        sed -i -E "s|^web:.*$|${web_command}|" ./Procfile
     else
-        printf '\nweb: bench --site %s serve --port 8000 --noreload\n' "${site}" >> ./Procfile
+        printf '\n%s\n' "${web_command}" >> ./Procfile
     fi
 }
 

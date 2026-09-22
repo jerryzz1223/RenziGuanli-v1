@@ -1,6 +1,18 @@
 (function () {
 	const API = "hrms.api.form_data_intake";
 	const ROSTER_TEMPLATE_KEY = "employee_roster";
+	const TEMPLATE_CAPABILITIES = {
+		employee_roster: "roster_import_submit", employee_onboarding: "employee_create", org_structure: "permission_management",
+		employee_transfer: "personnel_change_submit", qualification_review: "personnel_change_submit", contract_intent: "personnel_change_submit",
+		resignation_application: "separation_submit", recruitment_interview: "recruitment_submit", attendance_daily: "attendance_import_submit",
+		attendance_department_summary: "attendance_import_submit", leave_export: "attendance_import_submit", attendance_exception: "attendance_import_submit",
+		apple_reward: "attendance_import_submit", attendance_final: "attendance_import_submit", salary_structure_change: "payroll_change_submit",
+		reward_punishment: "personnel_change_submit", skill_certificate_allowance: "payroll_change_submit", full_attendance_bonus: "payroll_change_submit",
+		housing_allowance: "payroll_change_submit", education_allowance: "payroll_change_submit", dormitory_fee: "payroll_change_submit",
+		social_insurance: "contribution_submit", service_award: "payroll_change_submit", proposal_improvement: "personnel_change_submit",
+		exit_payroll_settlement: "payroll_change_submit", training_registration: "training_submit", certificate_management: "employee_edit",
+		performance_summary: "performance_submit", system_feedback: "permission_management",
+	};
 	let listImportAttachTimers = [];
 
 	function current_company() {
@@ -15,6 +27,7 @@
 		if (!button || !window.$) return;
 		const target = button.jquery ? button : window.$(button);
 		if (!target?.length) return;
+		if (target.attr("data-hrms-permission-disabled")) return;
 		target.prop("disabled", false).removeAttr("disabled").removeClass("disabled").attr("aria-disabled", "false");
 	}
 
@@ -64,6 +77,8 @@
 
 	function open_import_dialog(template_key, options = {}) {
 		return get_template(template_key).then((template) => {
+			const capability = template.submit_capability || TEMPLATE_CAPABILITIES[template.key];
+			if (!window.hrmsCapabilities?.require(capability)) return;
 			if (template.key === ROSTER_TEMPLATE_KEY) {
 				open_roster_import_dialog();
 				return;
@@ -159,7 +174,9 @@
 			setTimeout(reset, 250);
 			setTimeout(reset, 1000);
 		};
+		const capability = TEMPLATE_CAPABILITIES[template_key];
 		button = page.add_inner_button(__(button_label), () => {
+			if (!window.hrmsCapabilities?.require(capability)) return;
 			reset_when_focus_returns();
 			const import_window = open_import_dialog(template_key, { title: `${label || "表单"}${__("导入")}` });
 			Promise.resolve(import_window)
@@ -171,9 +188,10 @@
 			window.addEventListener("focus", reset_when_focus_returns, { once: true });
 		});
 		reset_action_button(button);
+		window.hrmsCapabilities?.ready().then(() => window.hrmsCapabilities.disable(button?.jquery ? button[0] : button, capability));
 	}
 
-	window.hrmsFormImport = { open: open_import_dialog, download(template_key) { return get_template(template_key).then(download_template); }, addPageActions: add_page_import_actions };
+	window.hrmsFormImport = { open: open_import_dialog, download(template_key) { return get_template(template_key).then(download_template); }, addPageActions: add_page_import_actions, capabilityForTemplate: (template_key) => TEMPLATE_CAPABILITIES[template_key] || "" };
 
 	const LIST_IMPORTS = {
 		Department: { key: "org_structure", label: "组织架构与编制", button_label: "导入组织架构" },

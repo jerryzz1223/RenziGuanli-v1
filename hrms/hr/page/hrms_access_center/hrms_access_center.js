@@ -45,28 +45,68 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 				{
 					fieldname: "permission_notice",
 					fieldtype: "HTML",
-					options: `<div class="hrms-access-capability-dialog__account">${escape(account.user)}</div>`,
+					options: `<div class="hrms-access-capability-dialog__header">
+						<div class="hrms-access-capability-dialog__account">${escape(account.user)}</div>
+						<div class="hrms-access-capability-dialog__bulk-actions">
+							<button type="button" class="btn btn-default btn-sm" data-action="select-all-capabilities">${__("一键全选")}</button>
+							<button type="button" class="btn btn-default btn-sm" data-action="clear-all-capabilities">${__("取消全选")}</button>
+						</div>
+					</div>`,
 				},
 				...permissionFields,
 			],
 			primary_action_label: __("保存权限"),
-			primary_action(values) {
+			primary_action() {
+				const values = dialog.get_values() || {};
 				const selected = capabilities
 					.filter((capability) => values[`capability_${capability.key}`])
 					.map((capability) => capability.key);
 				dialog.disable_primary_action();
-				frappe.call("hrms.access_control.set_hrms_user_capabilities", {
-					user: account.user,
-					capabilities: selected,
-				}).then(() => {
-					dialog.hide();
-					frappe.show_alert({ message: __("权限已保存"), indicator: "green" });
-					load();
-				}).finally(() => dialog.enable_primary_action());
+				frappe.call({
+					method: "hrms.access_control.set_hrms_user_capabilities",
+					args: {
+						user: account.user,
+						// Frappe form requests transport arrays inconsistently across
+						// versions.  Send explicit JSON and verify the server readback.
+						capabilities: JSON.stringify(selected),
+					},
+					freeze: true,
+					freeze_message: __("正在保存权限..."),
+					callback(response) {
+						const saved = [...(response.message?.capabilities || [])].sort();
+						const ignored = new Set(response.message?.ignored_capabilities || []);
+						const requested = selected.filter((key) => !ignored.has(key)).sort();
+						if (!response.message?.saved || JSON.stringify(saved) !== JSON.stringify(requested)) {
+							frappe.msgprint({
+								title: __("保存失败"),
+								message: __("权限保存后校验失败，请刷新后重试。"),
+								indicator: "red",
+							});
+							return;
+						}
+						account.assigned_roles = response.message.roles || [];
+						dialog.hide();
+						frappe.show_alert({
+							message: __("权限已正式保存，共 {0} 项", [saved.length]),
+							indicator: "green",
+						});
+						load();
+					},
+					always() {
+						dialog.enable_primary_action();
+					},
+				});
 			},
 		});
 		dialog.show();
 		dialog.$wrapper.addClass("hrms-access-capability-dialog");
+		const set_all_capabilities = (checked) => {
+			capabilities.forEach((capability) => {
+				dialog.set_value(`capability_${capability.key}`, checked ? 1 : 0);
+			});
+		};
+		dialog.$wrapper.on("click", "[data-action='select-all-capabilities']", () => set_all_capabilities(true));
+		dialog.$wrapper.on("click", "[data-action='clear-all-capabilities']", () => set_all_capabilities(false));
 	}
 
 	function open_disable_account_dialog(account) {

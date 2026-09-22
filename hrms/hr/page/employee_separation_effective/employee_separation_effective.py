@@ -10,7 +10,7 @@ def get_pending_employee_separations(
 	"""Return approved separations awaiting or tracking actual departure time."""
 	from hrms.access_control import require_hrms_capability
 
-	require_hrms_capability("separation_effective", legacy_roles=("HR Manager",))
+	require_hrms_capability("separation_effective")
 	if not frappe.has_permission("Employee Separation", ptype="read"):
 		frappe.throw(_("您没有查看实际离职办理的权限。"), frappe.PermissionError)
 

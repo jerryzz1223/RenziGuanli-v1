@@ -4616,7 +4616,7 @@ def export_processing_exceptions(
 	from hrms.access_control import require_hrms_capability
 
 	_require_processing_manager()
-	require_hrms_capability("attendance_export", legacy_roles=("HR Manager",))
+	require_hrms_capability("attendance_export")
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
 	if source_type:
 		_require_processing_source_type(source_type)
@@ -4941,7 +4941,7 @@ def close_daily_attendance(company: str, attendance_month: str, attendance_date:
 	_require_processing_manager()
 	from hrms.access_control import require_hrms_capability
 
-	require_hrms_capability("attendance_approve", legacy_roles=("HR Manager",))
+	require_hrms_capability("attendance_approve")
 	state = _daily_workflow_state(company, attendance_month, attendance_date)
 	if not state["can_lock"]:
 		frappe.throw(_("当天不能锁定：{0}").format(state["validation_message"]))

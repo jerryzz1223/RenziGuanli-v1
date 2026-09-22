@@ -13,6 +13,7 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_field
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 from frappe.utils import cint, flt
 
+from hrms.access_control import has_hrms_capability, require_hrms_capability
 from hrms.utils.employee_profile import normalise_profile_value
 from hrms.utils.employee_rehire import (
 	IDENTITY_NUMBER_FIELD,
@@ -170,7 +171,7 @@ PERSONNEL_PAGE_DEFINITIONS = [
 		"roles": ["HR User", "HR Manager", "System Manager"],
 	},
 	{"name": "cross-department-support", "title": "跨部门支援", "icon": "users"},
-	{"name": "recruitment-center", "title": "招聘中心", "icon": "briefcase", "roles": ["HR User", "HR Manager", "System Manager", "Interviewer"]},
+	{"name": "recruitment-center", "title": "招聘中心", "icon": "briefcase"},
 	{"name": "attendance-import-center", "title": "考勤导入中心", "icon": "upload"},
 	{"name": "payroll-input-center", "title": "薪资输入中心", "icon": "database"},
 	{"name": "form-data-intake", "title": "人资表单导入中心", "icon": "upload"},
@@ -3797,6 +3798,23 @@ def get_employee_roster(
 	page_length = min(max(frappe.utils.cint(page_length) or 20, 10), 500)
 	start = (page - 1) * page_length
 	fields = _get_roster_fetch_fields(columns)
+	if not has_hrms_capability("personnel_view"):
+		return {
+			"rows": [],
+			"columns": columns,
+			"total": 0,
+			"page": page,
+			"page_length": page_length,
+			"sort_by": sort_field,
+			"sort_order": sort_order,
+			"status_cards": EMPLOYEE_ROSTER_STATUS_CARDS,
+			"sort_options": [
+				{"label": "入职日期", "value": "date_of_joining"},
+				{"label": "更新时间", "value": "modified"},
+				{"label": "姓名", "value": "employee_name"},
+				{"label": "工号", "value": "custom_employee_code"},
+			],
+		}
 
 	if probation_stage == EMPLOYEE_ROSTER_MATURE_PROBATION_STAGE:
 		today = frappe.utils.getdate(frappe.utils.nowdate())
@@ -3858,6 +3876,19 @@ def get_employee_roster(
 
 @frappe.whitelist()
 def get_employee_roster_summary(filters: str = "{}", include_all: int = 0):
+	if not has_hrms_capability("personnel_view"):
+		summary = [{**card, "count": 0} for card in EMPLOYEE_ROSTER_STATUS_CARDS]
+		if frappe.utils.cint(include_all):
+			summary.insert(
+				0,
+				{
+					"label": "全部",
+					"filters": {"custom_work_nature": ["!=", "离职"]},
+					"count": 0,
+				},
+			)
+		return summary
+
 	employee_filters = _build_employee_roster_filters(filters)
 	# Keep the query permission-aware and calculate the three probation buckets
 	# from the same date basis used by the roster cards.
@@ -4942,6 +4973,7 @@ def get_employee_detail_navigation(employee: str, filters: str = "{}"):
 
 @frappe.whitelist()
 def parse_employee_roster_file(file_url: str):
+	require_hrms_capability("roster_import_submit")
 	context = _get_uploaded_roster_context(file_url)
 
 	return {
@@ -5844,8 +5876,7 @@ def preview_employee_roster_import(
 	manual_mappings: str = "{}",
 	row_overrides: str = "{}",
 ):
-	from hrms.access_control import require_hrms_capability
-	require_hrms_capability("roster_import_submit", legacy_roles=HR_SETTINGS_MANAGER_ROLES)
+	require_hrms_capability("roster_import_submit")
 	result, _planned_rows, _meta_fields = _build_employee_roster_import_plan(
 		file_url, mode, match_by, manual_mappings, row_overrides
 	)
@@ -5862,8 +5893,7 @@ def import_employee_roster(
 	manual_mappings: str = "{}",
 	row_overrides: str = "{}",
 ):
-	from hrms.access_control import require_hrms_capability
-	require_hrms_capability("roster_import_submit", legacy_roles=HR_SETTINGS_MANAGER_ROLES)
+	require_hrms_capability("roster_import_submit")
 	preview_result, planned_rows, meta_fields = _build_employee_roster_import_plan(
 		file_url, mode, match_by, manual_mappings, row_overrides
 	)
@@ -6342,7 +6372,7 @@ def download_employee_roster_export(
 	current_filters: str = "{}",
 ):
 	from hrms.access_control import require_hrms_capability
-	require_hrms_capability("personnel_export", legacy_roles=HR_SETTINGS_MANAGER_ROLES)
+	require_hrms_capability("personnel_export")
 	from frappe.desk.utils import provide_binary_file
 
 	doc = _get_template_doc()

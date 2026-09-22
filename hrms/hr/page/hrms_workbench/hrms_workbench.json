@@ -10,20 +10,7 @@
  "name": "hrms-workbench",
  "owner": "Administrator",
  "page_name": "hrms-workbench",
- "roles": [
-  {
-   "role": "HR User"
-  },
-  {
-   "role": "HR Manager"
-  },
-  {
-   "role": "Employee"
-  },
-  {
-   "role": "System Manager"
-  }
- ],
+ "roles": [],
  "script": null,
  "standard": "Yes",
  "style": null,

@@ -10,11 +10,7 @@
  "name": "personnel-home",
  "owner": "Administrator",
  "page_name": "personnel-home",
- "roles": [
-  {"role": "HR User"},
-  {"role": "HR Manager"},
-  {"role": "System Manager"}
- ],
+ "roles": [],
  "script": null,
  "standard": "Yes",
  "style": null,

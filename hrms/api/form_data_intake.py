@@ -15,6 +15,8 @@ import frappe
 from frappe import _
 from frappe.utils import flt, getdate, now_datetime
 
+from hrms.access_control import require_hrms_capability
+
 
 FORM_IMPORT_BATCH_DOCTYPE = "HRMS Form Import Batch"
 FORM_IMPORT_ROW_DOCTYPE = "HRMS Form Import Row"
@@ -85,6 +87,53 @@ BUSINESS_PROCESS_TEMPLATE_CONFIG = {
 	"proposal_improvement": {"record_type": "提案改善", "date_keys": ("proposal_date",), "title": lambda data: _("提案改善：{0}").format(data.get("subject") or data.get("proposal_no") or "")},
 	"system_feedback": {"record_type": "系统反馈", "date_keys": ("followup_date", "completed_date"), "title": lambda data: _("系统反馈：{0}").format(data.get("feedback_no") or data.get("description") or "")},
 }
+
+# Every spreadsheet entry point uses the same business permission as the
+# action that its rows will eventually perform.  Keeping this mapping next to
+# the template registry prevents a generic upload endpoint from bypassing the
+# checkbox that disabled the module button.
+FORM_IMPORT_CAPABILITIES = {
+	EMPLOYEE_ROSTER_TEMPLATE_KEY: ("roster_import_submit", "roster_import_approve"),
+	EMPLOYEE_ONBOARDING_TEMPLATE_KEY: ("employee_create", "employee_create_approve"),
+	"org_structure": ("permission_management", "permission_management"),
+	"employee_transfer": ("personnel_change_submit", "personnel_change_approve"),
+	"qualification_review": ("personnel_change_submit", "personnel_change_approve"),
+	"contract_intent": ("personnel_change_submit", "personnel_change_approve"),
+	"resignation_application": ("separation_submit", "separation_approve"),
+	"recruitment_interview": ("recruitment_submit", "recruitment_approve"),
+	"attendance_daily": ("attendance_import_submit", "attendance_approve"),
+	"attendance_department_summary": ("attendance_import_submit", "attendance_approve"),
+	"leave_export": ("attendance_import_submit", "attendance_approve"),
+	"attendance_exception": ("attendance_import_submit", "attendance_approve"),
+	"apple_reward": ("attendance_import_submit", "attendance_approve"),
+	"attendance_final": ("attendance_import_submit", "attendance_final_lock"),
+	"salary_structure_change": ("payroll_change_submit", "payroll_approval"),
+	"reward_punishment": ("personnel_change_submit", "personnel_change_approve"),
+	"skill_certificate_allowance": ("payroll_change_submit", "payroll_approval"),
+	"full_attendance_bonus": ("payroll_change_submit", "payroll_approval"),
+	"housing_allowance": ("payroll_change_submit", "payroll_approval"),
+	"education_allowance": ("payroll_change_submit", "payroll_approval"),
+	"dormitory_fee": ("payroll_change_submit", "payroll_approval"),
+	"social_insurance": ("contribution_submit", "payroll_approval"),
+	"service_award": ("payroll_change_submit", "payroll_approval"),
+	"proposal_improvement": ("personnel_change_submit", "personnel_change_approve"),
+	"exit_payroll_settlement": ("payroll_change_submit", "payroll_approval"),
+	"training_registration": ("training_submit", "training_approve"),
+	"certificate_management": ("employee_edit", "personnel_change_approve"),
+	"performance_summary": ("performance_submit", "performance_approve"),
+	"system_feedback": ("permission_management", "permission_management"),
+}
+
+
+def _form_import_capability(template_key: str, approval: bool = False):
+	capabilities = FORM_IMPORT_CAPABILITIES.get(template_key)
+	if not capabilities:
+		frappe.throw(_("表单没有配置业务权限：{0}").format(template_key), frappe.PermissionError)
+	return capabilities[1 if approval else 0]
+
+
+def _require_form_import_capability(template_key: str, approval: bool = False):
+	require_hrms_capability(_form_import_capability(template_key, approval))
 
 
 def _column(key, label, required=False, aliases=None):
@@ -830,6 +879,8 @@ def list_form_import_templates(module_name: str = ""):
 		"key": profile["key"], "module": profile["module"], "label": profile["label"], "description": profile["description"],
 		"source_sheets": profile["source_sheets"], "processing_target": profile["processing_target"], "entry_mode": profile.get("entry_mode", "staging"),
 		"entry_route": FORM_IMPORT_ENTRY_ROUTES.get(profile["key"], "/desk/form-data-intake"),
+		"submit_capability": _form_import_capability(profile["key"]),
+		"approval_capability": _form_import_capability(profile["key"], approval=True),
 		"columns": profile["columns"],
 	} for profile in profiles]
 
@@ -872,6 +923,7 @@ def create_form_import_template_file(template_key: str):
 @frappe.whitelist()
 def preview_form_import(file_url: str, template_key: str, company: str):
 	profile = _profile_or_throw(template_key)
+	_require_form_import_capability(profile["key"])
 	if profile.get("entry_mode") == "employee_roster":
 		return {"entry_mode": "employee_roster", "redirect_route": "employee-roster-import", "message": _("员工花名册需要使用智能花名册导入，以便安全导入员工主档。")}
 	if not company or not frappe.db.exists("Company", company):
@@ -890,6 +942,7 @@ def preview_form_import(file_url: str, template_key: str, company: str):
 @frappe.whitelist()
 def import_form_workbook(file_url: str, template_key: str, company: str, notes: str = ""):
 	profile = _profile_or_throw(template_key)
+	_require_form_import_capability(profile["key"])
 	if profile.get("entry_mode") == "employee_roster":
 		frappe.throw(_("员工花名册请使用智能花名册导入。"))
 	if not company or not frappe.db.exists("Company", company):
@@ -1816,6 +1869,7 @@ def review_form_import_row(row_name: str, decision: str, review_note: str = ""):
 	"""Approve or reject an imported row before any formal document is created."""
 	_require_form_import_reviewer()
 	row = _get_form_import_row(row_name)
+	_require_form_import_capability(row.template_key, approval=True)
 	decision = (decision or "").strip()
 	if decision not in ("批准", "驳回"):
 		frappe.throw(_("审核决定只能是“批准”或“驳回”。"))
@@ -1861,6 +1915,7 @@ def generate_form_import_target(row_name: str, payroll_month: str = "", attendan
 	"""Generate an editable target draft from an approved row, without activation."""
 	_require_form_import_reviewer()
 	row = _get_form_import_row(row_name)
+	_require_form_import_capability(row.template_key, approval=True)
 	if row.review_status != "已批准":
 		frappe.throw(_("请先完成人事审核并批准该行。"))
 	if row.target_name:
@@ -1964,6 +2019,7 @@ def activate_form_import_target(row_name: str):
 	"""Submit a formal draft or explicitly confirm a non-submittable target."""
 	_require_form_import_reviewer()
 	row = _get_form_import_row(row_name)
+	_require_form_import_capability(row.template_key, approval=True)
 	if row.review_status != "已批准" or not row.target_doctype or not row.target_name:
 		frappe.throw(_("请先审核通过并生成正式草稿。"))
 	if row.status == "已提交生效":

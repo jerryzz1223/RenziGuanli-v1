@@ -11,6 +11,8 @@ const workbenchPath = path.join(root, "hrms", "hr", "workspace", "hr_setup", "hr
 const workbenchSidebarPath = path.join(root, "hrms", "workspace_sidebar", "hr_setup.json");
 const personnelPath = path.join(root, "hrms", "hr", "workspace", "personnel", "personnel.json");
 const personnelSidebarPath = path.join(root, "hrms", "workspace_sidebar", "personnel.json");
+const setupPath = path.join(root, "hrms", "setup.py");
+const personnelApiPath = path.join(root, "hrms", "api", "employee_field_template.py");
 
 const hooksSource = fs.readFileSync(hooksPath, "utf8");
 const redirectSource = fs.readFileSync(redirectPath, "utf8");
@@ -21,6 +23,32 @@ const workbench = JSON.parse(fs.readFileSync(workbenchPath, "utf8"));
 const workbenchSidebar = JSON.parse(fs.readFileSync(workbenchSidebarPath, "utf8"));
 const personnel = JSON.parse(fs.readFileSync(personnelPath, "utf8"));
 const personnelSidebar = JSON.parse(fs.readFileSync(personnelSidebarPath, "utf8"));
+const setupSource = fs.readFileSync(setupPath, "utf8");
+const personnelApiSource = fs.readFileSync(personnelApiPath, "utf8");
+
+for (const page of [homePage, personnel]) {
+	if (!Array.isArray(page.roles) || page.roles.length !== 0) {
+		throw new Error(`${page.name} must be open to every signed-in Desk user; business APIs enforce data permissions.`);
+	}
+}
+
+for (const marker of [
+	"PUBLIC_HRMS_NAVIGATION_PAGES",
+	'"hrms-workbench"',
+	'"personnel-home"',
+	'"organizational-chart"',
+	'"recruitment-center"',
+	'frappe.db.delete("Has Role", role_filters)',
+	"ensure_public_hrms_navigation_pages()",
+]) {
+	if (!setupSource.includes(marker)) {
+		throw new Error(`Public navigation Page synchronization is missing marker: ${marker}`);
+	}
+}
+
+if (!personnelApiSource.includes('{"name": "recruitment-center", "title": "招聘中心", "icon": "briefcase"}')) {
+	throw new Error("Recruitment center must not restore a Page-level role restriction during migration.");
+}
 
 for (const marker of ['app_home = "/desk/hrms-workbench"', '"route": "/desk/hrms-workbench"']) {
 	if (!hooksSource.includes(marker)) {
@@ -45,7 +73,7 @@ if (!topNavCssVersion || topNavCssVersion < "20260903f") {
 	throw new Error("The top navigation CSS cache version must change when its desktop layout is corrected.");
 }
 
-if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260912-hide-frappe-search-access-center-unified-v1")) {
+if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260922-permission-safe-navbar-v1")) {
 	throw new Error("The top navigation JavaScript cache version must change when framework controls change.");
 }
 
@@ -95,6 +123,14 @@ for (const marker of ["yongxin-brand-mark-red.png", "Navbar Settings", "MODULE_I
 	if (!topNavSource.includes(marker)) {
 		throw new Error(`Top navigation branding or module icons are missing marker: ${marker}`);
 	}
+}
+
+if (topNavSource.includes('.get_single_value("Navbar Settings", "app_logo")')) {
+	throw new Error("Top navigation must not query protected Navbar Settings for ordinary users.");
+}
+
+if (!topNavSource.includes("window.frappe?.boot?.navbar_settings?.app_logo")) {
+	throw new Error("Top navigation must read its optional logo from the permission-safe boot payload.");
 }
 
 for (const marker of ["hrms-top-module-nav__brand-logo", "hrms-top-module-nav__brand-company", "hrms-top-module-nav__item-icon", "hrms-page-title-icon"]) {

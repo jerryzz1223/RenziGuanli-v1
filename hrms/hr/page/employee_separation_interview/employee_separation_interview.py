@@ -5,7 +5,7 @@ from frappe import _
 def _require_interview_access():
 	from hrms.access_control import require_hrms_capability
 
-	require_hrms_capability("separation_approve", legacy_roles=("HR Manager",))
+	require_hrms_capability("separation_approve")
 	if not frappe.has_permission("Employee Separation", ptype="read"):
 		frappe.throw(_("您没有查看离职面谈的权限。"), frappe.PermissionError)
 

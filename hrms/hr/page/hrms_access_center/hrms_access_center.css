@@ -399,12 +399,25 @@
 	padding-right: 24px;
 }
 
-.hrms-access-capability-dialog__account {
+.hrms-access-capability-dialog__header {
+	align-items: center;
 	border-bottom: 1px solid var(--border-color, #dfe3e8);
-	color: var(--text-muted, #6b7280);
-	font-size: 13px;
+	display: flex;
+	gap: 12px;
+	justify-content: space-between;
 	margin-bottom: 4px;
 	padding: 0 0 12px;
+}
+
+.hrms-access-capability-dialog__account {
+	color: var(--text-muted, #6b7280);
+	font-size: 13px;
+}
+
+.hrms-access-capability-dialog__bulk-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
 }
 
 .hrms-access-capability-dialog .form-section {

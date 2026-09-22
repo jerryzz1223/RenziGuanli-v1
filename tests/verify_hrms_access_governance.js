@@ -65,6 +65,19 @@ for (const marker of [
 	"发起/提交与审批可以分配给不同账户",
 	"Column Break",
 	"hrms-access-capability-dialog",
+	"JSON.stringify(selected)",
+	"response.message?.saved",
+	"权限已正式保存",
+	"always()",
+	"dialog.enable_primary_action()",
+	"response.message?.ignored_capabilities",
+	"selected.filter((key) => !ignored.has(key))",
+	"一键全选",
+	"取消全选",
+	"select-all-capabilities",
+	"clear-all-capabilities",
+	"set_all_capabilities",
+	"dialog.set_value(`capability_${capability.key}`",
 ]) {
 	assert(accessPage.includes(marker), `Business capability editor contract missing: ${marker}`);
 }
@@ -131,9 +144,19 @@ for (const unavailableCapability of [
 	"hr_approval",
 	"leave_approval",
 	"expense_approval",
+	"expense_submit",
+	"expense_approve",
 	"recruitment_interview",
 ]) {
 	assert(!accessControl.includes(`"key": "${unavailableCapability}"`), `Unverified capability must stay hidden: ${unavailableCapability}`);
+}
+
+for (const removedLabel of ["费用与出差提交", "费用与出差审批"]) {
+	assert(!accessControl.includes(removedLabel), `Undelivered capability must stay removed: ${removedLabel}`);
+}
+
+for (const marker of ["RETIRED_CAPABILITY_ROLES", "RETIRED_CAPABILITY_KEYS", "ignored_capabilities", "retire_removed_capability_roles", '"Has Role",', 'frappe.db.delete("Custom DocPerm"']) {
+	assert(accessControl.includes(marker), `Retired capability cleanup is missing marker: ${marker}`);
 }
 
 for (const marker of [

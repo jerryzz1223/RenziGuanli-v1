@@ -860,6 +860,40 @@ def update_select_perm_after_install():
 	frappe.flags.update_select_perm_after_migrate = False
 
 
+PUBLIC_HRMS_NAVIGATION_PAGES = (
+	"hrms-workbench",
+	"personnel-home",
+	"organizational-chart",
+	"recruitment-center",
+	"attendance-import-center",
+	"payroll-input-center",
+	"announcement-directory",
+)
+
+
+def ensure_public_hrms_navigation_pages():
+	"""Allow every signed-in Desk user to enter the main HRMS page shells.
+
+	Page roles only control whether Frappe can load the page definition. Business
+	data remains protected by DocType permissions and capability checks in each
+	API. Keeping these shells public lets users see an empty state instead of a
+	misleading Page permission dialog when a module has no permitted records.
+	"""
+	updated = []
+	for page_name in PUBLIC_HRMS_NAVIGATION_PAGES:
+		if not frappe.db.exists("Page", page_name):
+			continue
+		role_filters = {"parenttype": "Page", "parent": page_name, "parentfield": "roles"}
+		if not frappe.db.exists("Has Role", role_filters):
+			continue
+		frappe.db.delete("Has Role", role_filters)
+		updated.append(page_name)
+
+	if updated:
+		frappe.clear_cache()
+	return updated
+
+
 def after_migrate():
 	"""Complete HRMS post-migration setup that the Desk depends on.
 
@@ -886,6 +920,7 @@ def after_migrate():
 
 	ensure_announcement_pages()
 	ensure_personnel_pages()
+	ensure_public_hrms_navigation_pages()
 	ensure_personnel_sidebar_links()
 	ensure_employee_rehire_setup()
 	ensure_employee_work_nature_setup()

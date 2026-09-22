@@ -26,6 +26,8 @@ class _UserDoc:
 def _load_module(user_doc=None):
 	frappe = types.ModuleType("frappe")
 	frappe.session = types.SimpleNamespace(user="manager@example.com")
+	frappe.form_dict = {}
+	frappe.local = types.SimpleNamespace(request=None)
 	frappe.PermissionError = PermissionError
 	frappe.get_roles = lambda _user=None: ["System Manager"]
 	frappe.whitelist = lambda **_kwargs: (lambda fn: fn)
@@ -102,6 +104,24 @@ class AccessControlTests(unittest.TestCase):
 		self.assertNotIn("Employee", module.READ_ONLY_DOCTYPES)
 		self.assertFalse(any("Salary" in doctype or "Payroll" in doctype for doctype in module.READ_ONLY_DOCTYPES))
 
+	def test_undelivered_expense_capabilities_are_retired(self):
+		module = _load_module()
+		keys = {item["key"] for item in module.CAPABILITY_DEFINITIONS}
+		self.assertNotIn("expense_submit", keys)
+		self.assertNotIn("expense_approve", keys)
+		self.assertEqual(module.RETIRED_CAPABILITY_ROLES, ("费用出差提交", "费用出差审批"))
+
+	def test_stale_dialog_ignores_retired_capabilities_and_saves_current_selection(self):
+		user = _UserDoc(["人事查看", "费用出差提交", "费用出差审批"])
+		module = _load_module(user)
+		result = module.set_hrms_user_capabilities(
+			"worker@example.com", ["personnel_view", "expense_submit", "expense_approve"]
+		)
+		self.assertEqual([row.role for row in user.roles], ["人事查看"])
+		self.assertEqual(result["capabilities"], ["personnel_view"])
+		self.assertEqual(result["ignored_capabilities"], ["expense_approve", "expense_submit"])
+		self.assertTrue(result["saved"])
+
 	def test_capability_assignment_preserves_roles_outside_checklist(self):
 		user = _UserDoc(["Existing Custom Role", "HR User", "Leave Approver"])
 		module = _load_module(user)
@@ -114,6 +134,75 @@ class AccessControlTests(unittest.TestCase):
 			["Existing Custom Role", "HR User", "Leave Approver", module.READ_ONLY_ROLE, "薪资经办"],
 		)
 		self.assertEqual(result["capabilities"], ["basic_read_only", "payroll_entry_submit"])
+		self.assertTrue(result["saved"])
+
+	def test_whitelisted_capability_payload_has_frappe_type_annotation(self):
+		module = _load_module()
+		annotation = module.set_hrms_user_capabilities.__annotations__["capabilities"]
+		self.assertEqual(annotation, str | None)
+
+	def test_every_individual_checkbox_grants_only_its_own_managed_role(self):
+		module = _load_module()
+		for capability in module.CAPABILITY_DEFINITIONS:
+			if capability["key"] == "permission_management":
+				# System Manager is intentionally the explicit full-access option.
+				continue
+			with self.subTest(capability=capability["key"]):
+				user = _UserDoc(["Existing Custom Role"])
+				module.frappe.get_doc = lambda *_args, _user=user, **_kwargs: _user
+				result = module.set_hrms_user_capabilities(
+					"worker@example.com", [capability["key"]]
+				)
+				self.assertEqual(
+					[row.role for row in user.roles],
+					["Existing Custom Role", capability["role"]],
+				)
+				self.assertEqual(result["capabilities"], [capability["key"]])
+
+	def test_one_capability_role_does_not_authorize_other_capabilities(self):
+		module = _load_module()
+		business_capabilities = [
+			item for item in module.CAPABILITY_DEFINITIONS
+			if item["key"] != "permission_management"
+		]
+		for granted in business_capabilities:
+			with self.subTest(granted=granted["key"]):
+				module.frappe.get_roles = lambda _user=None, role=granted["role"]: [role]
+				allowed = [
+					item["key"] for item in business_capabilities
+					if module.has_hrms_capability(item["key"], user="worker@example.com")
+				]
+				self.assertEqual(allowed, [granted["key"]])
+
+	def test_employee_reportview_requires_personnel_view_without_blocking_other_workflows(self):
+		module = _load_module()
+		module.frappe.get_roles = lambda _user=None: ["员工档案修改"]
+		module.frappe.form_dict = {"cmd": "frappe.desk.reportview.get"}
+		self.assertEqual(
+			module.employee_roster_permission_query("worker@example.com"), "1=0"
+		)
+		module.frappe.form_dict = {"cmd": "hrms.api.some_employee_edit_workflow"}
+		self.assertEqual(
+			module.employee_roster_permission_query("worker@example.com"), ""
+		)
+
+	def test_system_manager_does_not_bypass_individual_business_checkboxes(self):
+		module = _load_module()
+		module.frappe.get_roles = lambda _user=None: ["System Manager", "员工档案修改"]
+		self.assertTrue(
+			module.has_hrms_capability("permission_management", user="worker@example.com")
+		)
+		self.assertTrue(
+			module.has_hrms_capability("employee_edit", user="worker@example.com")
+		)
+		self.assertFalse(
+			module.has_hrms_capability("personnel_view", user="worker@example.com")
+		)
+		module.frappe.get_roles = lambda _user=None: ["人事查看"]
+		module.frappe.form_dict = {"cmd": "frappe.desk.reportview.get"}
+		self.assertEqual(
+			module.employee_roster_permission_query("worker@example.com"), ""
+		)
 
 	def test_every_business_action_has_a_unique_checkbox_role(self):
 		module = _load_module()
@@ -151,12 +240,13 @@ class AccessControlTests(unittest.TestCase):
 		self.assertIn(("HRMS Employee Salary Change", "薪资审批", "submit"), added)
 		self.assertIn(("Company", "考勤导入提交", "read"), added)
 
-	def test_registration_password_requires_length_letters_and_digits(self):
+	def test_registration_password_requires_only_four_characters(self):
 		module = _load_module()
-		for password in ("short1", "onlyletterslong", "1234567890"):
+		for password in ("", "123", "密码a"):
 			with self.assertRaises(ValueError):
 				module._validate_registration_password(password)
-		self.assertEqual(module._validate_registration_password("safePass123"), "safePass123")
+		for password in ("1234", "abcd", "!!!!", "密码可用"):
+			self.assertEqual(module._validate_registration_password(password), password)
 
 	def test_account_is_disabled_and_deletion_is_always_rejected(self):
 		user = _UserDoc([])

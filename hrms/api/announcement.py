@@ -78,13 +78,13 @@ def ensure_announcement_pages():
 def _require(key, legacy_roles=()):
 	from hrms.access_control import require_hrms_capability
 
-	require_hrms_capability(key, legacy_roles=legacy_roles)
+	require_hrms_capability(key)
 
 
 def _has(key, legacy_roles=()):
 	from hrms.access_control import has_hrms_capability
 
-	return has_hrms_capability(key, legacy_roles=legacy_roles)
+	return has_hrms_capability(key)
 
 
 def _payload(payload):

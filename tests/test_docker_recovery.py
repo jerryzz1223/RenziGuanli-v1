@@ -55,18 +55,18 @@ class RecoveryTests(unittest.TestCase):
             MODULE.main()
         run.assert_not_called()
 
-    def test_web_command_selects_site_without_unsupported_host_option(self):
+    def test_web_command_selects_site_and_supported_external_host(self):
         init = (Path(__file__).resolve().parents[1] / "docker/init.sh").read_text()
         function = init.split("configure_web_bind() {", 1)[1].split("\nconfigure_container_hosts()", 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             procfile = Path(directory) / "Procfile"
             procfile.write_text("web: bench serve --port 8000\nworker: bench worker\n")
-            script = "configure_web_bind() {" + function + "\nconfigure_web_bind"
+            script = "bench() { printf '%s\\n' '  --host TEXT'; }\nconfigure_web_bind() {" + function + "\nconfigure_web_bind"
             result = subprocess.run(["bash", "-c", script], cwd=directory,
                                     env={**os.environ, "HRMS_SITE": "hrms.localhost"},
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(procfile.read_text(), "web: bench --site hrms.localhost serve --port 8000 --noreload\nworker: bench worker\n")
+            self.assertEqual(procfile.read_text(), "web: bench --site hrms.localhost serve --host 0.0.0.0 --port 8000 --noreload\nworker: bench worker\n")
             before = procfile.read_bytes()
             result = subprocess.run(["bash", "-c", script], cwd=directory,
                                     env={**os.environ, "HRMS_SITE": "bad; command"},

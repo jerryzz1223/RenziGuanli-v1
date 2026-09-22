@@ -27,8 +27,9 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
+	"/assets/hrms/js/hrms_capability_ui.js?v=20260922-business-action-matrix-v1",
 	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260918-sidebar-layout-v2",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260918-sidebar-layout-v2&compat=20260914-hide-native-user-roles-v1",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260922-permission-safe-navbar-v1&compat=20260914-hide-native-user-roles-v1",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
 	"/assets/hrms/js/hrms_file_uploader.js?v=20260912a",
 	"/assets/hrms/js/hrms_entry.js?v=20260912-intranet-entry-v1",
@@ -50,10 +51,10 @@ app_include_css = [
 
 # include js, css files in header of web template
 web_include_css = [
-	"/assets/hrms/css/hrms_login.css?v=20260912-employee-match-v2",
+	"/assets/hrms/css/hrms_login.css?v=20260922-register-entry-v3",
 	"/assets/hrms/css/hrms_loading.css?v=20260909-black-loader",
 ]
-web_include_js = "/assets/hrms/js/hrms_login.js?v=20260912-employee-match-v2"
+web_include_js = "/assets/hrms/js/hrms_login.js?v=20260922-register-entry-v3"
 
 # include custom scss in every website theme (without file extension ".scss")
 # website_theme_scss = "hrms/public/scss/website"
@@ -174,9 +175,9 @@ before_app_uninstall = "hrms.setup.before_app_uninstall"
 # -----------
 # Permissions evaluated in scripted ways
 
-# permission_query_conditions = {
-# 	"Event": "frappe.desk.doctype.event.event.get_permission_query_conditions",
-# }
+permission_query_conditions = {
+	"Employee": "hrms.access_control.employee_roster_permission_query",
+}
 #
 # has_permission = {
 # 	"Event": "frappe.desk.doctype.event.event.has_permission",

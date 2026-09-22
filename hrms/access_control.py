@@ -5,7 +5,6 @@ and explicit backend role checks therefore remain the source of truth.
 """
 
 import json
-import re
 
 import frappe
 from frappe import _
@@ -17,6 +16,11 @@ from frappe.utils.password import update_password
 
 READ_ONLY_ROLE = "HRMS 基础只读"
 EMPLOYEE_SELF_SERVICE_ROLE = "Employee Self Service"
+RETIRED_CAPABILITY_ROLES = ("费用出差提交", "费用出差审批")
+RETIRED_CAPABILITY_KEYS = frozenset(("expense_submit", "expense_approve"))
+EMPLOYEE_ROSTER_REPORTVIEW_COMMANDS = frozenset(
+	("frappe.desk.reportview.get", "frappe.desk.reportview.get_count")
+)
 
 # Publicly self-registered accounts must not receive employee, attendance or
 # payroll data.  These dictionaries are enough to enter Desk and understand
@@ -98,8 +102,6 @@ CAPABILITY_DEFINITIONS = (
 	_capability("training_approve", "培训审批", "培训审批", "培训", "审批或取消已提交的培训业务。", "high", (("Training Program", "read", "write", "submit", "cancel"), ("Training Event", "read", "write", "submit", "cancel"), ("Training Result", "read", "write", "submit", "cancel"))),
 	_capability("performance_submit", "绩效录入与提交", "绩效提交", "绩效", "创建并提交目标、考核周期和绩效考核。", "high", (("Goal", "read", "create", "write", "submit"), ("Appraisal Cycle", "read", "create", "write", "submit"), ("Appraisal", "read", "create", "write", "submit"))),
 	_capability("performance_approve", "绩效审批", "绩效审批", "绩效", "审批目标、考核周期和绩效结果。", "critical", (("Goal", "read", "write", "submit", "cancel"), ("Appraisal Cycle", "read", "write", "submit", "cancel"), ("Appraisal", "read", "write", "submit", "cancel"))),
-	_capability("expense_submit", "费用与出差提交", "费用出差提交", "审批", "创建并提交费用报销和出差申请。", "high", (("Expense Claim", "read", "create", "write", "submit"), ("Travel Request", "read", "create", "write", "submit"))),
-	_capability("expense_approve", "费用与出差审批", "费用出差审批", "审批", "审批或驳回费用报销和出差申请。", "critical", (("Expense Claim", "read", "write", "submit", "cancel"), ("Travel Request", "read", "write", "submit", "cancel"))),
 	{
 		"key": "permission_management",
 		"label": "账户与权限管理",
@@ -120,9 +122,10 @@ def _require_system_manager():
 def has_hrms_capability(capability_key: str, user: str | None = None, legacy_roles=()):
 	"""Return whether one user may perform a named business action.
 
-	System Manager and Administrator retain their existing full access.  The
-	legacy role list is deliberately explicit per call so older HR accounts keep
-	working while new accounts can be granted only the narrow checkbox role.
+	Administrator retains full access.  System Manager is itself the explicit
+	permission-management checkbox and must not silently grant every unrelated
+	business capability.  The legacy role list is deliberately explicit per call
+	so older HR accounts keep working where a workflow opts into compatibility.
 	"""
 	definition = CAPABILITY_BY_KEY.get(capability_key)
 	if not definition:
@@ -131,7 +134,29 @@ def has_hrms_capability(capability_key: str, user: str | None = None, legacy_rol
 	if user == "Administrator":
 		return True
 	roles = set(frappe.get_roles(user))
-	return bool({"System Manager", definition["role"], *legacy_roles} & roles)
+	return bool({definition["role"], *legacy_roles} & roles)
+
+
+def employee_roster_permission_query(user: str | None = None):
+	"""Hide Employee reportview rows unless the roster-view capability is granted.
+
+	Other HR actions deliberately retain the narrow Employee read access needed
+	for their own workflows.  Restrict only Frappe's generic Employee list/count
+	requests here; roster-specific APIs enforce the same capability themselves.
+	"""
+	if has_hrms_capability("personnel_view", user=user):
+		return ""
+
+	form_dict = getattr(frappe, "form_dict", None) or {}
+	command = str(form_dict.get("cmd") or "")
+	request = getattr(getattr(frappe, "local", None), "request", None)
+	request_path = str(getattr(request, "path", "") or "").rstrip("/")
+	if command in EMPLOYEE_ROSTER_REPORTVIEW_COMMANDS or any(
+		request_path.endswith(f"/api/method/{candidate}")
+		for candidate in EMPLOYEE_ROSTER_REPORTVIEW_COMMANDS
+	):
+		return "1=0"
+	return ""
 
 
 def require_hrms_capability(capability_key: str, *, legacy_roles=(), message: str = ""):
@@ -184,6 +209,7 @@ def _ensure_docperm_operations(doctype, role, permission_types):
 
 def ensure_hrms_access_roles():
 	"""Create every checkbox role and its actual DocType operation permissions."""
+	retire_removed_capability_roles()
 	for capability in CAPABILITY_DEFINITIONS:
 		role = capability["role"]
 		if not frappe.db.exists("Role", role):
@@ -205,6 +231,28 @@ def ensure_hrms_access_roles():
 	frappe.clear_cache()
 
 
+def retire_removed_capability_roles():
+	"""Remove obsolete checklist roles from users and their custom permissions."""
+	affected_users = set()
+	for role in RETIRED_CAPABILITY_ROLES:
+		affected_users.update(
+			frappe.get_all(
+				"Has Role",
+				filters={"parenttype": "User", "parentfield": "roles", "role": role},
+				pluck="parent",
+			)
+		)
+		frappe.db.delete(
+			"Has Role",
+			{"parenttype": "User", "parentfield": "roles", "role": role},
+		)
+		frappe.db.delete("Custom DocPerm", {"role": role})
+
+	for user in affected_users:
+		frappe.clear_cache(user=user)
+	return sorted(affected_users)
+
+
 def _normalise_capability_keys(capabilities):
 	if isinstance(capabilities, str):
 		try:
@@ -212,6 +260,14 @@ def _normalise_capability_keys(capabilities):
 		except ValueError:
 			capabilities = [capabilities]
 	return {str(item) for item in (capabilities or [])}
+
+
+def _capability_keys_for_roles(roles):
+	"""Translate the roles actually saved on a User back to checkbox keys."""
+	roles = set(roles or ())
+	return sorted(
+		item["key"] for item in CAPABILITY_DEFINITIONS if item["role"] in roles
+	)
 
 
 @frappe.whitelist()
@@ -223,7 +279,7 @@ def get_hrms_capability_catalog():
 		"design_notes": [
 			"公开注册只授予非敏感基础资料的只读权限。",
 			"每个勾选项对应一个独立系统角色，提交和审批不捆绑。",
-			"人事、考勤、薪酬、招聘、培训、绩效、费用出差均可按业务动作独立分配。",
+			"人事、考勤、薪酬、招聘、培训和绩效均可按业务动作独立分配。",
 			"角色决定可执行的操作；User Permission 继续限定公司、部门或员工数据范围。",
 			"导入、导出、打印和报表权限也由对应勾选项进入实际权限引擎。",
 		],
@@ -231,7 +287,7 @@ def get_hrms_capability_catalog():
 
 
 @frappe.whitelist()
-def set_hrms_user_capabilities(user: str, capabilities=None):
+def set_hrms_user_capabilities(user: str, capabilities: str | None = None):
 	"""Replace only the roles managed by this business-facing checklist."""
 	_require_system_manager()
 	if not user or not frappe.db.exists("User", user):
@@ -239,14 +295,16 @@ def set_hrms_user_capabilities(user: str, capabilities=None):
 	if user == "Administrator":
 		frappe.throw(_("不能通过业务权限勾选修改 Administrator。"))
 
-	selected = _normalise_capability_keys(capabilities)
+	submitted = _normalise_capability_keys(capabilities)
+	ignored_capabilities = sorted(submitted & RETIRED_CAPABILITY_KEYS)
+	selected = submitted - RETIRED_CAPABILITY_KEYS
 	definitions = {item["key"]: item for item in CAPABILITY_DEFINITIONS}
 	unknown = selected - set(definitions)
 	if unknown:
 		frappe.throw(_("包含未知的业务权限：{0}").format("、".join(sorted(unknown))))
 
 	target = frappe.get_doc("User", user)
-	managed_roles = {item["role"] for item in CAPABILITY_DEFINITIONS}
+	managed_roles = {item["role"] for item in CAPABILITY_DEFINITIONS} | set(RETIRED_CAPABILITY_ROLES)
 	if user == frappe.session.user and "System Manager" in {row.role for row in target.roles} and "permission_management" not in selected:
 		frappe.throw(_("不能在当前登录会话中移除自己的权限管理能力。"))
 	preserved_roles = [row.role for row in target.roles if row.role not in managed_roles]
@@ -260,10 +318,19 @@ def set_hrms_user_capabilities(user: str, capabilities=None):
 		target.user_type = "System User"
 	target.save(ignore_permissions=True)
 	frappe.clear_cache(user=user)
+	saved_roles = [row.role for row in target.roles]
+	saved_capabilities = _capability_keys_for_roles(saved_roles)
+	if saved_capabilities != sorted(selected):
+		# A successful response must be an exact readback of the managed roles.
+		# Raising here keeps the request transactional instead of showing a false
+		# "saved" message when a User validation hook changed the role rows.
+		frappe.throw(_("权限保存后校验失败，未写入预期的单项权限。请刷新后重试。"))
 	return {
 		"user": user,
-		"capabilities": sorted(selected),
-		"roles": [row.role for row in target.roles],
+		"saved": True,
+		"capabilities": saved_capabilities,
+		"ignored_capabilities": ignored_capabilities,
+		"roles": saved_roles,
 	}
 
 
@@ -305,8 +372,8 @@ def delete_hrms_user_account(user: str, confirmation: str = ""):
 
 def _validate_registration_password(password):
 	password = str(password or "")
-	if len(password) < 10 or not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
-		frappe.throw(_("密码至少 10 位，且必须同时包含字母和数字。"))
+	if len(password) < 4:
+		frappe.throw(_("密码至少 4 位。"))
 	return password
 
 

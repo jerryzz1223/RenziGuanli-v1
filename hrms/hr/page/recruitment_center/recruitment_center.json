@@ -11,12 +11,7 @@
  "name": "recruitment-center",
  "owner": "Administrator",
  "page_name": "recruitment-center",
- "roles": [
-  {"role": "HR User"},
-  {"role": "HR Manager"},
-  {"role": "System Manager"},
-  {"role": "Interviewer"}
- ],
+ "roles": [],
  "script": null,
  "standard": "Yes",
  "style": null,

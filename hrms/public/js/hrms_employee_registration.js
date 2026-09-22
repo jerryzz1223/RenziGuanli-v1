@@ -10,14 +10,19 @@ frappe.ui.form.on("HRMS Employee Registration", {
 		});
 		frm.set_df_property("status", "read_only", 1);
 		if (!frm.is_new()) {
-			frm.add_custom_button(__("查看填写二维码"), () => show_registration_qr(frm), __("员工扫码填写"));
+			const qrButton = frm.add_custom_button(__("查看填写二维码"), () => {
+				if (window.hrmsCapabilities?.require("employee_create")) show_registration_qr(frm);
+			}, __("员工扫码填写"));
+			window.hrmsCapabilities?.ready().then(() => window.hrmsCapabilities.disable(qrButton?.jquery ? qrButton[0] : qrButton, "employee_create"));
 		}
 		if (frm.doc.status === "待审核") {
-			const can_review = (frappe.user_roles || []).some((role) => ["HR Manager", "System Manager"].includes(role));
-			if (can_review) {
-				frm.add_custom_button(__("通过并创建员工"), () => approve_registration(frm), __("审核"));
-				frm.add_custom_button(__("驳回"), () => reject_registration(frm), __("审核"));
-			}
+			const approveButton = frm.add_custom_button(__("通过并创建员工"), () => {
+				if (window.hrmsCapabilities?.require("employee_create_approve")) approve_registration(frm);
+			}, __("审核"));
+			const rejectButton = frm.add_custom_button(__("驳回"), () => {
+				if (window.hrmsCapabilities?.require("employee_create_approve")) reject_registration(frm);
+			}, __("审核"));
+			window.hrmsCapabilities?.ready().then(() => [approveButton, rejectButton].forEach((button) => window.hrmsCapabilities.disable(button?.jquery ? button[0] : button, "employee_create_approve")));
 		}
 	},
 });

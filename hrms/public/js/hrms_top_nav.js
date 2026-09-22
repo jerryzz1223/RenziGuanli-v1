@@ -217,7 +217,6 @@
 	let accountInfo = null;
 	let accountInfoLoading = false;
 	let brandLogoUrl = DEFAULT_BRAND_LOGO;
-	let brandLogoRequest = null;
 	let accountEventsBound = false;
 	let moreEventsBound = false;
 	let sidebarToggleEventsBound = false;
@@ -1030,12 +1029,10 @@
 
 	function loadBrandLogo(image) {
 		const bootLogo = window.frappe?.boot?.navbar_settings?.app_logo;
-		updateBrandLogo(image, bootLogo);
-		if (!window.frappe?.db?.get_single_value || brandLogoRequest) return;
-		brandLogoRequest = frappe.db
-			.get_single_value("Navbar Settings", "app_logo")
-			.then((value) => updateBrandLogo(image, value))
-			.catch(() => undefined);
+		// Navbar Settings is already included in the permission-safe boot payload.
+		// Querying the protected singleton from the browser makes ordinary users
+		// receive a Not Permitted dialog before their permitted page can render.
+		updateBrandLogo(image, bootLogo || DEFAULT_BRAND_LOGO);
 	}
 
 	function removeRedundantFrameworkControls() {

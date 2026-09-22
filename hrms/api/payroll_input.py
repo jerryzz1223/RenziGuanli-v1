@@ -3051,7 +3051,6 @@ def _require_company(company):
 	from hrms.access_control import require_any_hrms_capability
 	require_any_hrms_capability(
 		("payroll_view", "payroll_entry_submit", "payroll_change_submit", "contribution_submit", "payroll_approval", "payroll_calculate", "payroll_confirm", "payroll_export", "payroll_rules"),
-		legacy_roles=("HR Manager",),
 		message=_("当前账户没有薪酬板块权限。"),
 	)
 	company = (company or "").strip()

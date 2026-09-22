@@ -206,7 +206,7 @@ def record_employee_separation_actual_time(
 	"""Record the one business-effective departure time and apply its state."""
 	from hrms.access_control import require_hrms_capability
 
-	require_hrms_capability("separation_effective", legacy_roles=("HR Manager",))
+	require_hrms_capability("separation_effective")
 	frappe.db.sql(
 		"SELECT name FROM `tabEmployee Separation` WHERE name=%s FOR UPDATE",
 		(separation_name,),
@@ -250,7 +250,7 @@ def approve_employee_separation(
 	"""Approve a submitted separation and move the employee into pending departure."""
 	from hrms.access_control import require_hrms_capability
 
-	require_hrms_capability("separation_approve", legacy_roles=("HR Manager",))
+	require_hrms_capability("separation_approve")
 	frappe.db.sql(
 		"SELECT name FROM `tabEmployee Separation` WHERE name=%s FOR UPDATE",
 		(separation_name,),

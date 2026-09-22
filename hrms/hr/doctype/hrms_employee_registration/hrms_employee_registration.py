@@ -82,9 +82,10 @@ ALLOWED_FILE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
 MAX_FILE_BYTES = 8 * 1024 * 1024
 
 
-def _require_hr_role():
-	if not {"HR Manager", "System Manager"}.intersection(set(frappe.get_roles())):
-		frappe.throw(_("只有人事经理或系统管理员可以管理扫码入职资料。"), frappe.PermissionError)
+def _require_hr_role(capability_key="employee_create"):
+	from hrms.access_control import require_hrms_capability
+
+	require_hrms_capability(capability_key)
 
 
 def _token_hash(token):
@@ -445,7 +446,7 @@ def get_registration_qr_svg(name: str, url: str):
 
 @frappe.whitelist()
 def approve_registration(name: str, employee_code: str = ""):
-	_require_hr_role()
+	_require_hr_role("employee_create_approve")
 	doc = frappe.get_doc(DOCTYPE, name)
 	if doc.status != "待审核":
 		frappe.throw(_("只有待审核资料可以通过。"))
@@ -478,7 +479,7 @@ def approve_registration(name: str, employee_code: str = ""):
 
 @frappe.whitelist()
 def reject_registration(name: str, review_note: str):
-	_require_hr_role()
+	_require_hr_role("employee_create_approve")
 	doc = frappe.get_doc(DOCTYPE, name)
 	if doc.status != "待审核":
 		frappe.throw(_("只有待审核资料可以驳回。"))

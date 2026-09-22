@@ -653,7 +653,6 @@ def _require_company(company):
 	from hrms.access_control import require_any_hrms_capability
 	require_any_hrms_capability(
 		("attendance_view", "attendance_import_submit", "attendance_exception_edit", "attendance_approve", "attendance_final_lock", "attendance_export"),
-		legacy_roles=("HR Manager",),
 		message=_("当前账户没有考勤板块权限。"),
 	)
 	company = (company or "").strip()
@@ -2407,7 +2406,7 @@ def _prefer_manual_daily_rows(rows):
 
 def _require_attendance_capability(capability_key):
 	from hrms.access_control import require_hrms_capability
-	require_hrms_capability(capability_key, legacy_roles=("HR Manager",))
+	require_hrms_capability(capability_key)
 
 
 def _require_attendance_reviewer():
