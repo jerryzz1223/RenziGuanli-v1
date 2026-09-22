@@ -9,7 +9,7 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import cint, get_datetime
 
-from hrms.hr.doctype.shift_assignment.shift_assignment import get_actual_start_end_datetime_of_shift
+from hrms.hr.doctype.shift_assignment.shift_assignment import get_employee_shift_timings
 from hrms.hr.utils import (
 	get_distance_between_coordinates,
 	set_geolocation_from_coordinates,
@@ -90,11 +90,25 @@ class EmployeeCheckin(Document):
 
 	@frappe.whitelist()
 	def fetch_shift(self):
-		if not (
-			shift_actual_timings := get_actual_start_end_datetime_of_shift(
-				self.employee, get_datetime(self.time), True
-			)
-		):
+		from hrms.hr.doctype.hrms_attendance_scheduling_policy.hrms_attendance_scheduling_policy import (
+			merged_consecutive_shift_for_checkin,
+			unscheduled_punch_mode,
+		)
+
+		checkin_time = get_datetime(self.time)
+		company = frappe.db.get_value("Employee", self.employee, "company")
+		shift_actual_timings = merged_consecutive_shift_for_checkin(
+			self.employee,
+			company,
+			checkin_time,
+			get_employee_shift_timings(self.employee, checkin_time, True),
+		)
+		if not shift_actual_timings:
+			mode = unscheduled_punch_mode(self.employee, company, checkin_time)
+			if mode in {"不允许打卡", "选择班次打卡"}:
+				frappe.throw(
+					_("当前排班规则不允许直接记录未排班打卡；请先完成班次分配或选择允许直接打卡的规则。")
+				)
 			self.shift = None
 			self.offshift = 1
 			return

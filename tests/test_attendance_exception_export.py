@@ -48,6 +48,7 @@ class AttendanceExceptionExportTest(unittest.TestCase):
 		row = rows[0]
 		self.assertEqual(row["employee_code"], "YG-001")
 		self.assertEqual(row["department"], "生产课")
+		self.assertEqual(row["weekday"], "星期一")
 		self.assertEqual(row["raw_outside_shift_hours"], 0)
 		self.assertEqual(row["overtime_approval_status"], "无申请")
 		self.assertEqual(row["confirmed_overtime_hours"], 0)
@@ -67,13 +68,14 @@ class AttendanceExceptionExportTest(unittest.TestCase):
 		headers = [cell.value for cell in sheet[1]]
 
 		for label in (
-			"员工工号", "姓名", "部门", "异常原因", "班次", "实际打卡上班", "实际打卡下班",
+			"员工工号", "姓名", "部门", "异常日期", "星期几", "异常原因", "班次", "实际打卡上班", "实际打卡下班",
 			"班次外原始时长（小时）", "加班申请状态", "确认计入加班（小时）", "标准工时（小时）",
 			"导出实际出勤（小时）", "有效请假", "平日加班（小时）", "休息日加班（小时）", "节假日加班（小时）",
 		):
 			self.assertIn(label, headers)
-		self.assertEqual(sheet.freeze_panes, "E2")
-		self.assertEqual(sheet.auto_filter.ref, "A1:AE2")
+		self.assertEqual(headers[headers.index("异常日期") + 1], "星期几")
+		self.assertEqual(sheet.freeze_panes, "F2")
+		self.assertEqual(sheet.auto_filter.ref, "A1:AF2")
 
 	def test_exception_export_is_saved_without_watermark_media(self):
 		book = self.module._build_processing_exception_export_workbook([])

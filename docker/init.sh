@@ -84,12 +84,12 @@ configure_web_bind() {
         echo "Invalid HRMS_SITE" >&2
         exit 1
     fi
-    # Explicitly expose the development server to Docker's published port.
-    # Without --host, this Bench version defaults to 127.0.0.1 in the container.
+    # The current Bench serve command does not accept ``--host``. Docker still
+    # publishes port 8000 from the process started by Bench's Procfile.
     if grep -qE '^web:' ./Procfile; then
-        sed -i -E "s|^web:.*$|web: bench --site ${site} serve --port 8000 --host 0.0.0.0 --noreload|" ./Procfile
+        sed -i -E "s|^web:.*$|web: bench --site ${site} serve --port 8000 --noreload|" ./Procfile
     else
-        printf '\nweb: bench --site %s serve --port 8000 --host 0.0.0.0 --noreload\n' "${site}" >> ./Procfile
+        printf '\nweb: bench --site %s serve --port 8000 --noreload\n' "${site}" >> ./Procfile
     fi
 }
 

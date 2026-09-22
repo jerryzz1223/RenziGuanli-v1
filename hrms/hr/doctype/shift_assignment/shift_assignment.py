@@ -50,11 +50,21 @@ class ShiftAssignment(Document):
 		validate_active_employee(self.employee)
 		if self.end_date:
 			self.validate_from_to_dates("start_date", "end_date")
+		from hrms.hr.doctype.hrms_attendance_scheduling_policy.hrms_attendance_scheduling_policy import (
+			validate_shift_assignment_policy,
+		)
+
+		validate_shift_assignment_policy(self)
 		self.validate_overlapping_shifts()
 
 	def on_update_after_submit(self):
 		if self.end_date:
 			self.validate_from_to_dates("start_date", "end_date")
+		from hrms.hr.doctype.hrms_attendance_scheduling_policy.hrms_attendance_scheduling_policy import (
+			validate_shift_assignment_policy,
+		)
+
+		validate_shift_assignment_policy(self)
 		self.validate_overlapping_shifts()
 
 	def on_cancel(self):
@@ -108,7 +118,17 @@ class ShiftAssignment(Document):
 					self.throw_overlap_error(d)
 
 	def validate_same_date_multiple_shifts(self, overlapping_dates):
-		if cint(frappe.db.get_single_value("HR Settings", "allow_multiple_shift_assignments")):
+		from hrms.hr.doctype.hrms_attendance_scheduling_policy.hrms_attendance_scheduling_policy import (
+			policy_allows_multiple_shifts,
+		)
+
+		policy_allows_multiple = policy_allows_multiple_shifts(self.employee, self.company, self.start_date)
+		allow_multiple = (
+			policy_allows_multiple
+			if policy_allows_multiple is not None
+			else cint(frappe.db.get_single_value("HR Settings", "allow_multiple_shift_assignments"))
+		)
+		if allow_multiple:
 			if not self.docstatus:
 				frappe.msgprint(
 					_(

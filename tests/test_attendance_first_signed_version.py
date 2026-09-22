@@ -95,6 +95,40 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(rows[0]["red_apple_amount"], 5)
 		self.assertEqual(rows[0]["special_workday_hours"], 2)
 
+	def test_confirmed_special_hours_override_same_day_derived_from_attendance(self):
+		api = self.api
+		attendance = types.SimpleNamespace(
+			source_type="attendance_draft", company="测试公司", attendance_month="2026-07",
+		)
+		special = types.SimpleNamespace(
+			source_type="special_hours", company="测试公司", attendance_month="2026-07",
+		)
+		api._result_rows = lambda batch, *args, **kwargs: [{
+			"employee_code": "E-001", "employee_name": "张三", "department": "工程课",
+			"eligible_for_downstream": True,
+			"processed_value": {
+				"standard_hours": 176, "actual_attendance_hours": 176,
+				"special_hours": 1, "special_hours_days": [{"day": 1, "hours": 1}],
+			},
+		}] if batch.source_type == "attendance_draft" else [{
+			"employee_code": "E-001", "employee_name": "张三", "department": "工程课",
+			"eligible_for_downstream": True,
+			"processed_value": {
+				"special_hours": 2.5,
+				"special_hours_days": [{"day": 1, "hours": 0.5}, {"day": 2, "hours": 2}],
+			},
+		}]
+		api._special_hours_breakdown = lambda entries, *_args: {
+			"special_workday_hours": sum(entry["hours"] for entry in entries),
+			"special_restday_hours": 0,
+			"special_holiday_hours": 0,
+		}
+
+		rows = api._monthly_final_rows({"attendance_draft": attendance, "special_hours": special})
+
+		self.assertEqual(rows[0]["special_hours_days"], [{"day": 1, "hours": 0.5}, {"day": 2, "hours": 2.0}])
+		self.assertEqual(rows[0]["special_workday_hours"], 2.5)
+
 	def test_workbook_matches_first_signature_layout(self):
 		api = self.api
 		captured = {}

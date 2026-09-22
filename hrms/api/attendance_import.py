@@ -1664,12 +1664,16 @@ def _apply_leave_evidence_to_day_checks(batch_name):
 					matched_invalid.append(leave)
 		valid_hours = sum(flt(leave.leave_hours) for leave in matched_valid)
 		invalid_hours = sum(flt(leave.leave_hours) for leave in matched_invalid)
+		policy = _day_check_hours_policy(day_check)
+		effective_valid_hours = min(flt(day_check.leave_hours) or valid_hours, valid_hours) if valid_hours else 0
 		updates = {
-			"valid_leave_hours": min(flt(day_check.leave_hours) or valid_hours, valid_hours) if valid_hours else 0,
+			# Keep the approval rows as source evidence, but Saturday/Sunday leave
+			# must not re-enter department/monthly counts through the evidence pass.
+			"valid_leave_hours": 0 if policy["is_weekend"] else effective_valid_hours,
 			"invalid_leave_hours": invalid_hours,
 			"valid_leave_summary": "；".join(f"{leave.leave_type}{flt(leave.leave_hours):g}H" for leave in matched_valid[:4]),
 		}
-		if matched_valid and day_check.attendance_result == "异常" and not (day_check.missing_in or day_check.missing_out or day_check.late_count or day_check.early_count or day_check.absent_hours):
+		if matched_valid and not policy["is_weekend"] and day_check.attendance_result == "异常" and not (day_check.missing_in or day_check.missing_out or day_check.late_count or day_check.early_count or day_check.absent_hours):
 			updates["attendance_result"] = "请假"
 		frappe.db.set_value(DAY_CHECK_DOCTYPE, day_check.name, updates)
 
@@ -2056,7 +2060,7 @@ def _build_exception_candidates(day_check):
 	# may create a salary-relevant absence review item.
 	result_text = _cell_text(day_check.attendance_result).strip().lower()
 	explicit_absence = any(token in result_text for token in ("旷工", "缺勤", "未出勤", "absence", "absent", "no show"))
-	if flt(day_check.absent_hours) or (explicit_absence and not day_check.valid_leave_hours):
+	if not policy["is_weekend"] and (flt(day_check.absent_hours) or (explicit_absence and not day_check.valid_leave_hours)):
 		candidates.append(
 			{
 				"exception_type": "旷工",

@@ -47,6 +47,7 @@ IMPORT_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
 PROCESSING_RECORD_DOCTYPE = "HRMS Attendance Processing Record"
 DEPARTMENT_MAPPING_DOCTYPE = "HRMS Attendance Department Mapping"
 SHIFT_RULE_DOCTYPE = "HRMS Attendance Shift Rule"
+SCHEDULING_POLICY_DOCTYPE = "HRMS Attendance Scheduling Policy"
 DAILY_CLOSURE_DOCTYPE = "HRMS Attendance Daily Closure"
 SOURCE_TYPES = ("attendance_draft", "apple_tree", "missing_card")
 FIRST_SIGNED_SOURCE_TYPES = ("attendance_draft", "missing_card")
@@ -150,6 +151,7 @@ PROCESSING_FIELD_LABELS = {
 	"workday_overtime_hours": "工作日加班工时",
 	"restday_overtime_hours": "休息日加班工时",
 	"holiday_overtime_hours": "节假日加班工时",
+	"special_workday_hours": "平日特殊工时",
 	"deep_night_shifts": "深夜班次数",
 	"large_night_shifts": "大夜班次数",
 	"small_night_shifts": "小夜班次数",
@@ -185,8 +187,9 @@ PROCESSING_FIELD_LABELS = {
 
 # The completed attendance-draft dataset mirrors the human-readable monthly
 # attendance summary: one employee per row and one attendance metric per
-# column.  It intentionally excludes special hours, allowance and award data,
-# because those belong to the later confirmed sources rather than this draft.
+# column. It keeps derived special-hours details in the retained daily JSON and
+# monthly-final chain while leaving them out of this compact draft export;
+# confirmed monthly special-hours entries remain the authoritative override.
 ATTENDANCE_DRAFT_RESULT_COLUMNS = (
 	("department", "部门"),
 	("employee_name", "姓名"),
@@ -3512,7 +3515,10 @@ def update_attendance_draft_daily_row(
 ATTENDANCE_SOURCE_TOTAL_REPAIR_FIELDS = ("workday_overtime_hours", "deep_night_shifts")
 
 
-def _attendance_policy_replacement(record, *, attendance_month, employee_directory, exception_policy, shift_rules=None, shift_rule_version=""):
+def _attendance_policy_replacement(
+	record, *, attendance_month, employee_directory, exception_policy,
+	shift_rules=None, shift_rule_version="", source_rows_override=None,
+):
 	"""Recheck retained daily facts without overwriting reviewed monthly totals."""
 	current = _effective_result_values(record)
 	if current.get("signed_final_override"):
@@ -3522,7 +3528,7 @@ def _attendance_policy_replacement(record, *, attendance_month, employee_directo
 	} & set(ATTENDANCE_NUMERIC_FIELDS)
 	if monthly_edits:
 		return None, "该员工已有月度工时人工调整，请逐日核对，避免覆盖已确认数值。"
-	source_rows = _effective_daily_source_rows(record)
+	source_rows = list(source_rows_override) if source_rows_override is not None else _effective_daily_source_rows(record)
 	if not source_rows:
 		return None, "缺少留存的每日来源数据，请重新上传考勤来源。"
 	rebuilt = process_attendance_draft_rows(
@@ -3553,6 +3559,35 @@ def _attendance_policy_replacement(record, *, attendance_month, employee_directo
 	return replacement, ""
 
 
+def _historic_source_rows_by_employee(batch) -> dict[str, list[dict[str, Any]]]:
+	"""Recover retained source rows only from prior batches of the exact same file."""
+	checksum = str(getattr(batch, "source_checksum", "") or "").strip()
+	if not checksum:
+		return {}
+	prior_batches = frappe.get_all(
+		IMPORT_BATCH_DOCTYPE,
+		filters={
+			"name": ["!=", batch.name],
+			"company": batch.company,
+			"attendance_month": batch.attendance_month,
+			"source_type": "attendance_draft",
+			"source_checksum": checksum,
+		},
+		fields=["name"],
+		order_by="creation desc",
+		limit_page_length=10,
+	)
+	rows_by_employee: dict[str, list[dict[str, Any]]] = {}
+	for prior in prior_batches:
+		prior_batch = frappe.get_doc(IMPORT_BATCH_DOCTYPE, prior.name)
+		for record in _result_rows(prior_batch, 0):
+			code = str(record.get("employee_code") or "").strip()
+			source_rows = _effective_daily_source_rows(record)
+			if code and len(source_rows) > len(rows_by_employee.get(code) or []):
+				rows_by_employee[code] = source_rows
+	return rows_by_employee
+
+
 @frappe.whitelist()
 def recheck_attendance_policy(company: str, attendance_month: str, execute: int = 0, preview_token: str = ""):
 	"""Preview/apply current rules to the latest month, with immutable sources and audit."""
@@ -3563,11 +3598,31 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 		frappe.throw(_("尚未上传考勤初稿。"))
 	directory, policy = _employee_directory(company) or None, _attendance_draft_exception_policy()
 	shift_bundle = _attendance_shift_rule_bundle(company)
+	# Older processor versions discarded every first-day-of-next-month row from
+	# the retained per-employee JSON. Re-read the immutable workbook so a real
+	# rest-day punch on that boundary can re-enter the dated exception queue.
+	workbook_rows_by_employee: dict[str, list[dict[str, Any]]] = defaultdict(list)
+	if getattr(batch, "source_file", ""):
+		try:
+			workbook = _load_workbook(batch.source_file)
+		except (FileNotFoundError, OSError):
+			workbook_rows_by_employee.update(_historic_source_rows_by_employee(batch))
+		else:
+			sheet = find_dingtalk_daily_sheet(workbook)
+			if sheet:
+				for source_row in rows_from_dingtalk_daily_sheet(sheet, source_file=batch.source_file):
+					code = str(_attendance_draft_data_quality_value(
+						source_row, "工号", "员工工号", "employee_code",
+					) or "").strip()
+					if code:
+						workbook_rows_by_employee[code].append(source_row)
 	preview, skipped, replacements = [], [], []
 	for record in _result_rows(batch, 0):
+		employee_source_rows = workbook_rows_by_employee.get(str(record.get("employee_code") or "").strip())
 		replacement, reason = _attendance_policy_replacement(
 			record, attendance_month=attendance_month, employee_directory=directory, exception_policy=policy,
 			shift_rules=shift_bundle["rules"], shift_rule_version=shift_bundle["version"],
+			source_rows_override=employee_source_rows,
 		)
 		identity = {key: record.get(key) for key in ("record_id", "employee_code", "employee_name")}
 		if replacement is None:
@@ -4435,7 +4490,7 @@ def list_processing_exceptions(
 
 PROCESSING_EXCEPTION_EXPORT_COLUMNS = (
 	("employee_code", "员工工号", 16), ("employee_name", "姓名", 14), ("department", "部门", 22),
-	("attendance_date", "异常日期", 14), ("source_label", "来源", 14), ("exception_codes", "异常代码", 34),
+	("attendance_date", "异常日期", 14), ("weekday", "星期几", 10), ("source_label", "来源", 14), ("exception_codes", "异常代码", 34),
 	("exception_reason", "异常原因", 34), ("shift", "班次", 24), ("scheduled_start", "计划上班", 14),
 	("scheduled_end", "计划下班", 14), ("clock_in", "实际打卡上班", 16), ("clock_out", "实际打卡下班", 16),
 	("raw_outside_shift_hours", "班次外原始时长（小时）", 18), ("overtime_approval_status", "加班申请状态", 18),
@@ -4446,6 +4501,21 @@ PROCESSING_EXCEPTION_EXPORT_COLUMNS = (
 	("review_status", "处理状态", 14), ("reviewer", "处理人", 20), ("reviewed_on", "处理时间", 20), ("review_note", "处理备注", 34),
 	("approval", "关联审批单", 28), ("source_file", "来源文件", 38), ("source_sheet", "来源工作表", 24), ("source_row", "来源行号", 12),
 )
+
+
+def _exception_export_weekday(value: Any) -> str:
+	"""Return the Chinese weekday matching an exported exception date."""
+	if isinstance(value, datetime):
+		attendance_date = value.date()
+	elif isinstance(value, date):
+		attendance_date = value
+	else:
+		normalized = _daily_attendance_date(value) or str(value or "")[:10]
+		try:
+			attendance_date = date.fromisoformat(normalized)
+		except ValueError:
+			return ""
+	return f"星期{'\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u65e5'[attendance_date.weekday()]}"
 
 
 def _processing_exception_export_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -4465,6 +4535,7 @@ def _processing_exception_export_rows(records: list[dict[str, Any]]) -> list[dic
 				"employee_name": record.get("employee_name") or line.get("employee_name") or "",
 				"department": _display_department(record.get("department") or line.get("department")),
 				"attendance_date": line.get("attendance_date") or "",
+				"weekday": _exception_export_weekday(line.get("attendance_date")),
 				"source_label": record.get("source_label") or SOURCE_LABELS.get(record.get("source_type"), record.get("source_type") or ""),
 				"exception_codes": "、".join(codes),
 				"exception_reason": "、".join(EXCEPTION_LABELS.get(code, code) for code in codes) or record.get("exception_detail") or record.get("exception_message") or "待人工确认",
@@ -4511,7 +4582,7 @@ def _build_processing_exception_export_workbook(rows: list[dict[str, Any]]):
 			cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
 	for index, (_field, _label, width) in enumerate(PROCESSING_EXCEPTION_EXPORT_COLUMNS, start=1):
 		sheet.column_dimensions[get_column_letter(index)].width = width
-	sheet.freeze_panes = "E2"
+	sheet.freeze_panes = "F2"
 	sheet.auto_filter.ref = f"A1:{get_column_letter(len(PROCESSING_EXCEPTION_EXPORT_COLUMNS))}{max(sheet.max_row, 2)}"
 	sheet.sheet_view.showGridLines = False
 	sheet.row_dimensions[1].height = 34
@@ -5118,6 +5189,56 @@ def list_attendance_shift_rules(company: str):
 
 
 @frappe.whitelist()
+def list_attendance_scheduling_policies(company: str):
+	_require_processing_manager()
+	company = _require_company(company)
+	if not frappe.db.exists("DocType", SCHEDULING_POLICY_DOCTYPE):
+		return {"items": [], "installed": False}
+	rows = frappe.get_all(
+		SCHEDULING_POLICY_DOCTYPE,
+		filters={"company": company},
+		fields=["*"],
+		order_by="priority desc, modified desc",
+		limit_page_length=500,
+	)
+	return {"items": [dict(row) for row in rows], "installed": True}
+
+
+@frappe.whitelist()
+def upsert_attendance_scheduling_policy(company: str, policy: str | dict):
+	_require_processing_manager()
+	company = _require_company(company)
+	if not frappe.db.exists("DocType", SCHEDULING_POLICY_DOCTYPE):
+		frappe.throw(_("排班治理规则数据表尚未安装，请先完成站点更新。"))
+	if isinstance(policy, str):
+		policy = _loads(policy, {})
+	if not isinstance(policy, dict):
+		frappe.throw(_("排班治理规则格式不正确。"))
+	policy = frappe._dict(policy)
+	existing = str(policy.name or "").strip()
+	if existing:
+		doc = frappe.get_doc(SCHEDULING_POLICY_DOCTYPE, existing)
+		if doc.company != company:
+			frappe.throw(_("无权修改其他公司的排班治理规则。"))
+	else:
+		doc = frappe.get_doc({"doctype": SCHEDULING_POLICY_DOCTYPE, "company": company})
+	write_fields = (
+		"enabled", "policy_name", "priority", "scope_type", "scope_values", "effective_from", "effective_to",
+		"allow_workday", "max_workday_hours", "allow_restday", "max_restday_hours", "allow_holiday",
+		"max_holiday_hours", "max_daily_hours", "allow_multiple_shifts", "merge_consecutive_shifts",
+		"consecutive_gap_minutes", "past_change_months", "future_change_days", "allow_change_after_checkin",
+		"allow_expired_unscheduled_change", "unscheduled_punch_mode", "remarks",
+	)
+	for field in write_fields:
+		if field in policy:
+			setattr(doc, field, policy.get(field))
+	doc.enabled = cint(policy.get("enabled", 1))
+	doc.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {"name": doc.name, "notice": _("排班治理规则已保存并用于后续班次分配校验。")}
+
+
+@frappe.whitelist()
 def get_complete_attendance_rules(company: str):
 	"""Return every maintainable attendance rule for the unified rule centre."""
 	_require_processing_manager()
@@ -5126,7 +5247,9 @@ def get_complete_attendance_rules(company: str):
 
 	bundle = _attendance_shift_rule_bundle(company)
 	policy_rules = [dict(row) for row in list_attendance_custom_rules(page_length=500)]
+	scheduling_policies = list_attendance_scheduling_policies(company).get("items", [])
 	return {
+		"scheduling_policies": scheduling_policies,
 		"shift_rules": bundle["items"],
 		"shift_rule_version": bundle["version"],
 		"using_builtin_fallback": bundle["rules"] is None,
@@ -5698,6 +5821,20 @@ def _special_hours_entries_with_manual_change(
 	return [{"day": entry_day, "hours": by_day[entry_day]} for entry_day in sorted(by_day)]
 
 
+def _merge_special_hours_entries(base_entries, override_entries) -> list[dict[str, float]]:
+	"""Merge dated special hours, with the confirmed monthly source taking priority."""
+	by_day: dict[int, float] = {}
+	for entries in (base_entries or [], override_entries or []):
+		for entry in entries:
+			if not isinstance(entry, dict):
+				continue
+			day = cint(entry.get("day"))
+			hours = _as_nonnegative_number(entry.get("hours"))
+			if day > 0 and hours is not None:
+				by_day[day] = hours
+	return [{"day": day, "hours": by_day[day]} for day in sorted(by_day)]
+
+
 def _final_calculation(row: dict[str, Any]) -> dict[str, float]:
 	"""Mirror the HR paper-form calculation chain for one monthly employee row."""
 	actual = _as_number(row.get("actual_attendance_hours"))
@@ -5832,6 +5969,11 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = ""):
 			if source_type == "attendance_draft":
 				for field, _label in ATTENDANCE_DRAFT_RESULT_COLUMNS:
 					output[field] = values.get(field, output.get(field, 0))
+				derived_special_entries = values.get("special_hours_days") or []
+				if derived_special_entries:
+					output["special_hours_days"] = _merge_special_hours_entries([], derived_special_entries)
+					output["special_hours"] = sum(_as_number(entry.get("hours")) for entry in output["special_hours_days"])
+					output.update(_special_hours_breakdown(output["special_hours_days"], batch.attendance_month, batch.company))
 				for field in ("green_apple_amount", "red_apple_amount", "housing_allowance", "full_attendance_award", "employee_signature", "review_note", "signed_final_override"):
 					if field in values:
 						output[field] = values.get(field)
@@ -5848,10 +5990,17 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = ""):
 			elif source_type == "special_hours":
 				# The grid supplies a dated value for every entry.  Retain the total
 				# for audit, but pass the rate-specific values to the final calculator.
-				breakdown = _special_hours_breakdown(values.get("special_hours_days"), batch.attendance_month, batch.company)
-				output["special_hours"] = _as_number(output.get("special_hours")) + _as_number(values.get("special_hours"))
+				# A confirmed monthly entry overrides the attendance-derived value for
+				# the same date so the 17:00-18:00 rule can never be paid twice.
+				merged_entries = _merge_special_hours_entries(output.get("special_hours_days"), values.get("special_hours_days"))
+				output["special_hours_days"] = merged_entries
+				output["special_hours"] = (
+					sum(_as_number(entry.get("hours")) for entry in merged_entries)
+					if merged_entries else _as_number(values.get("special_hours"))
+				)
+				breakdown = _special_hours_breakdown(merged_entries, batch.attendance_month, batch.company)
 				for field, amount in breakdown.items():
-					output[field] = _as_number(output.get(field)) + amount
+					output[field] = amount
 			elif source_type in {"housing_allowance", "full_attendance"}:
 				if output.get("signed_final_override"):
 					continue

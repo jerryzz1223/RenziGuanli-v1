@@ -2569,12 +2569,28 @@ class AttendanceImportCenter {
 	}
 
 	render_complete_attendance_rules(data = {}, loading = false, error = "") {
+		const schedulingPolicies = data.scheduling_policies || [];
 		const shiftRules = data.shift_rules || [];
 		const policyRules = data.policy_rules || [];
 		const boundaries = data.system_boundaries || [];
 		const enabledShiftCount = shiftRules.filter((row) => Number(row.enabled)).length;
 		const enabledPolicyCount = policyRules.filter((row) => Number(row.enabled)).length;
 		const field = (label, value, wide = false) => `<div class="hrms-attendance-rule-field ${wide ? "is-wide" : ""}"><span>${this.escape(__(label))}</span><strong>${this.escape(value === 0 ? 0 : value || "--")}</strong></div>`;
+		const schedulingCard = (row) => {
+			const scope = row.scope_type === "全公司" ? "全公司" : row.scope_type + "：" + (row.scope_values || "--");
+			const period = (row.effective_from || "--") + " 至 " + (row.effective_to || "长期");
+			const compliance = [
+				"工作日" + (row.allow_workday ? "可排，上限 " + (row.max_workday_hours || 0) + " 小时" : "不可排"),
+				"休息日" + (row.allow_restday ? "可排，上限 " + (row.max_restday_hours || 0) + " 小时" : "不可排"),
+				"节假日" + (row.allow_holiday ? "可排，上限 " + (row.max_holiday_hours || 0) + " 小时" : "不可排"),
+			].join("\n");
+			return '<article class="hrms-attendance-rule-card" data-scheduling-policy-card>'
+				+ '<header><div><span class="hrms-attendance-status ' + (row.enabled ? "" : "is-pending") + '">' + this.escape(__(row.enabled ? "启用" : "停用")) + '</span><h4>' + this.escape(row.policy_name || "--") + '</h4><small>' + this.escape(__("优先级 {0}", [row.priority || 0])) + '</small></div><div><button class="btn btn-default btn-xs" data-toggle-scheduling-policy="' + this.escape(row.name || "") + '">' + this.escape(__(row.enabled ? "停用" : "启用")) + '</button> <button class="btn btn-primary btn-xs" data-edit-scheduling-policy="' + this.escape(row.name || "") + '">' + this.escape(__("编辑规则")) + '</button></div></header>'
+				+ '<div class="hrms-attendance-rule-group"><h5>' + this.escape(__("适用范围与周期")) + '</h5><div class="hrms-attendance-rule-fields">' + field("适用范围", scope, true) + field("生效周期", period, true) + '</div></div>'
+				+ '<div class="hrms-attendance-rule-group"><h5>' + this.escape(__("排班合规性")) + '</h5><div class="hrms-attendance-rule-fields">' + field("日期类型上限", compliance, true) + field("每日累计上限", (row.max_daily_hours || 0) + " 小时") + field("一天多班", row.allow_multiple_shifts ? "允许" : "不允许") + '</div></div>'
+				+ '<div class="hrms-attendance-rule-group"><h5>' + this.escape(__("连班、改班与打卡")) + '</h5><div class="hrms-attendance-rule-fields">' + field("连班取卡", row.merge_consecutive_shifts ? "合并，最大间隔 " + (row.consecutive_gap_minutes || 0) + " 分钟" : "不合并", true) + field("可修改范围", "过去 " + (row.past_change_months || 0) + " 个月 / 未来 " + (row.future_change_days || 0) + " 天") + field("打卡后改班", row.allow_change_after_checkin ? "允许" : "不允许") + field("未排班打卡", row.unscheduled_punch_mode) + field("备注", row.remarks, true) + '</div></div>'
+				+ '</article>';
+		};
 		const shiftCard = (row) => `<article class="hrms-attendance-rule-card" data-complete-shift-rule data-rule-search-value="${this.escape([row.rule_code, row.rule_name, row.match_tokens, row.suggested_positions].join(" ").toLowerCase())}">
 			<header><div><span class="hrms-attendance-status ${row.enabled ? "" : "is-pending"}">${this.escape(__(row.enabled ? "启用" : "停用"))}</span><h4>${this.escape(row.rule_name || "--")}</h4><small>${this.escape(row.rule_code || "")} · ${this.escape(__("顺序 {0}", [row.sequence || 0]))}</small></div><div><button class="btn btn-default btn-xs" data-toggle-shift-rule="${this.escape(row.name || "")}">${this.escape(__(row.enabled ? "停用" : "启用"))}</button> <button class="btn btn-primary btn-xs" data-edit-shift-rule="${this.escape(row.name || "")}">${this.escape(__("编辑完整规则"))}</button></div></header>
 			<div class="hrms-attendance-rule-group"><h5>${this.escape(__("匹配与生效"))}</h5><div class="hrms-attendance-rule-fields">${field("匹配关键词", row.match_tokens, true)}${field("生效日期", row.effective_from || "立即生效")}${field("建议岗位", row.suggested_positions, true)}</div></div>
@@ -2588,17 +2604,20 @@ class AttendanceImportCenter {
 		return `<div class="hrms-attendance-section hrms-attendance-rule-center"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("完整考勤规则中心"))}</h3><small>${this.escape(__("在同一页面维护真正参与考勤计算的班次规则，以及异常提示和制度规则。所有可计算字段均按固定格式保存并保留版本。"))}</small></div><div class="hrms-attendance-list-actions"><button class="btn btn-default btn-sm" data-import-shift-rules>${this.escape(__(shiftRules.length ? "重新导入排班表" : "首次导入排班表"))}</button> <button class="btn btn-primary btn-sm" data-add-shift-rule>${this.escape(__("新增班次规则"))}</button></div></div>
 		${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}${fallbackNotice}
 		<div class="hrms-attendance-kpi-grid hrms-attendance-rule-kpis"><div class="hrms-attendance-kpi"><strong>${this.escape(shiftRules.length)}</strong><span>${this.escape(__("班次规则"))}</span><small>${this.escape(__("启用 {0} 条", [enabledShiftCount]))}</small></div><div class="hrms-attendance-kpi"><strong>${this.escape(policyRules.length)}</strong><span>${this.escape(__("提示/制度规则"))}</span><small>${this.escape(__("启用 {0} 条", [enabledPolicyCount]))}</small></div><div class="hrms-attendance-kpi"><strong>${this.escape(data.shift_rule_version || "--")}</strong><span>${this.escape(__("当前规则版本"))}</span><small>${this.escape(__("字段变化即产生新版本"))}</small></div><div class="hrms-attendance-kpi"><button class="btn btn-default btn-sm" data-recheck-rules>${this.escape(__("按当前规则校验本月"))}</button><span>${this.escape(this.format_attendance_month(this.attendance_month))}</span><small>${this.escape(__("先预览，再应用"))}</small></div></div>
-		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("一、班次计算规则"))}</h4><small>${this.escape(__("直接影响基本工时、平日/周末/节日加班、可取卡时段、小夜班和大夜班。"))}</small></div><input class="form-control input-sm hrms-attendance-rule-search" data-rule-search placeholder="${this.escape(__("按规则名称、编码、关键词或岗位筛选"))}"></div><div class="hrms-attendance-rule-cards">${loading ? `<div class="text-muted">${this.escape(__("正在读取完整规则..."))}</div>` : shiftRules.length ? shiftRules.map(shiftCard).join("") : `<div class="text-muted">${this.escape(__("暂无公司班次规则。"))}</div>`}</div></section>
-		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("二、异常提示与制度规则"))}</h4><small>${this.escape(__("用于受控异常提示、导入校验或制度说明；自定义公式不会被直接执行。"))}</small></div><div><button class="btn btn-default btn-sm" data-seed-policy-rules>${this.escape(__("初始化规则"))}</button> <button class="btn btn-default btn-sm" data-evaluate-policy-rules>${this.escape(__("运行提示检查"))}</button> <button class="btn btn-primary btn-sm" data-add-policy-rule>${this.escape(__("新增规则"))}</button></div></div><div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr><th>${this.escape(__("状态"))}</th><th>${this.escape(__("规则"))}</th><th>${this.escape(__("分组/类型"))}</th><th>${this.escape(__("使用方式/生效"))}</th><th>${this.escape(__("来源"))}</th><th>${this.escape(__("触发条件/公式"))}</th><th>${this.escape(__("处理结果/备注"))}</th><th>${this.escape(__("操作"))}</th></tr></thead><tbody>${loading ? `<tr><td colspan="8" class="text-muted">${this.escape(__("正在读取规则..."))}</td></tr>` : policyRules.length ? policyRules.map(policyRow).join("") : `<tr><td colspan="8" class="text-muted">${this.escape(__("暂无规则，可点击“初始化规则”或“新增规则”。"))}</td></tr>`}</tbody></table></div></section>
-		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("三、系统处理边界（只读）"))}</h4><small>${this.escape(__("这些是保护来源数据、人工审核和历史版本的系统约束，不允许在页面中随意关闭。"))}</small></div></div><div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr><th>${this.escape(__("边界"))}</th><th>${this.escape(__("判断逻辑"))}</th><th>${this.escape(__("影响"))}</th></tr></thead><tbody>${boundaries.length ? boundaries.map((row) => `<tr><td><strong>${this.escape(row.name)}</strong></td><td>${this.escape(row.logic)}</td><td>${this.escape(row.impact)}</td></tr>`).join("") : `<tr><td colspan="3" class="text-muted">${this.escape(__("正在读取系统边界..."))}</td></tr>`}</tbody></table></div></section></div>`;
+		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("一、排班治理规则"))}</h4><small>${this.escape(__("按公司、部门或公司工号复用，统一限制可排日、工时上限、多班次、连班、改班和未排班打卡。"))}</small></div><button class="btn btn-primary btn-sm" data-add-scheduling-policy>${this.escape(__("新增排班规则"))}</button></div><div class="hrms-attendance-rule-cards">${loading ? `<div class="text-muted">${this.escape(__("正在读取排班治理规则..."))}</div>` : schedulingPolicies.length ? schedulingPolicies.map(schedulingCard).join("") : `<div class="text-muted">${this.escape(__("暂无排班治理规则；新建后会在班次分配保存时进行服务端校验。"))}</div>`}</div></section>
+		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("二、班次计算规则"))}</h4><small>${this.escape(__("直接影响基本工时、平日/周末/节日加班、可取卡时段、小夜班和大夜班。"))}</small></div><input class="form-control input-sm hrms-attendance-rule-search" data-rule-search placeholder="${this.escape(__("按规则名称、编码、关键词或岗位筛选"))}"></div><div class="hrms-attendance-rule-cards">${loading ? `<div class="text-muted">${this.escape(__("正在读取完整规则..."))}</div>` : shiftRules.length ? shiftRules.map(shiftCard).join("") : `<div class="text-muted">${this.escape(__("暂无公司班次规则。"))}</div>`}</div></section>
+		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("三、异常提示与制度规则"))}</h4><small>${this.escape(__("用于受控异常提示、导入校验或制度说明；自定义公式不会被直接执行。"))}</small></div><div><button class="btn btn-default btn-sm" data-seed-policy-rules>${this.escape(__("初始化规则"))}</button> <button class="btn btn-default btn-sm" data-evaluate-policy-rules>${this.escape(__("运行提示检查"))}</button> <button class="btn btn-primary btn-sm" data-add-policy-rule>${this.escape(__("新增规则"))}</button></div></div><div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr><th>${this.escape(__("状态"))}</th><th>${this.escape(__("规则"))}</th><th>${this.escape(__("分组/类型"))}</th><th>${this.escape(__("使用方式/生效"))}</th><th>${this.escape(__("来源"))}</th><th>${this.escape(__("触发条件/公式"))}</th><th>${this.escape(__("处理结果/备注"))}</th><th>${this.escape(__("操作"))}</th></tr></thead><tbody>${loading ? `<tr><td colspan="8" class="text-muted">${this.escape(__("正在读取规则..."))}</td></tr>` : policyRules.length ? policyRules.map(policyRow).join("") : `<tr><td colspan="8" class="text-muted">${this.escape(__("暂无规则，可点击“初始化规则”或“新增规则”。"))}</td></tr>`}</tbody></table></div></section>
+		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("四、系统处理边界（只读）"))}</h4><small>${this.escape(__("这些是保护来源数据、人工审核和历史版本的系统约束，不允许在页面中随意关闭。"))}</small></div></div><div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr><th>${this.escape(__("边界"))}</th><th>${this.escape(__("判断逻辑"))}</th><th>${this.escape(__("影响"))}</th></tr></thead><tbody>${boundaries.length ? boundaries.map((row) => `<tr><td><strong>${this.escape(row.name)}</strong></td><td>${this.escape(row.logic)}</td><td>${this.escape(row.impact)}</td></tr>`).join("") : `<tr><td colspan="3" class="text-muted">${this.escape(__("正在读取系统边界..."))}</td></tr>`}</tbody></table></div></section></div>`;
 	}
 
 	bind_complete_attendance_rule_events(data = {}) {
 		const body = this.body();
+		const schedulingPolicies = data.scheduling_policies || [];
 		const shiftRules = data.shift_rules || [];
 		const policyRules = data.policy_rules || [];
 		body.querySelector("[data-import-shift-rules]")?.addEventListener("click", () => this.open_shift_rule_uploader());
 		body.querySelector("[data-add-shift-rule]")?.addEventListener("click", () => this.open_shift_rule_dialog());
+		body.querySelector("[data-add-scheduling-policy]")?.addEventListener("click", () => this.open_scheduling_policy_dialog());
 		body.querySelector("[data-recheck-rules]")?.addEventListener("click", () => this.recheck_attendance_policy());
 		body.querySelector("[data-add-policy-rule]")?.addEventListener("click", () => this.open_rule_dialog());
 		body.querySelector("[data-seed-policy-rules]")?.addEventListener("click", () => this.seed_attendance_custom_rules());
@@ -2608,6 +2627,17 @@ class AttendanceImportCenter {
 			body.querySelectorAll("[data-complete-shift-rule]").forEach((card) => { card.hidden = Boolean(query) && !card.dataset.ruleSearchValue.includes(query); });
 		});
 		body.querySelectorAll("[data-edit-shift-rule]").forEach((button) => button.addEventListener("click", () => this.open_shift_rule_dialog(shiftRules.find((row) => row.name === button.dataset.editShiftRule) || {})));
+		body.querySelectorAll("[data-edit-scheduling-policy]").forEach((button) => button.addEventListener("click", () => this.open_scheduling_policy_dialog(schedulingPolicies.find((row) => row.name === button.dataset.editSchedulingPolicy) || {})));
+		body.querySelectorAll("[data-toggle-scheduling-policy]").forEach((button) => button.addEventListener("click", () => {
+			const policy = schedulingPolicies.find((row) => row.name === button.dataset.toggleSchedulingPolicy);
+			if (!policy) return;
+			this.call_processing_api("upsert_attendance_scheduling_policy", { company: this.company, policy: { ...policy, enabled: policy.enabled ? 0 : 1 } }, {
+				freeze: true,
+				freeze_message: __("正在更新排班规则状态..."),
+				on_success: () => this.refresh_attendance_rule_view(),
+				on_error: (message) => frappe.msgprint(message),
+			});
+		}));
 		body.querySelectorAll("[data-toggle-shift-rule]").forEach((button) => button.addEventListener("click", () => {
 			const rule = shiftRules.find((row) => row.name === button.dataset.toggleShiftRule);
 			if (!rule) return;
@@ -2621,6 +2651,7 @@ class AttendanceImportCenter {
 	}
 
 	load_attendance_shift_rules() {
+		if (this.active_view === "schedule-management") return this.load_complete_attendance_rules();
 		const body = this.body();
 		body.innerHTML = this.render_attendance_shift_rules({}, true);
 		if (!this.ensure_company()) return;
@@ -2674,6 +2705,67 @@ class AttendanceImportCenter {
 				this.call_processing_api("import_attendance_shift_rules", { company: this.company, file_url: fileUrl, preview_only: 0 }, {
 					freeze: true, freeze_message: __("正在保存班次规则..."),
 					on_success: (result) => { dialog.hide(); frappe.show_alert({ message: result.notice || __("班次规则已导入。"), indicator: "green" }); this.refresh_attendance_rule_view(); },
+					on_error: (message) => frappe.msgprint(message),
+				});
+			},
+		});
+		dialog.show();
+	}
+
+	open_scheduling_policy_dialog(existing = {}) {
+		const dialog = new frappe.ui.Dialog({
+			title: existing.name ? __("编辑排班治理规则") : __("新增排班治理规则"),
+			size: "extra-large",
+			fields: [
+				{ fieldname: "policy_name", fieldtype: "Data", label: __("排班规则名称"), reqd: 1, default: existing.policy_name || "" },
+				{ fieldname: "enabled", fieldtype: "Check", label: __("启用"), default: existing.enabled ?? 1 },
+				{ fieldname: "priority", fieldtype: "Int", label: __("优先级"), default: existing.priority ?? 100, description: __("员工范围优先于部门，部门优先于全公司；同范围再按优先级选择。") },
+				{ fieldtype: "Section Break", label: __("适用范围与周期") },
+				{ fieldname: "scope_type", fieldtype: "Select", label: __("适用范围"), options: "全公司\n部门\n员工", reqd: 1, default: existing.scope_type || "全公司" },
+				{ fieldname: "scope_values", fieldtype: "Small Text", label: __("适用对象"), default: existing.scope_values || "", depends_on: "eval:doc.scope_type!='全公司'", mandatory_depends_on: "eval:doc.scope_type!='全公司'", description: __("部门填写部门名称；员工只填写公司工号。多项用 | 分隔。") },
+				{ fieldname: "effective_from", fieldtype: "Date", label: __("生效开始日"), reqd: 1, default: existing.effective_from || frappe.datetime.get_today() },
+				{ fieldname: "effective_to", fieldtype: "Date", label: __("生效结束日"), default: existing.effective_to || "" },
+				{ fieldtype: "Section Break", label: __("排班合规性") },
+				{ fieldname: "allow_workday", fieldtype: "Check", label: __("工作日可排班"), default: existing.allow_workday ?? 1 },
+				{ fieldname: "max_workday_hours", fieldtype: "Float", label: __("工作日排班上限（小时）"), default: existing.max_workday_hours ?? 24 },
+				{ fieldname: "allow_restday", fieldtype: "Check", label: __("休息日可排班"), default: existing.allow_restday ?? 1 },
+				{ fieldname: "max_restday_hours", fieldtype: "Float", label: __("休息日排班上限（小时）"), default: existing.max_restday_hours ?? 24 },
+				{ fieldname: "allow_holiday", fieldtype: "Check", label: __("节假日可排班"), default: existing.allow_holiday ?? 1 },
+				{ fieldname: "max_holiday_hours", fieldtype: "Float", label: __("节假日排班上限（小时）"), default: existing.max_holiday_hours ?? 24 },
+				{ fieldname: "max_daily_hours", fieldtype: "Float", label: __("每日累计排班上限（小时）"), default: existing.max_daily_hours ?? 24 },
+				{ fieldtype: "Section Break", label: __("一天多班与连班") },
+				{ fieldname: "allow_multiple_shifts", fieldtype: "Check", label: __("允许一天多班次"), default: existing.allow_multiple_shifts || 0 },
+				{ fieldname: "merge_consecutive_shifts", fieldtype: "Check", label: __("连续班次合并取卡"), default: existing.merge_consecutive_shifts || 0, depends_on: "allow_multiple_shifts" },
+				{ fieldname: "consecutive_gap_minutes", fieldtype: "Int", label: __("连班最大间隔（分钟）"), default: existing.consecutive_gap_minutes || 0, depends_on: "merge_consecutive_shifts" },
+				{ fieldtype: "Section Break", label: __("排班修改与未排班打卡") },
+				{ fieldname: "past_change_months", fieldtype: "Int", label: __("可修改过去月数"), default: existing.past_change_months ?? 6 },
+				{ fieldname: "future_change_days", fieldtype: "Int", label: __("可修改未来天数"), default: existing.future_change_days ?? 365 },
+				{ fieldname: "allow_change_after_checkin", fieldtype: "Check", label: __("已有打卡后允许改班"), default: existing.allow_change_after_checkin ?? 1 },
+				{ fieldname: "allow_expired_unscheduled_change", fieldtype: "Check", label: __("逾期未排班允许补排"), default: existing.allow_expired_unscheduled_change ?? 1 },
+				{ fieldname: "unscheduled_punch_mode", fieldtype: "Select", label: __("未排班打卡方式"), options: "不允许打卡\n选择班次打卡\n直接打卡\n选择班次打卡或直接打卡", default: existing.unscheduled_punch_mode || "选择班次打卡或直接打卡" },
+				{ fieldname: "remarks", fieldtype: "Small Text", label: __("备注"), default: existing.remarks || "" },
+			],
+			primary_action_label: __("保存规则"),
+			primary_action: (values) => {
+				if (values.effective_to && values.effective_to < values.effective_from) {
+					frappe.msgprint(__("生效结束日不能早于生效开始日。"));
+					return;
+				}
+				if (values.merge_consecutive_shifts && !values.allow_multiple_shifts) {
+					frappe.msgprint(__("开启连班合并前，必须先允许一天多班次。"));
+					return;
+				}
+				this.call_processing_api("upsert_attendance_scheduling_policy", {
+					company: this.company,
+					policy: { ...existing, ...values },
+				}, {
+					freeze: true,
+					freeze_message: __("正在保存排班治理规则..."),
+					on_success: (data) => {
+						dialog.hide();
+						frappe.show_alert({ message: data.notice || __("排班治理规则已保存。"), indicator: "green" });
+						this.refresh_attendance_rule_view();
+					},
 					on_error: (message) => frappe.msgprint(message),
 				});
 			},

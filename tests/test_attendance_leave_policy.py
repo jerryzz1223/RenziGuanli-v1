@@ -1,6 +1,7 @@
 import ast
 import importlib.util
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -34,7 +35,49 @@ def _legacy_monthly_values():
 	return namespace["_calculate_monthly_values"]
 
 
+def _apply_leave_evidence(fake_frappe):
+	tree = ast.parse(ATTENDANCE_IMPORT_PATH.read_text())
+	function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_apply_leave_evidence_to_day_checks")
+	namespace = {
+		"frappe": fake_frappe,
+		"LEAVE_EVIDENCE_DOCTYPE": "Leave Evidence",
+		"DAY_CHECK_DOCTYPE": "Day Check",
+		"_index_records_by_person": lambda records: records,
+		"_records_for_same_person": lambda _index, _day_check: fake_frappe.leave_rows,
+		"getdate": lambda value: datetime.fromisoformat(str(value)).date(),
+		"flt": lambda value: float(value or 0),
+		"_day_check_hours_policy": lambda day_check: {"is_weekend": datetime.fromisoformat(str(day_check.attendance_date)).date().weekday() >= 5},
+	}
+	exec(compile(ast.Module(body=[function], type_ignores=[]), str(ATTENDANCE_IMPORT_PATH), "exec"), namespace)
+	return namespace["_apply_leave_evidence_to_day_checks"]
+
+
 class AttendanceLeavePolicyTest(unittest.TestCase):
+	def test_weekend_leave_approval_stays_audit_only(self):
+		leave = SimpleNamespace(
+			employee="EMP-1", employee_code="E-001", employee_name="张三",
+			leave_type="事假", leave_start="2026-09-18", leave_end="2026-09-20",
+			leave_hours=8, is_valid_approval=1, approval_no="APP-1",
+		)
+		day_checks = [
+			SimpleNamespace(name="FRI", attendance_date="2026-09-18", leave_hours=8, attendance_result="异常", missing_in=0, missing_out=0, late_count=0, early_count=0, absent_hours=0),
+			SimpleNamespace(name="SAT", attendance_date="2026-09-19", leave_hours=0, attendance_result="异常", missing_in=0, missing_out=0, late_count=0, early_count=0, absent_hours=0),
+			SimpleNamespace(name="SUN", attendance_date="2026-09-20", leave_hours=0, attendance_result="异常", missing_in=0, missing_out=0, late_count=0, early_count=0, absent_hours=0),
+		]
+		updates = {}
+		fake_frappe = SimpleNamespace(
+			leave_rows=[leave],
+			get_all=lambda doctype, **_kwargs: [leave] if doctype == "Leave Evidence" else day_checks,
+			db=SimpleNamespace(set_value=lambda _doctype, name, values: updates.__setitem__(name, values)),
+		)
+		_apply_leave_evidence(fake_frappe)("BATCH-1")
+		self.assertEqual(updates["FRI"]["valid_leave_hours"], 8)
+		self.assertEqual(updates["FRI"]["attendance_result"], "请假")
+		for name in ("SAT", "SUN"):
+			self.assertEqual(updates[name]["valid_leave_hours"], 0)
+			self.assertNotIn("attendance_result", updates[name])
+			self.assertEqual(updates[name]["valid_leave_summary"], "事假8H")
+
 	def test_reunion_leave_days_are_normalized_to_paid_hours_and_prevent_absence(self):
 		processor = _draft_processor()
 		result = processor.process_attendance_draft_rows(

@@ -14,6 +14,7 @@ PROCESSOR_PATH = ROOT / "hrms" / "api" / "attendance_processors" / "attendance_d
 DOCTYPE_DIR = ROOT / "hrms" / "hr" / "doctype" / "hrms_attendance_processing_record"
 DEPARTMENT_MAPPING_DIR = ROOT / "hrms" / "hr" / "doctype" / "hrms_attendance_department_mapping"
 SHIFT_RULE_DIR = ROOT / "hrms" / "hr" / "doctype" / "hrms_attendance_shift_rule"
+SCHEDULING_POLICY_DIR = ROOT / "hrms" / "hr" / "doctype" / "hrms_attendance_scheduling_policy"
 BATCH_JSON = ROOT / "hrms" / "hr" / "doctype" / "hrms_attendance_import_batch" / "hrms_attendance_import_batch.json"
 STATUS_SYNC_PATCH = ROOT / "hrms" / "patches" / "v16_0" / "sync_attendance_import_batch_status_options.py"
 PATCHES_FILE = ROOT / "hrms" / "patches.txt"
@@ -29,6 +30,7 @@ for path in (
 	DOCTYPE_DIR / "hrms_attendance_processing_record.json", DOCTYPE_DIR / "hrms_attendance_processing_record.py",
 	DEPARTMENT_MAPPING_DIR / "hrms_attendance_department_mapping.json", DEPARTMENT_MAPPING_DIR / "hrms_attendance_department_mapping.py",
 	SHIFT_RULE_DIR / "hrms_attendance_shift_rule.json", SHIFT_RULE_DIR / "hrms_attendance_shift_rule.py",
+	SCHEDULING_POLICY_DIR / "hrms_attendance_scheduling_policy.json", SCHEDULING_POLICY_DIR / "hrms_attendance_scheduling_policy.py",
 	STATUS_SYNC_PATCH,
 ):
 	if not path.exists():
@@ -71,8 +73,10 @@ for method in (
 	"get_processing_configuration",
 	"get_complete_attendance_rules",
 	"list_attendance_shift_rules",
+	"list_attendance_scheduling_policies",
 	"import_attendance_shift_rules",
 	"upsert_attendance_shift_rule",
+	"upsert_attendance_scheduling_policy",
 	"list_department_mappings",
 	"upsert_department_mapping",
 	"generate_monthly_final_files",
@@ -375,6 +379,7 @@ for method in (
 	"list_processing_results", "export_processing_result", "get_processing_record", "update_processing_record", "update_special_hours_manual_entry", "review_attendance_draft_daily_exception", "bulk_update_processing_records", "confirm_source_result",
 	"list_processing_exceptions", "list_processing_batches", "list_daily_attendance_records", "reset_attendance_month", "list_manual_adjustments",
 	"get_processing_configuration", "get_complete_attendance_rules", "list_attendance_shift_rules", "import_attendance_shift_rules", "upsert_attendance_shift_rule", "list_department_mappings", "upsert_department_mapping", "generate_monthly_final_files", "get_monthly_final_preview", "update_monthly_final_rows",
+	"list_attendance_scheduling_policies", "upsert_attendance_scheduling_policy",
 ):
 	start = api.find(f"def {method}(")
 	end = api.find("\n@frappe.whitelist()", start + 1)

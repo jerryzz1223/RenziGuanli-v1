@@ -159,6 +159,33 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(result["data_quality"]["supplemental_out_of_month_rows"], 1)
 		self.assertEqual(result["data_quality"]["supplemental_out_of_month_dates"], ["2026-08-01"])
 		self.assertEqual(result["metrics"]["eligible_employee_source_rows"], 1)
+		self.assertEqual(result["metrics"]["boundary_restday_review_rows"], 0)
+
+	def test_next_month_boundary_restday_punch_is_reviewed_without_changing_month_totals(self):
+		rows = [
+			{"姓名": "林欣雨", "工号": "260614", "日期": "26-07-31", "日期类型": "工作日", "实际部门": "总办室", "班次": "间接长白班 08:00-17:00", "标准工时": 8, "实际出勤（小时）": 8, "上班时间": "07:53", "下班时间": "17:05", "source_row": 6691},
+			{"姓名": "林欣雨", "工号": "260614", "日期": "26-08-01", "日期类型": "周末休息日", "实际部门": "总办室", "班次": "休息", "标准工时": 0, "实际出勤（小时）": 8, "上班时间": "07:51", "下班时间": "17:04", "休息日加班（小时）": 0, "关联审批单": "", "source_row": 6692},
+		]
+
+		result = processor.process_attendance_draft_rows(
+			rows, attendance_month="2026-07", source_file="sample.xlsx", source_sheet="每日统计",
+		)
+		row = result["processed_rows"][0]
+		values = row["processed_value"]
+		detail = values["attendance_details"][1]
+
+		self.assertEqual(values["standard_hours"], 8)
+		self.assertEqual(values["actual_attendance_hours"], 8)
+		self.assertEqual(values["restday_overtime_hours"], 0)
+		self.assertEqual(detail["attendance_date"], "2026-08-01")
+		self.assertEqual(detail["source_numbers"]["actual_attendance_hours"], 8)
+		self.assertTrue(detail["restday_clocked_without_overtime"])
+		self.assertIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", row["exception_codes"])
+		self.assertNotIn("ATTENDANCE_MONTH_MISMATCH", row["exception_codes"])
+		self.assertEqual(row["review_status"], "待审核")
+		self.assertFalse(row["eligible_for_downstream"])
+		self.assertEqual(result["data_quality"]["supplemental_out_of_month_rows"], 1)
+		self.assertEqual(result["metrics"]["boundary_restday_review_rows"], 1)
 
 	def test_duplicate_dates_and_identity_conflicts_enter_review_without_loss(self):
 		rows = [
@@ -255,7 +282,9 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 
 		self.assertEqual(row["processed_value"]["late_count"], 1)
 		self.assertEqual(row["processed_value"]["early_count"], 1)
-		self.assertEqual(row["processed_value"]["absence_marker_count"], 2)
+		# The Sunday source marker remains auditable but only the Monday marker
+		# may enter the processed absence totals.
+		self.assertEqual(row["processed_value"]["absence_marker_count"], 1)
 		self.assertEqual(row["processed_value"]["absence_hours"], 10)
 		self.assertTrue({"CLOCK_IN_MISSING", "LATE_MARKED", "EARLY_MARKED", "ABSENCE_MARKED"}.issubset(row["exception_codes"]))
 		self.assertEqual(result["metrics"]["exception_events"], 6)
@@ -299,6 +328,38 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 
 		self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", row["exception_codes"])
 		self.assertEqual(row["review_status"], "无需审核")
+
+	def test_weekend_restday_lunch_window_pair_is_not_overtime_or_an_exception(self):
+		for clock_in, clock_out in (("11:31", "13:29"), ("12:05", "12:47")):
+			with self.subTest(clock_in=clock_in, clock_out=clock_out):
+				row = processor.process_attendance_draft_rows([{
+					"姓名": "张袁震", "工号": "E-001", "日期": "26-06-07", "日期类型": "周末休息日",
+					"实际部门": "连续课", "班次": "生产白班 08:00-16:30", "标准工时": 0,
+					"实际出勤（小时）": 1.5, "上班时间": clock_in, "下班时间": clock_out,
+					"休息日加班（小时）": 1.5, "关联审批单": "", "source_file": "sample.xlsx", "source_row": 3,
+				}], attendance_month="2026-06")["processed_rows"][0]
+
+				values = row["processed_value"]
+				detail = values["attendance_details"][0]
+				self.assertEqual(values["restday_overtime_hours"], 0)
+				self.assertEqual(values["actual_attendance_hours"], 0)
+				self.assertEqual(detail["source_numbers"]["actual_attendance_hours"], 1.5)
+				self.assertTrue(detail["weekend_restday_non_overtime_pair"])
+				self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", row["exception_codes"])
+				self.assertNotIn("ATTENDANCE_HOURS_MISMATCH", row["exception_codes"])
+
+	def test_weekend_restday_lunch_window_requires_both_punches_inside(self):
+		for clock_in, clock_out in (("11:30", "13:29"), ("11:31", "13:30"), ("11:31", "")):
+			with self.subTest(clock_in=clock_in, clock_out=clock_out):
+				row = processor.process_attendance_draft_rows([{
+					"姓名": "张袁震", "工号": "E-001", "日期": "26-06-07", "日期类型": "周末休息日",
+					"实际部门": "工程课", "班次": "休息", "上班时间": clock_in, "下班时间": clock_out,
+					"休息日加班（小时）": 0, "关联审批单": "", "source_file": "sample.xlsx", "source_row": 3,
+				}], attendance_month="2026-06")["processed_rows"][0]
+
+				detail = row["processed_value"]["attendance_details"][0]
+				self.assertFalse(detail["weekend_restday_non_overtime_pair"])
+				self.assertIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", row["exception_codes"])
 
 	def test_early_departure_with_leave_evidence_does_not_create_absence_hours(self):
 		rows = [{
@@ -484,7 +545,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", row["exception_codes"])
 		self.assertEqual(row["review_status"], "无需审核")
 
-	def test_production_white_uses_dingtalk_hours_and_requires_approval_after_20(self):
+	def test_production_white_uses_dingtalk_hours_without_approval_after_20(self):
 		base = {
 			"姓名": "张付俊", "工号": "2112", "日期": "26-07-01", "日期类型": "工作日",
 			"实际部门": "生产课", "班次": "生产白班 08:00-16:30", "标准工时": 8,
@@ -492,14 +553,14 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 			"关联审批单": "", "source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 2853,
 		}
 
-		for clock_out, dingtalk_hours, expected_excess_minutes, expected_exception in (
-			("19:00", 2, 0, False),
-			("20:00", 3, 0, False),
-			("20:04", 3, 4, False),
-			("20:29", 3, 29, False),
-			("20:30", 3, 30, False),
-			("20:31", 3, 31, True),
-			("21:00", 3, 60, True),
+		for clock_out, dingtalk_hours, expected_excess_minutes in (
+			("19:00", 2, 0),
+			("20:00", 3, 0),
+			("20:04", 3, 4),
+			("20:29", 3, 29),
+			("20:30", 3, 30),
+			("20:31", 3, 31),
+			("21:00", 3, 60),
 		):
 			with self.subTest(clock_out=clock_out):
 				row = processor.process_attendance_draft_rows([
@@ -511,9 +572,8 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 				self.assertEqual(values["workday_overtime_hours"], dingtalk_hours)
 				self.assertEqual(detail["confirmed_overtime_hours"], dingtalk_hours)
 				self.assertEqual(detail["schedule_auto_excess_minutes"], expected_excess_minutes)
-				self.assertEqual(
-					"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED" in row["exception_codes"], expected_exception,
-				)
+				self.assertEqual(values["special_workday_hours"], 0)
+				self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", row["exception_codes"])
 
 		approved = processor.process_attendance_draft_rows([{
 			**base, "下班时间": "21:00", "工作日加班（小时）": 3,
@@ -695,7 +755,6 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 
 	def test_schedule_rows_requiring_an_application_do_not_auto_generate_workday_hours(self):
 		for shift, clock_out in (
-			("间接人员 08:00-17:00", "18:01"),
 			("药水分析组 10:00-20:00", "22:01"),
 			("生管仓库 06:30-15:30", "17:01"),
 		):
@@ -708,6 +767,66 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 				}], attendance_month="2026-07")["processed_rows"][0]
 				self.assertEqual(row["processed_value"]["workday_overtime_hours"], 0)
 				self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", row["exception_codes"])
+
+	def test_indirect_staff_17_to_18_is_unpaid_and_source_overtime_is_authoritative(self):
+		base = {
+			"姓名": "张三", "工号": "E-001", "日期": "26-07-01", "日期类型": "工作日",
+			"实际部门": "工程课", "班次": "间接人员 08:00-17:00", "标准工时": 8,
+			"实际出勤（小时）": 8, "上班时间": "08:00", "工作日加班（小时）": 0,
+			"关联审批单": "", "source_file": "sample.xlsx", "source_row": 3,
+		}
+		for clock_out, source_overtime, expected_overtime, expected_exception in (
+			("17:00", 0, 0, False),
+			("17:29", 0, 0, False),
+			("17:30", 0, 0, False),
+			("17:59", 0, 0, False),
+			("18:00", 0, 0, False),
+			("18:30", 0, 0, False),
+			("18:31", 0, 0, True),
+			("20:00", 2, 2, False),
+		):
+			with self.subTest(clock_out=clock_out):
+				row = processor.process_attendance_draft_rows([
+					{**base, "下班时间": clock_out, "工作日加班（小时）": source_overtime},
+				], attendance_month="2026-07")["processed_rows"][0]
+				values = row["processed_value"]
+				self.assertEqual(values["special_workday_hours"], 0)
+				self.assertEqual(values["workday_overtime_hours"], expected_overtime)
+				self.assertEqual(
+					"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED" in row["exception_codes"], expected_exception,
+				)
+				self.assertEqual(values["special_hours_days"], [])
+				self.assertEqual(values["attendance_details"][0]["overtime_approval_status"], "原表已判定")
+
+		configured = processor.process_attendance_draft_rows([
+			{**base, "下班时间": "18:00"},
+		], attendance_month="2026-07", shift_rules=[{
+			"name": "公司间接人员", "rule_code": "SHIFT-006", "tokens": ("间接人员",),
+			"workday_hours": "0", "workday_auto": False, "restday_auto": False,
+			"basic_time": "08:00-17:00", "extended_shift_rule": "加班单；17:00-18:00特殊工时",
+		}])["processed_rows"][0]
+		self.assertEqual(configured["processed_value"]["special_workday_hours"], 0)
+		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", configured["exception_codes"])
+
+	def test_indirect_long_day_outside_shift_exception_depends_on_workday_overtime_hours(self):
+		base = {
+			"姓名": "张三", "工号": "E-001", "日期": "26-07-01", "日期类型": "工作日",
+			"实际部门": "工程课", "标准工时": 8, "实际出勤（小时）": 8,
+			"上班时间": "08:00", "下班时间": "19:00", "关联审批单": "",
+			"source_file": "sample.xlsx", "source_row": 3,
+		}
+		for shift in ("间接长白班 08:00-17:00", "中班-间接长白班 08:00-17:00"):
+			with self.subTest(shift=shift):
+				missing = processor.process_attendance_draft_rows([
+					{**base, "班次": shift, "工作日加班（小时）": 0},
+				], attendance_month="2026-07")["processed_rows"][0]
+				recorded = processor.process_attendance_draft_rows([
+					{**base, "班次": shift, "工作日加班（小时）": 2},
+				], attendance_month="2026-07")["processed_rows"][0]
+
+				self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", missing["exception_codes"])
+				self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", recorded["exception_codes"])
+				self.assertEqual(recorded["processed_value"]["workday_overtime_hours"], 2)
 
 	def test_middle_shift_weekend_still_requires_an_overtime_application(self):
 		row = processor.process_attendance_draft_rows([{
@@ -750,7 +869,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertAlmostEqual(within_tolerance["processed_value"]["attendance_details"][0]["raw_outside_shift_hours"], 7 / 60, places=2)
 		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", within_tolerance["exception_codes"])
 
-		for clock_in, clock_out, expected_exception in (("07:30", "17:00", False), ("07:29", "17:31", True)):
+		for clock_in, clock_out, expected_exception in (("07:30", "17:00", False), ("07:29", "17:31", False)):
 			with self.subTest(clock_in=clock_in, clock_out=clock_out):
 				row = processor.process_attendance_draft_rows([
 					{**base, "上班时间": clock_in, "下班时间": clock_out}
@@ -786,7 +905,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(result["data_quality"]["employment_scope_excluded_rows"], 2)
 		self.assertEqual(row["processed_value"]["employment_scope_summary"], {"in_scope_rows": 1, "out_of_scope_rows": 2, "unknown_scope_rows": 0})
 
-	def test_outside_employment_rows_do_not_create_hours_late_absence_or_missing_punch_exceptions(self):
+	def test_employee_joining_after_attendance_month_is_removed_from_processed_results(self):
 		rows = [{
 			"姓名": "王涛", "工号": "E-009", "日期": "26-07-08", "日期类型": "工作日", "实际部门": "工程课",
 			"班次": "", "标准工时": 8, "实际出勤（小时）": 0, "上班缺卡": 1, "下班缺卡": 1,
@@ -795,23 +914,29 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		}]
 		roster = [{"employee_code": "E-009", "employee_name": "王涛", "department": "工程课", "date_of_joining": "2026-09-01"}]
 
-		row = processor.process_attendance_draft_rows(
+		result = processor.process_attendance_draft_rows(
 			rows, attendance_month="2026-07", employee_directory=roster,
-		)["processed_rows"][0]
-		values = row["processed_value"]
+		)
 
-		self.assertEqual(row["exception_codes"], [])
-		self.assertEqual(row["exception_events"], [])
-		self.assertEqual(row["review_status"], "无需审核")
-		self.assertFalse(row["eligible_for_downstream"])
-		self.assertEqual(values["attendance_population_status"], "非本月在职")
-		self.assertEqual(values["standard_hours"], 0)
-		self.assertEqual(values["actual_attendance_hours"], 0)
-		self.assertEqual(values["absence_hours"], 0)
-		self.assertEqual(values["clock_in_missing_count"], 0)
-		self.assertEqual(values["attendance_details"][0]["employment_scope"], "out_of_scope")
-		self.assertEqual(values["attendance_details"][0]["source_numbers"]["standard_hours"], 8)
-		self.assertEqual(row["data_quality_events"][0]["code"], "BLANK_SHIFT_OUTSIDE_EMPLOYMENT")
+		self.assertEqual(result["processed_rows"], [])
+		self.assertEqual(result["metrics"]["processed_rows"], 0)
+		self.assertEqual(result["metrics"]["eligible_employee_source_rows"], 0)
+		self.assertEqual(result["metrics"]["excluded_future_joining_rows"], 1)
+		self.assertEqual(result["data_quality"]["excluded_future_joining_rows"], 1)
+
+	def test_employee_joining_on_last_day_of_attendance_month_is_retained(self):
+		rows = [{
+			"姓名": "王涛", "工号": "E-009", "日期": "26-07-31", "日期类型": "工作日", "实际部门": "工程课",
+			"班次": "白班 08:00-17:00", "标准工时": 8, "实际出勤（小时）": 8, "source_row": 716,
+		}]
+		roster = [{"employee_code": "E-009", "employee_name": "王涛", "department": "工程课", "date_of_joining": "2026-07-31"}]
+
+		result = processor.process_attendance_draft_rows(
+			rows, attendance_month="2026-07", employee_directory=roster,
+		)
+
+		self.assertEqual(len(result["processed_rows"]), 1)
+		self.assertEqual(result["metrics"]["excluded_future_joining_rows"], 0)
 
 	def test_unknown_employment_dates_do_not_silently_suppress_real_hours_mismatch(self):
 		row = processor.process_attendance_draft_rows([{
@@ -961,18 +1086,18 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		yang_bo = next(row for row in result["processed_rows"] if row["employee_code"] == "946")
 		self.assertEqual(yang_bo["processed_value"]["standard_hours"], 168)
 		self.assertEqual(yang_bo["processed_value"]["actual_attendance_hours"], 156.5)
-		self.assertEqual(yang_bo["processed_value"]["workday_overtime_hours"], 18.5)
+		self.assertEqual(yang_bo["processed_value"]["workday_overtime_hours"], 28)
 		self.assertEqual(sum(item["raw_workday_overtime_hours"] for item in yang_bo["processed_value"]["attendance_details"]), 28)
-		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", yang_bo["exception_codes"])
+		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", yang_bo["exception_codes"])
 		self.assertEqual(yang_bo["processed_value"]["restday_overtime_hours"], 9)
 		self.assertEqual(yang_bo["processed_value"]["annual_leave_hours"], 8)
 		# Daily facts remain visible. Rows without a recoverable scheduled start/end
 		# now stay pending instead of guessing a cross-day or missing-card schedule.
 		self.assertGreater(result["metrics"]["exception_events"], 0)
-		# Morning leave approvals cover ten apparent late punches across six
-		# employees, so those employees no longer remain in the late queue.
-		self.assertEqual(result["metrics"]["eligible_rows"], 159)
-		self.assertEqual(result["metrics"]["exception_rows"], 35)
+		# Morning leave approvals, the indirect-staff 17:00-18:00 unpaid interval,
+		# and source-judged overtime keep false positives out of the review queue.
+		self.assertEqual(result["metrics"]["eligible_rows"], 160)
+		self.assertEqual(result["metrics"]["exception_rows"], 34)
 
 
 if __name__ == "__main__":

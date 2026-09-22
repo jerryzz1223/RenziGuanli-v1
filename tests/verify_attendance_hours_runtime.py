@@ -30,9 +30,9 @@ def main():
 		):
 			day = SimpleNamespace(attendance_date="2026-09-18", standard_hours=8, actual_attendance_hours=actual, personal_leave_hours=personal, sick_leave_hours=sick, reunion_leave_hours=reunion, rest_leave_hours=rest, absent_hours=absence)
 			assert legacy._day_check_hours_policy(day)["hours_mismatch"] == mismatch
-		weekend = SimpleNamespace(attendance_date="2026-09-19", standard_hours=8, actual_attendance_hours=8, sick_leave_hours=8, rest_leave_hours=8, absent_hours=0, late_count=1, early_count=1, missing_in=0, missing_out=0)
+		weekend = SimpleNamespace(attendance_date="2026-09-19", standard_hours=8, actual_attendance_hours=0, sick_leave_hours=8, rest_leave_hours=8, absent_hours=8, late_count=1, early_count=1, missing_in=0, missing_out=0)
 		legacy._apply_day_check_hours_policy(weekend)
-		assert (weekend.sick_leave_hours, weekend.rest_leave_hours, weekend.late_count, weekend.early_count) == (0, 0, 0, 0)
+		assert (weekend.sick_leave_hours, weekend.rest_leave_hours, weekend.absent_hours, weekend.late_count, weekend.early_count) == (0, 0, 0, 0, 0)
 		preview = api.recheck_attendance_policy(company, month)
 		with patch.object(frappe.db, "commit", side_effect=AssertionError("preview must not commit")):
 			assert api.recheck_attendance_policy(company, month)["preview_token"] == preview["preview_token"]

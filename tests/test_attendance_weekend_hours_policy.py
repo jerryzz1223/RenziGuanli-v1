@@ -36,11 +36,41 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 				self.assertEqual(row["processed_value"]["absence_hours"], 0)
 				self.assertEqual(row["original_value"]["rows"][0]["迟到次数"], 1)
 
-	def test_weekend_sick_and_rest_excluded_but_other_leave_retained(self):
-		row = self.process(**{"日期": "2026-09-19", "病假(小时)": 4, "排休(小时)": 4, "事假(小时)": 1})
-		values = row["processed_value"]
-		self.assertEqual((values["sick_leave_hours"], values["rest_arrangement_hours"], values["leave_hours"]), (0, 0, 1))
-		self.assertEqual(values["attendance_details"][0]["excluded_leave_hours"], {"病假": 4, "排休": 4})
+	def test_calendar_weekend_schedule_without_work_never_becomes_absence(self):
+		for day in ("2026-09-19", "2026-09-20"):
+			with self.subTest(day=day):
+				row = self.process(**{
+					"日期": day, "日期类型": "周末排班", "实际出勤": 0,
+					"旷工": 1, "旷工(小时)": 8,
+				})
+				values = row["processed_value"]
+				self.assertEqual(values["absence_marker_count"], 0)
+				self.assertEqual(values["absence_hours"], 0)
+				self.assertNotIn("ABSENCE_MARKED", row["exception_codes"])
+				detail = values["attendance_details"][0]
+				self.assertEqual(detail["source_numbers"]["absence_marker_count"], 1)
+				self.assertEqual(detail["source_numbers"]["absence_hours"], 8)
+
+	def test_saturday_and_sunday_exclude_every_leave_type_but_keep_source_audit(self):
+		leave_values = {
+			"事假(小时)": 1, "病假(小时)": 2, "特休(小时)": 3,
+			"工伤(小时)": 4, "团圆假(小时)": 5, "排休(小时)": 6,
+			"丧假(小时)": 7, "婚假(小时)": 8, "公假(小时)": 9,
+			"产假(小时)": 10,
+		}
+		expected_excluded = {
+			"事假": 1, "病假": 2, "特休": 3, "工伤": 4, "团圆假": 5,
+			"排休": 6, "丧假": 7, "婚假": 8, "公假": 9, "产假": 10,
+		}
+		for day in ("2026-09-19", "2026-09-20"):
+			with self.subTest(day=day):
+				row = self.process(**{"日期": day, **leave_values})
+				values = row["processed_value"]
+				self.assertEqual(values["leave_hours"], 0)
+				self.assertTrue(all(values[field] == 0 for field in processor.LEAVE_FIELDS))
+				detail = values["attendance_details"][0]
+				self.assertEqual(detail["excluded_leave_hours"], expected_excluded)
+				self.assertEqual(detail["source_numbers"]["personal_leave_hours"], 1)
 		weekday = self.process(**{"病假(小时)": 4, "排休(小时)": 4})
 		self.assertEqual(weekday["processed_value"]["leave_hours"], 8)
 
