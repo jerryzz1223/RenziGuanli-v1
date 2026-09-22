@@ -84,12 +84,12 @@ configure_web_bind() {
         echo "Invalid HRMS_SITE" >&2
         exit 1
     fi
-    # This Frappe version binds the published service on container interfaces;
-    # its `bench serve` command does not support --host.
+    # Explicitly expose the development server to Docker's published port.
+    # Without --host, this Bench version defaults to 127.0.0.1 in the container.
     if grep -qE '^web:' ./Procfile; then
-        sed -i -E "s|^web:.*$|web: bench --site ${site} serve --port 8000 --noreload|" ./Procfile
+        sed -i -E "s|^web:.*$|web: bench --site ${site} serve --port 8000 --host 0.0.0.0 --noreload|" ./Procfile
     else
-        printf '\nweb: bench --site %s serve --port 8000 --noreload\n' "${site}" >> ./Procfile
+        printf '\nweb: bench --site %s serve --port 8000 --host 0.0.0.0 --noreload\n' "${site}" >> ./Procfile
     fi
 }
 

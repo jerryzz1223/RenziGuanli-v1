@@ -227,6 +227,39 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(bundle["rules"], [])
 		self.assertFalse(bundle["version"].startswith("builtin-"))
 
+	def test_complete_rule_center_returns_shift_policy_and_system_rules(self):
+		api = self.api
+		fake_import = types.ModuleType("hrms.api.attendance_import")
+		fake_import.list_attendance_custom_rules = lambda page_length=0: [{
+			"rule_code": "ATT-LATE-30", "rule_name": "迟到提示", "enabled": 1,
+		}]
+		old_import = sys.modules.get("hrms.api.attendance_import")
+		old_bundle = api._attendance_shift_rule_bundle
+		old_permission = api._require_processing_manager
+		old_company = api._require_company
+		try:
+			sys.modules["hrms.api.attendance_import"] = fake_import
+			api._attendance_shift_rule_bundle = lambda company: {
+				"items": [{"rule_code": "SHIFT-001", "rule_name": "生产白班"}],
+				"rules": [{"rule_code": "SHIFT-001"}], "version": "rules-v1",
+			}
+			api._require_processing_manager = lambda: None
+			api._require_company = lambda company: company
+			result = api.get_complete_attendance_rules("永新")
+		finally:
+			api._attendance_shift_rule_bundle = old_bundle
+			api._require_processing_manager = old_permission
+			api._require_company = old_company
+			if old_import is None:
+				del sys.modules["hrms.api.attendance_import"]
+			else:
+				sys.modules["hrms.api.attendance_import"] = old_import
+
+		self.assertEqual(result["shift_rule_version"], "rules-v1")
+		self.assertEqual(result["shift_rules"][0]["rule_code"], "SHIFT-001")
+		self.assertEqual(result["policy_rules"][0]["rule_code"], "ATT-LATE-30")
+		self.assertEqual(len(result["system_boundaries"]), 4)
+
 
 if __name__ == "__main__":
 	unittest.main()

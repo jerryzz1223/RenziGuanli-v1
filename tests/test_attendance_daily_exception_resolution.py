@@ -119,6 +119,28 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 		self.assertEqual(result["exception_codes"], [])
 		self.assertEqual(self.module._attendance_draft_queue_rollup(result["exception_codes"], "已通过"), "已通过")
 
+	def test_manual_adjustment_ledger_only_returns_real_value_changes(self):
+		events = [
+			{"field_name": "__attendance_policy_recheck__", "old_value": {"hours": 0}, "new_value": {"hours": 8}, "reviewed_on": "2026-09-22T09:00:00"},
+			{"field_name": "__source_parser_repair__", "old_value": {"hours": 0}, "new_value": {"hours": 8}, "reviewed_on": "2026-09-22T09:01:00"},
+			{"field_name": "__review_decision__", "old_value": {"hours": 8}, "new_value": {"hours": 8}, "reviewed_on": "2026-09-22T09:02:00"},
+			{"field_name": "__daily_exception_decision__:10:RESTDAY_CLOCKED_WITHOUT_OVERTIME", "old_value": {"decision": "待处理"}, "new_value": {"decision": "已处理"}, "reviewed_on": "2026-09-22T09:03:00"},
+			{"field_name": "special_hours_days:15", "old_value": {"day": 15, "hours": 0}, "new_value": {"day": 15, "hours": 6}, "reviewed_on": "2026-09-22T10:00:00"},
+			{"field_name": "__daily_row__:99", "old_value": {"annual_leave_hours": 0}, "new_value": {"annual_leave_hours": 6}, "attendance_date": "2026-07-16", "reviewed_on": "2026-09-22T11:00:00"},
+		]
+		record = SimpleNamespace(
+			name="REC-1", employee_code="2081", employee_name="李旭", source_type="attendance_draft",
+			review_history_json=json.dumps(events, ensure_ascii=False),
+		)
+		with patch.object(self.module, "_require_processing_manager", return_value=None), \
+			patch.object(self.module, "_require_company", side_effect=lambda value: value), \
+			patch.object(self.module, "_require_month", side_effect=lambda value: value), \
+			patch.object(self.module.frappe, "get_all", return_value=[record]):
+			result = self.module.list_manual_adjustments("TEST", "2026-07")
+
+		self.assertEqual([item["field_name"] for item in result["items"]], ["__daily_row__:99", "special_hours_days:15"])
+		self.assertEqual([item["attendance_date"] for item in result["items"]], ["2026-07-16", "2026-07-15"])
+
 	def test_single_daily_edit_preserves_unedited_sibling_exception_line(self):
 		old_line = {"attendance_date": "2026-07-02", "source_row": 11, "exception_codes": ["WORKDAY_OUTSIDE_SHIFT_UNAPPROVED"]}
 		rebuilt = {
@@ -186,7 +208,9 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 			before = m._serialize_record(doc.as_dict())
 			result = m.update_attendance_draft_daily_row("C", "2026-07", "R", 10, {"休息日加班（小时）": 3}, reason="补录", source_file="A.xlsx", source_sheet="每日统计", attendance_date="2026-07-04")
 			reopened = m._serialize_record(doc.as_dict())
-			self.assertEqual(result["daily_exception_lines"], before["daily_exception_lines"][1:])
+			self.assertEqual([line["attendance_date"] for line in result["daily_exception_lines"]], ["2026-07-04", "2026-07-11", "2026-07-25"])
+			self.assertEqual(result["daily_exception_lines"][0]["review_status"], "已处理异常")
+			self.assertEqual([line["attendance_date"] for line in result["daily_pending_exception_lines"]], ["2026-07-11", "2026-07-25"])
 			self.assertEqual(reopened["daily_exception_lines"], result["daily_exception_lines"])
 			self.assertEqual(reopened["review_status"], "待审核")
 			values = m._effective_result_values(reopened)
@@ -197,29 +221,45 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 			self.assertEqual(len(reopened["review_history"]), 1)
 			# Saving another card keeps the remaining one and both explicit edits.
 			result2 = m.update_attendance_draft_daily_row("C", "2026-07", "R", 12, {"休息日加班（小时）": 2}, reason="补录", source_file="A.xlsx", source_sheet="每日统计", attendance_date="2026-07-25")
-			self.assertEqual(result2["daily_exception_lines"], before["daily_exception_lines"][1:2])
+			self.assertEqual([line["attendance_date"] for line in result2["daily_exception_lines"]], ["2026-07-04", "2026-07-11", "2026-07-25"])
+			self.assertEqual([line["attendance_date"] for line in result2["daily_pending_exception_lines"]], ["2026-07-11"])
 			self.assertEqual(m._effective_result_values(result2)["restday_overtime_hours"], 5)
 			self.assertEqual(len(result2["review_history"]), 2)
 			# A decision-only card also must not run a month-wide recalculation.
 			with patch.object(m, "process_attendance_draft_rows", side_effect=AssertionError("unexpected month rebuild")):
 				result3 = m.review_attendance_draft_daily_exception("C", "2026-07", "R", 11, RESTDAY_CODE, reason="核对不计加班", source_file="A.xlsx", source_sheet="每日统计", attendance_date="2026-07-11")
-			self.assertEqual(result3["daily_exception_lines"][0]["exception_codes"], [CLOCK_IN_CODE])
+			pending_result3 = next(line for line in result3["daily_pending_exception_lines"] if line["attendance_date"] == "2026-07-11")
+			self.assertEqual(pending_result3["exception_codes"], [CLOCK_IN_CODE])
 			self.assertEqual(m._effective_result_values(result3)["restday_overtime_hours"], 5)
 			self.assertEqual(m._effective_result_values(result3)["workday_overtime_hours"], 123)
 
 	def test_queue_focus_returns_employee_page_without_changing_filter(self):
 		m = self.module
-		rows = [{"record_id": f"R{index}", "import_batch": "B", "employee_code": f"{index:04}",
-			"source_type": "attendance_draft", "daily_exception_lines": [{"source_row": index}],
+		rows = [{"name": f"R{index}", "import_batch": "B", "employee_code": f"{index:04}",
+			"employee_name": f"员工{index}", "department": "生产课" if index % 2 else "工程课",
+			"source_type": "attendance_draft", "daily_exception_lines": [{"source_row": index, "exception_codes": ["LATE_MARKED" if index % 2 else RESTDAY_CODE]}],
 			"exception_codes": [RESTDAY_CODE]} for index in range(25)]
+		rows[1]["daily_exception_lines"].append({"source_row": 101, "exception_codes": ["WORKDAY_OUTSIDE_SHIFT_UNAPPROVED"]})
+		serialize_calls = []
+		def serialize(row, *_args, hydrate_daily_details=True, **_kwargs):
+			serialize_calls.append(hydrate_daily_details)
+			result = dict(row)
+			result["record_id"] = result.pop("name", result.get("record_id", ""))
+			return result
 		with patch.multiple(m, _require_processing_manager=lambda: None, _require_company=lambda value: value,
-			_latest_batch=lambda *args: SimpleNamespace(name="B"), _serialize_record=lambda row, *_args: row), patch.object(m.frappe, "get_all", return_value=rows):
+			_latest_batch=lambda *args: SimpleNamespace(name="B"), _serialize_record=serialize), patch.object(m.frappe, "get_all", return_value=rows):
 			result = m.list_processing_exceptions("C", "2026-07", page_length=20, focus_record_id="R24")
 			self.assertEqual(result["page_start"], 20)
 			self.assertIn("R24", [row["record_id"] for row in result["review_rows"]])
 			self.assertEqual(result["filtered_pending_count"], 25)
+			self.assertEqual(serialize_calls.count(False), 25)
+			self.assertEqual(serialize_calls.count(True), 5)
 			filtered = m.list_processing_exceptions("C", "2026-07", employee_code="0001", focus_record_id="R24")
 			self.assertEqual([row["record_id"] for row in filtered["review_rows"]], ["R1"])
+			late = m.list_processing_exceptions("C", "2026-07", department="生产", exception_code="LATE_MARKED")
+			self.assertEqual(late["filtered_exception_count"], 12)
+			self.assertEqual(late["available_departments"], ["工程课", "生产课"])
+			self.assertTrue(all(len(row["daily_exception_lines"]) == 1 and row["daily_exception_lines"][0]["exception_codes"] == ["LATE_MARKED"] for row in late["review_rows"]))
 
 	def test_same_row_number_in_two_sources_resolves_only_exact_exception(self):
 		lines = [
@@ -282,6 +322,53 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 		ordered = sorted(rows, key=self.module._processing_exception_sort_key)
 
 		self.assertEqual([row["record_id"] for row in ordered], ["pending-day", "reviewed-day"])
+
+	def test_lightweight_queue_serialization_skips_daily_detail_replay(self):
+		record = {
+			"name": "R", "company": "C", "source_type": "attendance_draft",
+			"processed_value_json": "{}", "original_value_json": "{}",
+			"proposed_value_json": json.dumps({"exception_lines": [{
+				"attendance_date": "2026-07-03", "source_row": 10,
+				"exception_codes": ["LATE_MARKED"],
+			}]}),
+			"confirmed_value_json": "null", "exception_codes": json.dumps(["LATE_MARKED"]),
+			"review_history_json": "[]", "department": "", "exception_message": "",
+		}
+		with patch.object(self.module, "_restore_daily_exception_lines_from_source", side_effect=AssertionError("unexpected detail replay")):
+			result = self.module._serialize_record(record, "rules-v1", hydrate_daily_details=False)
+		self.assertEqual(result["daily_exception_lines"][0]["attendance_date"], "2026-07-03")
+		self.assertNotIn("standard_hours", result["daily_exception_lines"][0])
+
+	def test_exception_snapshot_page_reads_only_requested_twenty_records(self):
+		m = self.module
+		rows = [{
+			"name": f"R{index}", "import_batch": "B", "source_type": "attendance_draft",
+			"daily_exception_lines": [{"source_row": index, "exception_codes": [RESTDAY_CODE]}],
+			"exception_codes": [RESTDAY_CODE],
+		} for index in range(114)]
+		requested_ids = [f"R{index}" for index in range(60, 80)]
+		serialize_calls = []
+		def serialize(row, *_args, **_kwargs):
+			serialize_calls.append(row["name"])
+			result = dict(row)
+			result["record_id"] = result.pop("name")
+			return result
+		def get_all(*_args, **kwargs):
+			ids = set(kwargs["filters"]["name"][1])
+			return [row for row in rows if row["name"] in ids]
+		with patch.multiple(
+			m, _require_processing_manager=lambda: None, _require_company=lambda value: value,
+			_latest_batch=lambda *args: SimpleNamespace(name="B"),
+			_attendance_shift_rule_bundle=lambda *_args: {"version": "rules-v1"}, _serialize_record=serialize,
+		), patch.object(m.frappe, "get_all", side_effect=get_all) as get_all_mock:
+			result = m.list_processing_exceptions(
+				"C", "2026-07", page_length=20, page_start=60,
+				snapshot_record_ids=json.dumps(requested_ids),
+			)
+		self.assertTrue(result["snapshot_reused"])
+		self.assertEqual([row["record_id"] for row in result["review_rows"]], requested_ids)
+		self.assertEqual(serialize_calls, requested_ids)
+		self.assertEqual(get_all_mock.call_count, 1)
 
 	def test_batch_notes_reload_latest_version_before_save(self):
 		class VersionedBatch:

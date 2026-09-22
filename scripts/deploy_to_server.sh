@@ -53,7 +53,7 @@ git push origin main
 echo "Deploying ${PROJECT_ROOT} to ${REMOTE}:${REMOTE_ROOT}..."
 printf -v remote_root_q '%q' "${REMOTE_ROOT}"
 printf -v site_name_q '%q' "${SITE_NAME}"
-remote_command="set -euo pipefail; cd ${remote_root_q}; actual_arch=\$(sudo docker info --format '{{.Architecture}}'); case '${EXPECTED_ARCH}:\${actual_arch}' in arm64:arm64|arm64:aarch64|amd64:amd64|amd64:x86_64) ;; *) echo 'Architecture mismatch: expected ${EXPECTED_ARCH}, got '\${actual_arch} >&2; exit 21 ;; esac; sudo bash scripts/deploy_docker.sh --pull --site ${site_name_q}"
+remote_command="set -euo pipefail; cd ${remote_root_q}; actual_arch=\$(sudo docker info --format '{{.Architecture}}'); case \"${EXPECTED_ARCH}:\${actual_arch}\" in arm64:arm64|arm64:aarch64|amd64:amd64|amd64:x86_64) ;; *) echo 'Architecture mismatch: expected ${EXPECTED_ARCH}, got '\${actual_arch} >&2; exit 21 ;; esac; sudo bash scripts/deploy_docker.sh --pull --site ${site_name_q}"
 if [[ ${INSTALL_DEPS} -eq 0 ]]; then
 	remote_command+=" --skip-deps"
 fi

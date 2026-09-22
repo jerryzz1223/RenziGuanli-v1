@@ -3415,12 +3415,14 @@ def list_attendance_custom_rules(rule_group: str = "", enabled_only: int = 0, pa
 			"rule_name",
 			"rule_group",
 			"rule_type",
+			"priority",
 			"source_module",
 			"source_document",
 			"trigger_condition",
 			"formula",
 			"action_result",
-			"priority",
+			"effective_from",
+			"remarks",
 			"enabled",
 			"application_mode",
 			"last_evaluated_on",
@@ -3452,6 +3454,7 @@ def upsert_attendance_custom_rule(rule: str | dict):
 		"priority": int(flt(rule.priority)),
 		"enabled": 1 if str(rule.enabled) in ("1", "true", "True", "on", "是") else 0,
 		"application_mode": rule.application_mode if rule.application_mode in ATTENDANCE_RULE_APPLICATION_MODES else "仅展示",
+		"effective_from": rule.effective_from,
 		"remarks": rule.remarks,
 	}
 	existing = frappe.db.get_value(CUSTOM_RULE_DOCTYPE, {"rule_code": rule.rule_code}, "name")

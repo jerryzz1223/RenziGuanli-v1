@@ -12,7 +12,7 @@ const script = new vm.Script(source
 	.replace("export function useDownloadPDF", "function useDownloadPDF")
 	+ "\nuseDownloadPDF")
 
-function setup(fetchResponse, csrfToken = "test-token") {
+function setup(fetchResponse, csrfToken = "test-token", downloadFailure = null) {
 	const calls = { requests: [], toasts: [], blobs: [], revoked: [], timers: [], clicks: [] }
 	const context = vm.createContext({
 		URLSearchParams,
@@ -33,7 +33,11 @@ function setup(fetchResponse, csrfToken = "test-token") {
 		document: {
 			createElement: (tag) => {
 				assert.equal(tag, "a")
-				return { click() { calls.clicks.push({ href: this.href, download: this.download }) } }
+				if (downloadFailure === "create") throw new Error("anchor creation failed")
+				return { click() {
+					if (downloadFailure === "click") throw new Error("download click failed")
+					calls.clicks.push({ href: this.href, download: this.download })
+				} }
 			},
 		},
 		setTimeout: (callback, delay) => calls.timers.push({ callback, delay }),
@@ -97,5 +101,25 @@ test("network and response-body failures report errors without triggering a down
 		assert.deepEqual(calls.blobs, [])
 		assert.deepEqual(calls.clicks, [])
 		assert.deepEqual(calls.timers, [])
+	}
+})
+
+
+test("PDF object URLs are released even when creating or clicking the link fails", async () => {
+	for (const failure of ["create", "click"]) {
+		const { calls, useDownloadPDF } = setup(
+			async () => ({ ok: true, blob: async () => new Blob() }),
+			"test-token",
+			failure,
+		)
+		await useDownloadPDF().downloadPDF({ doctype: "Leave Application", docname: "LEAVE-001" })
+		assert.equal(calls.blobs.length, 1)
+		assert.deepEqual(calls.clicks, [])
+		assert.equal(calls.toasts.length, 1)
+		assert.equal(calls.toasts[0].type, "error")
+		assert.match(calls.toasts[0].text, /(?:anchor creation|download click) failed$/)
+		assert.equal(calls.timers.length, 1)
+		calls.timers[0].callback()
+		assert.deepEqual(calls.revoked, ["blob:test-pdf"])
 	}
 })

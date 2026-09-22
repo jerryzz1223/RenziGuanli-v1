@@ -5,6 +5,22 @@ from frappe import _
 from frappe.model.document import Document
 
 
+def _clock_values(value):
+	return re.findall(r"(?<!\d)([01]?\d|2[0-4])\s*[:：]\s*([0-5]\d)(?!\d)", value or "")
+
+
+def _valid_night_rule(value):
+	text = re.sub(r"\s+", "", value or "").replace("：", ":")
+	if not text or text == "无":
+		return True
+	has_hours = bool(re.search(r"(?:>=|≥|满)\d+(?:\.\d+)?(?:小时|H)", text, re.IGNORECASE))
+	clocks = _clock_values(text)
+	if not clocks:
+		clocks = [(hour, "00") for hour in re.findall(r"(?<!\d)([01]?\d|2[0-4])点", text)]
+	has_supported_clock_rule = ("之间" in text and len(clocks) >= 2) or any(token in text for token in ("晚于", ">=", "≥")) and len(clocks) >= 1
+	return has_hours and has_supported_clock_rule
+
+
 class HRMSAttendanceShiftRule(Document):
 	def validate(self):
 		self.rule_code = (self.rule_code or "").strip()
@@ -24,15 +40,31 @@ class HRMSAttendanceShiftRule(Document):
 		if self.weekday_overtime_mode == "无" and (self.weekday_overtime_hours or 0) > 0:
 			frappe.throw(_("平日加班来源为“无”时，自动加班小时必须为 0。"))
 		for fieldname, label in (
+			("basic_time", "基本工时上下班时间"),
+			("weekday_overtime_time", "平日加班起止时间"),
+			("weekend_overtime_time", "周末加班起止时间"),
+		):
+			value = getattr(self, fieldname, "") or ""
+			clocks = _clock_values(value)
+			if value and (len(clocks) < 2 or len(clocks) % 2):
+				frappe.throw(_("{0}必须由完整的 HH:MM-HH:MM 时间段组成。").format(label))
+			if any(int(hour) == 24 and int(minute) != 0 for hour, minute in clocks):
+				frappe.throw(_("24点只能写成 24:00。"))
+		if self.overtime_begin_time and len(_clock_values(str(self.overtime_begin_time))) != 1:
+			frappe.throw(_("班后开始加班时间必须使用 HH:MM 固定格式。"))
+		for fieldname, label in (
 			("punch_in_range", "可取上班卡时段"),
 			("punch_out_range", "可取下班卡时段"),
 		):
 			value = getattr(self, fieldname, "") or ""
-			matches = re.findall(r"(?<!\d)([01]?\d|2[0-4])\s*[:：]\s*([0-5]\d)(?!\d)", value)
+			matches = _clock_values(value)
 			if value and len(matches) != 2:
 				frappe.throw(_("{0}必须使用 HH:MM-HH:MM 固定格式，可在结束时间前写“次日”。").format(label))
 			if any(int(hour) == 24 and int(minute) != 0 for hour, minute in matches):
 				frappe.throw(_("24点只能写成 24:00。"))
+		for fieldname, label in (("small_night_rule", "小夜班规则"), ("large_night_rule", "大夜班规则")):
+			if not _valid_night_rule(getattr(self, fieldname, "") or ""):
+				frappe.throw(_("{0}必须同时包含最低工时和可执行的下班条件，例如“满8小时且下班时间在04:30-07:59之间”或“>=11.5小时且下班时间等于或晚于08:00”。").format(label))
 		existing = frappe.db.get_value(
 			self.doctype,
 			{"company": self.company, "rule_code": self.rule_code},

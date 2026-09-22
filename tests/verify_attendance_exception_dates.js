@@ -4,7 +4,9 @@ const path = require("path");
 const vm = require("vm");
 
 const sourcePath = path.resolve(__dirname, "../hrms/hr/page/attendance_import_center/attendance_import_center.js");
+const cssPath = path.resolve(__dirname, "../hrms/hr/page/attendance_import_center/attendance_import_center.css");
 const source = `${fs.readFileSync(sourcePath, "utf8")}\nglobalThis.AttendanceImportCenter = AttendanceImportCenter;`;
+const css = fs.readFileSync(cssPath, "utf8");
 const context = {
 	frappe: { pages: { "attendance-import-center": {} }, utils: { escape_html: (value) => String(value) } },
 	__: (value) => value,
@@ -13,6 +15,18 @@ vm.runInNewContext(source, context, { filename: sourcePath });
 
 const center = Object.create(context.AttendanceImportCenter.prototype);
 center.attendance_month = "2026-07";
+Object.assign(center, {
+	processing_result_sources: [{key: "attendance_draft", label: "考勤初稿"}],
+	exception_sources: [{key: "attendance_draft", label: "考勤初稿"}],
+	exception_source_filter: "", exception_code_filter: "", exception_processing_status_filter: "",
+	exception_department_filter: "", exception_department_options: ["工程课", "生产课"],
+	exception_employee_name_filter: "", exception_employee_code_filter: "",
+	exception_sort_field: "employee_code", exception_sort_order: "asc", select_all_filtered_exceptions: false,
+});
+const exceptionHeader = center.render_exception_table_header(false, 0);
+assert.match(exceptionHeader, /<select[^>]+data-exception-department-filter/);
+assert.match(exceptionHeader, /<option value="工程课"/);
+assert.doesNotMatch(exceptionHeader, /<input[^>]+data-exception-department-filter/);
 const makeCard = (record, date, row) => ({ dataset: { exceptionCardRecord: record, attendanceDate: date, attendanceSourceRow: String(row), attendanceSourceFile: "A.xlsx", attendanceSourceSheet: "每日统计" } });
 const previousCard = makeCard("employee-4076", "2026-07-13", 6961);
 const editedCard = makeCard("employee-4076", "2026-07-14", 6962);
@@ -30,8 +44,10 @@ visibleCards = [otherCard];
 assert.strictEqual(center.exception_scroll_target(anchor), null);
 delete center.body;
 const recheckChanges = center.manual_adjustment_changes({field_name: "__attendance_policy_recheck__", original_value: {}, new_value: {exception_lines: [], night_shift_matching: {}, deep_night_shifts: 5}});
-assert.strictEqual(recheckChanges.length, 1);
-assert.match(recheckChanges[0].label, /整月规则重新校验/);
+assert.deepStrictEqual(Array.from(recheckChanges), []);
+assert.deepStrictEqual(Array.from(center.manual_adjustment_changes({field_name: "__source_parser_repair__", original_value: {workday_overtime_hours: 0}, new_value: {workday_overtime_hours: 26.5}})), []);
+assert.deepStrictEqual(Array.from(center.manual_adjustment_changes({field_name: "__review_decision__", original_value: {}, new_value: {}})), []);
+assert.deepStrictEqual(Array.from(center.manual_adjustment_changes({field_name: "__daily_exception_decision__:10:RESTDAY_CLOCKED_WITHOUT_OVERTIME", original_value: {decision: "待处理"}, new_value: {decision: "已处理"}})), []);
 
 assert.strictEqual(center.parse_attendance_time_minutes("08:30"), 510);
 assert.strictEqual(center.parse_attendance_time_minutes("08:30:00"), 510);
@@ -117,11 +133,29 @@ assert.strictEqual((twoRestdayMarkup.match(/>修改本日</g) || []).length, 2);
 
 const independentStatusMarkup = center.render_attendance_daily_statuses([
 	{ attendance_date: "2026-07-04", review_status: "待审核" },
-	{ attendance_date: "2026-07-25", review_status: "已驳回" },
+	{ attendance_date: "2026-07-25", review_status: "已处理异常" },
 ]);
 assert.match(independentStatusMarkup, /2026-07-04[\s\S]*待处理异常/);
-assert.match(independentStatusMarkup, /2026-07-25[\s\S]*已处理，不计入/);
+assert.match(independentStatusMarkup, /2026-07-25[\s\S]*已处理异常/);
 assert.strictEqual((independentStatusMarkup.match(/hrms-attendance-exception-line/g) || []).length, 2);
+
+const resolvedMarkup = center.render_attendance_exception_lines([{
+	attendance_date: "2026-07-25", source_row: 20, resolved: true, review_status: "已处理异常",
+	exception_codes: ["RESTDAY_CLOCKED_WITHOUT_OVERTIME"],
+}], "record-1");
+assert.match(center.render_attendance_daily_statuses([{ attendance_date: "2026-07-25", review_status: "已处理异常" }]), /已处理异常/);
+assert.doesNotMatch(resolvedMarkup, /data-edit-attendance-daily-row/);
+
+const resolvedBalancedMarkup = center.render_attendance_exception_lines([{
+	attendance_date: "2026-07-01", source_row: 389, resolved: true, review_status: "已处理异常",
+	exception_codes: ["ATTENDANCE_HOURS_MISMATCH"], standard_hours: 8, actual_attendance_hours: 8,
+	personal_leave_hours: 0, sick_leave_hours: 0, reunion_leave_hours: 0, rest_arrangement_hours: 0,
+	absence_hours: 0, accounted_hours: 8, hours_difference: 0,
+}], "record-1");
+assert.match(resolvedBalancedMarkup, /已处理（原异常/);
+assert.match(resolvedBalancedMarkup, /处理后校验/);
+assert.match(resolvedBalancedMarkup, /已一致/);
+assert.doesNotMatch(resolvedBalancedMarkup, /输入不成立/);
 
 assert.doesNotMatch(source, /fieldtype: "Time", fieldname: "restday_overtime_(?:start|end)"/);
 assert.match(source, /data-overtime-wheel-picker/);
@@ -149,10 +183,23 @@ assert.match(source, /overtime_start_time: overtimeStartValue/);
 assert.match(source, /overtime_end_time: overtimeEndValue/);
 assert.match(source, /data-exception-employee-code-filter/);
 assert.match(source, /data-exception-employee-name-filter/);
-assert.match(source, /data-exception-sort-field/);
-assert.match(source, /data-exception-sort-order/);
+assert.match(source, /data-exception-department-filter/);
+assert.match(source, /data-exception-code-filter/);
+assert.match(source, /data-exception-processing-status-filter/);
+assert.match(source, /data-exception-sort-by/);
 assert.match(source, /employee_code: this\.exception_employee_code_filter/);
 assert.match(source, /employee_name: this\.exception_employee_name_filter/);
+assert.match(source, /department: this\.exception_department_filter/);
+assert.match(source, /exception_code: this\.exception_code_filter/);
+assert.match(source, /available_departments/);
+assert.match(source, /exception_department_options/);
+assert.match(source, /addEventListener\("input"/);
+assert.match(source, /setTimeout\(applyExceptionQuery, 300\)/);
+assert.match(css, /\.hrms-attendance-exception-table-wrap\s*\{[\s\S]*?max-height:[\s\S]*?overflow: auto/);
+assert.match(css, /\.hrms-attendance-exception-table-wrap\s*\{[\s\S]*?min-height:\s*min\(68vh,\s*760px\)/);
+assert.match(css, /\.hrms-attendance-exception-table-wrap\s*\{[\s\S]*?max-height:\s*calc\(100vh\s*-\s*96px\)/);
+assert.match(css, /@supports\s*\(height:\s*100dvh\)[\s\S]*?max-height:\s*calc\(100dvh\s*-\s*96px\)/);
+assert.match(css, /\.hrms-attendance-exception-table thead th\s*\{[\s\S]*?position: sticky;[\s\S]*?top: 0/);
 assert.match(source, /capture_exception_scroll_position/);
 assert.match(source, /restore_exception_scroll_position/);
 assert.match(source, /preserveScroll/);
@@ -163,7 +210,24 @@ const auditedChanges = center.manual_adjustment_changes({
 	new_value: {restday_overtime_hours: 6.5},
 	reference_values: {overtime_start_time: "07:59", overtime_end_time: "15:08"},
 });
-assert.deepStrictEqual(Array.from(auditedChanges, (item) => item.label), ["加班时间（小时数，计入后续）", "开始时间（仅查看）", "结束时间（仅查看）"]);
+assert.deepStrictEqual(Array.from(auditedChanges, (item) => item.label), ["加班时间（小时数，计入后续）"]);
 assert.strictEqual(auditedChanges[0].modified, 6.5);
+const onlyRealDailyChange = center.manual_adjustment_changes({
+	field_name: "__daily_row__:389",
+	original_value: {"实际出勤（小时）": null, "请假/事假(小时)": null},
+	new_value: {"实际出勤（小时）": "8", "请假/事假(小时)": ""},
+});
+assert.deepStrictEqual(Array.from(onlyRealDailyChange, (item) => item.label), ["实际出勤（小时）"]);
+
+const ledgerMarkup = center.render_processing_ledger("adjustments", [{
+	employee_code: "2081", employee_name: "李旭", source_type: "attendance_draft", attendance_date: "2026-07-15",
+	field_name: "__daily_row__:1224", original_value: {annual_leave_hours: 0, personal_leave_hours: 2},
+	new_value: {annual_leave_hours: 6, personal_leave_hours: 3}, reason: "更正", modified_by: "Administrator", modified_at: "2026-09-22 10:00:00",
+}]);
+assert.strictEqual((ledgerMarkup.match(/2081 李旭/g) || []).length, 2);
+assert.strictEqual((ledgerMarkup.match(/2026-07-15/g) || []).length, 2);
+assert.match(ledgerMarkup, />特休工时</);
+assert.match(ledgerMarkup, />事假工时</);
+assert.match(ledgerMarkup, /规则校验、来源修复和仅处理决定不在此显示/);
 
 console.log("Attendance exception-date display checks passed.");

@@ -69,6 +69,7 @@ for method in (
 	"reset_attendance_month",
 	"list_manual_adjustments",
 	"get_processing_configuration",
+	"get_complete_attendance_rules",
 	"list_attendance_shift_rules",
 	"import_attendance_shift_rules",
 	"upsert_attendance_shift_rule",
@@ -373,7 +374,7 @@ for method in (
 	"get_processing_batch", "register_source_file", "register_monthly_support_file", "bulk_import_and_process_sources", "precheck_monthly_support_file", "process_monthly_support_file", "confirm_monthly_support_file", "precheck_source_slot", "process_source_slot",
 	"list_processing_results", "export_processing_result", "get_processing_record", "update_processing_record", "update_special_hours_manual_entry", "review_attendance_draft_daily_exception", "bulk_update_processing_records", "confirm_source_result",
 	"list_processing_exceptions", "list_processing_batches", "list_daily_attendance_records", "reset_attendance_month", "list_manual_adjustments",
-	"get_processing_configuration", "list_attendance_shift_rules", "import_attendance_shift_rules", "upsert_attendance_shift_rule", "list_department_mappings", "upsert_department_mapping", "generate_monthly_final_files", "get_monthly_final_preview", "update_monthly_final_rows",
+	"get_processing_configuration", "get_complete_attendance_rules", "list_attendance_shift_rules", "import_attendance_shift_rules", "upsert_attendance_shift_rule", "list_department_mappings", "upsert_department_mapping", "generate_monthly_final_files", "get_monthly_final_preview", "update_monthly_final_rows",
 ):
 	start = api.find(f"def {method}(")
 	end = api.find("\n@frappe.whitelist()", start + 1)
@@ -384,7 +385,7 @@ for method in (
 exceptions_start = api.find("def list_processing_exceptions(")
 exceptions_end = api.find("\n\n@frappe.whitelist()", exceptions_start)
 exceptions_body = api[exceptions_start:] if exceptions_end == -1 else api[exceptions_start:exceptions_end]
-for marker in ("page_start", "RESTDAY_CLOCKED_WITHOUT_OVERTIME", "limit_page_length=5000", "rows[page_start : page_start + page_length]", "_processing_exception_sort_key"):
+for marker in ("page_start", "RESTDAY_CLOCKED_WITHOUT_OVERTIME", "limit_page_length=5000", "rows[page_start : page_start + page_length]", "_processing_exception_sort_key", "snapshot_record_ids", '"snapshot_reused": True'):
 	require(exceptions_body, marker, f"Exception queue pagination is incomplete: {marker}")
 
 bulk_start = api.find("def bulk_update_processing_records(")

@@ -1750,7 +1750,7 @@ def _restore_daily_exception_lines_from_source(record: dict[str, Any], *, all_de
 	return exception_lines_from_attendance_details(details, record.get("exception_codes") or [])
 
 
-def _serialize_record(record, current_shift_rule_version: str | None = None):
+def _serialize_record(record, current_shift_rule_version: str | None = None, *, hydrate_daily_details: bool = True):
 	result = dict(record)
 	result["record_id"] = result.pop("name")
 	result["processed_value"] = _loads(result.pop("processed_value_json", ""), {})
@@ -1791,16 +1791,30 @@ def _serialize_record(record, current_shift_rule_version: str | None = None):
 			values.get("attendance_details") or [], result["exception_codes"]
 		) or _restore_daily_exception_lines_from_source(result)
 		result["daily_attendance_details"] = values.get("attendance_details") or []
-		if any("standard_hours" not in line for line in result["daily_exception_lines"]):
+		# Queue filtering and counts only need the persisted exception projection.
+		# Replaying retained source rows is comparatively expensive, so reserve the
+		# detail hydration for the small page that is actually returned to the UI.
+		if hydrate_daily_details and any("standard_hours" not in line for line in result["daily_exception_lines"]):
 			details = {str(line.get("source_row")): line for line in _restore_daily_exception_lines_from_source(result, all_details=True)}
 			result["daily_exception_lines"] = [{**details.get(str(line.get("source_row")), {}), **line} for line in result["daily_exception_lines"]]
-		# Every remaining date/source line is an independent pending record.  The
-		# parent document status is only a database queue roll-up and must not be
-		# presented as the business status of all dates under the employee.
-		result["daily_exception_lines"] = [
-			{**line, "daily_record_id": _daily_line_key(line), "review_status": "待审核"}
+		# The parent document status is only a database queue roll-up. Keep fixed
+		# dates in a read-only history projection so the operator can still see
+		# what was changed, while pending dates remain independently actionable.
+		pending_lines = [
+			{**line, "daily_record_id": _daily_line_key(line), "review_status": "待审核", "resolved": False}
 			for line in result["daily_exception_lines"]
 		]
+		resolved_lines = [
+			{**line, "daily_record_id": _daily_line_key(line), "review_status": "已处理异常", "resolved": True}
+			for line in _daily_resolved_exception_lines(values)
+		]
+		pending_keys = {_daily_line_key(line) for line in pending_lines}
+		result["daily_pending_exception_lines"] = pending_lines
+		result["daily_exception_lines"] = pending_lines + [
+			line for line in resolved_lines if _daily_line_key(line) not in pending_keys
+		]
+		result["daily_exception_lines"].sort(key=lambda line: (str(line.get("attendance_date") or ""), str(line.get("source_row") or "")))
+		result["daily_pending_exception_lines"].sort(key=lambda line: (str(line.get("attendance_date") or ""), str(line.get("source_row") or "")))
 	return result
 
 
@@ -1838,6 +1852,34 @@ def _daily_exception_decisions(values: dict[str, Any]) -> dict[str, dict[str, bo
 		for source_row, codes in decisions.items()
 		if isinstance(codes, dict)
 	}
+
+
+def _daily_resolved_exception_lines(values: dict[str, Any]) -> list[dict[str, Any]]:
+	"""Return dated exception cards that were fixed and should remain visible."""
+	lines = values.get("_daily_resolved_exception_lines", []) if isinstance(values, dict) else []
+	return [deepcopy_json(line) for line in lines if isinstance(line, dict)]
+
+
+def _remember_daily_resolved_exception_line(values: dict[str, Any], line: dict[str, Any], replacement_values: dict[str, Any] | None = None) -> None:
+	"""Keep one fixed date in the read-only exception history projection."""
+	if not isinstance(values, dict) or not isinstance(line, dict):
+		return
+	key = _daily_line_key(line)
+	replacement_values = replacement_values if isinstance(replacement_values, dict) else {}
+	updated_detail = next(
+		(
+			item for item in replacement_values.get("attendance_details", [])
+			if isinstance(item, dict) and _daily_line_key(item) == key
+		),
+		{},
+	)
+	resolved = {**deepcopy_json(line), **deepcopy_json(updated_detail)}
+	resolved["exception_codes"] = list(line.get("exception_codes") or [])
+	resolved["review_status"] = "已处理异常"
+	resolved["resolved"] = True
+	lines = [item for item in _daily_resolved_exception_lines(values) if _daily_line_key(item) != key]
+	lines.append(resolved)
+	values["_daily_resolved_exception_lines"] = lines
 
 
 def _daily_source_key(source_row: Any, source_file: Any = "", source_sheet: Any = "", attendance_date: Any = "") -> str:
@@ -1973,7 +2015,7 @@ def _isolate_daily_edit(replacement, baseline, serialized, target):
 	for field in ("attendance_details", "exception_lines", "exception_events", "data_quality_events"):
 		old_items = previous.get(field) or []
 		if field == "exception_lines":
-			old_items = serialized.get("daily_exception_lines") or old_items
+			old_items = serialized.get("daily_pending_exception_lines") or old_items
 		values[field] = [deepcopy_json(item) for item in old_items if _daily_line_key(item) != key]
 		values[field].extend(deepcopy_json(item) for item in after.get(field) or [] if _daily_line_key(item) == key)
 	# Month-wide rule upgrades are separate actions; a single card cannot approve
@@ -3249,6 +3291,7 @@ def update_special_hours_manual_entry(
 		"old_value": {"day": day, "hours": old_hours},
 		"new_value": {"day": day, "hours": _as_nonnegative_number(hours)},
 		"field_name": f"special_hours_days:{day}",
+		"attendance_date": change_date.isoformat(),
 		"original_value": {"day": day, "hours": old_hours},
 		"reason": reason.strip(),
 		"review_status": "已通过",
@@ -3400,6 +3443,19 @@ def update_attendance_draft_daily_row(
 		frappe.throw(_("更正后无法重新生成该员工的考勤汇总。"))
 	replacement = _apply_daily_exception_decisions(replacement, decisions)
 	replacement = _isolate_daily_edit(replacement, baseline, serialized, target)
+	edited_key = _daily_line_key(target)
+	active_target = next(
+		(line for line in replacement.get("proposed_value", {}).get("exception_lines", []) if _daily_line_key(line) == edited_key),
+		None,
+	)
+	resolved_lines = [
+		line for line in _daily_resolved_exception_lines(replacement.get("proposed_value", {}))
+		if _daily_line_key(line) != edited_key
+	]
+	if active_target is None:
+		_remember_daily_resolved_exception_line(replacement["proposed_value"], target, replacement["proposed_value"])
+	else:
+		replacement["proposed_value"]["_daily_resolved_exception_lines"] = resolved_lines
 	target_still_missing_overtime = _has_daily_exception(
 		replacement, source_row, "RESTDAY_CLOCKED_WITHOUT_OVERTIME",
 		source_file=target.get("source_file") or "", source_sheet=target.get("source_sheet") or "",
@@ -3714,7 +3770,7 @@ def review_attendance_draft_daily_exception(
 		frappe.throw(_("无权修改该钉钉考勤记录。"))
 	serialized = _serialize_record(doc.as_dict())
 	candidates = [
-		line for line in serialized.get("daily_exception_lines") or []
+		line for line in serialized.get("daily_pending_exception_lines") or []
 		if str(line.get("source_row") or "") == str(source_row)
 		and (not source_file or str(line.get("source_file") or "") == str(source_file))
 		and (not source_sheet or str(line.get("source_sheet") or "") == str(source_sheet))
@@ -3736,11 +3792,12 @@ def review_attendance_draft_daily_exception(
 	# This action records a decision only; it must not adopt recalculated hours
 	# or statuses for any other card.
 	current = _effective_result_values(serialized)
-	current["exception_lines"] = deepcopy_json(serialized.get("daily_exception_lines") or [])
+	current["exception_lines"] = deepcopy_json(serialized.get("daily_pending_exception_lines") or [])
 	replacement = _apply_daily_exception_decisions({
 		"proposed_value": current, "processed_value": current,
 		"exception_codes": serialized.get("exception_codes") or [],
 	}, {target_key: {exception_code: True}})
+	_remember_daily_resolved_exception_line(replacement["proposed_value"], target, replacement["proposed_value"])
 	effective_review_status = _attendance_draft_queue_rollup(replacement.get("exception_codes") or [], "已通过")
 	confirmed = dict(replacement["proposed_value"])
 	confirmed["_daily_row_overrides"] = overrides
@@ -4190,9 +4247,13 @@ def list_processing_exceptions(
 	page_start: int = 0,
 	employee_code: str = "",
 	employee_name: str = "",
+	department: str = "",
+	exception_code: str = "",
+	processing_status: str = "",
 	sort_field: str = "employee_code",
 	sort_order: str = "asc",
 	focus_record_id: str = "",
+	snapshot_record_ids: str = "",
 ):
 	_require_processing_manager()
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
@@ -4205,43 +4266,324 @@ def list_processing_exceptions(
 	batch_names = [batch.name for batch in batches if batch and (not source_type or batch.source_type == source_type)]
 	# Attendance-draft records are one employee summary containing many dated
 	# lines. The parent review_status must not hide sibling dates after one date
-	# is saved; the queue is pending while persisted daily lines remain.
+	# is saved, and a fixed date remains visible as read-only history.
 	queue_fields = ["name", "company", "import_batch", "attendance_month", "employee_code", "employee_name", "department", "source_type", "original_value_json", "processed_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "reviewer", "reviewed_on", "review_note", "review_history_json", "eligible_for_downstream", "source_file", "source_sheet", "source_row", "source_id", "approval_no"]
+	exception_code_filter = str(exception_code or "").strip()
+	processing_status_filter = str(processing_status or "").strip()
+	if processing_status_filter not in {"", "pending", "processed"}:
+		processing_status_filter = ""
+	current_shift_rule_version = _attendance_shift_rule_bundle(company)["version"]
+	# A page change sends the twenty record ids from the snapshot created by the
+	# first request. Revalidate them against the active company's latest batches,
+	# then hydrate only those rows; counts and ordering stay in the browser.
+	snapshot_ids = _loads(snapshot_record_ids, [])
+	if isinstance(snapshot_ids, list) and snapshot_ids:
+		snapshot_ids = list(dict.fromkeys(str(value) for value in snapshot_ids if str(value or "").strip()))[:page_length]
+		stored_page = frappe.get_all(
+			PROCESSING_RECORD_DOCTYPE,
+			filters={"name": ["in", snapshot_ids or ["__none__"]], "import_batch": ["in", batch_names or ["__none__"]]},
+			fields=queue_fields,
+			limit_page_length=page_length,
+		)
+		page_by_id = {str(row.get("name") or ""): _serialize_record(row, current_shift_rule_version) for row in stored_page}
+		page_rows = []
+		for record_id in snapshot_ids:
+			row = page_by_id.get(record_id)
+			if not row:
+				continue
+			if row.get("source_type") == "attendance_draft" and (exception_code_filter or processing_status_filter):
+				def snapshot_line_matches(line):
+					pending = not line.get("resolved") and line.get("review_status") != "已处理异常"
+					return (
+						(not exception_code_filter or exception_code_filter in (line.get("exception_codes") or []))
+						and (processing_status_filter != "pending" or pending)
+						and (processing_status_filter != "processed" or not pending)
+					)
+				row["daily_exception_lines"] = [line for line in (row.get("daily_exception_lines") or []) if snapshot_line_matches(line)]
+				row["daily_pending_exception_lines"] = [line for line in row["daily_exception_lines"] if not line.get("resolved") and line.get("review_status") != "已处理异常"]
+			elif row.get("source_type") != "attendance_draft" and exception_code_filter:
+				row["exception_codes"] = [exception_code_filter]
+				row["exception_labels"] = [EXCEPTION_LABELS.get(exception_code_filter, exception_code_filter)]
+			page_rows.append(row)
+		return {"review_rows": page_rows, "snapshot_reused": True, "source_type": source_type, "page_start": page_start, "page_length": page_length}
+	# The exception history is stored inside the retained JSON projection, so a
+	# database filter on exception_codes would hide a fully resolved daily row.
+	# Load the latest source rows and apply the pending/display split below.
+	queue_filters = {"import_batch": ["in", all_batch_names]} if all_batch_names else {"name": "__none__"}
 	all_records = frappe.get_all(
 		PROCESSING_RECORD_DOCTYPE,
-		filters={"import_batch": ["in", all_batch_names]} if all_batch_names else {"name": "__none__"},
+		filters=queue_filters,
 		fields=queue_fields,
 		order_by="modified desc",
 		limit_page_length=5000,
 	) if all_batch_names else []
-	current_shift_rule_version = _attendance_shift_rule_bundle(company)["version"]
-	all_rows = [_serialize_record(row, current_shift_rule_version) for row in all_records]
+	# First build a lightweight projection for filtering, sorting and counts.
+	# Only the visible page is hydrated from retained daily source rows below.
+	all_rows = [_serialize_record(row, current_shift_rule_version, hydrate_daily_details=False) for row in all_records]
+	raw_records_by_id = {str(row.get("name") or ""): row for row in all_records}
+	available_departments = sorted({
+		str(row.get("department") or "").strip()
+		for row in all_rows
+		if row.get("import_batch") in batch_names and str(row.get("department") or "").strip()
+	}, key=str.casefold)
 	def normalise_employee_filter(value):
 		return re.sub(r"\s+", "", str(value or "").casefold())
 	employee_code_filter = normalise_employee_filter(employee_code)
 	employee_name_filter = normalise_employee_filter(employee_name)
-	sort_field = sort_field if sort_field in {"employee_code", "employee_name"} else "employee_code"
+	department_filter = normalise_employee_filter(department)
+	sort_field = sort_field if sort_field in {"employee_code", "employee_name", "department", "source_type", "exception_code", "review_status"} else "employee_code"
 	sort_order = "desc" if str(sort_order or "").strip().lower() == "desc" else "asc"
 	def employee_matches(row):
 		return (
 			(not employee_code_filter or employee_code_filter in normalise_employee_filter(row.get("employee_code")))
 			and (not employee_name_filter or employee_name_filter in normalise_employee_filter(row.get("employee_name")))
+			and (not department_filter or department_filter in normalise_employee_filter(row.get("department")))
 		)
-	def pending_filter(row):
+	def line_is_pending(line):
+		return not line.get("resolved") and line.get("review_status") != "已处理异常"
+	def line_matches(line):
+		if exception_code_filter and exception_code_filter not in (line.get("exception_codes") or []):
+			return False
+		if processing_status_filter == "pending":
+			return line_is_pending(line)
+		if processing_status_filter == "processed":
+			return not line_is_pending(line)
+		return True
+	def record_matches(row):
 		if row.get("source_type") == "attendance_draft":
-			return bool(row.get("daily_exception_lines"))
+			return any(line_matches(line) for line in (row.get("daily_exception_lines") or []))
+		if exception_code_filter and exception_code_filter not in (row.get("exception_codes") or []):
+			return False
+		if processing_status_filter == "pending":
+			return row.get("review_status") == "待审核"
+		if processing_status_filter == "processed":
+			return row.get("review_status") != "待审核"
+		return True
+	def pending_filter(row, apply_filters=True):
+		if row.get("source_type") == "attendance_draft":
+			return any((not apply_filters or line_matches(line)) and line_is_pending(line) for line in (row.get("daily_exception_lines") or []))
 		return bool(row.get("exception_codes")) and row.get("review_status") == "待审核"
-	total_pending_count = sum(1 for row in all_rows if pending_filter(row))
-	filtered_pending_count = sum(1 for row in all_rows if row.get("import_batch") in batch_names and pending_filter(row) and employee_matches(row))
+	def display_filter(row):
+		if row.get("source_type") == "attendance_draft":
+			return bool(row.get("daily_exception_lines")) and record_matches(row)
+		return bool(row.get("exception_codes")) and record_matches(row)
+	total_pending_count = sum(1 for row in all_rows if pending_filter(row, apply_filters=False))
+	filtered_pending_count = sum(1 for row in all_rows if row.get("import_batch") in batch_names and pending_filter(row) and employee_matches(row) and record_matches(row))
+	total_exception_count = sum(
+		1 for row in all_rows
+		if (row.get("daily_exception_lines") if row.get("source_type") == "attendance_draft" else row.get("exception_codes"))
+	)
+	filtered_exception_count = sum(1 for row in all_rows if row.get("import_batch") in batch_names and display_filter(row) and employee_matches(row))
 	if not batch_names:
-		return {"review_rows": [], "total_pending_count": total_pending_count, "filtered_pending_count": 0, "source_type": source_type, "page_start": page_start, "page_length": page_length}
-	rows = [row for row in all_rows if row.get("import_batch") in batch_names and pending_filter(row) and employee_matches(row)]
-	rows.sort(key=lambda row: (str(row.get(sort_field) or "").casefold(), _processing_exception_sort_key(row)), reverse=sort_order == "desc")
+		return {"review_rows": [], "available_departments": [], "total_pending_count": total_pending_count, "filtered_pending_count": 0, "total_exception_count": total_exception_count, "filtered_exception_count": 0, "source_type": source_type, "page_start": page_start, "page_length": page_length}
+	rows = [row for row in all_rows if row.get("import_batch") in batch_names and display_filter(row) and employee_matches(row)]
+	def apply_line_projection(row):
+		if not (exception_code_filter or processing_status_filter):
+			return row
+		if row.get("source_type") == "attendance_draft":
+			row["daily_exception_lines"] = [
+				{
+					**line,
+					"exception_codes": [exception_code_filter] if exception_code_filter else list(line.get("exception_codes") or []),
+				}
+				for line in (row.get("daily_exception_lines") or []) if line_matches(line)
+			]
+			row["daily_pending_exception_lines"] = [line for line in row["daily_exception_lines"] if line_is_pending(line)]
+		elif exception_code_filter:
+			row["exception_codes"] = [exception_code_filter]
+			row["exception_labels"] = [EXCEPTION_LABELS.get(exception_code_filter, exception_code_filter)]
+		return row
+	for row in rows:
+		apply_line_projection(row)
+	def queue_sort_value(row):
+		if sort_field == "exception_code":
+			return "、".join(sorted({code for line in (row.get("daily_exception_lines") or []) for code in (line.get("exception_codes") or [])} or set(row.get("exception_codes") or [])))
+		if sort_field == "review_status":
+			return "待处理" if pending_filter(row) else "已处理"
+		return str(row.get(sort_field) or "")
+	# Keep the helper's RESTDAY_CLOCKED_WITHOUT_OVERTIME priority as the stable
+	# tie-breaker after any user-selected column sort.
+	rows.sort(key=lambda row: (queue_sort_value(row).casefold(), _processing_exception_sort_key(row)), reverse=sort_order == "desc")
 	if focus_record_id:
 		focus_index = next((index for index, row in enumerate(rows) if row.get("record_id") == focus_record_id), None)
 		if focus_index is not None:
 			page_start = (focus_index // page_length) * page_length
-	return {"review_rows": rows[page_start : page_start + page_length], "total_pending_count": total_pending_count, "filtered_pending_count": filtered_pending_count, "source_type": source_type, "page_start": page_start, "page_length": page_length}
+	page_rows = []
+	for row in rows[page_start : page_start + page_length]:
+		raw = raw_records_by_id.get(str(row.get("record_id") or ""))
+		page_rows.append(apply_line_projection(_serialize_record(raw, current_shift_rule_version)) if raw else row)
+	return {"review_rows": page_rows, "snapshot_record_ids": [row.get("record_id") for row in rows if row.get("record_id")], "available_departments": available_departments, "total_pending_count": total_pending_count, "filtered_pending_count": filtered_pending_count, "total_exception_count": total_exception_count, "filtered_exception_count": filtered_exception_count, "source_type": source_type, "page_start": page_start, "page_length": page_length}
+
+
+PROCESSING_EXCEPTION_EXPORT_COLUMNS = (
+	("employee_code", "员工工号", 16), ("employee_name", "姓名", 14), ("department", "部门", 22),
+	("attendance_date", "异常日期", 14), ("source_label", "来源", 14), ("exception_codes", "异常代码", 34),
+	("exception_reason", "异常原因", 34), ("shift", "班次", 24), ("scheduled_start", "计划上班", 14),
+	("scheduled_end", "计划下班", 14), ("clock_in", "实际打卡上班", 16), ("clock_out", "实际打卡下班", 16),
+	("raw_outside_shift_hours", "班次外原始时长（小时）", 18), ("overtime_approval_status", "加班申请状态", 18),
+	("confirmed_overtime_hours", "确认计入加班（小时）", 18), ("standard_hours", "标准工时（小时）", 16),
+	("actual_attendance_hours", "导出实际出勤（小时）", 18), ("effective_leave", "有效请假", 30),
+	("workday_overtime_hours", "平日加班（小时）", 16), ("restday_overtime_hours", "休息日加班（小时）", 18),
+	("holiday_overtime_hours", "节假日加班（小时）", 18), ("date_type", "日期类型", 14), ("attendance_note", "考勤说明", 36),
+	("review_status", "处理状态", 14), ("reviewer", "处理人", 20), ("reviewed_on", "处理时间", 20), ("review_note", "处理备注", 34),
+	("approval", "关联审批单", 28), ("source_file", "来源文件", 38), ("source_sheet", "来源工作表", 24), ("source_row", "来源行号", 12),
+)
+
+
+def _processing_exception_export_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	"""Flatten the visible queue into one dated attendance exception per row."""
+	items = []
+	for record in records:
+		lines = (record.get("daily_exception_lines") or []) if record.get("source_type") == "attendance_draft" else []
+		if not lines:
+			values = _effective_result_values(record)
+			date_value = next((values.get(field) for field in ("attendance_date", "日期", "奖惩日期", "punch_time") if values.get(field)), "")
+			lines = [{**values, "attendance_date": str(date_value)[:10], "exception_codes": record.get("exception_codes") or []}]
+		for line in lines:
+			codes = line.get("exception_codes") or record.get("exception_codes") or []
+			leave_parts = [f"{label} {value} 小时" for label, value in (line.get("leave_breakdown") or {}).items() if flt(value) != 0]
+			items.append({
+				"employee_code": record.get("employee_code") or line.get("employee_code") or "",
+				"employee_name": record.get("employee_name") or line.get("employee_name") or "",
+				"department": _display_department(record.get("department") or line.get("department")),
+				"attendance_date": line.get("attendance_date") or "",
+				"source_label": record.get("source_label") or SOURCE_LABELS.get(record.get("source_type"), record.get("source_type") or ""),
+				"exception_codes": "、".join(codes),
+				"exception_reason": "、".join(EXCEPTION_LABELS.get(code, code) for code in codes) or record.get("exception_detail") or record.get("exception_message") or "待人工确认",
+				"shift": line.get("shift") or "--", "scheduled_start": line.get("scheduled_start") or "--", "scheduled_end": line.get("scheduled_end") or "--",
+				"clock_in": line.get("clock_in") or "--", "clock_out": line.get("clock_out") or "--",
+				"raw_outside_shift_hours": line.get("raw_outside_shift_hours", ""),
+				"overtime_approval_status": line.get("overtime_approval_status") or "无申请",
+				"confirmed_overtime_hours": line.get("confirmed_overtime_hours", ""), "standard_hours": line.get("standard_hours", ""),
+				"actual_attendance_hours": line.get("actual_attendance_hours", ""), "effective_leave": "；".join(leave_parts) or "无",
+				"workday_overtime_hours": line.get("workday_overtime_hours", ""), "restday_overtime_hours": line.get("restday_overtime_hours", ""),
+				"holiday_overtime_hours": line.get("holiday_overtime_hours", ""),
+				"date_type": "周末，只核对时长" if line.get("is_weekend") else line.get("date_type") or "",
+				"attendance_note": line.get("attendance_note") or record.get("exception_detail") or record.get("exception_message") or "",
+				"review_status": line.get("review_status") or record.get("review_status") or "待审核",
+				"reviewer": line.get("reviewer") or record.get("reviewer") or "", "reviewed_on": line.get("reviewed_on") or record.get("reviewed_on") or "",
+				"review_note": line.get("review_note") or record.get("review_note") or "",
+				"approval": line.get("approval") or line.get("overtime_approval") or record.get("approval_no") or "",
+				"source_file": line.get("source_file") or record.get("source_file") or "", "source_sheet": line.get("source_sheet") or record.get("source_sheet") or "",
+				"source_row": line.get("source_row") or record.get("source_row") or "",
+			})
+	return items
+
+
+def _build_processing_exception_export_workbook(rows: list[dict[str, Any]]):
+	from openpyxl import Workbook
+	from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+	from openpyxl.utils import get_column_letter
+
+	book = Workbook()
+	sheet = book.active
+	sheet.title = "异常明细"
+	sheet.append([label for _field, label, _width in PROCESSING_EXCEPTION_EXPORT_COLUMNS])
+	thin = Side(style="thin", color="D9E2F3")
+	for cell in sheet[1]:
+		cell.fill = PatternFill("solid", fgColor="1F4E78")
+		cell.font = Font(name="微软雅黑", size=10, bold=True, color="FFFFFF")
+		cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+		cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	for row in rows:
+		sheet.append([row.get(field, "") for field, _label, _width in PROCESSING_EXCEPTION_EXPORT_COLUMNS])
+		for cell in sheet[sheet.max_row]:
+			cell.font = Font(name="微软雅黑", size=10)
+			cell.alignment = Alignment(vertical="top", wrap_text=True)
+			cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+	for index, (_field, _label, width) in enumerate(PROCESSING_EXCEPTION_EXPORT_COLUMNS, start=1):
+		sheet.column_dimensions[get_column_letter(index)].width = width
+	sheet.freeze_panes = "E2"
+	sheet.auto_filter.ref = f"A1:{get_column_letter(len(PROCESSING_EXCEPTION_EXPORT_COLUMNS))}{max(sheet.max_row, 2)}"
+	sheet.sheet_view.showGridLines = False
+	sheet.row_dimensions[1].height = 34
+	return book
+
+
+@frappe.whitelist()
+def export_processing_exceptions(
+	company: str, attendance_month: str, source_type: str = "", employee_code: str = "", employee_name: str = "", department: str = "",
+	exception_code: str = "", processing_status: str = "", sort_field: str = "employee_code", sort_order: str = "asc",
+):
+	"""Export all rows matching the current exception-page filters."""
+	from frappe.utils.file_manager import save_file
+	from hrms.access_control import require_hrms_capability
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+
+	_require_processing_manager()
+	require_hrms_capability("attendance_export", legacy_roles=("HR Manager",))
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	if source_type:
+		_require_processing_source_type(source_type)
+	batches = [_latest_batch(company, attendance_month, source) for source in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES]
+	batch_names = [batch.name for batch in batches if batch and (not source_type or batch.source_type == source_type)]
+	queue_fields = ["name", "company", "import_batch", "attendance_month", "employee_code", "employee_name", "department", "source_type", "original_value_json", "processed_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "reviewer", "reviewed_on", "review_note", "review_history_json", "eligible_for_downstream", "source_file", "source_sheet", "source_row", "source_id", "approval_no"]
+	stored_records = frappe.get_all(
+		PROCESSING_RECORD_DOCTYPE,
+		filters={"import_batch": ["in", batch_names or ["__none__"]]},
+		fields=queue_fields,
+		order_by="modified desc",
+		limit_page_length=5000,
+	)
+	records = [_serialize_record(record) for record in stored_records]
+	def normalise(value):
+		return re.sub(r"\s+", "", str(value or "").casefold())
+	employee_code_filter, employee_name_filter, department_filter = normalise(employee_code), normalise(employee_name), normalise(department)
+	exception_code_filter = str(exception_code or "").strip()
+	processing_status_filter = str(processing_status or "").strip()
+	if processing_status_filter not in {"", "pending", "processed"}:
+		processing_status_filter = ""
+	filtered_records = []
+	for record in records:
+		if employee_code_filter and employee_code_filter not in normalise(record.get("employee_code")):
+			continue
+		if employee_name_filter and employee_name_filter not in normalise(record.get("employee_name")):
+			continue
+		if department_filter and department_filter not in normalise(record.get("department")):
+			continue
+		if record.get("source_type") == "attendance_draft":
+			lines = []
+			for line in record.get("daily_exception_lines") or []:
+				pending = not line.get("resolved") and line.get("review_status") != "已处理异常"
+				if exception_code_filter and exception_code_filter not in (line.get("exception_codes") or []):
+					continue
+				if processing_status_filter == "pending" and not pending:
+					continue
+				if processing_status_filter == "processed" and pending:
+					continue
+				lines.append(line)
+			if not lines:
+				continue
+			record = {**record, "daily_exception_lines": lines}
+		else:
+			if not record.get("exception_codes"):
+				continue
+			if exception_code_filter and exception_code_filter not in (record.get("exception_codes") or []):
+				continue
+			pending = record.get("review_status") == "待审核"
+			if processing_status_filter == "pending" and not pending:
+				continue
+			if processing_status_filter == "processed" and pending:
+				continue
+		filtered_records.append(record)
+	records = filtered_records
+	sort_field = sort_field if sort_field in {"employee_code", "employee_name", "department", "source_type", "exception_code", "review_status"} else "employee_code"
+	def export_sort_value(record):
+		if sort_field == "exception_code":
+			return "、".join(sorted({code for line in (record.get("daily_exception_lines") or []) for code in (line.get("exception_codes") or [])} or set(record.get("exception_codes") or [])))
+		if sort_field == "review_status":
+			return str(record.get("review_status") or "")
+		return str(record.get(sort_field) or "")
+	records.sort(key=lambda record: (export_sort_value(record).casefold(), str(record.get("record_id") or "")), reverse=str(sort_order).lower() == "desc")
+	if not records:
+		frappe.throw(_("当前筛选下没有可导出的异常记录。"))
+	rows = _processing_exception_export_rows(records)
+	book = _build_processing_exception_export_workbook(rows)
+	output = BytesIO()
+	save_workbook_with_logo_watermark(book, output)
+	filename = f"{attendance_month}_考勤异常明细.xlsx"
+	file = save_file(filename, output.getvalue(), None, None, is_private=1)
+	return {"file_url": file.file_url, "file_name": file.file_name, "employee_record_count": len(records), "exception_line_count": len(rows)}
 
 
 def _processing_exception_sort_key(row: dict[str, Any]):
@@ -4691,19 +5033,35 @@ def reset_attendance_month(company: str, attendance_month: str, confirm_month: s
 def list_manual_adjustments(company: str, attendance_month: str, page_length: int = 500):
 	_require_processing_manager()
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	limit = min(max(cint(page_length), 1), 5000)
 	records = frappe.get_all(
 		PROCESSING_RECORD_DOCTYPE,
 		filters={"company": company, "attendance_month": attendance_month, "review_history_json": ["!=", "[]"]},
 		fields=["name", "employee_code", "employee_name", "source_type", "review_history_json"],
 		order_by="modified desc",
-		limit_page_length=min(max(cint(page_length), 1), 5000),
+		# Fetch one extra parent record so the UI can state explicitly when the
+		# newest-first ledger has been bounded for fast initial display.
+		limit_page_length=limit + 1,
 	)
 	items = []
 	for record in records:
 		for event in _loads(record.review_history_json, []):
+			field_name = str(event.get("field_name") or "")
+			if field_name in {"__attendance_policy_recheck__", "__source_parser_repair__", "__review_decision__"}:
+				continue
+			if field_name.startswith("__daily_exception_decision__:"):
+				continue
+			if event.get("old_value") == event.get("new_value"):
+				continue
 			items.append({"record_id": record.name, "employee_code": record.employee_code, "employee_name": record.employee_name, "source_type": record.source_type, "field_name": event.get("field_name", ""), "original_value": event.get("old_value"), "new_value": event.get("new_value"), "reference_values": event.get("reference_values") or {}, "review_status": event.get("review_status", ""), "reason": event.get("reason", ""), "modified_by": event.get("reviewer", ""), "modified_at": event.get("reviewed_on", "")})
-			items[-1]["attendance_date"] = event.get("attendance_date") or ""
-	return {"items": items[: min(max(cint(page_length), 1), 5000)]}
+			attendance_date = event.get("attendance_date") or ""
+			if not attendance_date and field_name.startswith("special_hours_days:"):
+				day = cint(field_name.rsplit(":", 1)[-1])
+				if day:
+					attendance_date = f"{attendance_month}-{day:02d}"
+			items[-1]["attendance_date"] = attendance_date
+	items.sort(key=lambda item: item.get("modified_at") or "", reverse=True)
+	return {"items": items[:limit], "has_more": len(records) > limit or len(items) > limit, "page_length": limit}
 
 
 @frappe.whitelist()
@@ -4721,6 +5079,29 @@ def list_attendance_shift_rules(company: str):
 		"items": bundle["items"],
 		"rule_version": bundle["version"],
 		"using_builtin_fallback": bundle["rules"] is None,
+	}
+
+
+@frappe.whitelist()
+def get_complete_attendance_rules(company: str):
+	"""Return every maintainable attendance rule for the unified rule centre."""
+	_require_processing_manager()
+	company = _require_company(company)
+	from hrms.api.attendance_import import list_attendance_custom_rules
+
+	bundle = _attendance_shift_rule_bundle(company)
+	policy_rules = [dict(row) for row in list_attendance_custom_rules(page_length=500)]
+	return {
+		"shift_rules": bundle["items"],
+		"shift_rule_version": bundle["version"],
+		"using_builtin_fallback": bundle["rules"] is None,
+		"policy_rules": policy_rules,
+		"system_boundaries": [
+			{"name": "员工身份匹配", "logic": "公司工号为主键；姓名、部门用于冲突核对", "impact": "冲突进入异常处理，不自动合并员工"},
+			{"name": "班次匹配", "logic": "启用规则的全部匹配关键词均需出现在来源班次中", "impact": "决定基本工时、加班、取卡及夜班津贴规则"},
+			{"name": "规则生效与版本", "logic": "按生效日期及匹配精度选择规则；每次有效修改生成新版本", "impact": "历史结果标记为待重新校验，不静默覆盖"},
+			{"name": "人工与审批优先", "logic": "人工确认值、已匹配审批优先于排班自动值", "impact": "保留审核结果及完整修改记录"},
+		],
 	}
 
 

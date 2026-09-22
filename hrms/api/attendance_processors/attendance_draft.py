@@ -12,7 +12,7 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -69,7 +69,7 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 9
+ATTENDANCE_POLICY_VERSION = 12
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
 
 # 永新班别排配表 V3.0 的固定加班规则。每条规则分别保存：班次关键词、平日
@@ -148,6 +148,12 @@ _PRODUCTION_DEEP_NIGHT_START_MINUTES = 20 * 60
 _PRODUCTION_DEEP_NIGHT_END_MINUTES = 8 * 60
 _SHIFT_CLOCK_RE = re.compile(r"(?<!\d)([01]?\d|2[0-3])[:：]([0-5]\d)(?!\d)")
 _PUNCH_RANGE_CLOCK_RE = re.compile(r"(?<!\d)([01]?\d|2[0-4])[:：]([0-5]\d)(?!\d)")
+_LEAVE_APPROVAL_RE = re.compile(
+	r"(?P<leave_type>事假|病假|特休|年假|工伤|团圆假|排休|丧假|婚假|公假|产假)"
+	r"\s*(?P<start_date>(?:\d{4}-)?\d{1,2}-\d{1,2})\s*(?P<start_time>\d{1,2}[:：]\d{2})"
+	r"\s*到\s*(?P<end_date>(?:\d{4}-)?\d{1,2}-\d{1,2})\s*(?P<end_time>\d{1,2}[:：]\d{2})"
+	r"\s*(?P<hours>\d+(?:\.\d+)?)\s*小时"
+)
 
 EXCEPTION_MESSAGES = {
 	"ATTENDANCE_DATE_MISSING": "考勤日期为空。",
@@ -167,11 +173,11 @@ EXCEPTION_MESSAGES = {
 	"CLOCK_OUT_MISSING": "钉钉明确存在下班未打卡记录；人员照常进入终稿，红苹果由忘打卡来源核算。",
 	"CLOCK_IN_OUTSIDE_PICK_RANGE": "上班打卡不在该班次允许的可取卡时段内，请人工核对班次或打卡。",
 	"CLOCK_OUT_OUTSIDE_PICK_RANGE": "下班打卡不在该班次允许的可取卡时段内，请人工核对班次或打卡。",
-	"LATE_MARKED": "上班打卡晚于计划上班时间；迟到缺口已按时长叠加到事假，原始打卡和迟到次数仍保留审计。",
+	"LATE_MARKED": "上班打卡晚于计划上班时间；30分钟以内只标记迟到，超过30分钟时整段迟到时长计入事假，原始打卡和迟到次数仍保留审计。",
 	"EARLY_MARKED": "钉钉明确标记早退；工作日无请假证据时按实际早退时长计旷工工时。",
 	"ABSENCE_MARKED": "工作日无出勤且无可抵扣请假，已按未出勤工时计入旷工并进入薪资三倍扣款。",
 	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "休息日存在打卡时间，但未匹配加班申请且休息日加班工时为 0；请人工确认是否补录休息日加班工时。",
-	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "工作日下班后班次外打卡超过30分钟或存在加班时长，但无有效加班申请；原始时长仅供展示审计，未自动计入后续。",
+	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "工作日打卡超出钉钉自动识别时段，或所属班次要求提交加班申请，但无有效审批单；原始时长仅供展示审计，未自动计入后续。",
 	"SHIFT_SCHEDULE_REVIEW_REQUIRED": "有打卡或迟到标记，但无法取得完整班次计划起止；已标为待复核，未凭空推算。",
 	"SOURCE_FILE_MISSING": "来源文件定位为空。",
 	"SOURCE_SHEET_MISSING": "来源工作表定位为空。",
@@ -249,6 +255,81 @@ def _has_leave_evidence(row: Mapping[str, Any], leave_hours: Decimal) -> bool:
 		return True
 	approval = _text(_value(row, IDENTITY_FIELDS["approval"]))
 	return "假" in approval
+
+
+def _approval_datetime(date_text: str, time_text: str, attendance_date: str) -> datetime | None:
+	"""Parse DingTalk's approval timestamps, whose year is commonly omitted."""
+	try:
+		attendance_day = date.fromisoformat(attendance_date)
+		parts = [int(part) for part in date_text.split("-")]
+		if len(parts) == 3:
+			year, month, day = parts
+		else:
+			month, day = parts
+			year = attendance_day.year
+			if attendance_day.month == 1 and month == 12:
+				year -= 1
+			elif attendance_day.month == 12 and month == 1:
+				year += 1
+		hour, minute = (int(part) for part in time_text.replace("：", ":").split(":"))
+		return datetime(year, month, day, hour, minute)
+	except (TypeError, ValueError):
+		return None
+
+
+def _morning_leave_approval_hours(
+	row: Mapping[str, Any], attendance_date: str, scheduled_start: int, actual_in: int | None,
+) -> Decimal:
+	"""Return approved leave hours that move this day's expected clock-in.
+
+	DingTalk serialises several approvals into one ``关联审批单`` cell, for example
+	``事假07-29 08:00到07-29 08:30 0.5小时，加班...``.  Only a leave
+	segment that covers the scheduled start may alter the lateness boundary;
+	afternoon leave and overtime/card approvals must not excuse a morning punch.
+	"""
+	approval = _text(_value(row, IDENTITY_FIELDS["approval"]))
+	if not approval or any(token in approval for token in ("未通过", "已驳回", "已拒绝", "已撤销", "已作废", "审批中")):
+		return Decimal("0")
+	try:
+		attendance_day = date.fromisoformat(attendance_date)
+	except (TypeError, ValueError):
+		return Decimal("0")
+	scheduled = datetime.combine(attendance_day, datetime.min.time()).replace(
+		hour=(scheduled_start // 60) % 24, minute=scheduled_start % 60,
+	)
+	actual = datetime.combine(attendance_day, datetime.min.time()) + timedelta(minutes=actual_in) if actual_in is not None else None
+	segments = []
+	for match in _LEAVE_APPROVAL_RE.finditer(approval):
+		start = _approval_datetime(match.group("start_date"), match.group("start_time"), attendance_date)
+		end = _approval_datetime(match.group("end_date"), match.group("end_time"), attendance_date)
+		if not start or not end:
+			continue
+		if end < start:
+			continue
+		segments.append((start, end, Decimal(match.group("hours"))))
+	segments.sort(key=lambda item: item[0])
+	if not any(start <= scheduled < end for start, end, _hours in segments):
+		return Decimal("0")
+	return sum(
+		(hours for start, end, hours in segments if end > scheduled and (actual is None or start <= actual)),
+		Decimal("0"),
+	)
+
+
+def _late_minutes_after_approval(
+	raw_late_minutes: int,
+	approved_leave_hours: Decimal,
+	standard_hours: Decimal,
+	actual_attendance_hours: Decimal,
+) -> int:
+	"""Keep only the late duration not already covered by a morning approval."""
+	if raw_late_minutes <= 0 or approved_leave_hours <= 0:
+		return raw_late_minutes
+	if standard_hours > 0 and actual_attendance_hours > 0:
+		unworked_minutes = max(standard_hours - actual_attendance_hours, Decimal("0")) * Decimal("60")
+		uncovered = max(unworked_minutes - approved_leave_hours * Decimal("60"), Decimal("0"))
+		return min(raw_late_minutes, int(uncovered.quantize(Decimal("1"))))
+	return max(raw_late_minutes - int(approved_leave_hours * Decimal("60")), 0)
 
 
 def _is_rest_day(row: Mapping[str, Any]) -> bool:
@@ -492,6 +573,7 @@ def _shift_time_facts(row: Mapping[str, Any], shift_rule: Mapping[str, Any] | No
 		"schedule_available": True,
 		"scheduled_start_minutes": start,
 		"scheduled_end_minutes": end,
+		"actual_in_minutes": actual_in,
 		"late_minutes": late_minutes,
 		"pre_shift_minutes": early_minutes,
 		"post_shift_minutes": late_out_minutes,
@@ -572,7 +654,13 @@ def is_production_deep_night_shift(shift: Any) -> bool:
 
 
 def _late_hours(minutes: int) -> Decimal:
-	return (Decimal(minutes) / Decimal("60")).quantize(Decimal("0.01")) if minutes > 0 else Decimal("0")
+	"""Return personal-leave hours only after the 30-minute late boundary.
+
+	A punch up to and including 30 minutes late remains a late-attendance event
+	for review and reporting, but does not become personal leave. Once the
+	boundary is exceeded, the complete late duration is charged as leave.
+	"""
+	return (Decimal(minutes) / Decimal("60")).quantize(Decimal("0.01")) if minutes > 30 else Decimal("0")
 
 
 def _format_minutes(value: Any) -> str:
@@ -995,19 +1083,33 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		# Shift and actual clock decide the minutes.  Source work/date type decides
 		# whether an adjusted weekend is a workday; ordinary rest days stay excluded.
 		is_attendance_workday = _is_scheduled_attendance_workday(row, row_standard_hours, parsed_date)
-		late_minutes = int(shift_facts.get("late_minutes") or 0) if is_attendance_workday else 0
+		raw_late_minutes = int(shift_facts.get("late_minutes") or 0) if is_attendance_workday else 0
+		approved_clock_in_leave_hours = _morning_leave_approval_hours(
+			row,
+			parsed_date,
+			int(shift_facts.get("scheduled_start_minutes") or 0),
+			shift_facts.get("actual_in_minutes"),
+		) if raw_late_minutes and shift_facts.get("schedule_available") else Decimal("0")
+		late_minutes = _late_minutes_after_approval(
+			raw_late_minutes,
+			approved_clock_in_leave_hours,
+			row_standard_hours,
+			row_actual_attendance_hours,
+		)
 		late_personal_leave_hours = _late_hours(late_minutes)
-		if late_personal_leave_hours:
+		if late_minutes:
 			# Ordinary source rows add the derived late duration to their leave.  A
 			# reviewed override is the displayed final total (already including late),
 			# so retain it without adding the same late duration a second time.  The
-			# late duration itself remains the minimum that can flow downstream.
-			if row.get("_personal_leave_includes_late"):
-				row_numbers["personal_leave_hours"] = max(
-					row_numbers["personal_leave_hours"], late_personal_leave_hours,
-				)
-			else:
-				row_numbers["personal_leave_hours"] += late_personal_leave_hours
+			# late duration itself remains the minimum that can flow downstream once
+			# the 30-minute boundary has been exceeded.
+			if late_personal_leave_hours:
+				if row.get("_personal_leave_includes_late"):
+					row_numbers["personal_leave_hours"] = max(
+						row_numbers["personal_leave_hours"], late_personal_leave_hours,
+					)
+				else:
+					row_numbers["personal_leave_hours"] += late_personal_leave_hours
 			attendance_notes.append(
 				f"{parsed_date or _text(date_value)}迟到{late_minutes}分钟"
 				+ ("（半小时以内）" if late_minutes <= 30 else "（超过半小时）")
@@ -1019,6 +1121,9 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 		row_clock_in_missing = row_numbers["clock_in_missing_count"]
 		row_clock_out_missing = row_numbers["clock_out_missing_count"]
 		row_late_count = row_numbers["late_count"]
+		if raw_late_minutes > 0 and approved_clock_in_leave_hours > 0 and late_minutes <= 0:
+			row_late_count = Decimal("0")
+			row_numbers["late_count"] = row_late_count
 		row_early_count = row_numbers["early_count"]
 		row_absence_marker_count = row_numbers["absence_marker_count"]
 		row_absence_hours = row_numbers["absence_hours"]
@@ -1157,8 +1262,9 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			"approval": _text(_value(row, IDENTITY_FIELDS["approval"])),
 			"overtime_approval_status": (
 				"人工确认" if manual_overtime_hours is not None
-				else "排班自动生成" if schedule_overtime_mode == "schedule_auto"
-				else "已匹配申请" if has_overtime_approval else "无申请"
+				else "已匹配申请" if has_overtime_approval
+				else "钉钉自动识别" if schedule_overtime_mode == "schedule_auto"
+				else "无申请"
 			),
 			"overtime_source_mode": schedule_overtime_mode,
 			"shift_rule_code": matched_shift_rule.get("rule_code", "builtin") if matched_shift_rule else "",
@@ -1180,6 +1286,9 @@ def _aggregate_employee_rows(rows, *, attendance_month, source_file, source_shee
 			"schedule_auto_excess_minutes": schedule_auto_excess_minutes,
 			"confirmed_overtime_hours": _display_number(confirmed_workday_overtime_hours),
 			"late_minutes": late_minutes,
+			"raw_late_minutes": raw_late_minutes,
+			"approved_clock_in_leave_hours": _display_number(approved_clock_in_leave_hours),
+			"late_approval_covered": bool(raw_late_minutes > 0 and approved_clock_in_leave_hours > 0 and late_minutes <= 0),
 			"late_personal_leave_hours": _display_number(late_personal_leave_hours),
 			"attendance_note": attendance_notes[-1] if late_minutes else "",
 			"scheduled_start": _format_minutes(shift_facts.get("scheduled_start_minutes")),

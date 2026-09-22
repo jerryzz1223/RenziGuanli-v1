@@ -32,13 +32,17 @@ export function useDownloadPDF(translate = (value) => value) {
 
 			const blob = await response.blob()
 			const blobUrl = window.URL.createObjectURL(blob)
-			const link = document.createElement("a")
-			link.href = blobUrl
-			link.download = `${filename || docname}.pdf`
-			link.click()
-			setTimeout(() => {
-				window.URL.revokeObjectURL(blobUrl)
-			}, 3000)
+			try {
+				const link = document.createElement("a")
+				link.href = blobUrl
+				link.download = `${filename || docname}.pdf`
+				link.click()
+			} finally {
+				// Release the URL even if preparing or triggering the download fails.
+				setTimeout(() => {
+					window.URL.revokeObjectURL(blobUrl)
+				}, 3000)
+			}
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error)
 			toast({
