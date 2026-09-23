@@ -3,22 +3,26 @@
 import frappe
 
 from hrms.access_control import (
-	CAPABILITY_DEFINITIONS,
+	ACCESS_TIER_DEFINITIONS,
+	APPROVE_TIER_CAPABILITY_KEYS,
+	GRANULAR_BUSINESS_ROLES,
 	READ_ONLY_ROLE,
+	READ_TIER_CAPABILITY_KEYS,
+	SUBMIT_ROLE,
+	SUBMIT_TIER_CAPABILITY_KEYS,
 	disable_hrms_user_account,
 	register_read_only_account,
-	set_hrms_user_capabilities,
+	set_hrms_user_access_tier,
 )
 
 
 def verify_business_capability_matrix():
-	"""Select all, remove every key once, and verify template action pairs."""
+	"""Verify the three cumulative tiers and submit/approval separation."""
 	from hrms.access_control import has_hrms_capability
 	from hrms.api.form_data_intake import FORM_IMPORT_CAPABILITIES, _require_form_import_capability
 
 	original_session_user = frappe.session.user
 	test_user = f"capability.matrix.{frappe.generate_hash(length=10).lower()}@example.invalid"
-	keys = [item["key"] for item in CAPABILITY_DEFINITIONS]
 	frappe.set_user("Administrator")
 	frappe.db.savepoint("verify_business_capability_matrix")
 	try:
@@ -26,20 +30,22 @@ def verify_business_capability_matrix():
 			"doctype": "User", "email": test_user, "first_name": "Capability Matrix",
 			"enabled": 1, "send_welcome_email": 0, "user_type": "System User",
 		}).insert(ignore_permissions=True)
-		all_result = set_hrms_user_capabilities(test_user, keys)
-		assert set(all_result["capabilities"]) == set(keys), "all-selected readback mismatch"
-
-		for removed in keys:
-			selected = [key for key in keys if key != removed]
-			result = set_hrms_user_capabilities(test_user, selected)
-			assert set(result["capabilities"]) == set(selected), f"remove-one readback mismatch: {removed}"
+		for tier, allowed in (
+			("read", READ_TIER_CAPABILITY_KEYS),
+			("submit", SUBMIT_TIER_CAPABILITY_KEYS),
+			("approve", APPROVE_TIER_CAPABILITY_KEYS),
+		):
+			result = set_hrms_user_access_tier(test_user, tier)
+			assert result["access_tier"] == tier
 			frappe.set_user(test_user)
-			assert not has_hrms_capability(removed), f"removed capability still active: {removed}"
-			assert all(has_hrms_capability(key) for key in selected), f"retained capability lost after removing: {removed}"
+			assert all(has_hrms_capability(key) for key in allowed)
 			frappe.set_user("Administrator")
 
 		for template_key, (submit_key, approval_key) in FORM_IMPORT_CAPABILITIES.items():
-			set_hrms_user_capabilities(test_user, [submit_key])
+			if submit_key == "permission_management":
+				# System configuration remains outside the three business tiers.
+				continue
+			set_hrms_user_access_tier(test_user, "submit")
 			frappe.set_user(test_user)
 			_require_form_import_capability(template_key)
 			if approval_key != submit_key:
@@ -51,10 +57,7 @@ def verify_business_capability_matrix():
 					raise AssertionError(f"approval bypassed submit-only permission: {template_key}")
 			frappe.set_user("Administrator")
 
-		set_hrms_user_capabilities(test_user, [])
-		frappe.set_user(test_user)
-		assert not any(has_hrms_capability(key) for key in keys), "clear-all left a managed capability"
-		return {"capabilities": len(keys), "remove_one_cases": len(keys), "form_templates": len(FORM_IMPORT_CAPABILITIES), "result": "passed_and_rolled_back"}
+		return {"tiers": len(ACCESS_TIER_DEFINITIONS), "form_templates": len(FORM_IMPORT_CAPABILITIES), "result": "passed_and_rolled_back"}
 	finally:
 		frappe.db.rollback(save_point="verify_business_capability_matrix")
 		frappe.clear_cache(user=test_user)
@@ -74,13 +77,13 @@ def execute():
 
 	before = frappe.get_doc("User", target_user)
 	before_roles = [row.role for row in before.roles]
-	managed_roles = {item["role"] for item in CAPABILITY_DEFINITIONS}
+	managed_roles = {item["role"] for item in ACCESS_TIER_DEFINITIONS} | set(GRANULAR_BUSINESS_ROLES) | {READ_ONLY_ROLE}
 	preserved = [role for role in before_roles if role not in managed_roles]
 	frappe.db.savepoint("verify_hrms_access_control")
 	try:
-		result = set_hrms_user_capabilities(target_user, ["basic_read_only", "payroll_entry_submit"])
-		assert result["capabilities"] == ["basic_read_only", "payroll_entry_submit"]
-		assert result["roles"] == preserved + [READ_ONLY_ROLE, "薪资经办"]
+		result = set_hrms_user_access_tier(target_user, "submit")
+		assert result["access_tier"] == "submit"
+		assert result["roles"] == preserved + [SUBMIT_ROLE]
 		assert frappe.db.get_value("User", target_user, "user_type") == "System User"
 		return {"user": target_user, "result": "passed_and_rolled_back"}
 	finally:

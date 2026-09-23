@@ -57,29 +57,25 @@ assert(!accessPage.includes("员工：${escape(scope.internal_for_value)}"), "In
 assert(api.includes('hrms.patches.v16_0.reapply_company_employee_code_names') === false, "Patch registration belongs only in patches.txt.");
 
 for (const marker of [
-	"勾选权限",
+	"设置权限档位",
 	"open_capability_editor",
-	"hrms.access_control.set_hrms_user_capabilities",
-	"可勾选的业务动作权限",
-	"permissionFields",
-	"发起/提交与审批可以分配给不同账户",
-	"Column Break",
+	"hrms.access_control.set_hrms_user_access_tier",
+	"三档业务权限",
+	"只读 → 可以提交 → 审批",
+	"access_tier_label",
+	"tier_by_label",
 	"hrms-access-capability-dialog",
-	"JSON.stringify(selected)",
 	"response.message?.saved",
-	"权限已正式保存",
+	"权限已保存为",
 	"always()",
 	"dialog.enable_primary_action()",
-	"response.message?.ignored_capabilities",
-	"selected.filter((key) => !ignored.has(key))",
-	"一键全选",
-	"取消全选",
-	"select-all-capabilities",
-	"clear-all-capabilities",
-	"set_all_capabilities",
-	"dialog.set_value(`capability_${capability.key}`",
+	"提交人和审批人按实际登录账号记入",
 ]) {
-	assert(accessPage.includes(marker), `Business capability editor contract missing: ${marker}`);
+	assert(accessPage.includes(marker), `Three-tier access editor contract missing: ${marker}`);
+}
+
+for (const removedGranularUi of ["一键全选", "取消全选", "capability_${capability.key}", "permissionFields"]) {
+	assert(!accessPage.includes(removedGranularUi), `Granular capability UI must stay removed: ${removedGranularUi}`);
 }
 
 for (const marker of [".hrms-access-capability-dialog .modal-dialog", "1180px", "calc(100vw - 48px)"]) {
@@ -133,7 +129,9 @@ for (const marker of [
 	"payroll_confirm",
 	"permission_management",
 	"def require_hrms_capability(",
-	"def set_hrms_user_capabilities(",
+	"ACCESS_TIER_DEFINITIONS",
+	"def set_hrms_user_access_tier(",
+	"def migrate_legacy_capability_roles_to_access_tiers(",
 	"preserved_roles",
 ]) {
 	assert(accessControl.includes(marker), `Capability backend contract missing: ${marker}`);

@@ -33,7 +33,7 @@ for (const field of ["employee_code", "source_row", "source_month", "source_empl
 assert(feedback.fields.some((item) => item.fieldname === "satisfaction_score"));
 for (const marker of ["set_assessment_outcomes", "event_status = \"Completed\"", "sync_passed_training_to_skill_map", "assessment_result == \"Pass\""]) assert(resultController.includes(marker));
 assert(feedbackController.includes("满意度评分必须介于 1 到 5 分之间"));
-for (const marker of ["培训闭环", "培训待办", "近期培训活动", "培训计划清单", "get_training_learning_dashboard", "新建培训计划", "年度资料导入与员工匹配", "教育训练计划导入与员工匹配", "员工公司工号匹配", "data-training-match-filter", "data-training-match-search", "preview_training_workbooks", "import_training_workbooks", "公司工号", "请先完成剩余 {0} 组员工公司工号匹配", ".prop(\"disabled\", Boolean(sourceErrors || pending))"]) assert(programList.includes(marker));
+for (const marker of ["培训闭环", "培训待办", "近期培训活动", "培训计划清单", "get_training_learning_dashboard", "新建培训计划", "年度资料导入与员工匹配", "教育训练计划导入与员工匹配", "员工公司工号匹配", "data-training-match-filter", "data-training-match-search", "preview_training_workbooks", "import_training_workbooks", "公司工号", "清除已选文件", "清除两份文件并重新选择", "请先完成剩余 {0} 组员工公司工号匹配", ".prop(\"disabled\", Boolean(sourceErrors || pending))"]) assert(programList.includes(marker));
 for (const marker of ["make_attachments_public: false", "disable_file_browser: true", "allow_web_link: false", "allow_toggle_private: false"]) assert(programList.includes(marker));
 for (const marker of ["get_training_learning_dashboard", "_attendance_summary", "needs_retraining", "retraining_due_on"]) assert(programController.includes(marker));
 for (const marker of [".hrms-training-learning-workspace", ".hrms-training-summary", "@media (max-width: 767px)"]) assert(trainingCss.includes(marker));

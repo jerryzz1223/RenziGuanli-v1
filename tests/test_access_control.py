@@ -122,7 +122,7 @@ class AccessControlTests(unittest.TestCase):
 		result = module.set_hrms_user_capabilities(
 			"worker@example.com", ["personnel_view", "expense_submit", "expense_approve"]
 		)
-		self.assertEqual([row.role for row in user.roles], ["人事查看"])
+		self.assertEqual([row.role for row in user.roles], [module.READ_TIER_ROLE])
 		self.assertEqual(result["capabilities"], ["personnel_view"])
 		self.assertEqual(result["ignored_capabilities"], ["expense_approve", "expense_submit"])
 		self.assertTrue(result["saved"])
@@ -136,7 +136,7 @@ class AccessControlTests(unittest.TestCase):
 		self.assertTrue(user.saved)
 		self.assertEqual(
 			[row.role for row in user.roles],
-			["Existing Custom Role", "HR User", "Leave Approver", module.READ_ONLY_ROLE, "薪资经办"],
+			["Existing Custom Role", "HR User", "Leave Approver", module.SUBMIT_ROLE],
 		)
 		self.assertEqual(result["capabilities"], ["basic_read_only", "payroll_entry_submit"])
 		self.assertTrue(result["saved"])
@@ -146,23 +146,19 @@ class AccessControlTests(unittest.TestCase):
 		annotation = module.set_hrms_user_capabilities.__annotations__["capabilities"]
 		self.assertEqual(annotation, str | None)
 
-	def test_every_individual_checkbox_grants_only_its_own_managed_role(self):
+	def test_stale_individual_checkbox_payloads_collapse_to_three_tiers(self):
 		module = _load_module()
-		for capability in module.CAPABILITY_DEFINITIONS:
-			if capability["key"] == "permission_management":
-				# System Manager is intentionally the explicit full-access option.
-				continue
-			with self.subTest(capability=capability["key"]):
+		for capability, expected_tier, expected_role in (
+			("personnel_view", "read", module.READ_TIER_ROLE),
+			("roster_import_submit", "submit", module.SUBMIT_ROLE),
+			("roster_import_approve", "approve", module.APPROVE_ROLE),
+		):
+			with self.subTest(capability=capability):
 				user = _UserDoc(["Existing Custom Role"])
 				module.frappe.get_doc = lambda *_args, _user=user, **_kwargs: _user
-				result = module.set_hrms_user_capabilities(
-					"worker@example.com", [capability["key"]]
-				)
-				self.assertEqual(
-					[row.role for row in user.roles],
-					["Existing Custom Role", capability["role"]],
-				)
-				self.assertEqual(result["capabilities"], [capability["key"]])
+				result = module.set_hrms_user_capabilities("worker@example.com", [capability])
+				self.assertEqual([row.role for row in user.roles], ["Existing Custom Role", expected_role])
+				self.assertEqual(result["migrated_to_tier"], expected_tier)
 
 	def test_one_capability_role_does_not_authorize_other_capabilities(self):
 		module = _load_module()
@@ -178,6 +174,38 @@ class AccessControlTests(unittest.TestCase):
 					if module.has_hrms_capability(item["key"], user="worker@example.com")
 				]
 				self.assertEqual(allowed, [granted["key"]])
+
+	def test_three_access_tiers_are_cumulative_and_do_not_grant_permission_management(self):
+		module = _load_module()
+		cases = (
+			(module.READ_TIER_ROLE, "personnel_view", False),
+			(module.SUBMIT_ROLE, "roster_import_submit", False),
+			(module.APPROVE_ROLE, "roster_import_approve", False),
+		)
+		for role, capability, manages_permissions in cases:
+			with self.subTest(role=role):
+				module.frappe.get_roles = lambda _user=None, selected_role=role: [selected_role]
+				self.assertTrue(module.has_hrms_capability(capability, user="worker@example.com"))
+				self.assertEqual(
+					module.has_hrms_capability("permission_management", user="worker@example.com"),
+					manages_permissions,
+				)
+		module.frappe.get_roles = lambda _user=None: [module.SUBMIT_ROLE]
+		self.assertTrue(module.has_hrms_capability("personnel_view", user="worker@example.com"))
+		self.assertFalse(module.has_hrms_capability("roster_import_approve", user="worker@example.com"))
+		module.frappe.get_roles = lambda _user=None: [module.APPROVE_ROLE]
+		self.assertTrue(module.has_hrms_capability("roster_import_submit", user="worker@example.com"))
+
+	def test_setting_tier_collapses_legacy_business_roles_and_preserves_system_manager(self):
+		user = _UserDoc(["System Manager", "人事查看", "花名册导入提交", "Existing Custom Role"])
+		module = _load_module(user)
+		result = module.set_hrms_user_access_tier("worker@example.com", "submit")
+		self.assertEqual(
+			[row.role for row in user.roles],
+			["System Manager", "Existing Custom Role", module.SUBMIT_ROLE],
+		)
+		self.assertEqual(result["access_tier"], "submit")
+		self.assertEqual(result["changed_by"], "manager@example.com")
 
 	def test_employee_reportview_requires_personnel_view_without_blocking_other_workflows(self):
 		module = _load_module()

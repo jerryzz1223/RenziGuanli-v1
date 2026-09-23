@@ -65,7 +65,7 @@ def _department_link(company, business_name):
 def _employee_directory(company):
 	if not frappe.db.has_column("Employee", "custom_employee_code"):
 		frappe.throw(_("员工主档尚未配置公司工号字段，不能导入培训人员记录。"))
-	fields = ["name", "employee_name", "department", "status"]
+	fields = ["name", "employee_name", "department", "status", "date_of_joining", "relieving_date"]
 	fields.append("custom_employee_code")
 	rows = frappe.get_all(
 		"Employee",
@@ -80,8 +80,24 @@ def _employee_directory(company):
 	return rows
 
 
+def _covers_training_dates(employee, training_dates):
+	if not training_dates or not employee.get("employee_code"):
+		return False
+	joined = employee.get("date_of_joining")
+	relieved = employee.get("relieving_date")
+	if joined and not hasattr(joined, "year"):
+		joined = datetime.fromisoformat(text(joined)).date()
+	if relieved and not hasattr(relieved, "year"):
+		relieved = datetime.fromisoformat(text(relieved)).date()
+	return all((not joined or joined <= day) and (not relieved or day <= relieved) for day in training_dates)
+
+
 def _identity_preview(records, employees):
 	counts = Counter(row["identity_key"] for row in records["rows"])
+	dates_by_identity = defaultdict(set)
+	for record in records["rows"]:
+		for value in record["actual_dates"]:
+			dates_by_identity[record["identity_key"]].add(datetime.fromisoformat(value).date())
 	by_name = defaultdict(list)
 	for employee in employees:
 		by_name[text(employee.get("employee_name"))].append(employee)
@@ -90,7 +106,13 @@ def _identity_preview(records, employees):
 		employee_name, source_department = identity_key.split("|", 1)
 		name_matches = by_name.get(employee_name, [])
 		exact = [row for row in name_matches if row.get("department_display") == source_department]
+		training_dates = sorted(dates_by_identity[identity_key])
+		period_matches = [row for row in name_matches if _covers_training_dates(row, training_dates)]
 		proposed = exact[0] if len(exact) == 1 and exact[0].get("employee_code") else None
+		match_basis = "name_department" if proposed else ""
+		if not proposed and len(period_matches) == 1:
+			proposed = period_matches[0]
+			match_basis = "employment_period"
 		if proposed:
 			status = "matched"
 		elif len(exact) == 1:
@@ -108,6 +130,7 @@ def _identity_preview(records, employees):
 				"source_department": source_department,
 				"record_count": counts[identity_key],
 				"status": status,
+				"match_basis": match_basis,
 				"employee_code": proposed.get("employee_code") if proposed else "",
 				"candidates": [
 					{
@@ -115,6 +138,8 @@ def _identity_preview(records, employees):
 						"employee_name": row.get("employee_name"),
 						"department": row.get("department_display"),
 						"status": row.get("status"),
+						"date_of_joining": text(row.get("date_of_joining")),
+						"relieving_date": text(row.get("relieving_date")),
 					}
 					for row in name_matches
 				],
@@ -400,7 +425,7 @@ def _insert_event_and_result(company, source_file, source_digest, event, identit
 			"employees": participants,
 			"source_import_key": event["source_key"],
 			"source_file": source_file,
-			"source_sheet": "2026年安全培训教育记录表",
+			"source_sheet": event["source_sheet"],
 			"source_rows": _source_rows_text(event["source_rows"]),
 			"source_fingerprint": source_digest,
 			"source_actual_dates": event["actual_date_text"],

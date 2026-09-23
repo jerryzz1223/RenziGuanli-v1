@@ -318,8 +318,16 @@ class EmployeeRelationshipPage {
 				code_mismatch: __("源工号与姓名不一致"),
 			};
 			const identity_rows = (preview.identities || []).map((item) => {
-				const candidates = (item.candidates || []).map((candidate) => [candidate.employee_code, candidate.department, candidate.status].filter(Boolean).join(" · ")).join("；");
-				return `<tr><td>${escape(item.employee_name)}<small class="text-muted d-block">${escape(item.source_department || "未填部门")} · ${Number(item.record_count || 0)} 条</small></td><td>${escape(status_labels[item.status] || item.status)}</td><td><input class="form-control input-sm" data-relationship-identity="${escape(item.identity_key)}" value="${escape(item.employee_code || "")}" placeholder="${escape(__("输入公司工号"))}"><small class="text-muted">${escape(candidates || __("无同名候选"))}</small></td></tr>`;
+				const candidates = (item.candidates || []).filter((candidate) => candidate.employee_code);
+				const candidate_options = candidates.map((candidate) => {
+					const label = [candidate.employee_code, candidate.department, candidate.status].filter(Boolean).join(" · ");
+					const selected = String(item.employee_code || "") === String(candidate.employee_code || "") ? " selected" : "";
+					return `<option value="${escape(candidate.employee_code)}"${selected}>${escape(label)}</option>`;
+				}).join("");
+				const control = candidate_options
+					? `<select class="form-control input-sm" data-relationship-identity="${escape(item.identity_key)}"><option value="">${escape(__("请选择公司工号"))}</option>${candidate_options}</select><small class="text-muted">${escape(__("候选仅来自当前公司的同名员工"))}</small>`
+					: `<input class="form-control input-sm" data-relationship-identity="${escape(item.identity_key)}" value="${escape(item.employee_code || "")}" placeholder="${escape(__("输入公司工号"))}"><small class="text-muted">${escape(__("无同名候选，请核对员工主档"))}</small>`;
+				return `<tr><td>${escape(item.employee_name)}<small class="text-muted d-block">${escape(item.source_department || "未填部门")} · ${Number(item.record_count || 0)} 条</small></td><td>${escape(status_labels[item.status] || item.status)}</td><td>${control}</td></tr>`;
 			}).join("");
 			const conflict_rows = (preview.source_conflicts || []).map((item) => {
 				const occurrences = (item.occurrences || []).map((row) => `${row.source_sheet} 第 ${row.source_row} 行=${row.relationship}`).join("；");
@@ -333,7 +341,24 @@ class EmployeeRelationshipPage {
 				${row_errors ? `<div class="alert alert-danger"><strong>${escape(__("来源行错误"))}</strong><ul>${row_errors}</ul></div>` : ""}
 				${conflict_rows ? `<h5>${escape(__("选择重复员工对的最终关系大类"))}</h5><table class="table table-bordered"><thead><tr><th>${escape(__("冲突员工对与来源"))}</th><th>${escape(__("最终关系大类"))}</th></tr></thead><tbody>${conflict_rows}</tbody></table>` : ""}
 				<p>${escape(__("请核对公司工号。来源姓名必须与工号对应姓名一致；部门变化不会覆盖员工主档。"))}</p>
+				<div class="d-flex align-items-center justify-content-between mb-2"><span data-relationship-confirmation-status></span><button type="button" class="btn btn-xs btn-default" data-relationship-use-unique-candidates>${escape(__("一键采用唯一同名候选"))}</button></div>
 				<div style="max-height:430px;overflow:auto"><table class="table table-bordered"><thead><tr><th>${escape(__("来源员工"))}</th><th>${escape(__("匹配状态"))}</th><th>${escape(__("确认公司工号"))}</th></tr></thead><tbody>${identity_rows}</tbody></table></div>`);
+			wrapper.off(".employeeRelationshipImport");
+			wrapper.on("change.employeeRelationshipImport input.employeeRelationshipImport", "[data-relationship-identity], [data-relationship-conflict]", function () {
+				$(this).removeClass("is-invalid");
+				refresh_confirmation_status();
+			});
+			wrapper.on("click.employeeRelationshipImport", "[data-relationship-use-unique-candidates]", () => {
+				for (const item of preview.identities || []) {
+					if (item.employee_code) continue;
+					const candidates = (item.candidates || []).filter((candidate) => candidate.employee_code);
+					if (candidates.length !== 1) continue;
+					const input = wrapper.find(`[data-relationship-identity="${CSS.escape(item.identity_key)}"]`);
+					input.val(candidates[0].employee_code).removeClass("is-invalid");
+				}
+				refresh_confirmation_status();
+			});
+			refresh_confirmation_status();
 			dialog.get_primary_btn().text(preview.row_error_count ? __("重新校验") : __("确认导入"));
 		};
 		const identity_map = () => {
@@ -349,6 +374,34 @@ class EmployeeRelationshipPage {
 				result[input.dataset.relationshipConflict] = String(input.value || "").trim();
 			});
 			return result;
+		};
+		const incomplete_controls = () => {
+			const wrapper = dialog.fields_dict.preview.$wrapper;
+			const missing_identities = wrapper.find("[data-relationship-identity]").filter((_, input) => !String(input.value || "").trim());
+			const missing_conflicts = wrapper.find("[data-relationship-conflict]").filter((_, input) => !String(input.value || "").trim());
+			return { missing_identities, missing_conflicts };
+		};
+		const refresh_confirmation_status = () => {
+			if (!preview) return;
+			const { missing_identities, missing_conflicts } = incomplete_controls();
+			const message = missing_identities.length || missing_conflicts.length
+				? __("当前还需确认 {0} 名员工、{1} 组关系冲突。", [missing_identities.length, missing_conflicts.length])
+				: __("所有身份和关系冲突已确认，可以导入。");
+			dialog.fields_dict.preview.$wrapper.find("[data-relationship-confirmation-status]").text(message);
+		};
+		const validate_confirmations = () => {
+			const { missing_identities, missing_conflicts } = incomplete_controls();
+			missing_identities.addClass("is-invalid");
+			missing_conflicts.addClass("is-invalid");
+			if (!missing_identities.length && !missing_conflicts.length) return true;
+			const first = missing_conflicts.get(0) || missing_identities.get(0);
+			first?.scrollIntoView({ behavior: "smooth", block: "center" });
+			frappe.msgprint({
+				title: __("尚不能导入"),
+				indicator: "orange",
+				message: __("请先确认 {0} 名员工的公司工号，并处理 {1} 组关系冲突。", [missing_identities.length, missing_conflicts.length]),
+			});
+			return false;
 		};
 		const run = async () => {
 			if (busy) return;
@@ -373,6 +426,7 @@ class EmployeeRelationshipPage {
 					render();
 					return;
 				}
+				if (!validate_confirmations()) return;
 				const response = await frappe.call({
 					method: "hrms.hr.page.employee_relationship.employee_relationship.apply_employee_relationship_import",
 					args: {

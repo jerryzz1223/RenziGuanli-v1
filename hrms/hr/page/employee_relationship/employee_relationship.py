@@ -292,7 +292,11 @@ def _json_mapping(value, label):
 
 @frappe.whitelist()
 def apply_employee_relationship_import(
-	file_url: str, company: str, plan_token_value: str, identity_map=None, conflict_map=None
+	file_url: str,
+	company: str,
+	plan_token_value: str,
+	identity_map: str = "",
+	conflict_map: str = "",
 ):
 	_require_relationship_permission("create")
 	company = _company(company)

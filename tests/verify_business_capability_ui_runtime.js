@@ -9,13 +9,17 @@ function control(text, capability = "") {
 	return {
 		textContent: text, title: "", value: "", disabled: false,
 		dataset: capability ? { hrmsCapability: capability } : {},
-		classList: { add() {} },
+		classList: { add() {}, remove() {} },
 		matches() { return true; },
 		querySelectorAll() { return []; },
 		getAttribute() { return ""; },
 		setAttribute(name, value) {
 			if (name === "disabled") this.disabled = true;
 			if (name === "data-hrms-permission-disabled") this.dataset.hrmsPermissionDisabled = value;
+		},
+		removeAttribute(name) {
+			if (name === "disabled") this.disabled = false;
+			if (name === "data-hrms-permission-disabled") delete this.dataset.hrmsPermissionDisabled;
 		},
 	};
 }
@@ -78,5 +82,11 @@ vm.runInNewContext(source, context, { filename: "hrms_capability_ui.js" });
 	const navigation = control("返回员工花名册");
 	context.hrmsCapabilities.apply(navigation);
 	if (navigation.disabled) throw new Error("Navigation button must remain usable without a business action permission.");
+	if (!source.includes('typeof frappe.ready === "function"')) {
+		throw new Error("Capability UI must support Frappe versions without frappe.ready().");
+	}
+	if (!source.includes("Promise.resolve(frappe.call")) {
+		throw new Error("Capability loading must normalize Frappe's jQuery Deferred to a native Promise.");
+	}
 	console.log(`Business capability UI runtime verified (${cases.length} representative controls; navigation remains enabled).`);
 })().catch((error) => { console.error(error); process.exitCode = 1; });

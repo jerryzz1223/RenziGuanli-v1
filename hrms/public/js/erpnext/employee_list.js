@@ -268,11 +268,16 @@
 	function setup_roster_actions(listview) {
 		if (listview.page.__hrms_roster_actions_ready || listview.page.__hrms_roster_actions_loading) return;
 		listview.page.__hrms_roster_actions_loading = true;
-		get_current_hrms_capabilities()
+		// Older Frappe releases return a jQuery Deferred from frappe.call.  It is
+		// thenable, but it does not implement Promise.prototype.finally().  Convert
+		// it to a native Promise before installing the action buttons so capability
+		// loading cannot abort the rest of the roster header setup.
+		Promise.resolve(get_current_hrms_capabilities())
 			.then((capabilities) => install_roster_actions(listview, capabilities))
-			.finally(() => {
-				listview.page.__hrms_roster_actions_loading = false;
-			});
+			.then(
+				() => { listview.page.__hrms_roster_actions_loading = false; },
+				() => { listview.page.__hrms_roster_actions_loading = false; },
+			);
 	}
 
 	function get_current_hrms_capabilities() {

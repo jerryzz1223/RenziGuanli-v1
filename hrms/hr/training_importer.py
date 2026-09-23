@@ -195,11 +195,24 @@ def _find_record_header(sheet):
 	raise ValueError("实际记录表未识别到标准表头")
 
 
+def _record_sheet(workbook):
+	"""Select the actual-record sheet by structure, not by one historic title."""
+	ordered_names = ([RECORD_SHEET] if RECORD_SHEET in workbook.sheetnames else []) + [
+		name for name in workbook.sheetnames if name != RECORD_SHEET
+	]
+	for sheet_name in ordered_names:
+		sheet = workbook[sheet_name]
+		try:
+			_find_record_header(sheet)
+		except ValueError:
+			continue
+		return sheet
+	raise ValueError("未找到包含序号、实际上课时间、部门、姓名和培训内容的实际记录工作表")
+
+
 def parse_record_workbook(content):
 	workbook = _workbook(content)
-	if RECORD_SHEET not in workbook.sheetnames:
-		raise ValueError(f"缺少工作表：{RECORD_SHEET}")
-	sheet = workbook[RECORD_SHEET]
+	sheet = _record_sheet(workbook)
 	header_row, columns = _find_record_header(sheet)
 	aliases = {
 		"serial": "序号",
@@ -291,6 +304,7 @@ def parse_record_workbook(content):
 		grouped[key]["errors"].extend(row["errors"])
 	for event in grouped.values():
 		event["errors"] = list(OrderedDict.fromkeys(event["errors"]))
+		event["source_sheet"] = sheet.title
 	return {"sheet_name": sheet.title, "header_row": header_row, "rows": rows, "events": list(grouped.values())}
 
 

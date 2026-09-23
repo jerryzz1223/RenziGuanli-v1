@@ -14,69 +14,49 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 	page.add_inner_button(__("测试实际权限"), () => open_permission_tester());
 
 	function open_capability_editor(account) {
-		const capabilities = state.data?.capabilities || [];
-		const assigned = new Set(account.assigned_roles || []);
-		const categories = [...new Set(capabilities.map((capability) => capability.category))];
-		const capability_field = (capability) => ({
-			fieldname: `capability_${capability.key}`,
-			fieldtype: "Check",
-			label: capability.label,
-			default: assigned.has(capability.role) ? 1 : 0,
-			description: `${capability.description}<br><code>${escape(capability.role)}</code>`,
-		});
-		const permissionFields = categories.flatMap((category) => {
-			const categoryCapabilities = capabilities.filter((capability) => capability.category === category);
-			const splitAt = Math.ceil(categoryCapabilities.length / 2);
-			return [
-				{
-					fieldname: `section_${category}`,
-					fieldtype: "Section Break",
-					label: __(`${category}权限`),
-					description: __("发起/提交与审批可以分配给不同账户。"),
-				},
-				...categoryCapabilities.slice(0, splitAt).map(capability_field),
-				...(categoryCapabilities.length > 1 ? [{ fieldtype: "Column Break" }] : []),
-				...categoryCapabilities.slice(splitAt).map(capability_field),
-			];
-		});
+		const tiers = state.data?.tiers || [];
+		const tier_by_label = new Map(tiers.map((tier) => [tier.label, tier.key]));
+		const current_tier = tiers.find((tier) => tier.key === account.access_tier) || tiers[0];
 		const dialog = new frappe.ui.Dialog({
-			title: __("设置 {0} 的业务权限", [account.full_name || account.user]),
+			title: __("设置 {0} 的权限档位", [account.full_name || account.user]),
 			fields: [
 				{
 					fieldname: "permission_notice",
 					fieldtype: "HTML",
 					options: `<div class="hrms-access-capability-dialog__header">
 						<div class="hrms-access-capability-dialog__account">${escape(account.user)}</div>
-						<div class="hrms-access-capability-dialog__bulk-actions">
-							<button type="button" class="btn btn-default btn-sm" data-action="select-all-capabilities">${__("一键全选")}</button>
-							<button type="button" class="btn btn-default btn-sm" data-action="clear-all-capabilities">${__("取消全选")}</button>
-						</div>
 					</div>`,
 				},
-				...permissionFields,
+				{
+					fieldname: "access_tier_label",
+					fieldtype: "Select",
+					label: __("权限档位"),
+					options: tiers.map((tier) => tier.label).join("\n"),
+					default: current_tier?.label || "只读",
+					reqd: 1,
+					description: tiers.map((tier) => `<strong>${escape(tier.label)}</strong>：${escape(tier.description)}`).join("<br>"),
+				},
+				{
+					fieldname: "audit_notice",
+					fieldtype: "HTML",
+					options: `<div class="alert alert-info">${__("权限逐级包含；提交人和审批人按实际登录账号记入单据及审计记录。")}</div>`,
+				},
 			],
 			primary_action_label: __("保存权限"),
 			primary_action() {
 				const values = dialog.get_values() || {};
-				const selected = capabilities
-					.filter((capability) => values[`capability_${capability.key}`])
-					.map((capability) => capability.key);
+				const selected = tier_by_label.get(values.access_tier_label);
 				dialog.disable_primary_action();
 				frappe.call({
-					method: "hrms.access_control.set_hrms_user_capabilities",
+					method: "hrms.access_control.set_hrms_user_access_tier",
 					args: {
 						user: account.user,
-						// Frappe form requests transport arrays inconsistently across
-						// versions.  Send explicit JSON and verify the server readback.
-						capabilities: JSON.stringify(selected),
+						access_tier: selected,
 					},
 					freeze: true,
 					freeze_message: __("正在保存权限..."),
 					callback(response) {
-						const saved = [...(response.message?.capabilities || [])].sort();
-						const ignored = new Set(response.message?.ignored_capabilities || []);
-						const requested = selected.filter((key) => !ignored.has(key)).sort();
-						if (!response.message?.saved || JSON.stringify(saved) !== JSON.stringify(requested)) {
+						if (!response.message?.saved || response.message?.access_tier !== selected) {
 							frappe.msgprint({
 								title: __("保存失败"),
 								message: __("权限保存后校验失败，请刷新后重试。"),
@@ -85,9 +65,11 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 							return;
 						}
 						account.assigned_roles = response.message.roles || [];
+						account.access_tier = response.message.access_tier;
+						account.access_tier_label = response.message.access_tier_label;
 						dialog.hide();
 						frappe.show_alert({
-							message: __("权限已正式保存，共 {0} 项", [saved.length]),
+							message: __("权限已保存为“{0}”", [response.message.access_tier_label]),
 							indicator: "green",
 						});
 						load();
@@ -100,13 +82,6 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 		});
 		dialog.show();
 		dialog.$wrapper.addClass("hrms-access-capability-dialog");
-		const set_all_capabilities = (checked) => {
-			capabilities.forEach((capability) => {
-				dialog.set_value(`capability_${capability.key}`, checked ? 1 : 0);
-			});
-		};
-		dialog.$wrapper.on("click", "[data-action='select-all-capabilities']", () => set_all_capabilities(true));
-		dialog.$wrapper.on("click", "[data-action='clear-all-capabilities']", () => set_all_capabilities(false));
 	}
 
 	function open_disable_account_dialog(account) {
@@ -140,9 +115,10 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 
 	function assigned_roles(account) {
 		const roles = account.assigned_roles || [];
-		const labels = account.assigned_role_labels || roles;
+		const labels = [account.access_tier_label || __("只读")];
+		if (roles.includes("System Manager")) labels.push(__("系统管理员"));
 		const visible = labels.slice(0, 3).map((role) => `<span class="hrms-access-center__role-chip">${escape(role)}</span>`).join("");
-		const remaining = roles.length - 3;
+		const remaining = Math.max(0, labels.length - 3);
 		return `${visible || `<span class="text-muted">${__("未分配角色")}</span>`}${remaining > 0 ? `<span class="hrms-access-center__role-more">+${remaining}</span>` : ""}`;
 	}
 
@@ -217,7 +193,7 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 					<div>
 						<span class="indicator blue"></span>
 						<h3>${__("一个入口管理账户、权限与角色")}</h3>
-						<p>${__("先为账户分配业务权限和数据范围，再到角色页维护共享规则；最终用实际权限测试确认结果。")}</p>
+						<p>${__("账户只选只读、可以提交、审批三档之一；数据范围仍可按公司、部门或员工限定。")}</p>
 					</div>
 					<div class="hrms-access-center__scope"><strong>${__("管理员权限")}</strong><span>System Manager</span></div>
 				</section>
@@ -243,7 +219,7 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 									<td><div class="hrms-access-center__role-chips">${assigned_roles(account)}</div></td>
 									<td><div class="hrms-access-center__scope-chips">${assigned_scopes(account)}</div></td>
 									<td class="hrms-access-center__account-actions">
-										${account.user === "Administrator" ? `<span class="text-muted">${__("固定最高权限")}</span>` : `<button class="btn btn-primary btn-sm" data-action="capabilities" data-user="${escape(account.user)}">${__("勾选权限")}</button>`}
+										${account.user === "Administrator" ? `<span class="text-muted">${__("固定最高权限")}</span>` : `<button class="btn btn-primary btn-sm" data-action="capabilities" data-user="${escape(account.user)}">${__("设置权限档位")}</button>`}
 										<button class="btn btn-default btn-sm" data-action="edit-account" data-user="${escape(account.user)}">${__("账户资料")}</button>
 										<button class="btn btn-default btn-sm" data-action="scope" data-user="${escape(account.user)}">${__("管理数据范围")}</button>
 										<button class="btn btn-default btn-sm" data-action="test-user" data-user="${escape(account.user)}">${__("验证权限")}</button>
@@ -256,17 +232,15 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 
 				<section class="hrms-access-center__panel ${state.active_tab === "roles" ? "" : "is-hidden"}">
 					<div class="hrms-access-center__panel-head">
-					<div><h4>${__("可勾选的业务动作权限")}</h4><p>${__("每一项都是独立真实角色；提交人和审批人可分开配置。")}</p></div>
+					<div><h4>${__("三档业务权限")}</h4><p>${__("只读 → 可以提交 → 审批，逐级包含。")}</p></div>
 					</div>
 					<div class="hrms-access-center__role-list">
-					${[...new Set((data.capabilities || []).map((capability) => capability.category))].map((category) => `
-						<div class="hrms-access-center__permission-category"><h5>${escape(category)}</h5></div>
-						${(data.capabilities || []).filter((capability) => capability.category === category).map((capability) => `<article class="hrms-access-center__role-card">
+					${(data.tiers || []).map((tier) => `<article class="hrms-access-center__role-card">
 							<div class="hrms-access-center__role-copy">
-								<div class="hrms-access-center__role-title"><strong>${escape(capability.label)}</strong><span>${escape(capability.category)}</span></div>
-								<p>${escape(capability.description)}</p><code>${escape(capability.role)}</code>
+								<div class="hrms-access-center__role-title"><strong>${escape(tier.label)}</strong></div>
+								<p>${escape(tier.description)}</p><code>${escape(tier.role)}</code>
 							</div>
-						</article>`).join("")}`).join("")}
+						</article>`).join("")}
 					</div>
 					<ul>${(data.design_notes || []).map((note) => `<li>${escape(note)}</li>`).join("")}</ul>
 				</section>

@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import io
 import unittest
@@ -7,6 +8,7 @@ from openpyxl import Workbook
 
 
 MODULE_PATH = Path(__file__).parents[1] / "hrms" / "hr" / "employee_relationship_importer.py"
+API_PATH = Path(__file__).parents[1] / "hrms" / "hr" / "page" / "employee_relationship" / "employee_relationship.py"
 SPEC = importlib.util.spec_from_file_location("employee_relationship_importer", MODULE_PATH)
 IMPORTER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(IMPORTER)
@@ -32,6 +34,16 @@ def source_workbook(relationship="同村"):
 
 
 class EmployeeRelationshipWorkbookImportTest(unittest.TestCase):
+	def test_apply_endpoint_annotates_every_request_parameter(self):
+		module = ast.parse(API_PATH.read_text(encoding="utf-8"))
+		function = next(
+			node
+			for node in module.body
+			if isinstance(node, ast.FunctionDef) and node.name == "apply_employee_relationship_import"
+		)
+		missing = [argument.arg for argument in function.args.args if argument.annotation is None]
+		self.assertEqual(missing, [])
+
 	def test_parses_existing_two_person_layout_without_guessing_codes(self):
 		result = IMPORTER.parse_employee_relationship_workbook(workbook_bytes(source_workbook()))
 		self.assertEqual(result["sheet_names"], ["人员关系表——在职"])

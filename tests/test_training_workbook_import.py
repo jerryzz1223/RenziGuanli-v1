@@ -68,6 +68,23 @@ class TrainingWorkbookImportTest(unittest.TestCase):
 		self.assertEqual(len(result["events"][0]["participants"]), 2)
 		self.assertFalse(result["events"][0]["errors"])
 
+	def test_record_sheet_is_detected_by_headers_when_title_changes(self):
+		workbook = Workbook()
+		sheet = workbook.active
+		sheet.title = "26年教育训练登记表"
+		headers = ["序号", "月份", "实际上课时间", "部门", "姓名", "课程类型", "培训内容", "课程归\n属部门", "内/\n外", "课件\n方式", "课时", "学时", "授课人", "地点", "培训对象", "成绩", "备注（评价标准）"]
+		for column, label in enumerate(headers, start=1):
+			sheet.cell(1, column).value = label
+		values = [1, 1, datetime(2026, 1, 5), "量试组", "陆卫国", "会议类", "周会", "量试组", "内", "excel", 0.5, 0.75, "时雷", "会议室", "量试组全体", None, None]
+		for column, value in enumerate(values, start=1):
+			sheet.cell(2, column).value = value
+
+		result = IMPORTER.parse_record_workbook(workbook_bytes(workbook))
+		self.assertEqual(result["sheet_name"], "26年教育训练登记表")
+		self.assertEqual(result["header_row"], 1)
+		self.assertEqual(len(result["rows"]), 1)
+		self.assertEqual(result["events"][0]["source_sheet"], "26年教育训练登记表")
+
 	def test_preview_token_changes_when_source_identity_changes(self):
 		plan_rows = [{"source_key": "PLAN-1"}]
 		rows = [{"source_row": 4, "source_serial": "1", "identity_key": "张三|工程课"}]

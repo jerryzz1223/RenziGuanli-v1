@@ -7,10 +7,14 @@ const ui = fs.readFileSync(path.join(root, "hrms", "public", "js", "hrms_capabil
 const intakeApi = fs.readFileSync(path.join(root, "hrms", "api", "form_data_intake.py"), "utf8");
 const intakeUi = fs.readFileSync(path.join(root, "hrms", "public", "js", "hrms_contextual_form_import.js"), "utf8");
 const hooks = fs.readFileSync(path.join(root, "hrms", "hooks.py"), "utf8");
+const capabilityDefinitions = access.slice(
+	access.indexOf("CAPABILITY_DEFINITIONS = ("),
+	access.indexOf("CAPABILITY_BY_KEY ="),
+);
 
 const keys = new Set();
-for (const match of access.matchAll(/_capability\("([a-z0-9_]+)"/g)) keys.add(match[1]);
-for (const match of access.matchAll(/"key":\s*"([a-z0-9_]+)"/g)) keys.add(match[1]);
+for (const match of capabilityDefinitions.matchAll(/_capability\("([a-z0-9_]+)"/g)) keys.add(match[1]);
+for (const match of capabilityDefinitions.matchAll(/"key":\s*"([a-z0-9_]+)"/g)) keys.add(match[1]);
 
 if (keys.size !== 40) throw new Error(`Expected 40 business capabilities, found ${keys.size}.`);
 for (const key of keys) {

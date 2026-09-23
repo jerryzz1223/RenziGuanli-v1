@@ -2533,6 +2533,7 @@ def get_hrms_access_center():
 	why a user's existing password cannot appear in this screen.
 	"""
 	_require_system_manager()
+	from hrms.access_control import ACCESS_TIER_BY_KEY, get_hrms_access_tier_for_roles
 	users = frappe.get_all(
 		"User",
 		fields=["name", "full_name", "user_type", "enabled", "last_login"],
@@ -2590,12 +2591,17 @@ def get_hrms_access_center():
 		"Leave Approver": "请假审批人",
 		"Interviewer": "面试官",
 		"Guest": "访客",
+		"HRMS 基础只读": "只读",
+		"HRMS 只读": "只读",
+		"HRMS 提交": "可以提交",
+		"HRMS 审批": "审批",
 		"Sales Master Manager": "销售主数据管理员",
 		"Maintenance Manager": "维护管理员",
 	}
 	accounts = []
 	for user in users:
 		roles = roles_by_user.get(user.name, [])
+		access_tier = get_hrms_access_tier_for_roles(roles)
 		data_scopes = permissions_by_user.get(user.name, [])
 		business_scopes = _business_user_permissions(data_scopes)
 		accounts.append(
@@ -2607,6 +2613,8 @@ def get_hrms_access_center():
 				"roles": [role for role in roles if role in primary_roles] or roles[:1],
 				"assigned_roles": roles,
 				"assigned_role_labels": [role_labels.get(role, _(role)) for role in roles],
+				"access_tier": access_tier,
+				"access_tier_label": ACCESS_TIER_BY_KEY[access_tier]["label"],
 				"role_count": len(roles),
 				"data_scope_count": len(data_scopes),
 				"data_scopes": business_scopes,

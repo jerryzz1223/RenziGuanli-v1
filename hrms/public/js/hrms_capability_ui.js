@@ -193,13 +193,25 @@
 		control.title = __("没有“{0}”权限", [label]);
 	}
 
+	function restore(control, key) {
+		if (!control || control.dataset?.hrmsPermissionDisabled !== key || !has(key)) return;
+		control.disabled = false;
+		control.removeAttribute("disabled");
+		control.removeAttribute("aria-disabled");
+		control.removeAttribute("data-hrms-permission-disabled");
+		control.classList.remove("disabled");
+		if (control.title === __("没有“{0}”权限", [LABELS[key] || key])) control.title = "";
+	}
+
 	function apply(root = document) {
 		const controls = [];
 		if (root?.matches?.("button, .btn, [role='button'], input[type='submit'], [data-hrms-capability]")) controls.push(root);
 		root?.querySelectorAll?.("button, .btn, [role='button'], input[type='submit'], [data-hrms-capability]").forEach((item) => controls.push(item));
 		controls.forEach((control) => {
 			const key = infer(control);
-			if (key) disable(control, key);
+			if (!key) return;
+			if (has(key)) restore(control, key);
+			else disable(control, key);
 		});
 	}
 
@@ -221,7 +233,9 @@
 		}
 		if (force) readyPromise = null;
 		if (!readyPromise) {
-			readyPromise = frappe.call("hrms.access_control.get_current_hrms_capabilities")
+			// frappe.call may be a jQuery Deferred on the deployed Frappe version.
+			// Always expose one native Promise to callers and refresh paths.
+			readyPromise = Promise.resolve(frappe.call("hrms.access_control.get_current_hrms_capabilities"))
 				.then((response) => { capabilities = new Set(response.message?.capabilities || []); return capabilities; })
 				.catch(() => { capabilities = new Set(); return capabilities; });
 		}

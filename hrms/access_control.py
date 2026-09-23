@@ -15,6 +15,9 @@ from frappe.utils.password import update_password
 
 
 READ_ONLY_ROLE = "HRMS 基础只读"
+READ_TIER_ROLE = "HRMS 只读"
+SUBMIT_ROLE = "HRMS 提交"
+APPROVE_ROLE = "HRMS 审批"
 EMPLOYEE_SELF_SERVICE_ROLE = "Employee Self Service"
 RETIRED_CAPABILITY_ROLES = ("费用出差提交", "费用出差审批")
 RETIRED_CAPABILITY_KEYS = frozenset(("expense_submit", "expense_approve"))
@@ -113,6 +116,53 @@ CAPABILITY_DEFINITIONS = (
 )
 CAPABILITY_BY_KEY = {item["key"]: item for item in CAPABILITY_DEFINITIONS}
 
+# The public permission model has three cumulative levels.  The detailed
+# capability definitions remain an internal compatibility map for existing API
+# guards and old records, but administrators no longer assign forty independent
+# checkboxes to each user.
+READ_TIER_CAPABILITY_KEYS = frozenset({
+	"basic_read_only", "personnel_view", "announcement_view", "attendance_view", "payroll_view",
+})
+APPROVAL_ONLY_CAPABILITY_KEYS = frozenset({
+	"roster_import_approve", "dingtalk_employee_import_approve", "employee_create_approve",
+	"personnel_change_approve", "separation_approve", "separation_effective",
+	"announcement_approve", "announcement_sign_upload", "attendance_approve",
+	"attendance_final_lock", "payroll_approval", "payroll_confirm", "payroll_rules",
+	"recruitment_approve", "training_approve", "performance_approve",
+})
+BUSINESS_CAPABILITY_KEYS = frozenset(CAPABILITY_BY_KEY) - {"permission_management"}
+SUBMIT_TIER_CAPABILITY_KEYS = BUSINESS_CAPABILITY_KEYS - APPROVAL_ONLY_CAPABILITY_KEYS
+APPROVE_TIER_CAPABILITY_KEYS = BUSINESS_CAPABILITY_KEYS
+ACCESS_TIER_DEFINITIONS = (
+	{
+		"key": "read",
+		"label": "只读",
+		"role": READ_TIER_ROLE,
+		"description": "只能查看已授权范围内的人事、考勤、公告和薪酬数据。",
+		"capabilities": READ_TIER_CAPABILITY_KEYS,
+	},
+	{
+		"key": "submit",
+		"label": "可以提交",
+		"role": SUBMIT_ROLE,
+		"description": "包含只读；可新增、修改、导入和提交，不能审批或确认最终结果。",
+		"capabilities": SUBMIT_TIER_CAPABILITY_KEYS,
+	},
+	{
+		"key": "approve",
+		"label": "审批",
+		"role": APPROVE_ROLE,
+		"description": "包含提交；可审批、锁定或确认最终结果。",
+		"capabilities": APPROVE_TIER_CAPABILITY_KEYS,
+	},
+)
+ACCESS_TIER_BY_KEY = {item["key"]: item for item in ACCESS_TIER_DEFINITIONS}
+ACCESS_TIER_BY_ROLE = {item["role"]: item for item in ACCESS_TIER_DEFINITIONS}
+GRANULAR_BUSINESS_ROLES = frozenset(
+	item["role"] for item in CAPABILITY_DEFINITIONS
+	if item["key"] not in {"basic_read_only", "permission_management"}
+)
+
 
 def _require_system_manager():
 	if frappe.session.user != "Administrator" and "System Manager" not in frappe.get_roles(frappe.session.user):
@@ -122,8 +172,8 @@ def _require_system_manager():
 def has_hrms_capability(capability_key: str, user: str | None = None, legacy_roles=()):
 	"""Return whether one user may perform a named business action.
 
-	Administrator retains full access.  System Manager is itself the explicit
-	permission-management checkbox and must not silently grant every unrelated
+	Administrator retains full access.  System Manager remains a separate
+	permission-management role and must not silently grant every unrelated
 	business capability.  The legacy role list is deliberately explicit per call
 	so older HR accounts keep working where a workflow opts into compatibility.
 	"""
@@ -134,7 +184,27 @@ def has_hrms_capability(capability_key: str, user: str | None = None, legacy_rol
 	if user == "Administrator":
 		return True
 	roles = set(frappe.get_roles(user))
+	for tier in reversed(ACCESS_TIER_DEFINITIONS):
+		if tier["role"] in roles and capability_key in tier["capabilities"]:
+			return True
 	return bool({definition["role"], *legacy_roles} & roles)
+
+
+def get_hrms_access_tier_for_roles(roles):
+	"""Return the effective three-level tier, including legacy granular roles."""
+	roles = set(roles or ())
+	for tier in reversed(ACCESS_TIER_DEFINITIONS):
+		if tier["role"] in roles:
+			return tier["key"]
+	legacy_keys = {
+		item["key"] for item in CAPABILITY_DEFINITIONS
+		if item["key"] != "permission_management" and item["role"] in roles
+	}
+	if legacy_keys & APPROVAL_ONLY_CAPABILITY_KEYS:
+		return "approve"
+	if legacy_keys & (SUBMIT_TIER_CAPABILITY_KEYS - READ_TIER_CAPABILITY_KEYS):
+		return "submit"
+	return "read"
 
 
 def employee_roster_permission_query(user: str | None = None):
@@ -208,7 +278,7 @@ def _ensure_docperm_operations(doctype, role, permission_types):
 
 
 def ensure_hrms_access_roles():
-	"""Create every checkbox role and its actual DocType operation permissions."""
+	"""Create the three public tiers plus internal compatibility permissions."""
 	retire_removed_capability_roles()
 	for capability in CAPABILITY_DEFINITIONS:
 		role = capability["role"]
@@ -225,10 +295,59 @@ def ensure_hrms_access_roles():
 		# further narrowed by Company User Permission when one is configured.
 		if role != "System Manager" and frappe.db.exists("DocType", "Company"):
 			_ensure_docperm_operations("Company", role, ("read",))
+	# Install the same real DocPerm operations on the three public tier roles.
+	# Approval is cumulative over submit, and submit is cumulative over read.
+	for tier in ACCESS_TIER_DEFINITIONS:
+		role = tier["role"]
+		if not frappe.db.exists("Role", role):
+			frappe.get_doc(
+				{"doctype": "Role", "role_name": role, "desk_access": 1, "is_custom": 1}
+			).insert(ignore_permissions=True)
+		permissions_by_doctype = {}
+		for capability_key in tier["capabilities"]:
+			for doctype, *permission_types in CAPABILITY_BY_KEY[capability_key].get("permissions") or ():
+				permissions_by_doctype.setdefault(doctype, set()).update(permission_types)
+		for doctype, permission_types in permissions_by_doctype.items():
+			if frappe.db.exists("DocType", doctype):
+				_ensure_docperm_operations(doctype, role, tuple(sorted(permission_types)))
+		if frappe.db.exists("DocType", "Company"):
+			_ensure_docperm_operations("Company", role, ("read",))
 	for doctype in READ_ONLY_DOCTYPES:
 		if frappe.db.exists("DocType", doctype):
 			_ensure_docperm_operations(doctype, READ_ONLY_ROLE, ("read",))
+	migrate_legacy_capability_roles_to_access_tiers()
 	frappe.clear_cache()
+
+
+def migrate_legacy_capability_roles_to_access_tiers():
+	"""Collapse existing detailed business roles to one cumulative tier per user."""
+	migration_source_roles = GRANULAR_BUSINESS_ROLES | set(ACCESS_TIER_BY_ROLE)
+	legacy_rows = frappe.get_all(
+		"Has Role",
+		filters={
+			"parenttype": "User",
+			"parentfield": "roles",
+			"role": ["in", sorted(migration_source_roles)],
+		},
+		fields=["parent"],
+		ignore_permissions=True,
+	)
+	users = sorted({row.parent for row in legacy_rows if row.parent not in {"Administrator", "Guest"}})
+	for user in users:
+		target = frappe.get_doc("User", user)
+		roles = [row.role for row in target.roles]
+		access_tier = get_hrms_access_tier_for_roles(roles)
+		managed_roles = GRANULAR_BUSINESS_ROLES | set(ACCESS_TIER_BY_ROLE) | {READ_ONLY_ROLE}
+		preserved_roles = [role for role in roles if role not in managed_roles]
+		desired_roles = preserved_roles + [ACCESS_TIER_BY_KEY[access_tier]["role"]]
+		if roles == desired_roles:
+			continue
+		target.set("roles", [])
+		for role in dict.fromkeys(desired_roles):
+			target.append("roles", {"role": role})
+		target.save(ignore_permissions=True)
+		frappe.clear_cache(user=user)
+	return users
 
 
 def retire_removed_capability_roles():
@@ -274,63 +393,82 @@ def _capability_keys_for_roles(roles):
 def get_hrms_capability_catalog():
 	_require_system_manager()
 	return {
-		"capabilities": [{key: value for key, value in item.items() if key != "permissions"} for item in CAPABILITY_DEFINITIONS],
-		"managed_roles": [item["role"] for item in CAPABILITY_DEFINITIONS],
+		"tiers": [
+			{key: value for key, value in item.items() if key != "capabilities"}
+			for item in ACCESS_TIER_DEFINITIONS
+		],
+		"managed_roles": [item["role"] for item in ACCESS_TIER_DEFINITIONS],
 		"design_notes": [
-			"公开注册只授予非敏感基础资料的只读权限。",
-			"每个勾选项对应一个独立系统角色，提交和审批不捆绑。",
-			"人事、考勤、薪酬、招聘、培训和绩效均可按业务动作独立分配。",
+			"权限只分只读、可以提交、审批三档，且逐级包含。",
+			"账户与权限管理仍只属于系统管理员，不随业务审批档自动授予。",
+			"提交和审批使用登录账号执行，操作人由单据 owner、modified_by 及业务审计字段保留。",
 			"角色决定可执行的操作；User Permission 继续限定公司、部门或员工数据范围。",
-			"导入、导出、打印和报表权限也由对应勾选项进入实际权限引擎。",
 		],
 	}
 
 
 @frappe.whitelist()
-def set_hrms_user_capabilities(user: str, capabilities: str | None = None):
-	"""Replace only the roles managed by this business-facing checklist."""
+def set_hrms_user_access_tier(user: str, access_tier: str = "read"):
+	"""Assign exactly one cumulative business tier and preserve unrelated roles."""
 	_require_system_manager()
 	if not user or not frappe.db.exists("User", user):
 		frappe.throw(_("账户不存在。"))
 	if user == "Administrator":
-		frappe.throw(_("不能通过业务权限勾选修改 Administrator。"))
+		frappe.throw(_("不能修改 Administrator 的固定最高权限。"))
+	access_tier = str(access_tier or "read").strip()
+	if access_tier not in ACCESS_TIER_BY_KEY:
+		frappe.throw(_("不支持的权限档位：{0}").format(access_tier))
 
+	target = frappe.get_doc("User", user)
+	managed_roles = (
+		GRANULAR_BUSINESS_ROLES | set(ACCESS_TIER_BY_ROLE) |
+		{READ_ONLY_ROLE, *RETIRED_CAPABILITY_ROLES}
+	)
+	preserved_roles = [row.role for row in target.roles if row.role not in managed_roles]
+	desired_roles = preserved_roles + [ACCESS_TIER_BY_KEY[access_tier]["role"]]
+	target.set("roles", [])
+	for role in dict.fromkeys(desired_roles):
+		target.append("roles", {"role": role})
+	target.user_type = "System User"
+	target.save(ignore_permissions=True)
+	frappe.clear_cache(user=user)
+	saved_roles = [row.role for row in target.roles]
+	saved_tier = get_hrms_access_tier_for_roles(saved_roles)
+	if saved_tier != access_tier:
+		frappe.throw(_("权限保存后校验失败，请刷新后重试。"))
+	return {
+		"user": user,
+		"saved": True,
+		"access_tier": saved_tier,
+		"access_tier_label": ACCESS_TIER_BY_KEY[saved_tier]["label"],
+		"roles": saved_roles,
+		"changed_by": frappe.session.user,
+	}
+
+
+@frappe.whitelist()
+def set_hrms_user_capabilities(user: str, capabilities: str | None = None):
+	"""Compatibility endpoint: collapse a stale checkbox payload to one tier."""
+	_require_system_manager()
 	submitted = _normalise_capability_keys(capabilities)
-	ignored_capabilities = sorted(submitted & RETIRED_CAPABILITY_KEYS)
-	selected = submitted - RETIRED_CAPABILITY_KEYS
+	ignored_capabilities = sorted(submitted & (RETIRED_CAPABILITY_KEYS | {"permission_management"}))
+	selected = submitted - set(ignored_capabilities)
 	definitions = {item["key"]: item for item in CAPABILITY_DEFINITIONS}
 	unknown = selected - set(definitions)
 	if unknown:
 		frappe.throw(_("包含未知的业务权限：{0}").format("、".join(sorted(unknown))))
-
-	target = frappe.get_doc("User", user)
-	managed_roles = {item["role"] for item in CAPABILITY_DEFINITIONS} | set(RETIRED_CAPABILITY_ROLES)
-	if user == frappe.session.user and "System Manager" in {row.role for row in target.roles} and "permission_management" not in selected:
-		frappe.throw(_("不能在当前登录会话中移除自己的权限管理能力。"))
-	preserved_roles = [row.role for row in target.roles if row.role not in managed_roles]
-	desired_roles = preserved_roles + [
-		item["role"] for item in CAPABILITY_DEFINITIONS if item["key"] in selected
-	]
-	target.set("roles", [])
-	for role in dict.fromkeys(desired_roles):
-		target.append("roles", {"role": role})
-	if selected:
-		target.user_type = "System User"
-	target.save(ignore_permissions=True)
-	frappe.clear_cache(user=user)
-	saved_roles = [row.role for row in target.roles]
-	saved_capabilities = _capability_keys_for_roles(saved_roles)
-	if saved_capabilities != sorted(selected):
-		# A successful response must be an exact readback of the managed roles.
-		# Raising here keeps the request transactional instead of showing a false
-		# "saved" message when a User validation hook changed the role rows.
-		frappe.throw(_("权限保存后校验失败，未写入预期的单项权限。请刷新后重试。"))
+	if selected & APPROVAL_ONLY_CAPABILITY_KEYS:
+		access_tier = "approve"
+	elif selected & (SUBMIT_TIER_CAPABILITY_KEYS - READ_TIER_CAPABILITY_KEYS):
+		access_tier = "submit"
+	else:
+		access_tier = "read"
+	result = set_hrms_user_access_tier(user, access_tier)
 	return {
-		"user": user,
-		"saved": True,
-		"capabilities": saved_capabilities,
+		**result,
+		"capabilities": sorted(selected),
 		"ignored_capabilities": ignored_capabilities,
-		"roles": saved_roles,
+		"migrated_to_tier": access_tier,
 	}
 
 

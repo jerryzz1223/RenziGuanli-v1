@@ -251,6 +251,10 @@ mustInclude(topNavCss, ".hrms-roster-input-table", "Employee roster data and hea
 mustInclude(topNavCss, ".hrms-roster-employee-name-cell", "Employee name and photo must share the name column.");
 mustInclude(topNavCss, ".hrms-roster-table-pagination", "Employee roster must provide visible paging for the custom table.");
 mustInclude(topNavCss, ".hrms-roster-input-table", "Employee roster must style its payroll-compatible table cells.");
+mustInclude(employeeList, "Promise.resolve(get_current_hrms_capabilities())", "Employee roster must normalize Frappe's jQuery Deferred before finishing capability setup.");
+if (employeeList.includes("get_current_hrms_capabilities()\n\t\t\t.then((capabilities) => install_roster_actions(listview, capabilities))\n\t\t\t.finally")) {
+	throw new Error("Employee roster actions must not call .finally() on Frappe's jQuery Deferred.");
+}
 const rosterTableCss = topNavCss.slice(topNavCss.indexOf(".hrms-roster-table-wrap"), topNavCss.indexOf(".hrms-roster-input-table"));
 if (!rosterTableCss.includes("flex-direction: column;") || !rosterTableCss.includes("width: 100%;")) {
 	throw new Error("Employee roster table must stack its scroll area above the pagination bar and fill the available width.");
