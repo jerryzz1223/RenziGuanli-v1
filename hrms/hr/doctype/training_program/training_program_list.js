@@ -168,7 +168,7 @@
 				body.find("[data-upload-record]").on("click", () => upload("record_file_url"));
 				body.find("[data-training-clear]").on("click", clearSelection);
 				dialog.set_primary_action(__("解析并进入员工匹配"), preview);
-				dialog.get_primary_btn().prop("disabled", !(state.plan_file_url && state.record_file_url));
+				dialog.get_primary_btn().prop("disabled", !(state.plan_file_url && state.record_file_url)).attr("title", "");
 				return;
 			}
 			const sourceErrors = (state.preview.plan?.error_count || 0) + (state.preview.records?.error_count || 0);
