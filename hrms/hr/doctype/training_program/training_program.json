@@ -14,6 +14,25 @@
   "company",
   "owner_department",
   "plan_period",
+  "source_plan_section",
+  "source_department",
+  "source_classification",
+  "source_training_type",
+  "source_course_hours",
+  "source_convener_department",
+  "source_location",
+  "source_target",
+  "source_planned_month",
+  "source_actual_dates",
+  "source_audience_matrix",
+  "source_audit_section",
+  "source_file",
+  "source_sheet",
+  "source_row",
+  "source_import_key",
+  "source_fingerprint",
+  "source_imported_by",
+  "source_imported_on",
   "section_break_5",
   "training_category",
   "training_mode",
@@ -78,6 +97,123 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "计划期间"
+  },
+  {
+   "fieldname": "source_plan_section",
+   "fieldtype": "Section Break",
+   "label": "教育训练计划原表字段"
+  },
+  {
+   "fieldname": "source_department",
+   "fieldtype": "Data",
+   "label": "来源部门",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_classification",
+   "fieldtype": "Data",
+   "label": "来源分类",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_training_type",
+   "fieldtype": "Data",
+   "label": "来源培训类型",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_course_hours",
+   "fieldtype": "Float",
+   "label": "计划课时",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_convener_department",
+   "fieldtype": "Data",
+   "label": "召集部门",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_location",
+   "fieldtype": "Data",
+   "label": "计划地点",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_target",
+   "fieldtype": "Small Text",
+   "label": "主要培训岗位/人员",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_planned_month",
+   "fieldtype": "Data",
+   "label": "预计上课月份",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_actual_dates",
+   "fieldtype": "Small Text",
+   "label": "原表实际上课时间",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_audience_matrix",
+   "fieldtype": "Code",
+   "label": "课程对象矩阵（JSON）",
+   "options": "JSON",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_audit_section",
+   "fieldtype": "Section Break",
+   "label": "导入来源"
+  },
+  {
+   "fieldname": "source_file",
+   "fieldtype": "Attach",
+   "label": "来源文件",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_sheet",
+   "fieldtype": "Data",
+   "label": "来源工作表",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_row",
+   "fieldtype": "Int",
+   "label": "来源行号",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_import_key",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "来源导入键",
+   "read_only": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "source_fingerprint",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "来源文件指纹",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_imported_by",
+   "fieldtype": "Link",
+   "label": "导入人",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_imported_on",
+   "fieldtype": "Datetime",
+   "label": "导入时间",
+   "read_only": 1
   },
   {
    "fieldname": "section_break_5",

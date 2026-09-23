@@ -269,6 +269,7 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		}]
 		old_import = sys.modules.get("hrms.api.attendance_import")
 		old_bundle = api._attendance_shift_rule_bundle
+		old_scheduling_policies = api.list_attendance_scheduling_policies
 		old_permission = api._require_processing_manager
 		old_company = api._require_company
 		try:
@@ -277,11 +278,13 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 				"items": [{"rule_code": "SHIFT-001", "rule_name": "生产白班"}],
 				"rules": [{"rule_code": "SHIFT-001"}], "version": "rules-v1",
 			}
+			api.list_attendance_scheduling_policies = lambda company: {"items": []}
 			api._require_processing_manager = lambda: None
 			api._require_company = lambda company: company
 			result = api.get_complete_attendance_rules("永新")
 		finally:
 			api._attendance_shift_rule_bundle = old_bundle
+			api.list_attendance_scheduling_policies = old_scheduling_policies
 			api._require_processing_manager = old_permission
 			api._require_company = old_company
 			if old_import is None:
@@ -292,7 +295,8 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(result["shift_rule_version"], "rules-v1")
 		self.assertEqual(result["shift_rules"][0]["rule_code"], "SHIFT-001")
 		self.assertEqual(result["policy_rules"][0]["rule_code"], "ATT-LATE-30")
-		self.assertEqual(len(result["system_boundaries"]), 4)
+		self.assertEqual(len(result["system_boundaries"]), 5)
+		self.assertTrue(any(item["name"] == "周末与调班边界" for item in result["system_boundaries"]))
 
 
 if __name__ == "__main__":

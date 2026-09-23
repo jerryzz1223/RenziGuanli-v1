@@ -6,7 +6,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "enabled", "company", "rule_code", "rule_name", "sequence", "match_tokens", "effective_from",
+  "enabled", "company", "rule_code", "rule_name", "sequence", "match_tokens", "effective_from", "shift_type", "shift_sync_status", "shift_sync_message",
   "time_section", "basic_time", "weekday_overtime_time", "weekend_overtime_time", "overtime_begin_time", "overnight", "meal_deduction_rule",
   "calculation_section", "basic_hours", "weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule", "weekend_overtime_mode", "holiday_overtime_mode",
   "allowance_section", "small_night_rule", "large_night_rule", "remarks", "suggested_positions", "punch_in_range", "punch_out_range",
@@ -20,6 +20,9 @@
   {"default": "0", "fieldname": "sequence", "fieldtype": "Int", "label": "顺序"},
   {"description": "多个关键词用 | 分隔；同一规则的关键词必须全部出现在来源班次中。", "fieldname": "match_tokens", "fieldtype": "Data", "in_list_view": 1, "label": "班次匹配关键词", "reqd": 1},
   {"fieldname": "effective_from", "fieldtype": "Date", "label": "生效日期"},
+  {"description": "由排班表联动生成或手动绑定的系统班次；班次分配使用此值。", "fieldname": "shift_type", "fieldtype": "Link", "in_list_view": 1, "label": "系统班次", "options": "Shift Type"},
+  {"fieldname": "shift_sync_status", "fieldtype": "Select", "label": "班次联动状态", "options": "\n已联动\n待联动\n需复核", "read_only": 1},
+  {"fieldname": "shift_sync_message", "fieldtype": "Small Text", "label": "班次联动说明", "read_only": 1},
   {"fieldname": "time_section", "fieldtype": "Section Break", "label": "班次与打卡时间"},
   {"fieldname": "basic_time", "fieldtype": "Data", "label": "基本工时上下班时间", "reqd": 1},
   {"fieldname": "weekday_overtime_time", "fieldtype": "Data", "label": "平日加班起止时间"},

@@ -46,10 +46,15 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 				values = row["processed_value"]
 				self.assertEqual(values["absence_marker_count"], 0)
 				self.assertEqual(values["absence_hours"], 0)
+				self.assertEqual(values["standard_hours"], 0)
 				self.assertNotIn("ABSENCE_MARKED", row["exception_codes"])
+				self.assertNotIn("ATTENDANCE_HOURS_MISMATCH", row["exception_codes"])
 				detail = values["attendance_details"][0]
+				self.assertTrue(detail["weekend_restday_mode"])
+				self.assertEqual(detail["reconciliation_mode"], "restday_overtime_only")
 				self.assertEqual(detail["source_numbers"]["absence_marker_count"], 1)
 				self.assertEqual(detail["source_numbers"]["absence_hours"], 8)
+				self.assertEqual(detail["source_numbers"]["standard_hours"], 8)
 
 	def test_saturday_and_sunday_exclude_every_leave_type_but_keep_source_audit(self):
 		leave_values = {
@@ -67,12 +72,69 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 				row = self.process(**{"日期": day, **leave_values})
 				values = row["processed_value"]
 				self.assertEqual(values["leave_hours"], 0)
+				self.assertEqual(values["standard_hours"], 0)
 				self.assertTrue(all(values[field] == 0 for field in processor.LEAVE_FIELDS))
+				self.assertNotIn("ATTENDANCE_HOURS_MISMATCH", row["exception_codes"])
 				detail = values["attendance_details"][0]
 				self.assertEqual(detail["excluded_leave_hours"], expected_excluded)
 				self.assertEqual(detail["source_numbers"]["personal_leave_hours"], 1)
 		weekday = self.process(**{"病假(小时)": 4, "排休(小时)": 4})
 		self.assertEqual(weekday["processed_value"]["leave_hours"], 8)
+
+	def test_explicit_weekend_makeup_day_still_uses_workday_attendance(self):
+		row = self.process(**{
+			"日期": "2026-09-19", "日期类型": "周末补班", "实际出勤": 0,
+			"旷工": 1, "旷工(小时)": 8,
+		})
+		values = row["processed_value"]
+		self.assertEqual(values["standard_hours"], 8)
+		self.assertEqual(values["absence_hours"], 8)
+		self.assertIn("ABSENCE_MARKED", row["exception_codes"])
+		self.assertFalse(values["attendance_details"][0]["weekend_restday_mode"])
+
+	def test_scheduling_policy_can_intentionally_treat_calendar_weekend_as_workday(self):
+		source = {
+			"姓名": "测试员工", "工号": "E001", "日期": "2026-09-19", "日期类型": "周末排班",
+			"班次": "白班 08:00-17:00", "标准工时": 8, "实际出勤": 0,
+			"旷工": 1, "旷工(小时)": 8, "source_row": 3,
+		}
+		row = processor.process_attendance_draft_rows(
+			[source], attendance_month="2026-09", scheduling_policies=[{
+				"name": "POLICY-001", "enabled": 1, "policy_name": "测试周末工作日规则",
+				"priority": 100, "scope_type": "全公司", "effective_from": "2026-01-01",
+				"calendar_weekend_mode": "按工作日考勤",
+			}],
+		)["processed_rows"][0]
+		self.assertEqual(row["processed_value"]["standard_hours"], 8)
+		self.assertEqual(row["processed_value"]["absence_hours"], 8)
+		self.assertIn("ABSENCE_MARKED", row["exception_codes"])
+		self.assertEqual(
+			row["processed_value"]["attendance_details"][0]["scheduling_policy"]["name"],
+			"POLICY-001",
+		)
+
+	def test_employee_company_code_policy_overrides_company_weekend_policy(self):
+		source = {
+			"姓名": "测试员工", "工号": "E001", "日期": "2026-09-19", "日期类型": "周末排班",
+			"班次": "白班 08:00-17:00", "标准工时": 8, "实际出勤": 0,
+			"旷工": 1, "旷工(小时)": 8, "source_row": 3,
+		}
+		policies = [
+			{"name": "COMPANY", "enabled": 1, "policy_name": "公司规则", "priority": 999,
+			 "scope_type": "全公司", "effective_from": "2026-01-01", "calendar_weekend_mode": "按工作日考勤"},
+			{"name": "EMPLOYEE", "enabled": 1, "policy_name": "员工规则", "priority": 1,
+			 "scope_type": "员工", "scope_values": "E001", "effective_from": "2026-01-01",
+			 "calendar_weekend_mode": "休息日加班口径"},
+		]
+		row = processor.process_attendance_draft_rows(
+			[source], attendance_month="2026-09", scheduling_policies=policies,
+		)["processed_rows"][0]
+		self.assertEqual(row["processed_value"]["standard_hours"], 0)
+		self.assertNotIn("ABSENCE_MARKED", row["exception_codes"])
+		self.assertEqual(
+			row["processed_value"]["attendance_details"][0]["scheduling_policy"]["name"],
+			"EMPLOYEE",
+		)
 
 	def test_only_full_day_leave_exempts_both_explicit_and_single_punch(self):
 		for standard, leave, exempt in ((8, 8, True), (8, 7.99, False), (8, 0, False), (12, 8, False), (12, 12, True), (0, 8, False)):
@@ -154,7 +216,7 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 			def save(self, **kwargs):
 				self.saves += 1
 		doc = Record()
-		batch = SimpleNamespace(name="batch-1", company="TEST", attendance_month="2026-09", source_type="attendance_draft")
+		batch = SimpleNamespace(name="batch-1", company="TEST", attendance_month="2026-09", source_type="attendance_draft", notes="")
 		api._require_processing_manager = lambda: None
 		api._require_company = api._require_month = lambda value: value
 		api._employee_directory = lambda company: None

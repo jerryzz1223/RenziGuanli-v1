@@ -36,6 +36,22 @@
   "end_time",
   "section_break_15",
   "introduction",
+  "source_record_section",
+  "source_owner_department",
+  "source_course_type",
+  "source_courseware",
+  "source_course_hours",
+  "source_target",
+  "source_actual_dates",
+  "source_date_only",
+  "source_audit_section",
+  "source_file",
+  "source_sheet",
+  "source_rows",
+  "source_import_key",
+  "source_fingerprint",
+  "source_imported_by",
+  "source_imported_on",
   "section_break_18",
   "employees",
   "amended_from",
@@ -208,6 +224,105 @@
    "fieldtype": "Text Editor",
    "label": "Introduction",
    "reqd": 1
+  },
+  {
+   "fieldname": "source_record_section",
+   "fieldtype": "Section Break",
+   "label": "教育训练记录原表字段"
+  },
+  {
+   "fieldname": "source_owner_department",
+   "fieldtype": "Data",
+   "label": "课程归属部门",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_course_type",
+   "fieldtype": "Data",
+   "label": "来源课程类型",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_courseware",
+   "fieldtype": "Data",
+   "label": "课件方式",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_course_hours",
+   "fieldtype": "Float",
+   "label": "来源课时",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_target",
+   "fieldtype": "Small Text",
+   "label": "培训对象",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_actual_dates",
+   "fieldtype": "Small Text",
+   "label": "来源实际上课时间",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "source_date_only",
+   "fieldtype": "Check",
+   "label": "来源仅提供日期",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_audit_section",
+   "fieldtype": "Section Break",
+   "label": "导入来源"
+  },
+  {
+   "fieldname": "source_file",
+   "fieldtype": "Attach",
+   "label": "来源文件",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_sheet",
+   "fieldtype": "Data",
+   "label": "来源工作表",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_rows",
+   "fieldtype": "Small Text",
+   "label": "来源行号",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_import_key",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "来源导入键",
+   "read_only": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "source_fingerprint",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "来源文件指纹",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_imported_by",
+   "fieldtype": "Link",
+   "label": "导入人",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_imported_on",
+   "fieldtype": "Datetime",
+   "label": "导入时间",
+   "read_only": 1
   },
   {
    "fieldname": "section_break_18",

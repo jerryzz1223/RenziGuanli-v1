@@ -22,12 +22,22 @@ for (const fieldname of ["employee_a", "employee_a_name", "employee_a_code", "em
 	assert.ok(fields.has(fieldname), `员工关系 DocType 缺少字段: ${fieldname}`);
 }
 
+assert.equal(fields.get("relationship").fieldtype, "Select", "员工关系大类必须使用受控选项");
+for (const category of ["直系亲属", "旁系亲属", "姻亲", "男女朋友", "同学", "前同事", "朋友", "同村", "其他"]) {
+	assert.ok(fields.get("relationship").options.includes(category), `员工关系大类缺少: ${category}`);
+}
+
 for (const marker of [
 	"frappe.new_doc(DOCTYPENAME)",
 	'doc.set("employee_a", first.name)',
 	'doc.set("employee_b", second.name)',
 	'doc.set("relationship", relationship)',
 	"doc.insert(ignore_mandatory=True)",
+	"preview_employee_relationship_import",
+	"apply_employee_relationship_import",
+	"_identity_selection",
+	"plan_token_value",
+	"duplicate_source_count",
 	'"submitted_by_name": frappe.db.get_value("User", submitted_by, "full_name")',
 	'"submitted_on": submitted_on',
 	"meta.has_field(fieldname)",
@@ -64,6 +74,13 @@ for (const marker of [
 	"pie_slice_path",
 	"data-relationship-statistics-more",
 	"show_relationship_statistic_records",
+	"导入人员关系表",
+	"preview_employee_relationship_import",
+	"apply_employee_relationship_import",
+	"data-relationship-identity",
+	"data-relationship-conflict",
+	"conflict_map",
+	"relationship_categories",
 	"提交关系",
 	"员工关系提交记录",
 	"提交人",

@@ -3,6 +3,8 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import now_datetime
 
+from hrms.hr.employee_relationship_importer import RELATIONSHIP_CATEGORIES
+
 
 class HRMSEmployeeRelationship(Document):
 	"""A business relationship shared by two employee profiles."""
@@ -12,8 +14,9 @@ class HRMSEmployeeRelationship(Document):
 			frappe.throw(_("请选择两名员工。"))
 		if self.employee_a == self.employee_b:
 			frappe.throw(_("员工关系不能选择同一名员工。"))
-		if not str(self.relationship or "").strip():
-			frappe.throw(_("请输入员工关系。"))
+		self.relationship = str(self.relationship or "").strip()
+		if self.relationship not in RELATIONSHIP_CATEGORIES:
+			frappe.throw(_("请选择有效的员工关系大类：{0}").format("、".join(RELATIONSHIP_CATEGORIES)))
 
 		first = _employee_snapshot(self.employee_a)
 		second = _employee_snapshot(self.employee_b)

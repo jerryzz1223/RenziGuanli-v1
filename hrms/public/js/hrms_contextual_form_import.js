@@ -13,6 +13,18 @@
 		exit_payroll_settlement: "payroll_change_submit", training_registration: "training_submit", certificate_management: "employee_edit",
 		performance_summary: "performance_submit", system_feedback: "permission_management",
 	};
+	const TEMPLATE_APPROVAL_CAPABILITIES = {
+		employee_roster: "roster_import_approve", employee_onboarding: "employee_create_approve", org_structure: "permission_management",
+		employee_transfer: "personnel_change_approve", qualification_review: "personnel_change_approve", contract_intent: "personnel_change_approve",
+		resignation_application: "separation_approve", recruitment_interview: "recruitment_approve", attendance_daily: "attendance_approve",
+		attendance_department_summary: "attendance_approve", leave_export: "attendance_approve", attendance_exception: "attendance_approve",
+		apple_reward: "attendance_approve", attendance_final: "attendance_final_lock", salary_structure_change: "payroll_approval",
+		reward_punishment: "personnel_change_approve", skill_certificate_allowance: "payroll_approval", full_attendance_bonus: "payroll_approval",
+		housing_allowance: "payroll_approval", education_allowance: "payroll_approval", dormitory_fee: "payroll_approval",
+		social_insurance: "payroll_approval", service_award: "payroll_approval", proposal_improvement: "personnel_change_approve",
+		exit_payroll_settlement: "payroll_approval", training_registration: "training_approve", certificate_management: "personnel_change_approve",
+		performance_summary: "performance_approve", system_feedback: "permission_management",
+	};
 	let listImportAttachTimers = [];
 
 	function current_company() {
@@ -191,7 +203,13 @@
 		window.hrmsCapabilities?.ready().then(() => window.hrmsCapabilities.disable(button?.jquery ? button[0] : button, capability));
 	}
 
-	window.hrmsFormImport = { open: open_import_dialog, download(template_key) { return get_template(template_key).then(download_template); }, addPageActions: add_page_import_actions, capabilityForTemplate: (template_key) => TEMPLATE_CAPABILITIES[template_key] || "" };
+	window.hrmsFormImport = {
+		open: open_import_dialog,
+		download(template_key) { return get_template(template_key).then(download_template); },
+		addPageActions: add_page_import_actions,
+		capabilityForTemplate: (template_key) => TEMPLATE_CAPABILITIES[template_key] || "",
+		approvalCapabilityForTemplate: (template_key) => TEMPLATE_APPROVAL_CAPABILITIES[template_key] || "",
+	};
 
 	const LIST_IMPORTS = {
 		Department: { key: "org_structure", label: "组织架构与编制", button_label: "导入组织架构" },

@@ -11,6 +11,56 @@ from hrms.access_control import (
 )
 
 
+def verify_business_capability_matrix():
+	"""Select all, remove every key once, and verify template action pairs."""
+	from hrms.access_control import has_hrms_capability
+	from hrms.api.form_data_intake import FORM_IMPORT_CAPABILITIES, _require_form_import_capability
+
+	original_session_user = frappe.session.user
+	test_user = f"capability.matrix.{frappe.generate_hash(length=10).lower()}@example.invalid"
+	keys = [item["key"] for item in CAPABILITY_DEFINITIONS]
+	frappe.set_user("Administrator")
+	frappe.db.savepoint("verify_business_capability_matrix")
+	try:
+		frappe.get_doc({
+			"doctype": "User", "email": test_user, "first_name": "Capability Matrix",
+			"enabled": 1, "send_welcome_email": 0, "user_type": "System User",
+		}).insert(ignore_permissions=True)
+		all_result = set_hrms_user_capabilities(test_user, keys)
+		assert set(all_result["capabilities"]) == set(keys), "all-selected readback mismatch"
+
+		for removed in keys:
+			selected = [key for key in keys if key != removed]
+			result = set_hrms_user_capabilities(test_user, selected)
+			assert set(result["capabilities"]) == set(selected), f"remove-one readback mismatch: {removed}"
+			frappe.set_user(test_user)
+			assert not has_hrms_capability(removed), f"removed capability still active: {removed}"
+			assert all(has_hrms_capability(key) for key in selected), f"retained capability lost after removing: {removed}"
+			frappe.set_user("Administrator")
+
+		for template_key, (submit_key, approval_key) in FORM_IMPORT_CAPABILITIES.items():
+			set_hrms_user_capabilities(test_user, [submit_key])
+			frappe.set_user(test_user)
+			_require_form_import_capability(template_key)
+			if approval_key != submit_key:
+				try:
+					_require_form_import_capability(template_key, approval=True)
+				except frappe.PermissionError:
+					pass
+				else:
+					raise AssertionError(f"approval bypassed submit-only permission: {template_key}")
+			frappe.set_user("Administrator")
+
+		set_hrms_user_capabilities(test_user, [])
+		frappe.set_user(test_user)
+		assert not any(has_hrms_capability(key) for key in keys), "clear-all left a managed capability"
+		return {"capabilities": len(keys), "remove_one_cases": len(keys), "form_templates": len(FORM_IMPORT_CAPABILITIES), "result": "passed_and_rolled_back"}
+	finally:
+		frappe.db.rollback(save_point="verify_business_capability_matrix")
+		frappe.clear_cache(user=test_user)
+		frappe.set_user(original_session_user)
+
+
 def execute():
 	original_session_user = frappe.session.user
 	frappe.set_user("Administrator")

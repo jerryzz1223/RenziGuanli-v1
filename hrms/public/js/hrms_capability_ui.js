@@ -100,14 +100,33 @@
 		"payroll-input-center": [
 			[/导出|Export/i, "payroll_export"], [/发放|确认结算|生成结算|发送工资条/, "payroll_confirm"],
 			[/试算|计算工资|生成薪资/, "payroll_calculate"], [/审批|批准|驳回/, "payroll_approval"],
+			[/规则|公式|字段映射|模板.*保存/, "payroll_rules"],
 			[/社保|公积金|缴费/, "contribution_submit"], [/修改申请|调薪|申请修改/, "payroll_change_submit"],
-			[/首次录入|员工定薪|保存薪资/, "payroll_entry_submit"], [/规则|公式|字段映射|模板.*保存/, "payroll_rules"],
+			[/首次录入|员工定薪|保存薪资/, "payroll_entry_submit"],
 		],
 		"recruitment-center": [[/审批|批准|驳回|取消/, "recruitment_approve"], [/新建|添加|录入|保存|提交|导入/, "recruitment_submit"]],
 		"hrms-access-center": [[/保存权限|新建账户|账户资料|管理数据范围|验证权限|停用账号|一键全选|取消全选/, "permission_management"]],
 	};
+	const PAGE_SUBROUTE_DEFAULTS = {
+		"attendance-import-center": {
+			exceptions: "attendance_exception_edit", "manual-adjustments": "attendance_exception_edit",
+			"daily-review": "attendance_approve", "monthly-final": "attendance_final_lock",
+			"processing-results": "attendance_import_submit", "import-batches": "attendance_import_submit",
+			"daily-attendance": "attendance_import_submit", "processing-rules": "attendance_approve",
+		},
+		"payroll-input-center": {
+			"employee-salary": "payroll_entry_submit", "salary-assignments": "payroll_entry_submit",
+			"salary-changes": "payroll_change_submit", variables: "payroll_change_submit",
+			"contribution-register": "contribution_submit", "contribution-changes": "contribution_submit",
+			"salary-approvals": "payroll_approval", "contribution-approvals": "payroll_approval",
+			"monthly-workbench": "payroll_calculate", "monthly-payroll": "payroll_calculate", inputs: "payroll_calculate", "annual-bonus": "payroll_calculate",
+			"termination-settlement": "payroll_confirm", "payroll-disbursement": "payroll_confirm", settlements: "payroll_confirm", "salary-slips": "payroll_confirm",
+			"salary-rules": "payroll_rules", "attendance-pay-rules": "payroll_rules", "salary-templates": "payroll_rules", "payroll-adjustments": "payroll_rules",
+			"payroll-reports": "payroll_export", "payroll-analysis": "payroll_export",
+		},
+	};
 
-	const MUTATING_TEXT = /新建|添加|编辑|修改|保存|提交|申请|导入|上传|审批|审核|批准|驳回|撤回|取消|删除|生成|确认|锁定|解锁|New|Add|Edit|Save|Submit|Import|Upload|Approve|Reject|Cancel|Delete|Create/i;
+	const MUTATING_TEXT = /新建|添加|编辑|修改|保存|提交|申请|导入|上传|审批|审核|批准|驳回|撤回|取消|删除|生成|确认|锁定|解锁|处理|应用|执行|重算|校验|发放|New|Add|Edit|Save|Submit|Import|Upload|Approve|Reject|Cancel|Delete|Create|Apply|Run/i;
 	const APPROVAL_TEXT = /审批|审核|批准|驳回|撤回|取消|Approve|Reject|Cancel/i;
 	let capabilities = new Set();
 	let readyPromise = null;
@@ -148,6 +167,7 @@
 		for (const [pattern, key] of PAGE_POLICIES[pageName] || []) {
 			if (pattern.test(text)) return key;
 		}
+		if (MUTATING_TEXT.test(text)) return PAGE_SUBROUTE_DEFAULTS[pageName]?.[currentRoute[1]] || "";
 		return "";
 	}
 
@@ -156,6 +176,8 @@
 		if (explicit) return explicit;
 		const text = controlText(control);
 		if (!text) return "";
+		// A dialog's dismiss button is navigation, not a business-document cancel.
+		if (/^(取消|关闭|Cancel|Close)$/i.test(text) && control?.closest?.(".modal, .msgprint-dialog")) return "";
 		const currentRoute = route();
 		return formPolicy(control, currentRoute, text) || listPolicy(currentRoute, text) || pagePolicy(currentRoute, text);
 	}
@@ -234,5 +256,6 @@
 		guard(key, callback) { return function (...args) { if (!requireCapability(key)) return; return callback.apply(this, args); }; },
 	};
 
-	frappe.ready(install);
+	if (typeof frappe.ready === "function") frappe.ready(install);
+	else $(install);
 })();

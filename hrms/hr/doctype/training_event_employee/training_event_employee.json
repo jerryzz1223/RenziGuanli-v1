@@ -6,12 +6,14 @@
  "engine": "InnoDB",
  "field_order": [
   "employee",
+  "employee_code",
   "employee_name",
   "department",
   "column_break_3",
   "status",
   "attendance",
-  "is_mandatory"
+  "is_mandatory",
+  "source_row"
  ],
  "fields": [
   {
@@ -21,6 +23,14 @@
    "label": "Employee",
    "no_copy": 1,
    "options": "Employee"
+  },
+  {
+   "fetch_from": "employee.custom_employee_code",
+   "fieldname": "employee_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "公司工号",
+   "read_only": 1
   },
   {
    "fetch_from": "employee.employee_name",
@@ -64,6 +74,12 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Is Mandatory"
+  },
+  {
+   "fieldname": "source_row",
+   "fieldtype": "Int",
+   "label": "来源行号",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,

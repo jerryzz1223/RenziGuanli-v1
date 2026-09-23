@@ -32,8 +32,13 @@ def _load_module(user_doc=None):
 	frappe.get_roles = lambda _user=None: ["System Manager"]
 	frappe.whitelist = lambda **_kwargs: (lambda fn: fn)
 	frappe._ = lambda message: message
-	frappe.db = types.SimpleNamespace(exists=lambda doctype, name=None: True)
+	frappe.db = types.SimpleNamespace(
+		exists=lambda doctype, name=None: True,
+		delete=lambda *_args, **_kwargs: None,
+		get_value=lambda *_args, **_kwargs: None,
+	)
 	frappe.get_doc = lambda *_args, **_kwargs: user_doc
+	frappe.get_all = lambda *_args, **_kwargs: []
 	frappe.clear_cache = lambda **_kwargs: None
 	frappe._deleted = []
 	frappe.delete_doc = lambda doctype, name, **kwargs: frappe._deleted.append((doctype, name, kwargs))
@@ -233,8 +238,12 @@ class AccessControlTests(unittest.TestCase):
 
 	def test_role_setup_installs_real_operation_permissions_and_company_read(self):
 		module = _load_module()
+		captured = []
+		module._ensure_docperm_operations = lambda doctype, role, permission_types: captured.extend(
+			(doctype, role, permission_type) for permission_type in permission_types
+		)
 		module.ensure_hrms_access_roles()
-		added = {(args[0], args[1], kwargs.get("ptype")) for args, kwargs in module._added_permissions}
+		added = set(captured)
 		self.assertIn(("Employee", "花名册导入提交", "import"), added)
 		self.assertIn(("HRMS Attendance Department Confirmation", "考勤审批", "submit"), added)
 		self.assertIn(("HRMS Employee Salary Change", "薪资审批", "submit"), added)

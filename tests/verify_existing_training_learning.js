@@ -19,14 +19,22 @@ const sidebar = read("hrms", "public", "js", "hrms_home_redirect_v6.js");
 for (const field of ["approval_status", "owner_department", "plan_period", "training_category", "training_mode", "is_mandatory", "objective"]) {
 	assert(program.fields.some((item) => item.fieldname === field), `培训计划缺少字段：${field}`);
 }
+for (const field of ["source_file", "source_sheet", "source_row", "source_import_key", "source_department", "source_classification", "source_training_type", "source_course_hours", "source_target", "source_audience_matrix"]) {
+	assert(program.fields.some((item) => item.fieldname === field), `培训计划缺少来源字段：${field}`);
+}
 for (const field of ["training_category", "training_mode", "assessment_required", "passing_score", "retraining_due_on", "qualification_gate"]) {
 	assert(event.fields.some((item) => item.fieldname === field), `培训活动缺少字段：${field}`);
 }
+for (const field of ["source_file", "source_sheet", "source_rows", "source_import_key", "source_actual_dates", "source_course_type", "source_courseware", "source_course_hours", "source_target"]) {
+	assert(event.fields.some((item) => item.fieldname === field), `培训活动缺少来源字段：${field}`);
+}
 for (const field of ["score", "assessment_result", "needs_retraining"]) assert(resultEmployee.fields.some((item) => item.fieldname === field));
+for (const field of ["employee_code", "source_row", "source_month", "source_employee_name", "source_department", "source_study_hours"]) assert(resultEmployee.fields.some((item) => item.fieldname === field));
 assert(feedback.fields.some((item) => item.fieldname === "satisfaction_score"));
 for (const marker of ["set_assessment_outcomes", "event_status = \"Completed\"", "sync_passed_training_to_skill_map", "assessment_result == \"Pass\""]) assert(resultController.includes(marker));
 assert(feedbackController.includes("满意度评分必须介于 1 到 5 分之间"));
-for (const marker of ["培训闭环", "培训待办", "近期培训活动", "培训计划清单", "get_training_learning_dashboard", "新建培训计划"]) assert(programList.includes(marker));
+for (const marker of ["培训闭环", "培训待办", "近期培训活动", "培训计划清单", "get_training_learning_dashboard", "新建培训计划", "年度资料导入与员工匹配", "教育训练计划导入与员工匹配", "员工公司工号匹配", "data-training-match-filter", "data-training-match-search", "preview_training_workbooks", "import_training_workbooks", "公司工号", "请先完成剩余 {0} 组员工公司工号匹配", ".prop(\"disabled\", Boolean(sourceErrors || pending))"]) assert(programList.includes(marker));
+for (const marker of ["make_attachments_public: false", "disable_file_browser: true", "allow_web_link: false", "allow_toggle_private: false"]) assert(programList.includes(marker));
 for (const marker of ["get_training_learning_dashboard", "_attendance_summary", "needs_retraining", "retraining_due_on"]) assert(programController.includes(marker));
 for (const marker of [".hrms-training-learning-workspace", ".hrms-training-summary", "@media (max-width: 767px)"]) assert(trainingCss.includes(marker));
 assert(nav.includes('route: "/desk/training-program"'), "培训学习必须保留原培训计划入口。");

@@ -8,10 +8,10 @@
  "field_order": [
   "enabled", "company", "policy_name", "priority",
   "scope_section", "scope_type", "scope_values", "effective_from", "effective_to",
-  "compliance_section", "allow_workday", "max_workday_hours", "allow_restday", "max_restday_hours", "allow_holiday", "max_holiday_hours", "max_daily_hours",
+  "compliance_section", "allow_workday", "max_workday_hours", "allow_restday", "max_restday_hours", "allow_holiday", "max_holiday_hours", "max_daily_hours", "calendar_weekend_mode",
   "multiple_section", "allow_multiple_shifts", "merge_consecutive_shifts", "consecutive_gap_minutes",
   "change_section", "past_change_months", "future_change_days", "allow_change_after_checkin", "allow_expired_unscheduled_change", "unscheduled_punch_mode",
-  "remarks"
+  "remarks", "source_section", "generated_from_schedule", "source_version", "source_file", "source_checksum", "source_sync_on"
  ],
  "fields": [
   {"default": "1", "fieldname": "enabled", "fieldtype": "Check", "in_list_view": 1, "label": "启用"},
@@ -31,6 +31,7 @@
   {"default": "1", "fieldname": "allow_holiday", "fieldtype": "Check", "label": "节假日可排班"},
   {"default": "24", "fieldname": "max_holiday_hours", "fieldtype": "Float", "label": "节假日排班上限（小时）"},
   {"default": "24", "description": "同一员工同一日所有班次的累计上限。", "fieldname": "max_daily_hours", "fieldtype": "Float", "label": "每日累计上限（小时）"},
+  {"default": "休息日加班口径", "description": "休息日加班口径：普通周六日不计标准工时、请假、旷工、迟到和早退，只核对打卡及休息日加班；明确标为工作日、调班或补班的周末仍按工作日考勤。", "fieldname": "calendar_weekend_mode", "fieldtype": "Select", "label": "普通周六日考勤口径", "options": "休息日加班口径\n按工作日考勤", "reqd": 1},
   {"fieldname": "multiple_section", "fieldtype": "Section Break", "label": "一天多班与连班"},
   {"default": "0", "fieldname": "allow_multiple_shifts", "fieldtype": "Check", "label": "允许一天多班次"},
   {"default": "0", "fieldname": "merge_consecutive_shifts", "fieldtype": "Check", "label": "连续班次合并取卡"},
@@ -41,7 +42,13 @@
   {"default": "1", "fieldname": "allow_change_after_checkin", "fieldtype": "Check", "label": "有打卡后允许改班"},
   {"default": "1", "fieldname": "allow_expired_unscheduled_change", "fieldtype": "Check", "label": "逾期未排班允许补排"},
   {"default": "选择班次打卡或直接打卡", "fieldname": "unscheduled_punch_mode", "fieldtype": "Select", "label": "未排班打卡方式", "options": "不允许打卡\n选择班次打卡\n直接打卡\n选择班次打卡或直接打卡"},
-  {"fieldname": "remarks", "fieldtype": "Small Text", "label": "备注"}
+  {"fieldname": "remarks", "fieldtype": "Small Text", "label": "备注"},
+  {"fieldname": "source_section", "fieldtype": "Section Break", "label": "排班表联动来源"},
+  {"default": "0", "fieldname": "generated_from_schedule", "fieldtype": "Check", "hidden": 1, "label": "由排班表生成", "read_only": 1},
+  {"fieldname": "source_version", "fieldtype": "Data", "label": "来源版本", "read_only": 1},
+  {"fieldname": "source_file", "fieldtype": "Data", "label": "来源文件", "read_only": 1},
+  {"fieldname": "source_checksum", "fieldtype": "Data", "label": "来源校验值", "read_only": 1},
+  {"fieldname": "source_sync_on", "fieldtype": "Datetime", "label": "最近联动时间", "read_only": 1}
  ],
  "links": [],
  "modified": "2026-09-22 00:00:00.000000",

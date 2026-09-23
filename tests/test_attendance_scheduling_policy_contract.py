@@ -4,6 +4,7 @@ import ast
 import json
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +47,20 @@ class SchedulingPolicyContractTest(unittest.TestCase):
 		checkin_source = EMPLOYEE_CHECKIN_PY.read_text(encoding="utf-8")
 		self.assertIn("merged_consecutive_shift_for_checkin", checkin_source)
 		self.assertIn("unscheduled_punch_mode", checkin_source)
+
+	def test_linked_shift_hours_include_fixed_workday_overtime_only_on_workdays(self):
+		source = ast.parse(POLICY_PY.read_text(encoding="utf-8"))
+		function = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "linked_shift_hours")
+		rule = SimpleNamespace(basic_hours=8, weekday_overtime_hours=3.5, weekday_overtime_mode="不提交加班单")
+		db = SimpleNamespace(exists=lambda *_args: True, get_value=lambda *_args, **_kwargs: rule)
+		namespace = {
+			"frappe": SimpleNamespace(db=db), "flt": lambda value: float(value or 0),
+			"shift_duration_hours": lambda *_args: 99,
+		}
+		exec(compile(ast.Module(body=[function], type_ignores=[]), str(POLICY_PY), "exec"), namespace)
+		hours = namespace["linked_shift_hours"]
+		self.assertEqual(hours("永新", "生产夜班", day_type="workday"), 11.5)
+		self.assertEqual(hours("永新", "生产夜班", day_type="restday"), 8)
 
 	def test_api_and_rule_center_expose_the_policy(self):
 		api_source = API_PY.read_text(encoding="utf-8")

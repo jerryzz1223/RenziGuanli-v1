@@ -46,6 +46,51 @@
 .hrms-training-hero p:not(.hrms-training-eyebrow) { margin: 8px 0 0; color: #657187; }
 .hrms-training-hero-actions { display: flex; gap: 8px; flex-shrink: 0; }
 
+.hrms-training-import-center {
+	display: grid;
+	grid-template-columns: minmax(250px, 1.1fr) minmax(460px, 1.8fr) auto;
+	align-items: center;
+	gap: 24px;
+	margin-top: 14px;
+	padding: 22px 24px;
+	border: 1px solid #cddcf3;
+	border-radius: 16px;
+	background: linear-gradient(120deg, #f5f9ff 0%, #fff 58%, #f7fbff 100%);
+	box-shadow: 0 8px 24px rgba(42, 91, 158, .06);
+}
+
+.hrms-training-import-center-copy p {
+	margin: 0 0 5px;
+	color: #2b6cdb;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: .08em;
+}
+
+.hrms-training-import-center-copy h2 { margin: 0; font-size: 18px; font-weight: 700; }
+.hrms-training-import-center-copy > span { display: block; margin-top: 7px; color: #6f7d92; font-size: 12px; line-height: 1.55; }
+.hrms-training-import-center > .btn { min-width: 168px; white-space: nowrap; }
+.hrms-training-import-center > .btn span { margin-left: 12px; }
+
+.hrms-training-import-path { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.hrms-training-import-path > div { position: relative; min-width: 0; padding: 2px 14px 2px 34px; }
+.hrms-training-import-path > div:not(:last-child)::after {
+	position: absolute;
+	top: 12px;
+	right: -5px;
+	width: 10px;
+	height: 1px;
+	background: #cbd5e4;
+	content: "";
+}
+.hrms-training-import-path b { position: absolute; top: 0; left: 0; display: grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; background: #edf1f7; color: #78869a; font-size: 10px; }
+.hrms-training-import-path span, .hrms-training-import-path small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hrms-training-import-path span { color: #344156; font-size: 12px; font-weight: 650; }
+.hrms-training-import-path small { margin-top: 3px; color: #8793a6; font-size: 10px; }
+.hrms-training-import-path .active b { background: #2b6cdb; color: #fff; }
+.hrms-training-import-path .done b { background: #e6f6ed; color: #238253; }
+.hrms-training-import-path .warning b { background: #fff0cc; color: #936300; }
+
 .hrms-training-summary {
 	display: grid;
 	grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -139,9 +184,68 @@
 
 .hrms-training-list-heading { margin-top: 14px; padding: 16px 20px; }
 
+.hrms-training-import h5 { margin: 0 0 6px; font-weight: 650; }
+.hrms-training-import-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 18px; border: 1px solid #e4eaf2; border-radius: 12px; overflow: hidden; }
+.hrms-training-import-steps span { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-right: 1px solid #e8edf4; background: #f8fafc; color: #7a879a; font-size: 12px; font-weight: 600; }
+.hrms-training-import-steps span:last-child { border-right: 0; }
+.hrms-training-import-steps b { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #e9eef5; font-size: 11px; }
+.hrms-training-import-steps .active { background: #eef5ff; color: #255eb4; }
+.hrms-training-import-steps .active b { background: #2b6cdb; color: #fff; }
+.hrms-training-import-steps .done { color: #23794e; }
+.hrms-training-import-steps .done b { background: #e4f5eb; }
+
+.hrms-training-import-note { display: flex; align-items: flex-start; gap: 18px; padding: 14px 16px; border-radius: 10px; background: #f7f9fc; }
+.hrms-training-import-note strong { flex: 0 0 auto; color: #344258; }
+.hrms-training-import-note span { color: #748197; font-size: 12px; }
+.hrms-training-upload-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+.hrms-training-upload-card { position: relative; min-height: 145px; padding: 20px 54px 20px 20px; border: 1px dashed #bfcce0; border-radius: 13px; background: #fff; text-align: left; transition: .16s ease; }
+.hrms-training-upload-card:hover { border-color: #5b83c6; background: #f8fbff; box-shadow: 0 8px 22px rgba(50, 86, 140, .08); }
+.hrms-training-upload-card.selected { border-style: solid; border-color: #87c5a2; background: #f6fcf8; }
+.hrms-training-upload-card > span { display: block; margin-bottom: 22px; color: #2b6cdb; font-size: 11px; font-weight: 700; }
+.hrms-training-upload-card strong, .hrms-training-upload-card small { display: block; }
+.hrms-training-upload-card strong { color: #29364a; font-size: 15px; }
+.hrms-training-upload-card small { margin-top: 7px; overflow: hidden; color: #7c899c; text-overflow: ellipsis; white-space: nowrap; }
+.hrms-training-upload-card i { position: absolute; top: calc(50% - 18px); right: 20px; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: #edf4ff; color: #2b6cdb; font-size: 20px; font-style: normal; }
+.hrms-training-upload-card.selected i { background: #e4f5eb; color: #238253; }
+
+.hrms-training-import-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+.hrms-training-import-summary > div { padding: 14px; border: 1px solid #e6ebf2; border-radius: 11px; background: #fafbfd; }
+.hrms-training-import-summary span, .hrms-training-import-summary small { display: block; color: #78869a; font-size: 11px; }
+.hrms-training-import-summary strong { display: block; margin: 5px 0 3px; color: #2c384c; font-size: 24px; line-height: 1; }
+.hrms-training-import-summary .success { background: #f1faf5; }
+.hrms-training-import-summary .success strong { color: #23794e; }
+.hrms-training-import-summary .warning { background: #fff9ec; }
+.hrms-training-import-summary .warning strong { color: #9a6a04; }
+
+.hrms-training-match-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin: 18px 0 12px; }
+.hrms-training-match-heading p { margin: 0; color: #758197; font-size: 12px; }
+.hrms-training-match-progress { flex: 0 0 210px; }
+.hrms-training-match-progress strong { display: block; margin-bottom: 5px; color: #46536a; font-size: 11px; text-align: right; }
+.hrms-training-match-progress > span { display: block; height: 6px; border-radius: 999px; background: #e9edf3; overflow: hidden; }
+.hrms-training-match-progress i { display: block; height: 100%; border-radius: inherit; background: #2b6cdb; transition: width .2s ease; }
+.hrms-training-match-toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) 190px auto; gap: 8px; margin-bottom: 10px; }
+.hrms-training-import .hrms-training-identity-table { max-height: 440px; overflow: auto; }
+.hrms-training-import .hrms-training-identity-table thead th {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	background: var(--subtle-fg);
+}
+.hrms-training-identity-table td { vertical-align: middle !important; }
+.hrms-training-identity-table td:first-child small { display: block; margin-top: 3px; color: #8490a2; }
+.hrms-training-match-status { display: inline-flex; padding: 4px 8px; border-radius: 999px; background: #fff4da; color: #926300; font-size: 11px; white-space: nowrap; }
+.hrms-training-match-status.ambiguous { background: #fff0ef; color: #b53d37; }
+.hrms-training-match-status.unmatched { background: #f0f2f5; color: #58667a; }
+.hrms-training-match-complete { display: flex; align-items: center; gap: 14px; padding: 20px; border: 1px solid #c8e7d5; border-radius: 12px; background: #f1faf5; }
+.hrms-training-match-complete > span { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: #dff2e7; color: #23794e; font-size: 20px; }
+.hrms-training-match-complete strong { color: #276944; }
+.hrms-training-match-complete p { margin: 4px 0 0; color: #668073; }
+
 @media (max-width: 1120px) {
 	.hrms-training-flow, .hrms-training-events { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 	.hrms-training-content-grid { grid-template-columns: 1fr; }
+	.hrms-training-import-center { grid-template-columns: 1fr; }
+	.hrms-training-import-center > .btn { justify-self: start; }
 }
 
 @media (max-width: 767px) {
@@ -150,4 +254,12 @@
 	.hrms-training-summary, .hrms-training-flow, .hrms-training-events { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	.hrms-training-panel { padding: 15px; }
 	.hrms-training-list-heading > span { display: none; }
+	.hrms-training-import-center { padding: 18px; }
+	.hrms-training-import-path, .hrms-training-import-steps, .hrms-training-import-summary, .hrms-training-upload-grid { grid-template-columns: 1fr; }
+	.hrms-training-import-path > div { min-height: 45px; }
+	.hrms-training-import-path > div:not(:last-child)::after { display: none; }
+	.hrms-training-import-steps span { border-right: 0; border-bottom: 1px solid #e8edf4; }
+	.hrms-training-match-heading { align-items: flex-start; flex-direction: column; }
+	.hrms-training-match-progress { width: 100%; flex-basis: auto; }
+	.hrms-training-match-toolbar { grid-template-columns: 1fr; }
 }

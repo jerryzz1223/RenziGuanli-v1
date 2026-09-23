@@ -10,10 +10,173 @@
 	const escape = (value) => frappe.utils.escape_html(String(value ?? ""));
 	const number = (value) => escape(value || 0);
 	const route = (key) => frappe.set_route(...routes[key]);
+	const importApi = "hrms.api.training_import";
+	const currentCompany = () => window.hrmsCompanyContext?.getCurrentCompany?.() || frappe.defaults?.get_user_default?.("Company") || "";
+	let importState = { company: "", plan_file_url: "", record_file_url: "", preview: null };
+
+	function get_import_state(company) {
+		if (importState.company !== company) importState = { company, plan_file_url: "", record_file_url: "", preview: null };
+		return importState;
+	}
 
 	function new_training_program() {
-		const company = window.hrmsCompanyContext?.getCurrentCompany?.() || frappe.defaults?.get_user_default?.("Company") || "";
+		const company = currentCompany();
 		frappe.new_doc("Training Program", { company, approval_status: "Draft" });
+	}
+
+	function open_training_import(reload) {
+		if (!window.hrmsCapabilities?.require("training_submit")) return;
+		const company = currentCompany();
+		if (!company) return frappe.msgprint(__("请先在页面顶部选择当前公司。"));
+		const state = get_import_state(company);
+		const dialog = new frappe.ui.Dialog({
+			title: __("年度资料导入与员工匹配"),
+			size: "extra-large",
+			fields: [{ fieldtype: "HTML", fieldname: "training_import_body" }],
+		});
+
+		const unresolved = () => (state.preview?.identities || []).filter((item) => item.status !== "matched");
+		const statusLabel = {
+			department_mismatch: __("部门不一致"),
+			ambiguous: __("存在同名候选"),
+			unmatched: __("主档未找到"),
+			missing_code: __("缺少公司工号"),
+		};
+
+		function upload(kind) {
+			new frappe.ui.FileUploader({
+				folder: "Home/Attachments",
+				allow_multiple: false,
+				make_attachments_public: false,
+				disable_file_browser: true,
+				allow_web_link: false,
+				allow_take_photo: false,
+				allow_toggle_private: false,
+				restrictions: { allowed_file_types: [".xlsx"] },
+				on_success(file) {
+					state[kind] = file.file_url;
+					state.preview = null;
+					render();
+					reload?.();
+					if (state.plan_file_url && state.record_file_url) preview();
+				},
+			});
+		}
+
+		function preview() {
+			frappe.call({
+				method: `${importApi}.preview_training_workbooks`,
+				args: { plan_file_url: state.plan_file_url, record_file_url: state.record_file_url, company },
+				freeze: true,
+				freeze_message: __("正在完整读取计划总表、实际记录和员工公司工号…"),
+			}).then((response) => {
+				state.preview = response.message || {};
+				render();
+				reload?.();
+			});
+		}
+
+		function identityRows() {
+			return unresolved().map((item) => {
+				const candidates = (item.candidates || []).filter((candidate) => candidate.employee_code);
+				const candidateControl = candidates.length
+					? `<select class="form-control input-sm" data-training-identity="${escape(item.identity_key)}"><option value="">${escape(__("请选择候选员工"))}</option>${candidates.map((candidate) => `<option value="${escape(candidate.employee_code)}">${escape([candidate.employee_code, candidate.employee_name, candidate.department, candidate.status].filter(Boolean).join(" · "))}</option>`).join("")}</select>`
+					: `<input class="form-control input-sm" data-training-identity="${escape(item.identity_key)}" value="" placeholder="${escape(__("输入当前公司工号"))}">`;
+				const searchText = [item.employee_name, item.source_department, statusLabel[item.status], ...candidates.map((candidate) => candidate.employee_code)].join(" ").toLowerCase();
+				return `<tr data-training-match-row data-status="${escape(item.status)}" data-search="${escape(searchText)}"><td><strong>${escape(item.employee_name)}</strong><small>${escape(__("来源部门：{0}", [item.source_department]))}</small></td><td>${escape(item.record_count)}</td><td><span class="hrms-training-match-status ${escape(item.status)}">${escape(statusLabel[item.status] || item.status)}</span></td><td>${candidateControl}</td><td>${candidates.length ? escape(candidates.map((candidate) => candidate.department || __("无部门")).join("；")) : `<span class="text-muted">${escape(__("请根据原表姓名核对工号"))}</span>`}</td></tr>`;
+			}).join("");
+		}
+
+		function updateMatchProgress() {
+			const inputs = dialog.$wrapper.find("[data-training-identity]");
+			const completed = inputs.toArray().filter((input) => input.value.trim()).length;
+			const sourceErrors = (state.preview?.plan?.error_count || 0) + (state.preview?.records?.error_count || 0);
+			const pending = inputs.length - completed;
+			dialog.$wrapper.find("[data-training-match-progress]").text(__("已确认 {0} / {1} 组", [completed, inputs.length]));
+			dialog.$wrapper.find("[data-training-progress-fill]").css("width", `${inputs.length ? Math.round(completed / inputs.length * 100) : 100}%`);
+			dialog.get_primary_btn()
+				.prop("disabled", Boolean(sourceErrors || pending))
+				.attr("title", pending ? __("请先完成剩余 {0} 组员工公司工号匹配。", [pending]) : "");
+		}
+
+		function bindMatchingTools() {
+			const wrapper = dialog.$wrapper;
+			wrapper.find("[data-training-identity]").on("change input", updateMatchProgress);
+			wrapper.find("[data-training-match-search], [data-training-match-filter]").on("input change", () => {
+				const query = String(wrapper.find("[data-training-match-search]").val() || "").trim().toLowerCase();
+				const filter = wrapper.find("[data-training-match-filter]").val() || "";
+				wrapper.find("[data-training-match-row]").each((_index, row) => {
+					const matchesQuery = !query || String(row.dataset.search || "").includes(query);
+					const matchesFilter = !filter || row.dataset.status === filter;
+					row.hidden = !(matchesQuery && matchesFilter);
+				});
+			});
+			wrapper.find("[data-training-reselect]").on("click", () => {
+				state.plan_file_url = "";
+				state.record_file_url = "";
+				state.preview = null;
+				render();
+				reload?.();
+			});
+			updateMatchProgress();
+		}
+
+		function importData() {
+			const identity_map = {};
+			dialog.$wrapper.find("[data-training-identity]").each((_index, input) => {
+				identity_map[input.dataset.trainingIdentity] = input.value.trim();
+			});
+			const missing = Object.entries(identity_map).filter(([, value]) => !value);
+			if (missing.length) return frappe.msgprint(__("仍有 {0} 组姓名/部门没有填写公司工号，不能导入。", [missing.length]));
+			frappe.confirm(
+				__("将写入 {0} 条培训计划、{1} 场历史培训和 {2} 条逐人参训记录。历史活动会标记为已完成，培训结果先保留为草稿，复核提交后才进入员工技能。是否继续？", [state.preview.plan.row_count, state.preview.records.event_count, state.preview.records.row_count]),
+				() => frappe.call({
+					method: `${importApi}.import_training_workbooks`,
+					args: {
+						plan_file_url: state.plan_file_url,
+						record_file_url: state.record_file_url,
+						company,
+						plan_token: state.preview.plan_token,
+						identity_map: JSON.stringify(identity_map),
+						confirm_import: 1,
+					},
+					freeze: true,
+					freeze_message: __("正在写入培训计划、活动和结果草稿…"),
+				}).then((response) => {
+					const result = response.message || {};
+					importState = { company, plan_file_url: "", record_file_url: "", preview: null };
+					dialog.hide();
+					frappe.msgprint({
+						title: __("培训数据导入完成"),
+						indicator: "green",
+						message: `${escape(result.message || "")}<br>${escape(__("新增计划 {0}，更新草稿计划 {1}，保留已审批计划 {2}；新增活动 {3}；结果草稿 {4}。", [result.programs_created || 0, result.programs_updated || 0, result.programs_locked || 0, result.events_created || 0, result.results_created_as_draft || 0]))}`,
+					});
+					reload?.();
+				}),
+			);
+		}
+
+		function render() {
+			const body = dialog.fields_dict.training_import_body.$wrapper;
+			if (!state.preview) {
+				body.html(`<div class="hrms-training-import"><div class="hrms-training-import-steps"><span class="active"><b>1</b>${escape(__("上传原表"))}</span><span><b>2</b>${escape(__("数据校验"))}</span><span><b>3</b>${escape(__("公司工号匹配"))}</span><span><b>4</b>${escape(__("确认入库"))}</span></div><div class="hrms-training-import-note"><strong>${escape(__("当前公司：{0}", [company]))}</strong><span>${escape(__("以“2026年计划总表”和第二份文件的主汇总页为准，不重复读取月度分页。"))}</span></div><div class="hrms-training-upload-grid"><button class="hrms-training-upload-card ${state.plan_file_url ? "selected" : ""}" data-upload-plan><span>01</span><strong>${escape(__("年度教育训练计划"))}</strong><small>${escape(state.plan_file_url || __("点击选择 .xlsx 文件"))}</small><i>${state.plan_file_url ? "✓" : "+"}</i></button><button class="hrms-training-upload-card ${state.record_file_url ? "selected" : ""}" data-upload-record><span>02</span><strong>${escape(__("安全培训教育记录"))}</strong><small>${escape(state.record_file_url || __("点击选择 .xlsx 文件"))}</small><i>${state.record_file_url ? "✓" : "+"}</i></button></div></div>`);
+				body.find("[data-upload-plan]").on("click", () => upload("plan_file_url"));
+				body.find("[data-upload-record]").on("click", () => upload("record_file_url"));
+				dialog.set_primary_action(__("解析并进入员工匹配"), preview);
+				dialog.get_primary_btn().prop("disabled", !(state.plan_file_url && state.record_file_url));
+				return;
+			}
+			const sourceErrors = (state.preview.plan?.error_count || 0) + (state.preview.records?.error_count || 0);
+			const unresolvedIdentities = unresolved().length;
+			const strictMatched = state.preview.records.row_count - state.preview.unresolved_record_count;
+			body.html(`<div class="hrms-training-import"><div class="hrms-training-import-steps"><span class="done"><b>✓</b>${escape(__("上传原表"))}</span><span class="done"><b>✓</b>${escape(__("数据校验"))}</span><span class="active"><b>3</b>${escape(__("公司工号匹配"))}</span><span><b>4</b>${escape(__("确认入库"))}</span></div><div class="hrms-training-import-summary"><div><span>${escape(__("年度计划"))}</span><strong>${number(state.preview.plan.row_count)}</strong><small>${escape(__("计划 {0} / 临时 {1}", [state.preview.plan.planned_count, state.preview.plan.temporary_count]))}</small></div><div><span>${escape(__("实际培训"))}</span><strong>${number(state.preview.records.event_count)}</strong><small>${escape(__("{0} 条逐人记录", [state.preview.records.row_count]))}</small></div><div class="success"><span>${escape(__("严格匹配"))}</span><strong>${number(strictMatched)}</strong><small>${escape(__("已按公司工号确认"))}</small></div><div class="warning"><span>${escape(__("待人工确认"))}</span><strong>${number(state.preview.unresolved_record_count)}</strong><small>${escape(__("{0} 组姓名/部门", [unresolvedIdentities]))}</small></div></div>${sourceErrors ? `<div class="alert alert-danger">${escape(__("原表存在 {0} 条结构或数据错误，需先修正。", [sourceErrors]))}</div>` : ""}${unresolvedIdentities ? `<div class="hrms-training-match-heading"><div><h5>${escape(__("员工公司工号匹配"))}</h5><p>${escape(__("只显示未能严格自动匹配的记录；必须逐组确认，不使用 Frappe 员工编号。"))}</p></div><div class="hrms-training-match-progress"><strong data-training-match-progress></strong><span><i data-training-progress-fill></i></span></div></div><div class="hrms-training-match-toolbar"><input class="form-control" data-training-match-search placeholder="${escape(__("搜索姓名、部门或公司工号"))}"><select class="form-control" data-training-match-filter><option value="">${escape(__("全部差异"))}</option><option value="department_mismatch">${escape(statusLabel.department_mismatch)}</option><option value="ambiguous">${escape(statusLabel.ambiguous)}</option><option value="unmatched">${escape(statusLabel.unmatched)}</option><option value="missing_code">${escape(statusLabel.missing_code)}</option></select><button class="btn btn-default" data-training-reselect>${escape(__("重新选择文件"))}</button></div><div class="table-responsive hrms-training-identity-table"><table class="table table-bordered table-sm"><thead><tr><th>${escape(__("来源人员"))}</th><th>${escape(__("记录数"))}</th><th>${escape(__("差异类型"))}</th><th>${escape(__("公司工号 / 候选员工"))}</th><th>${escape(__("当前主档部门"))}</th></tr></thead><tbody>${identityRows()}</tbody></table></div>` : `<div class="hrms-training-match-complete"><span>✓</span><div><strong>${escape(__("员工匹配已全部完成"))}</strong><p>${escape(__("所有逐人培训记录均已按姓名、来源部门和公司工号唯一匹配。"))}</p></div></div>`}</div>`);
+			dialog.set_primary_action(unresolvedIdentities ? __("确认匹配并导入") : __("确认导入"), importData);
+			dialog.get_primary_btn().prop("disabled", Boolean(sourceErrors));
+			bindMatchingTools();
+		}
+
+		dialog.show();
+		render();
 	}
 
 	function event_time(value) {
@@ -45,6 +208,11 @@
 			["04", "培训反馈", "收集满意度与改进建议", "feedback"],
 			["05", "员工技能", "沉淀通过记录与岗位资格", "skills"],
 		];
+		const state = get_import_state(currentCompany());
+		const pendingIdentities = (state.preview?.identities || []).filter((item) => item.status !== "matched").length;
+		const importActionLabel = state.preview
+			? pendingIdentities ? __("继续匹配 {0} 组员工", [pendingIdentities]) : __("查看校验结果并导入")
+			: state.plan_file_url || state.record_file_url ? __("继续上传原表") : __("开始上传与匹配");
 
 		workspace.innerHTML = `
 			<div class="hrms-training-hero">
@@ -57,6 +225,20 @@
 					<button class="btn btn-primary" data-training-action="new-plan">${__("新建培训计划")}</button>
 					<button class="btn btn-default" data-training-action="refresh">${__("刷新数据")}</button>
 				</div>
+			</div>
+			<div class="hrms-training-import-center">
+				<div class="hrms-training-import-center-copy">
+					<p>${__("年度资料工作区")}</p>
+					<h2>${__("教育训练计划导入与员工匹配")}</h2>
+					<span>${__("以年度计划总表和安全培训教育记录为准，先解析校验，再用当前公司的公司工号匹配员工。")}</span>
+				</div>
+				<div class="hrms-training-import-path">
+					<div class="${state.plan_file_url && state.record_file_url ? "done" : "active"}"><b>01</b><span>${__("两份原表")}</span><small>${state.plan_file_url && state.record_file_url ? __("已选择") : __("计划表 + 记录表")}</small></div>
+					<div class="${state.preview ? "done" : ""}"><b>02</b><span>${__("完整解析")}</span><small>${state.preview ? __("{0} 计划 / {1} 活动", [state.preview.plan.row_count, state.preview.records.event_count]) : __("主汇总页校验")}</small></div>
+					<div class="${state.preview ? pendingIdentities ? "active warning" : "done" : ""}"><b>03</b><span>${__("员工匹配")}</span><small>${state.preview ? pendingIdentities ? __("待确认 {0} 组", [pendingIdentities]) : __("已全部匹配") : __("仅使用公司工号")}</small></div>
+					<div><b>04</b><span>${__("确认入库")}</span><small>${__("计划、活动与结果草稿")}</small></div>
+				</div>
+				<button class="btn btn-primary" data-training-action="import">${importActionLabel}<span>→</span></button>
 			</div>
 			<div class="hrms-training-summary">
 				${summary_card(__("培训计划"), metrics.total_programs ?? placeholder, __("共 {0} 个计划", [number(metrics.total_programs ?? placeholder)]), "plans")}
@@ -95,6 +277,7 @@
 	function bind_dashboard_actions(workspace, reload) {
 		workspace.onclick = (event) => {
 			const action = event.target.closest("[data-training-action]")?.dataset.trainingAction;
+			if (action === "import") return open_training_import(reload);
 			if (action === "new-plan") return new_training_program();
 			if (action === "refresh") return reload();
 			const route_key = event.target.closest("[data-training-route]")?.dataset.trainingRoute;

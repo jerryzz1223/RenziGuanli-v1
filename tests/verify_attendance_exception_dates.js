@@ -80,7 +80,8 @@ assert.strictEqual(center.attendance_time_control_value("invalid"), "");
 assert.strictEqual(center.restday_overtime_hours_from_range("08:00", "17:30"), 9.5);
 assert.strictEqual(center.restday_overtime_hours_from_range("20:00", "04:30"), 8.5);
 assert.strictEqual(center.restday_overtime_hours_from_range("08:00", "08:00"), null);
-assert.strictEqual(center.restday_overtime_input_hours("6.25"), 6.25);
+assert.strictEqual(center.restday_overtime_input_hours("6.25"), 6);
+assert.strictEqual(center.restday_overtime_input_hours("6.5"), 6.5);
 assert.strictEqual(center.restday_overtime_input_hours("0"), null);
 
 assert.strictEqual(center.processing_slot_status({status: "已确认", exception_count: 234}), "待处理异常");
@@ -109,7 +110,7 @@ const row = {
 	},
 };
 
-assert.strictEqual(center.attendance_exception_date_text(row), "2026-08-01");
+assert.strictEqual(center.attendance_exception_date_text(row), "2026-08-01 星期六");
 assert.strictEqual(center.attendance_draft_columns().at(-1)[1], "异常日期");
 
 const exceptionMarkup = center.render_attendance_exception_lines([{

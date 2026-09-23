@@ -27,7 +27,7 @@ add_to_apps_screen = [
 # app_include_css = "/assets/hrms/css/hrms.css"
 app_include_js = [
 	"hrms.bundle.js",
-	"/assets/hrms/js/hrms_capability_ui.js?v=20260922-business-action-matrix-v1",
+	"/assets/hrms/js/hrms_capability_ui.js?v=20260923-frappe-ready-compat-v1",
 	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260918-sidebar-layout-v2",
 	"/assets/hrms/js/hrms_top_nav.js?v=20260922-permission-safe-navbar-v1&compat=20260914-hide-native-user-roles-v1",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
@@ -40,7 +40,7 @@ app_include_js = [
 app_include_css = [
 	"hrms.bundle.css",
 	"/assets/hrms/css/hrms_top_nav.css?v=20260918-sidebar-layout-v2",
-	"/assets/hrms/css/hrms_training_learning.css?v=20260827a",
+	"/assets/hrms/css/hrms_training_learning.css?v=20260923-training-matching-workspace-v2",
 	"/assets/hrms/css/hrms_entry.css?v=20260912-intranet-entry-v1",
 	"/assets/hrms/css/hrms_loading.css?v=20260909-black-loader",
 	"/assets/hrms/css/hrms_employee_registration.css?v=20260915a",

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from calendar import monthrange
 from collections import defaultdict
@@ -227,6 +228,7 @@ ATTENDANCE_DAILY_EDIT_FIELDS = (
 	("日期类型", "工作类型", ("日期类型", "工作类型")),
 	("关联审批单", "关联审批单", ("关联审批单", "关联的审批单", "审批单")),
 	("班次", "班次", ("班次",)),
+	("未排班中班适用", "确认未排班中班适用（是/否）", ("未排班中班适用",)),
 	("上班时间", "上班打卡", ("上班时间", "上班打卡", "上班打卡时间")),
 	("下班时间", "下班打卡", ("下班时间", "下班打卡", "下班打卡时间")),
 	("上班缺卡", "上班缺卡", ("上班缺卡", "上班未打卡次数")),
@@ -359,6 +361,7 @@ EXCEPTION_LABELS = {
 	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "休息日有打卡未计加班",
 	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "班次外时段无加班申请",
 	"SHIFT_SCHEDULE_REVIEW_REQUIRED": "班次计划起止待复核",
+	"UNSCHEDULED_MIDDLE_NIGHT_REVIEW": "未排班中班夜班待复核",
 	"INVALID_NUMERIC_VALUE": "工时或次数格式无效",
 	"SOURCE_FILE_MISSING": "来源文件定位缺失",
 	"SOURCE_SHEET_MISSING": "来源工作表定位缺失",
@@ -415,6 +418,8 @@ def _review_guidance(exception_codes: list[str], source_type: str) -> list[str]:
 		guidance.append("班次外原始时长已留痕并标记“无申请”；如需计入后续，请在“修改本日”同时填写确认计入的加班时长和原因。")
 	if "SHIFT_SCHEDULE_REVIEW_REQUIRED" in codes:
 		guidance.append("无法取得完整班次计划起止，不能从打卡或跨日文字凭空推算；请补齐班次后重新校验。")
+	if "UNSCHEDULED_MIDDLE_NIGHT_REVIEW" in codes:
+		guidance.append("请核对本日上下班卡及是否属于未排班中班；可在“修改本日”填写“确认未排班中班适用”为是或否，补齐有效时间后重新汇总。夜班次数与休息日加班分别审核。")
 	if {"EMPLOYEE_DEPARTMENT_MISMATCH", "EMPLOYEE_DEPARTMENT_CONFLICT", "DEPARTMENT_CONFLICT"} & codes:
 		guidance.append("以花名册当前部门为准；花名册无误可通过，需变更部门时先更新花名册或部门映射。")
 	if {"EMPLOYEE_NOT_FOUND", "EMPLOYEE_MATCH_PENDING", "EMPLOYEE_CODE_MISSING", "EMPLOYEE_CODE_NAME_CONFLICT", "EMPLOYEE_NAME_MISMATCH", "EMPLOYEE_NAME_CONFLICT", "EMPLOYEE_NAME_AMBIGUOUS", "EMPLOYEE_AMBIGUOUS"} & codes:
@@ -663,6 +668,126 @@ def _schedule_range_is_valid(value: Any) -> bool:
 	return len(clocks) == 2 and all(int(hour) < 24 or int(minute) == 0 for hour, minute in clocks)
 
 
+def _schedule_time_segments(value: Any) -> list[dict[str, int]]:
+	"""Return paired clock segments while retaining 24:00 as the end of a day."""
+	clocks = [
+		int(hour) * 60 + int(minute)
+		for hour, minute in re.findall(
+			r"(?<!\d)([01]?\d|2[0-4])\s*[:：]\s*([0-5]\d)(?!\d)",
+			_schedule_cell_text(value),
+		)
+	]
+	if len(clocks) < 2 or len(clocks) % 2:
+		return []
+	return [
+		{"start_minutes": clocks[index], "end_minutes": clocks[index + 1]}
+		for index in range(0, len(clocks), 2)
+	]
+
+
+def _schedule_special_note_warnings(items: list[dict[str, Any]], special_notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	"""Compare supported special-note times with their structured main-table row.
+
+	Special notes remain review evidence rather than executable formulas.  When a
+	note repeats a structured time range with a different value, however, the
+	preview must make that contradiction explicit instead of silently selecting
+	one source.
+	"""
+	warnings = []
+	food_night_note = next(
+		(
+			note
+			for note in special_notes
+			if "夜班" in _schedule_cell_text(note.get("text"))
+			and len(_schedule_time_segments(note.get("text"))) >= 3
+		),
+		None,
+	)
+	if not food_night_note:
+		return warnings
+	note_segment = _schedule_time_segments(food_night_note["text"])[-1]
+	for item in items:
+		if "烧饭阿姨" not in _schedule_cell_text(item.get("rule_name")) or "夜班" not in _schedule_cell_text(item.get("rule_name")):
+			continue
+		main_segments = _schedule_time_segments(item.get("weekday_overtime_time"))
+		if main_segments and main_segments[-1] != note_segment:
+			warnings.append({
+				"source_row": item.get("source_row"),
+				"related_source_row": food_night_note.get("source_row"),
+				"message": (
+					f"主表平日加班时段为 {_schedule_clock_text(main_segments[-1]['start_minutes'])[:5]}-"
+					f"{_schedule_clock_text(main_segments[-1]['end_minutes'])[:5]}，但第 {food_night_note.get('source_row')} 行"
+					f"特别说明为 {_schedule_clock_text(note_segment['start_minutes'])[:5]}-"
+					f"{_schedule_clock_text(note_segment['end_minutes'])[:5]}，请确认后再启用"
+				),
+			})
+	return warnings
+
+
+def _schedule_clock_text(minutes: int) -> str:
+	minutes %= 24 * 60
+	return f"{minutes // 60:02d}:{minutes % 60:02d}:00"
+
+
+def _schedule_shift_type_values(item: dict[str, Any]) -> dict[str, Any] | None:
+	segments = _schedule_time_segments(item.get("basic_time"))
+	if not segments:
+		return None
+	start_minutes = segments[0]["start_minutes"]
+	end_minutes = segments[-1]["end_minutes"]
+	punch_in = _schedule_time_segments(item.get("punch_in_range"))
+	punch_out = _schedule_time_segments(item.get("punch_out_range"))
+	begin_before = (start_minutes - punch_in[0]["start_minutes"]) % (24 * 60) if punch_in else 60
+	allow_after = (punch_out[0]["end_minutes"] - end_minutes) % (24 * 60) if punch_out else 60
+	# A bad/ambiguous source range must not create an almost day-long collection window.
+	begin_before = begin_before if begin_before <= 12 * 60 else 0
+	allow_after = allow_after if allow_after <= 12 * 60 else 0
+	return {
+		"start_time": _schedule_clock_text(start_minutes),
+		"end_time": _schedule_clock_text(end_minutes),
+		"begin_check_in_before_shift_start_time": begin_before,
+		"allow_check_out_after_shift_end_time": allow_after,
+		"segment_count": len(segments),
+	}
+
+
+def _schedule_shift_type_name(company: str, item: dict[str, Any]) -> str:
+	abbreviation = str(frappe.db.get_value("Company", company, "abbr") or company).strip()
+	company_key = hashlib.sha256(company.encode("utf-8")).hexdigest()[:6].upper()
+	base = f"{abbreviation}-{company_key}-{item.get('rule_code')}-{item.get('rule_name')}"
+	return re.sub(r"\s+", "", base)[:140]
+
+
+def _schedule_shift_type_plan(company: str, item: dict[str, Any], linked_shift_type: str = "") -> dict[str, Any]:
+	values = _schedule_shift_type_values(item)
+	if not values:
+		return {"name": "", "action": "无法联动", "message": "基本班次时间无法转换"}
+	name = linked_shift_type or _schedule_shift_type_name(company, item)
+	exists = bool(frappe.db.exists("Shift Type", name))
+	action = "保留并复核" if exists else "新增"
+	message = "已有系统班次的时间与打卡参数保持原值，请与本次来源逐项复核" if exists else "新建系统班次，不开启自动考勤"
+	if values["segment_count"] > 1:
+		message += "；多时段班次仅用首段至末段表示排班窗口，中间空档需人工复核"
+	return {"name": name, "action": action, "message": message, **values}
+
+
+def _sync_schedule_shift_type(company: str, item: dict[str, Any], linked_shift_type: str = "") -> dict[str, Any]:
+	plan = _schedule_shift_type_plan(company, item, linked_shift_type)
+	if not plan.get("name"):
+		return plan
+	if plan["action"] != "新增":
+		return plan
+	doc = frappe.get_doc({"doctype": "Shift Type", "__newname": plan["name"]})
+	for fieldname in (
+		"start_time", "end_time", "begin_check_in_before_shift_start_time", "allow_check_out_after_shift_end_time",
+	):
+		setattr(doc, fieldname, plan[fieldname])
+	# Importing a definition must never silently enable auto attendance or alter
+	# a user's existing attendance/grace-period choices on the Shift Type.
+	doc.save(ignore_permissions=True)
+	return plan
+
+
 def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 	workbook = _load_workbook(file_url)
 	checksum = _file_checksum(file_url)
@@ -685,10 +810,19 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 	current_group = ""
 	items = []
 	issues = []
+	warnings = []
+	special_notes = []
+	in_special_notes = False
 	for source_row, values in enumerate(sheet.iter_rows(min_row=header_row + 2, values_only=True), start=header_row + 2):
 		values = list(values) + [None] * max(0, 21 - len(values))
+		row_text = " ".join(_schedule_cell_text(value) for value in values if value not in (None, ""))
 		if "特别说明" in _schedule_cell_text(values[1]):
-			break
+			in_special_notes = True
+			continue
+		if in_special_notes:
+			if row_text:
+				special_notes.append({"source_row": source_row, "text": row_text})
+			continue
 		if values[2] not in (None, ""):
 			current_group = re.sub(r"\s+", "", _schedule_cell_text(values[2]))
 		shift_name = re.sub(r"\s+", "", _schedule_cell_text(values[3]))
@@ -736,6 +870,15 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 			"source_payload_json": _json([_schedule_cell_text(value) for value in values[:21]]),
 			"workday_end_minutes": _schedule_time_end_minutes(weekday_time),
 		}
+		# Confirmed business resolution (2026-09-23): CCD white shift runs from
+		# 08:00 to 20:00 with one total rest hour.  Paid time is therefore 11
+		# hours: 8 basic + 3 weekday overtime.  The workbook's raw 2.5 value and
+		# malformed meal cell remain untouched in source_payload_json for audit.
+		ccd_white_confirmed = current_group == "CCD人员" and shift_name == "白班"
+		if ccd_white_confirmed:
+			item["weekday_overtime_hours"] = 3
+			item["meal_deduction_rule"] = "总休息1H（业务确认；源表原文保留于来源行JSON）"
+			item["remarks"] = f"{item['remarks']}；系统确认口径：平日加班3H，总休息1H"
 		if weekday_mode == "不提交加班单" and (weekday_hours <= 0 or item["workday_end_minutes"] is None):
 			issues.append({"source_row": source_row, "message": "免申请平日加班缺少固定小时或结束时间"})
 		for label, fieldname in (("可取上班卡时段", "punch_in_range"), ("可取下班卡时段", "punch_out_range")):
@@ -745,10 +888,40 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 			text = item[fieldname]
 			if text and text != "无" and _schedule_night_condition(text) is None:
 				issues.append({"source_row": source_row, "message": f"{label}规则无法转换为固定判断条件"})
+		segments = _schedule_time_segments(item["basic_time"])
+		if len(segments) > 1:
+			warnings.append({"source_row": source_row, "message": "基本班次包含多个时段；系统 Shift Type 将覆盖首段开始至末段结束，考勤工时仍按本行基本工时计算"})
+		meal_text = item["meal_deduction_rule"].replace("：", ":")
+		meal_segments = _schedule_time_segments(meal_text)
+		declared_deductions = [float(value) for value in re.findall(r"扣(?:除)?\s*(\d+(?:\.\d+)?)\s*H", meal_text, re.IGNORECASE)]
+		if not ccd_white_confirmed and meal_segments and len(meal_segments) == len(declared_deductions):
+			actual_hours = sum(((segment["end_minutes"] - segment["start_minutes"]) % (24 * 60)) / 60 for segment in meal_segments)
+			if abs(actual_hours - sum(declared_deductions)) > 0.01:
+				warnings.append({"source_row": source_row, "message": f"休息时段合计 {actual_hours:g} 小时，但文字声明扣除 {sum(declared_deductions):g} 小时，请复核源表"})
+		remark_hours = re.search(r"自动生成\s*(\d+(?:\.\d+)?)\s*(?:小时|时)", item["remarks"])
+		if not ccd_white_confirmed and remark_hours and weekday_hours > 0 and abs(float(remark_hours.group(1)) - weekday_hours) > 0.01:
+			warnings.append({"source_row": source_row, "message": f"平日加班数值为 {weekday_hours:g} 小时，备注却写 {float(remark_hours.group(1)):g} 小时，请复核源表"})
+		group_token = match_tokens.split("|")[0] if match_tokens else ""
+		group_token = "生产人员" if group_token == "生产" else group_token
+		# “生管仓库”是用于区分生管课内仓库人员的班次名称；
+		# 津贴说明写“生管课”是合法的人员范围描述，不是复制错误。
+		night_scope_aliases = {
+			"生管仓库": ("生管课",),
+			# CCD 夜班与生产夜班共用同一组夜班津贴阈值。
+			"CCD人员": ("生产人员",),
+		}
+		night_text = f"{item['small_night_rule']} {item['large_night_rule']}"
+		night_meaningful = re.sub(r"\s+", "", night_text).replace("无", "")
+		accepted_scope_names = (group_token, *night_scope_aliases.get(group_token, ()))
+		if night_meaningful and group_token and not any(name and name in night_text for name in accepted_scope_names):
+			warnings.append({"source_row": source_row, "message": f"夜班津贴文字未提及当前班组“{current_group}”，可能是从其他班次复制后未修改"})
 		items.append(item)
+	warnings.extend(_schedule_special_note_warnings(items, special_notes))
 	return {
 		"items": items,
 		"issues": issues,
+		"warnings": warnings,
+		"special_notes": special_notes,
 		"source_version": version,
 		"source_file": file_doc.file_name or file_url,
 		"source_sheet": sheet.title,
@@ -769,7 +942,7 @@ def _attendance_shift_rule_bundle(company: str) -> dict[str, Any]:
 			"weekend_overtime_mode", "holiday_overtime_mode", "overnight", "meal_deduction_rule",
 			"small_night_rule", "large_night_rule", "remarks", "suggested_positions", "punch_in_range",
 			"punch_out_range", "effective_from", "source_version", "source_file", "source_sheet",
-			"source_row", "source_checksum", "modified", "modified_by",
+			"source_row", "source_checksum", "shift_type", "shift_sync_status", "shift_sync_message", "modified", "modified_by",
 		],
 		order_by="sequence asc, rule_code asc",
 		limit_page_length=500,
@@ -824,6 +997,23 @@ def _attendance_shift_rule_bundle(company: str) -> dict[str, Any]:
 	# built-in compatibility fallback. An explicit empty list means rules exist
 	# but are all disabled; disabling must never silently reactivate built-ins.
 	return {"rules": rules if items else None, "version": version, "items": items}
+
+
+def _attendance_scheduling_policies(company: str) -> list[dict[str, Any]]:
+	"""Return enabled day-governance policies for deterministic draft replay."""
+	if not company or not frappe.db.exists("DocType", SCHEDULING_POLICY_DOCTYPE):
+		return []
+	rows = frappe.get_all(
+		SCHEDULING_POLICY_DOCTYPE,
+		filters={"company": company, "enabled": 1},
+		fields=[
+			"name", "enabled", "policy_name", "priority", "scope_type", "scope_values",
+			"effective_from", "effective_to", "calendar_weekend_mode", "modified",
+		],
+		order_by="priority desc, modified desc",
+		limit_page_length=500,
+	)
+	return [dict(row) for row in rows]
 
 
 def _latest_batch(company: str, attendance_month: str, source_type: str):
@@ -1077,7 +1267,7 @@ def _employee_directory(company: str = ""):
 		employees = frappe.get_all(
 			"Employee",
 			filters={"company": company} if company else None,
-			fields=["custom_employee_code", "employee_name", "department", "status as employment_status", "date_of_joining", "relieving_date"],
+			fields=["custom_employee_code", "employee_name", "department", "designation", "status as employment_status", "date_of_joining", "relieving_date"],
 			# A small default page would make most name+department matches look
 			# missing even though those employees exist in the roster.
 			limit_page_length=5000,
@@ -1087,6 +1277,7 @@ def _employee_directory(company: str = ""):
 				"employee_code": (employee.custom_employee_code or "").strip(),
 				"employee_name": employee.employee_name,
 				"department": employee.department,
+				"designation": employee.designation,
 				"employment_status": employee.employment_status,
 				"date_of_joining": employee.date_of_joining,
 				"relieving_date": employee.relieving_date,
@@ -1447,6 +1638,7 @@ def _process_batch(batch) -> dict[str, Any]:
 			exception_policy=exception_policy,
 			shift_rules=shift_bundle["rules"],
 			shift_rule_version=shift_bundle["version"],
+			scheduling_policies=_attendance_scheduling_policies(batch.company),
 		)
 	source_rows = rows
 	rows, excluded = _filter_approval_source_rows(batch, rows)
@@ -1734,6 +1926,7 @@ def _restore_daily_exception_lines_from_source(record: dict[str, Any], *, all_de
 			source_sheet=record.get("source_sheet") or "每日统计",
 			shift_rules=shift_bundle["rules"],
 			shift_rule_version=shift_bundle["version"],
+			scheduling_policies=_attendance_scheduling_policies(record.get("company") or ""),
 		)
 	except Exception:
 		return []
@@ -3386,6 +3579,8 @@ def update_attendance_draft_daily_row(
 	invalid_fields = sorted(set(changes) - allowed_fields)
 	if invalid_fields:
 		frappe.throw(_("不能修改非钉钉每日统计字段：{0}").format("、".join(invalid_fields)))
+	if "未排班中班适用" in changes and str(changes["未排班中班适用"] or "").strip() not in {"", "是", "否"}:
+		frappe.throw(_("确认未排班中班适用只能填写“是”或“否”。"))
 	restday_field = next((field["fieldname"] for field in target["editable_fields"] if field.get("label") == "休息日加班（小时）"), "")
 	reference_values = {}
 	if restday_field and restday_field in changes:
@@ -3423,12 +3618,14 @@ def update_attendance_draft_daily_row(
 	})
 	batch = frappe.get_doc(IMPORT_BATCH_DOCTYPE, doc.import_batch)
 	shift_bundle = _attendance_shift_rule_bundle(company)
+	scheduling_policies = _attendance_scheduling_policies(company)
 	baseline_rows = process_attendance_draft_rows(
 		_effective_daily_source_rows(serialized), attendance_month=attendance_month,
 		source_file=doc.source_file or batch.source_file, source_sheet=doc.source_sheet or "每日统计",
 		employee_directory=_employee_directory(company) or None,
 		exception_policy=_attendance_draft_exception_policy(),
 		shift_rules=shift_bundle["rules"], shift_rule_version=shift_bundle["version"],
+		scheduling_policies=scheduling_policies,
 	)["processed_rows"]
 	baseline = next(row for row in baseline_rows if str(row.get("employee_code") or "") == str(doc.employee_code or ""))
 	rebuilt = process_attendance_draft_rows(
@@ -3440,6 +3637,7 @@ def update_attendance_draft_daily_row(
 		exception_policy=_attendance_draft_exception_policy(),
 		shift_rules=shift_bundle["rules"],
 		shift_rule_version=shift_bundle["version"],
+		scheduling_policies=scheduling_policies,
 	)
 	replacement = next((row for row in rebuilt["processed_rows"] if str(row.get("employee_code") or "") == str(doc.employee_code or "")), None)
 	if not replacement:
@@ -3517,7 +3715,7 @@ ATTENDANCE_SOURCE_TOTAL_REPAIR_FIELDS = ("workday_overtime_hours", "deep_night_s
 
 def _attendance_policy_replacement(
 	record, *, attendance_month, employee_directory, exception_policy,
-	shift_rules=None, shift_rule_version="", source_rows_override=None,
+	shift_rules=None, shift_rule_version="", scheduling_policies=None, source_rows_override=None,
 ):
 	"""Recheck retained daily facts without overwriting reviewed monthly totals."""
 	current = _effective_result_values(record)
@@ -3536,6 +3734,7 @@ def _attendance_policy_replacement(
 		source_file=record.get("source_file") or "", source_sheet=record.get("source_sheet") or "每日统计",
 		exception_policy=exception_policy,
 		shift_rules=shift_rules, shift_rule_version=shift_rule_version,
+		scheduling_policies=scheduling_policies,
 	)
 	replacement = next((row for row in rebuilt["processed_rows"] if str(row["employee_code"]) == str(record.get("employee_code"))), None)
 	if replacement is None:
@@ -3598,6 +3797,7 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 		frappe.throw(_("尚未上传考勤初稿。"))
 	directory, policy = _employee_directory(company) or None, _attendance_draft_exception_policy()
 	shift_bundle = _attendance_shift_rule_bundle(company)
+	scheduling_policies = _attendance_scheduling_policies(company)
 	# Older processor versions discarded every first-day-of-next-month row from
 	# the retained per-employee JSON. Re-read the immutable workbook so a real
 	# rest-day punch on that boundary can re-enter the dated exception queue.
@@ -3622,6 +3822,7 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 		replacement, reason = _attendance_policy_replacement(
 			record, attendance_month=attendance_month, employee_directory=directory, exception_policy=policy,
 			shift_rules=shift_bundle["rules"], shift_rule_version=shift_bundle["version"],
+			scheduling_policies=scheduling_policies,
 			source_rows_override=employee_source_rows,
 		)
 		identity = {key: record.get(key) for key in ("record_id", "employee_code", "employee_name")}
@@ -3711,6 +3912,7 @@ def repair_attendance_draft_source_totals(company: str, attendance_month: str, e
 		frappe.throw(_("尚未上传考勤初稿。"))
 	records = _result_rows(batch, 5000)
 	shift_bundle = _attendance_shift_rule_bundle(company)
+	scheduling_policies = _attendance_scheduling_policies(company)
 	preview = []
 	for record in records:
 		effective_rows = _effective_daily_source_rows(record)
@@ -3725,6 +3927,7 @@ def repair_attendance_draft_source_totals(company: str, attendance_month: str, e
 			exception_policy=_attendance_draft_exception_policy(),
 			shift_rules=shift_bundle["rules"],
 			shift_rule_version=shift_bundle["version"],
+			scheduling_policies=scheduling_policies,
 		)
 		replacement = next(
 			(
@@ -5227,7 +5430,7 @@ def upsert_attendance_scheduling_policy(company: str, policy: str | dict):
 		"allow_workday", "max_workday_hours", "allow_restday", "max_restday_hours", "allow_holiday",
 		"max_holiday_hours", "max_daily_hours", "allow_multiple_shifts", "merge_consecutive_shifts",
 		"consecutive_gap_minutes", "past_change_months", "future_change_days", "allow_change_after_checkin",
-		"allow_expired_unscheduled_change", "unscheduled_punch_mode", "remarks",
+		"allow_expired_unscheduled_change", "unscheduled_punch_mode", "calendar_weekend_mode", "remarks",
 	)
 	for field in write_fields:
 		if field in policy:
@@ -5259,38 +5462,86 @@ def get_complete_attendance_rules(company: str):
 			{"name": "班次匹配", "logic": "启用规则的全部匹配关键词均需出现在来源班次中", "impact": "决定基本工时、加班、取卡及夜班津贴规则"},
 			{"name": "规则生效与版本", "logic": "按生效日期及匹配精度选择规则；每次有效修改生成新版本", "impact": "历史结果标记为待重新校验，不静默覆盖"},
 			{"name": "人工与审批优先", "logic": "人工确认值、已匹配审批优先于排班自动值", "impact": "保留审核结果及完整修改记录"},
+			{"name": "周末与调班边界", "logic": "普通周六日按排班治理规则处理；明确标为工作日、调班或补班的日期仍按工作日", "impact": "普通周末不制造标准工时、请假、旷工或工时差异，实际打卡转入休息日加班核对"},
 		],
 	}
 
 
 @frappe.whitelist()
-def import_attendance_shift_rules(company: str, file_url: str, preview_only: int = 1):
-	"""Preview, then import the complete schedule workbook without deleting history."""
+def import_attendance_shift_rules(
+	company: str,
+	file_url: str,
+	preview_only: int = 1,
+	linkage_options: str | dict | None = None,
+):
+	"""Preview or apply a source-preserving rule, Shift Type and policy linkage plan."""
 	_require_processing_manager()
 	company = _require_company(company)
 	if not frappe.db.exists("DocType", SHIFT_RULE_DOCTYPE):
 		frappe.throw(_("班次规则数据表尚未安装，请先完成站点更新。"))
+	if isinstance(linkage_options, str):
+		linkage_options = _loads(linkage_options, {})
+	if linkage_options is not None and not isinstance(linkage_options, dict):
+		frappe.throw(_("排班表联动选项格式不正确。"))
+	options = frappe._dict(linkage_options or {})
 	parsed = _schedule_rule_import_rows(file_url)
+	if not parsed["items"]:
+		frappe.throw(_("排班表未解析出可导入的班次。"))
 	existing = {
-		row.rule_code: row.name
+		row.rule_code: dict(row)
 		for row in frappe.get_all(
 			SHIFT_RULE_DOCTYPE,
 			filters={"company": company},
-			fields=["name", "rule_code"],
+			fields=["name", "rule_code", "shift_type", "shift_sync_status", "shift_sync_message"],
 			limit_page_length=500,
 		)
 	}
-	preview = [{**item, "import_action": "更新" if item["rule_code"] in existing else "新增"} for item in parsed["items"]]
+	preview = []
+	for item in parsed["items"]:
+		existing_row = existing.get(item["rule_code"], {})
+		shift_plan = _schedule_shift_type_plan(company, item, existing_row.get("shift_type") or "")
+		preview.append({
+			**item,
+			"import_action": "更新" if existing_row else "新增",
+			"shift_type_name": shift_plan.get("name"),
+			"shift_type_action": shift_plan.get("action"),
+			"shift_type_message": shift_plan.get("message"),
+		})
+	generated_policy = ""
+	if frappe.db.exists("DocType", SCHEDULING_POLICY_DOCTYPE):
+		generated_policy = frappe.db.get_value(
+			SCHEDULING_POLICY_DOCTYPE,
+			{"company": company, "generated_from_schedule": 1},
+			"name",
+		) or ""
+	suggested_limit = max(
+		[8, *[math.ceil(flt(item.get("basic_hours")) + flt(item.get("weekday_overtime_hours"))) for item in parsed["items"]]],
+	)
 	if cint(preview_only):
 		return {
-			**{key: parsed[key] for key in ("source_version", "source_file", "source_sheet", "source_checksum", "issues")},
+			**{key: parsed[key] for key in ("source_version", "source_file", "source_sheet", "source_checksum", "issues", "warnings", "special_notes")},
 			"items": preview,
 			"existing_count": len(existing),
 			"created_count": sum(1 for item in preview if item["import_action"] == "新增"),
 			"updated_count": sum(1 for item in preview if item["import_action"] == "更新"),
+			"shift_type_created_count": sum(1 for item in preview if item["shift_type_action"] == "新增"),
+			"shift_type_review_count": sum(1 for item in preview if item["shift_type_action"] == "保留并复核"),
+			"scheduling_policy_action": "更新来源绑定" if generated_policy else "新增待确认",
+			"suggested_max_daily_hours": suggested_limit,
 		}
 	if parsed["issues"]:
 		frappe.throw(_("排班表仍有结构问题，请先按预览提示修正后再导入。"))
+	if (cint(options.get("sync_shift_types")) or cint(options.get("create_default_policy"))) and not options.get("source_checksum"):
+		frappe.throw(_("请先预览排班表，再确认联动计划。"))
+	if options.get("source_checksum") and options.get("source_checksum") != parsed["source_checksum"]:
+		frappe.throw(_("排班表内容在预览后发生变化，请重新上传并预览。"))
+	sync_shift_types = cint(options.get("sync_shift_types"))
+	create_default_policy = cint(options.get("create_default_policy"))
+	effective_from = getdate(options.get("effective_from") or now_datetime().date())
+	if create_default_policy:
+		for fieldname in ("max_workday_hours", "max_restday_hours", "max_holiday_hours", "max_daily_hours"):
+			if fieldname in options and flt(options[fieldname]) <= 0:
+				frappe.throw(_("排班工时上限必须大于 0。"))
 	write_fields = (
 		"rule_code", "rule_name", "sequence", "match_tokens", "basic_time", "weekday_overtime_time",
 		"weekend_overtime_time", "overtime_begin_time", "overnight", "meal_deduction_rule", "basic_hours",
@@ -5299,20 +5550,91 @@ def import_attendance_shift_rules(company: str, file_url: str, preview_only: int
 		"punch_in_range", "punch_out_range", "source_version", "source_file", "source_sheet", "source_row",
 		"source_checksum", "source_payload_json",
 	)
-	created = updated = 0
+	created = updated = shift_types_created = shift_types_reviewed = 0
 	for item in parsed["items"]:
 		values = {field: item.get(field) for field in write_fields}
+		values["effective_from"] = effective_from
 		if item["rule_code"] in existing:
-			doc = frappe.get_doc(SHIFT_RULE_DOCTYPE, existing[item["rule_code"]])
+			existing_row = existing[item["rule_code"]]
+			doc = frappe.get_doc(SHIFT_RULE_DOCTYPE, existing_row["name"])
 			doc.update(values)
 			updated += 1
 		else:
+			existing_row = {}
 			doc = frappe.get_doc({"doctype": SHIFT_RULE_DOCTYPE, "company": company, "enabled": 1, **values})
 			created += 1
+		if sync_shift_types:
+			shift_plan = _sync_schedule_shift_type(company, item, existing_row.get("shift_type") or "")
+			doc.shift_type = shift_plan.get("name") or ""
+			doc.shift_sync_status = "需复核" if shift_plan.get("action") != "新增" or shift_plan.get("segment_count", 0) > 1 else "已联动"
+			doc.shift_sync_message = shift_plan.get("message") or ""
+			if shift_plan.get("action") == "新增":
+				shift_types_created += 1
+			elif shift_plan.get("action") == "保留并复核":
+				shift_types_reviewed += 1
+		elif not existing_row:
+			doc.shift_sync_status = "待联动"
+			doc.shift_sync_message = "已导入计算规则，尚未生成系统 Shift Type"
 		doc.save(ignore_permissions=True)
+	policy_name = generated_policy
+	policy_action = "未创建"
+	if create_default_policy:
+		if not frappe.db.exists("DocType", SCHEDULING_POLICY_DOCTYPE):
+			frappe.throw(_("排班治理规则数据表尚未安装，无法建立联动。"))
+		if generated_policy:
+			policy_doc = frappe.get_doc(SCHEDULING_POLICY_DOCTYPE, generated_policy)
+			policy_action = "更新来源绑定"
+		else:
+			limit = flt(options.get("max_daily_hours") or suggested_limit)
+			policy_doc = frappe.get_doc({
+				"doctype": SCHEDULING_POLICY_DOCTYPE,
+				"company": company,
+				"enabled": cint(options.get("enable_default_policy")),
+				"policy_name": str(options.get("policy_name") or f"{company}排班表默认规则"),
+				"priority": 100,
+				"scope_type": "全公司",
+				"effective_from": effective_from,
+				"allow_workday": cint(options.get("allow_workday", 1)),
+				"max_workday_hours": flt(options.get("max_workday_hours") or limit),
+				"allow_restday": cint(options.get("allow_restday", 1)),
+				"max_restday_hours": flt(options.get("max_restday_hours") or limit),
+				"allow_holiday": cint(options.get("allow_holiday", 1)),
+				"max_holiday_hours": flt(options.get("max_holiday_hours") or limit),
+				"max_daily_hours": limit,
+				"allow_multiple_shifts": cint(options.get("allow_multiple_shifts")),
+				"merge_consecutive_shifts": 0,
+				"consecutive_gap_minutes": 0,
+				"past_change_months": 6,
+				"future_change_days": 365,
+				"allow_change_after_checkin": 1,
+				"allow_expired_unscheduled_change": 1,
+				"unscheduled_punch_mode": "选择班次打卡或直接打卡",
+				"calendar_weekend_mode": "休息日加班口径",
+				"remarks": "由排班表首次联动创建；上限为导入前人事明确确认的治理参数，重新导入不会覆盖后续人工修改。",
+			})
+			policy_action = "新增并启用" if cint(options.get("enable_default_policy")) else "新增待确认"
+		policy_doc.generated_from_schedule = 1
+		policy_doc.source_version = parsed["source_version"]
+		policy_doc.source_file = parsed["source_file"]
+		policy_doc.source_checksum = parsed["source_checksum"]
+		policy_doc.source_sync_on = now_datetime()
+		policy_doc.save(ignore_permissions=True)
+		policy_name = policy_doc.name
 	frappe.db.commit()
 	bundle = _attendance_shift_rule_bundle(company)
-	return {"created_count": created, "updated_count": updated, "rule_version": bundle["version"], "notice": _("排班规则已导入；历史考勤需在异常处理页按新规则预览并应用。")}
+	return {
+		"created_count": created,
+		"updated_count": updated,
+		"shift_types_created_count": shift_types_created,
+		"shift_types_review_count": shift_types_reviewed,
+		"scheduling_policy": policy_name,
+		"scheduling_policy_action": policy_action,
+		"rule_version": bundle["version"],
+		"warnings": parsed["warnings"],
+		"notice": _(
+			"排班表已导入班次计算规则并建立系统班次及治理规则来源关联；请复核源表提示和治理规则状态，历史考勤仍需预览后再应用。"
+		),
+	}
 
 
 @frappe.whitelist()
@@ -5341,7 +5663,7 @@ def upsert_attendance_shift_rule(company: str, rule: str | dict):
 	else:
 		doc = frappe.get_doc({"doctype": SHIFT_RULE_DOCTYPE, "company": company})
 	write_fields = (
-		"enabled", "rule_code", "rule_name", "sequence", "match_tokens", "effective_from", "basic_time",
+		"enabled", "rule_code", "rule_name", "sequence", "match_tokens", "effective_from", "shift_type", "basic_time",
 		"weekday_overtime_time", "weekend_overtime_time", "overtime_begin_time", "overnight",
 		"meal_deduction_rule", "basic_hours", "weekday_overtime_hours", "weekday_overtime_mode",
 		"extended_shift_rule", "weekend_overtime_mode", "holiday_overtime_mode", "small_night_rule",
@@ -5350,6 +5672,9 @@ def upsert_attendance_shift_rule(company: str, rule: str | dict):
 	for field in write_fields:
 		if field in rule:
 			setattr(doc, field, rule.get(field))
+	if "shift_type" in rule:
+		doc.shift_sync_status = "需复核" if rule.get("shift_type") else "待联动"
+		doc.shift_sync_message = "人工绑定系统 Shift Type，请核对班次时间与取卡范围" if rule.get("shift_type") else "尚未绑定系统 Shift Type"
 	doc.enabled = cint(rule.get("enabled", 1))
 	doc.save(ignore_permissions=True)
 	frappe.db.commit()

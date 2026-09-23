@@ -31,6 +31,7 @@ class EmployeeRelationshipPage {
 
 	show() {
 		this.page.set_title(__("员工关系"));
+		this.page.add_inner_button(__("导入人员关系表"), () => this.open_import_dialog());
 		this.render_shell();
 		this.bind_events();
 		this.load_relationships();
@@ -57,7 +58,7 @@ class EmployeeRelationshipPage {
 				.hrms-employee-relationship__form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(220px, .75fr); gap: 14px; align-items: end; }
 				.hrms-employee-relationship__field { position: relative; }
 				.hrms-employee-relationship__field label { display: block; margin-bottom: 6px; color: #44515e; font-weight: 600; }
-				.hrms-employee-relationship__field input { width: 100%; min-height: 38px; border: 1px solid #d9e3eb; border-radius: 6px; padding: 8px 10px; }
+				.hrms-employee-relationship__field input, .hrms-employee-relationship__field select { width: 100%; min-height: 38px; border: 1px solid #d9e3eb; border-radius: 6px; padding: 8px 10px; background:#fff; }
 				.hrms-employee-relationship__field input:focus { border-color: #10b981; outline: 0; box-shadow: 0 0 0 2px rgba(16,185,129,.12); }
 				.hrms-employee-relationship__suggestions { position: absolute; z-index: 8; left: 0; right: 0; top: 68px; display: none; max-height: 230px; overflow: auto; padding: 4px; background: #fff; border: 1px solid #d9e3eb; border-radius: 6px; box-shadow: 0 8px 20px rgba(15,23,42,.12); }
 				.hrms-employee-relationship__suggestions.is-visible { display: block; }
@@ -117,7 +118,7 @@ class EmployeeRelationshipPage {
 						<div class="hrms-employee-relationship__form-grid">
 							<div class="hrms-employee-relationship__field"><label>${__("员工一")}</label><input type="text" autocomplete="off" data-employee-input="a" placeholder="${__("输入姓名或公司工号")}"><div class="hrms-employee-relationship__suggestions" data-employee-suggestions="a"></div></div>
 							<div class="hrms-employee-relationship__field"><label>${__("员工二")}</label><input type="text" autocomplete="off" data-employee-input="b" placeholder="${__("输入姓名或公司工号")}"><div class="hrms-employee-relationship__suggestions" data-employee-suggestions="b"></div></div>
-							<div class="hrms-employee-relationship__field"><label>${__("关系")}</label><input type="text" maxlength="140" data-relationship-value placeholder="${__("例如：直属上级、同部门、亲属")}"></div>
+							<div class="hrms-employee-relationship__field"><label>${__("员工关系大类")}</label><select data-relationship-value><option value="">${__("请选择")}</option>${this.relationship_categories().map((value) => `<option value="${frappe.utils.escape_html(value)}">${frappe.utils.escape_html(value)}</option>`).join("")}</select></div>
 						</div>
 						<div style="margin-top:14px;text-align:right"><button type="submit" class="btn btn-primary hrms-employee-relationship__submit">${__("提交关系")}</button></div>
 					</form>
@@ -280,6 +281,122 @@ class EmployeeRelationshipPage {
 				if (container) container.innerHTML = `<div class="hrms-employee-relationship__statistics-empty">${__("关系统计暂时无法读取，请稍后重试。")}</div>`;
 			}
 		});
+	}
+
+	relationship_categories() {
+		return ["直系亲属", "旁系亲属", "姻亲", "男女朋友", "同学", "前同事", "朋友", "同村", "其他"];
+	}
+
+	open_import_dialog() {
+		let preview = null;
+		let busy = false;
+		const escape = (value) => frappe.utils.escape_html(String(value == null ? "" : value));
+		const dialog = new frappe.ui.Dialog({
+			title: __("导入人员关系表"),
+			size: "extra-large",
+			fields: [
+				{ fieldname: "company", fieldtype: "Link", options: "Company", label: __("目标公司"), reqd: 1, default: frappe.defaults.get_user_default("Company") || "", onchange: () => { preview = null; render(); } },
+				{ fieldname: "file_url", fieldtype: "Attach", label: __("人员关系表 Excel（私有文件）"), reqd: 1, options: { make_attachments_public: false, restrictions: { allowed_file_types: [".xlsx"] } }, onchange: () => { preview = null; render(); } },
+				{ fieldname: "preview", fieldtype: "HTML" },
+			],
+			primary_action_label: __("校验并预览"),
+			primary_action: () => { void run().catch(() => {}); },
+		});
+		const render = () => {
+			const wrapper = dialog.fields_dict.preview.$wrapper;
+			if (!preview) {
+				wrapper.html(`<div class="alert alert-info">${escape(__("系统读取“在职/离职”工作表。姓名和部门只用于提出匹配建议；确认导入前，每个人都必须对应当前公司的唯一公司工号。重复关系会跳过，关系大类冲突会阻止导入。"))}</div>`);
+				dialog.get_primary_btn().text(__("校验并预览"));
+				return;
+			}
+			const status_labels = {
+				matched: __("已按姓名和部门匹配"),
+				missing_code: __("员工档案缺少公司工号"),
+				ambiguous: __("存在多个同名同部门员工"),
+				department_mismatch: __("姓名存在但部门不一致"),
+				unmatched: __("未找到同名员工"),
+				code_mismatch: __("源工号与姓名不一致"),
+			};
+			const identity_rows = (preview.identities || []).map((item) => {
+				const candidates = (item.candidates || []).map((candidate) => [candidate.employee_code, candidate.department, candidate.status].filter(Boolean).join(" · ")).join("；");
+				return `<tr><td>${escape(item.employee_name)}<small class="text-muted d-block">${escape(item.source_department || "未填部门")} · ${Number(item.record_count || 0)} 条</small></td><td>${escape(status_labels[item.status] || item.status)}</td><td><input class="form-control input-sm" data-relationship-identity="${escape(item.identity_key)}" value="${escape(item.employee_code || "")}" placeholder="${escape(__("输入公司工号"))}"><small class="text-muted">${escape(candidates || __("无同名候选"))}</small></td></tr>`;
+			}).join("");
+			const conflict_rows = (preview.source_conflicts || []).map((item) => {
+				const occurrences = (item.occurrences || []).map((row) => `${row.source_sheet} 第 ${row.source_row} 行=${row.relationship}`).join("；");
+				return `<tr><td>${escape(item.employee_a_name)} ↔ ${escape(item.employee_b_name)}<small class="text-muted d-block">${escape(occurrences)}</small></td><td><select class="form-control input-sm" data-relationship-conflict="${escape(item.pair_key)}"><option value="">${escape(__("请选择最终大类"))}</option>${this.relationship_categories().map((category) => `<option value="${escape(category)}">${escape(category)}</option>`).join("")}</select></td></tr>`;
+			}).join("");
+			const row_errors = (preview.error_rows || []).map((row) => `<li>${escape(`${row.source_sheet} 第 ${row.source_row} 行：${row.errors.join("；")}`)}</li>`).join("");
+			wrapper.html(`
+				<div class="alert ${preview.row_error_count ? "alert-danger" : (preview.unresolved_identity_count || preview.source_conflicts?.length) ? "alert-warning" : "alert-success"}">
+					${escape(__("已读取 {0} 个工作表、{1} 条关系；来源行错误 {2} 条；待确认身份 {3} 人；重复类别冲突 {4} 组。", [preview.sheet_names?.length || 0, preview.row_count || 0, preview.row_error_count || 0, preview.unresolved_identity_count || 0, preview.source_conflicts?.length || 0]))}
+				</div>
+				${row_errors ? `<div class="alert alert-danger"><strong>${escape(__("来源行错误"))}</strong><ul>${row_errors}</ul></div>` : ""}
+				${conflict_rows ? `<h5>${escape(__("选择重复员工对的最终关系大类"))}</h5><table class="table table-bordered"><thead><tr><th>${escape(__("冲突员工对与来源"))}</th><th>${escape(__("最终关系大类"))}</th></tr></thead><tbody>${conflict_rows}</tbody></table>` : ""}
+				<p>${escape(__("请核对公司工号。来源姓名必须与工号对应姓名一致；部门变化不会覆盖员工主档。"))}</p>
+				<div style="max-height:430px;overflow:auto"><table class="table table-bordered"><thead><tr><th>${escape(__("来源员工"))}</th><th>${escape(__("匹配状态"))}</th><th>${escape(__("确认公司工号"))}</th></tr></thead><tbody>${identity_rows}</tbody></table></div>`);
+			dialog.get_primary_btn().text(preview.row_error_count ? __("重新校验") : __("确认导入"));
+		};
+		const identity_map = () => {
+			const result = {};
+			dialog.fields_dict.preview.$wrapper.find("[data-relationship-identity]").each((_, input) => {
+				result[input.dataset.relationshipIdentity] = String(input.value || "").trim();
+			});
+			return result;
+		};
+		const conflict_map = () => {
+			const result = {};
+			dialog.fields_dict.preview.$wrapper.find("[data-relationship-conflict]").each((_, input) => {
+				result[input.dataset.relationshipConflict] = String(input.value || "").trim();
+			});
+			return result;
+		};
+		const run = async () => {
+			if (busy) return;
+			busy = true;
+			dialog.get_primary_btn().prop("disabled", true);
+			try {
+				const values = dialog.get_values();
+				if (!values) return;
+				if (!preview) {
+					const response = await frappe.call({
+						method: "hrms.hr.page.employee_relationship.employee_relationship.preview_employee_relationship_import",
+						args: { company: values.company, file_url: values.file_url },
+						freeze: true,
+						freeze_message: __("正在读取人员关系表并匹配员工…"),
+					});
+					preview = { ...(response.message || {}), company: values.company, file_url: values.file_url };
+					render();
+					return;
+				}
+				if (preview.row_error_count) {
+					preview = null;
+					render();
+					return;
+				}
+				const response = await frappe.call({
+					method: "hrms.hr.page.employee_relationship.employee_relationship.apply_employee_relationship_import",
+					args: {
+						company: values.company,
+						file_url: values.file_url,
+						plan_token_value: preview.plan_token,
+						identity_map: JSON.stringify(identity_map()),
+						conflict_map: JSON.stringify(conflict_map()),
+					},
+					freeze: true,
+					freeze_message: __("正在导入员工关系…"),
+				});
+				const result = response.message || {};
+				dialog.hide();
+				frappe.msgprint({ title: __("导入完成"), indicator: "green", message: escape(__("新增 {0} 条；系统已有跳过 {1} 条；源文件重复跳过 {2} 条。", [result.created || 0, result.skipped_existing || 0, result.skipped_source_duplicates || 0])) });
+				this.load_relationships();
+				this.load_relationship_statistics();
+			} finally {
+				busy = false;
+				dialog.get_primary_btn().prop("disabled", false);
+			}
+		};
+		dialog.show();
+		render();
 	}
 
 	render_relationship_statistics(data) {

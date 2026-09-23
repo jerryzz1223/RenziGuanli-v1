@@ -45,5 +45,6 @@ for (const value of ["dailyRow.shift", "dailyRow.clock_in", "dailyRow.clock_out"
 for (const required of ['includes("LATE_MARKED")', "field.late_editor", 'label: __("日期")', "attendance_date_display"]) {
 	if (!editor.includes(required)) throw new Error(`Late editor must keep the focused field contract: ${required}`);
 }
+if (!source.includes("attendance_date_with_weekday")) throw new Error("Attendance dates must display their weekday.");
 
 console.log("Attendance exception hours display checks passed.");

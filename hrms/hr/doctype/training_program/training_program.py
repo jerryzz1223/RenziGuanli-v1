@@ -30,7 +30,7 @@ class TrainingProgram(Document):
 	pass
 
 
-def _dashboard_company(company=None):
+def _dashboard_company(company: str | None = None):
 	"""Return a company that the current user may use for training summaries."""
 	company = company or frappe.defaults.get_user_default("Company")
 	if not company:
@@ -58,7 +58,7 @@ def _attendance_summary(company):
 
 
 @frappe.whitelist()
-def get_training_learning_dashboard(company=None):
+def get_training_learning_dashboard(company: str | None = None):
 	"""Read-only operational summary for the existing Training Program list."""
 	if not frappe.has_permission("Training Program", "read"):
 		frappe.throw("无权查看培训学习数据", frappe.PermissionError)

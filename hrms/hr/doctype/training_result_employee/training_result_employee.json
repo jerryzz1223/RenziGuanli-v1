@@ -6,6 +6,7 @@
  "engine": "InnoDB",
  "field_order": [
   "employee",
+  "employee_code",
   "column_break_2",
   "employee_name",
   "department",
@@ -16,7 +17,12 @@
   "assessment_result",
   "needs_retraining",
   "column_break_7",
-  "comments"
+  "comments",
+  "source_row",
+  "source_month",
+  "source_employee_name",
+  "source_department",
+  "source_study_hours"
  ],
  "fields": [
   {
@@ -25,6 +31,14 @@
    "in_list_view": 1,
    "label": "Employee",
    "options": "Employee"
+  },
+  {
+   "fetch_from": "employee.custom_employee_code",
+   "fieldname": "employee_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "公司工号",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_2",
@@ -93,6 +107,36 @@
    "fieldtype": "Text",
    "in_list_view": 1,
    "label": "Comments"
+  },
+  {
+   "fieldname": "source_row",
+   "fieldtype": "Int",
+   "label": "来源行号",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_month",
+   "fieldtype": "Data",
+   "label": "来源月份",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_employee_name",
+   "fieldtype": "Data",
+   "label": "来源姓名",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_department",
+   "fieldtype": "Data",
+   "label": "来源部门",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_study_hours",
+   "fieldtype": "Float",
+   "label": "来源学时",
+   "read_only": 1
   }
  ],
  "istable": 1,
