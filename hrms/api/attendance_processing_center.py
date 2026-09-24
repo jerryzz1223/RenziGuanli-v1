@@ -6489,6 +6489,25 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 				raw.get("source_sheet") or record.get("source_sheet"), _daily_attendance_date(pick("日期", "考勤日期")),
 			)
 			detail = details_by_key.get(detail_key, {})
+			# Show the auditable, punch-derived weekday-overtime candidate even when
+			# approval rules keep confirmed/payroll overtime at zero.  New projections
+			# persist this value explicitly; the raw-minus-special fallback keeps older
+			# retained batches readable until they are revalidated under the new policy.
+			calculated_workday_overtime = detail.get("calculated_workday_overtime_hours")
+			if calculated_workday_overtime in (None, ""):
+				source_workday_overtime = max(flt(detail.get("raw_workday_overtime_hours")), 0)
+				if source_workday_overtime > 0:
+					calculated_workday_overtime = int(source_workday_overtime * 2) / 2
+				elif detail.get("raw_outside_shift_hours") not in (None, ""):
+					raw_outside = max(flt(detail.get("raw_outside_shift_hours")), 0)
+					special_hours = max(flt(detail.get("derived_special_workday_hours") or detail.get("special_workday_hours")), 0)
+					calculated_workday_overtime = int(max(raw_outside - special_hours, 0) * 2) / 2
+				else:
+					calculated_workday_overtime = detail.get(
+						"workday_overtime_hours", detail.get("confirmed_overtime_hours", pick("工作日加班（小时）")),
+					)
+			if calculated_workday_overtime in (None, ""):
+				calculated_workday_overtime = detail.get("confirmed_overtime_hours", pick("工作日加班（小时）"))
 
 			items.append([
 				pick("姓名", "员工姓名") or values.get("employee_name") or "",
@@ -6496,7 +6515,7 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 				pick("日期", "考勤日期"), pick("实际部门", "部门") or values.get("department") or "",
 				pick("日期类型", "工作类型"), pick("班次"), pick("上班时间", "上班打卡", "上班打卡时间"), pick("下班时间", "下班打卡", "下班打卡时间"),
 				pick("上班缺卡", "上班未打卡次数"), pick("下班缺卡", "下班未打卡次数"), pick("旷工"), pick("标准工时", "标准工时（小时）"),
-				pick("实际出勤（小时）", "实际出勤工时"), pick("关联审批单", "审批单"), detail.get("confirmed_overtime_hours", pick("工作日加班（小时）")), pick("休息日加班（小时）"), pick("节假日加班（小时）"),
+				pick("实际出勤（小时）", "实际出勤工时"), pick("关联审批单", "审批单"), calculated_workday_overtime, pick("休息日加班（小时）"), pick("节假日加班（小时）"),
 				pick("大夜班"), pick("小夜班"), detail.get("personal_leave_hours", pick("事假(小时)", "请假/事假(小时)")), pick("病假(小时)"), pick("婚假(天)"), pick("特休(小时)"),
 				pick("丧假(小时)"), pick("工伤(小时)"), pick("公假(天)"), pick("产假(天)"), pick("团圆假(天)"), pick("排休(小时)"), pick("旷工(小时)"),
 				pick("婚假"), pick("丧假"), pick("公假"), pick("产假"), pick("团圆假"), pick("旷工"),

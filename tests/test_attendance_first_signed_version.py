@@ -173,7 +173,7 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertIsNone(sheet["K5"].value)
 		self.assertEqual(sheet.max_column, 29)
 
-	def test_daily_projection_exports_confirmed_overtime_late_leave_and_note(self):
+	def test_daily_projection_exports_calculated_and_confirmed_overtime_separately(self):
 		api = self.api
 		batch = types.SimpleNamespace(source_type="attendance_draft")
 		api._result_rows = lambda *_args, **_kwargs: [{
@@ -187,18 +187,19 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 			"processed_value": {"attendance_details": [{
 				"attendance_date": "2026-07-01", "source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
 				"personal_leave_hours": 0.5, "late_count": 1, "scheduled_start": "08:00", "scheduled_end": "17:00",
-				"raw_outside_shift_hours": 1, "confirmed_overtime_hours": 0.75, "overtime_approval_status": "人工确认",
+				"raw_outside_shift_hours": 1.75, "calculated_workday_overtime_hours": 1.5,
+				"confirmed_overtime_hours": 0.75, "overtime_approval_status": "人工确认",
 				"attendance_note": "2026-07-01迟到30分钟（半小时以内）",
 			}]},
 		}]
 
 		rows = api._monthly_first_signed_daily_rows({"attendance_draft": batch})
 
-		self.assertEqual(rows[0][14], 0.75)
+		self.assertEqual(rows[0][14], 1.5)
 		self.assertEqual(rows[0][19], 0.5)
 		self.assertEqual(rows[0][4], "工作日")
 		self.assertEqual(rows[0][38], 1)
-		self.assertEqual(rows[0][40:46], ["08:00", "17:00", 1, 0.75, "人工确认", "2026-07-01迟到30分钟（半小时以内）"])
+		self.assertEqual(rows[0][40:46], ["08:00", "17:00", 1.75, 0.75, "人工确认", "2026-07-01迟到30分钟（半小时以内）"])
 
 	def test_second_signed_workbook_matches_supplied_header_contract(self):
 		api = self.api

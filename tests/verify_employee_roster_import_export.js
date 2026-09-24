@@ -299,11 +299,9 @@ for (const marker of [
 }
 
 for (const marker of [
-	"离职/历史人员补录",
-	'state.mode === "history"',
 	"最新钉钉在职名单",
 	"source_conflicts",
-	"钉钉负责待入职、当前在职资料和附件",
+	"是否新增只看系统中是否已有该员工档案",
 	"公司 + 公司工号",
 	"get_employee_import_source_balance",
 	"查看人工核对明细",
@@ -314,11 +312,39 @@ for (const marker of [
 for (const marker of [
 	"def _get_latest_dingtalk_onjob_snapshot",
 	"def _employee_roster_source_conflict",
-	'if mode == "history" and match_by != "employee_code"',
-	'values.get("custom_work_nature") != "离职"',
 	"已阻止整表覆盖",
 ]) {
-	mustInclude(api, marker, `离职补录与钉钉在职快照缺少服务端保护：${marker}`);
+	mustInclude(api, marker, `离职导入与钉钉在职快照缺少服务端保护：${marker}`);
+}
+
+for (const marker of [
+	"包括在职、待离职和离职员工",
+	"找不到匹配员工时不会新增",
+	"未找到可更新的员工",
+]) {
+	mustInclude(api + importJs, marker, `新增与修改必须按员工档案是否存在分流：${marker}`);
+}
+
+for (const obsolete of ["start-history", 'state.mode === "history"', 'mode == "history"']) {
+	if ((api + importJs).includes(obsolete)) {
+		throw new Error(`离职员工不能继续使用独立补录模式: ${obsolete}`);
+	}
+}
+
+mustInclude(api, 'mode not in {"insert", "update", "replace"}', "花名册只能使用新增、修改或完整覆盖模式。");
+const previewAction = api.match(/def _preview_employee_action[\s\S]*?\n\ndef /)?.[0] || "";
+for (const marker of [
+	'if mode == "insert":',
+	'return "skip", existing',
+	'return "update", existing',
+	'if mode == "update":',
+	'return "skip", None',
+	'return "insert", None',
+]) {
+	mustInclude(previewAction, marker, `新增与修改必须只按员工是否存在决定动作: ${marker}`);
+}
+if (previewAction.includes("custom_work_nature")) {
+	throw new Error("在职、待离职或离职状态不得改变新增/修改的分流。");
 }
 
 for (const marker of [

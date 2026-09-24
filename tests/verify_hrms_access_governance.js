@@ -61,7 +61,7 @@ for (const marker of [
 	"open_capability_editor",
 	"hrms.access_control.set_hrms_user_access_tier",
 	"三档业务权限",
-	"只读 → 可以提交 → 审批",
+	"只读 → 经办与提交 → 业务管理员",
 	"access_tier_label",
 	"tier_by_label",
 	"hrms-access-capability-dialog",
@@ -133,6 +133,9 @@ for (const marker of [
 	"def set_hrms_user_access_tier(",
 	"def migrate_legacy_capability_roles_to_access_tiers(",
 	"preserved_roles",
+	"BUSINESS_ADMIN_DOCTYPE_PERMISSIONS",
+	'("Department", "read", "select", "create", "write", "delete")',
+	'if tier["key"] == "approve"',
 ]) {
 	assert(accessControl.includes(marker), `Capability backend contract missing: ${marker}`);
 }

@@ -72,17 +72,10 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		$(page.body).html(`
 			<div class="hrms-import-landing">
 				<div class="alert alert-info">
-					<strong>${__("两个入口的分工：")}</strong>
-					${__("钉钉负责待入职、当前在职资料和附件；表单负责历史/离职补录及经审核的批量修正。两边统一按“公司 + 公司工号”识别员工；在职/离职结论冲突时只提示人工核对，不自动覆盖。")}
+					<strong>${__("新增与修改的分工：")}</strong>
+					${__("是否新增只看系统中是否已有该员工档案，与在职、待离职或离职无关。两边统一按“公司 + 公司工号”识别员工；在职/离职结论冲突时只提示人工核对，不自动覆盖。")}
 				</div>
 				<div class="alert alert-secondary" data-source-balance>${__("正在读取钉钉与系统员工来源核对摘要...")}</div>
-				<div class="hrms-import-card">
-					<div>
-						<div class="hrms-import-card__title"><span class="orange-dot"></span>${__("离职/历史人员补录")}</div>
-						<p>${__("用于补录钉钉中已不存在的离职、历史员工。只按公司工号匹配，必须填写离职状态和离职日期；若钉钉最新名单仍显示在职，将阻止写入并提示人工核对。")}</p>
-					</div>
-					<button class="btn btn-warning" data-action="start-history">${__("补录离职人员")}</button>
-				</div>
 				<div class="hrms-import-card">
 					<div>
 						<div class="hrms-import-card__title"><span class="orange-dot"></span>${__("完整花名册核对（高风险）")}</div>
@@ -93,14 +86,14 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 				<div class="hrms-import-card">
 					<div>
 						<div class="hrms-import-card__title"><span class="blue-dot"></span>${__("批量添加员工")}</div>
-						<p>${__("适用于后续导入新增人员。已存在工号将跳过，不会覆盖原有资料。")}</p>
+						<p>${__("用于新增系统中还没有档案的员工，包括在职、待离职和离职员工。已存在的公司工号将跳过，不会覆盖原有资料。")}</p>
 					</div>
 					<button class="btn btn-primary" data-action="start-insert">${__("导入花名册")}</button>
 				</div>
 				<div class="hrms-import-card">
 					<div>
 						<div class="hrms-import-card__title"><span class="orange-dot"></span>${__("批量修改信息")}</div>
-						<p>${__("适用于批量更新、修改系统已存在人员的信息。")}</p>
+						<p>${__("只用于更新、修改系统中已有档案的员工。找不到匹配员工时不会新增，会提示“未找到可更新的员工”。")}</p>
 					</div>
 					<button class="btn btn-warning" data-action="start-update">${__("去修改信息")}</button>
 				</div>
@@ -151,7 +144,6 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	function render_upload() {
 		const title = {
 			replace: __("智能花名册导入-覆盖当前花名册"),
-			history: __("智能花名册导入-离职/历史人员补录"),
 			update: __("智能花名册导入-批量修改信息"),
 			insert: __("智能花名册导入-批量添加员工"),
 		}[state.mode] || __("智能花名册导入");
@@ -167,7 +159,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 				</div>
 				<div class="hrms-import-tips">
 					<h4>${__("温馨提示")}</h4>
-					<p>1. ${state.mode === "history" ? __("本入口只处理离职/历史人员；按公司工号与钉钉最新在职名单核对后才允许写入。") : __("可导入在职员工和离职员工。上传后会先匹配表头，不会立即写入员工资料。")}</p>
+					<p>1. ${__("批量添加可导入在职、待离职和离职员工；批量修改只处理已存在的员工。上传后会先匹配表头，不会立即写入员工资料。")}</p>
 					<p>2. ${__("您可以用自有花名册导入，也可以")} <button class="btn btn-link btn-xs" data-action="download-template">${__("下载标准模板")}</button></p>
 				</div>
 				<div class="hrms-import-effects">
@@ -218,7 +210,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 					</div>
 					<div class="form-group">
 						<label class="control-label">${__("重复员工更新策略")}</label>
-						<select class="form-control" data-match-by ${state.mode === "history" ? "disabled" : ""}>
+						<select class="form-control" data-match-by>
 							<option value="employee_code" ${state.match_by === "employee_code" ? "selected" : ""}>${__("按工号")}</option>
 							<option value="id_card" ${state.match_by === "id_card" ? "selected" : ""}>${__("按身份证")}</option>
 							<option value="phone" ${state.match_by === "phone" ? "selected" : ""}>${__("按手机号")}</option>
@@ -680,10 +672,9 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 
 	$(page.body).on("click", "[data-action]", function () {
 		const action = this.dataset.action;
-		if (["start-insert", "start-update", "start-history", "start-replace"].includes(action)) {
+		if (["start-insert", "start-update", "start-replace"].includes(action)) {
 			if (!require_import_permission()) return;
-			state.mode = { "start-insert": "insert", "start-update": "update", "start-history": "history", "start-replace": "replace" }[action];
-			if (state.mode === "history") state.match_by = "employee_code";
+			state.mode = { "start-insert": "insert", "start-update": "update", "start-replace": "replace" }[action];
 			state.step = 1;
 			render_upload();
 		}

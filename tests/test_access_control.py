@@ -196,6 +196,21 @@ class AccessControlTests(unittest.TestCase):
 		module.frappe.get_roles = lambda _user=None: [module.APPROVE_ROLE]
 		self.assertTrue(module.has_hrms_capability("roster_import_submit", user="worker@example.com"))
 
+	def test_tier_docperms_include_baseline_reads_and_top_tier_organization_management(self):
+		module = _load_module()
+		module.ensure_hrms_access_roles()
+		added = {
+			(args[0], args[1], kwargs.get("ptype"))
+			for args, kwargs in module._added_permissions
+		}
+		for tier_role in (module.READ_TIER_ROLE, module.SUBMIT_ROLE, module.APPROVE_ROLE):
+			self.assertIn(("Department", tier_role, "read"), added)
+		self.assertIn(
+			("Department", "read", "select", "create", "write", "delete"),
+			module.BUSINESS_ADMIN_DOCTYPE_PERMISSIONS,
+		)
+		self.assertIn(("Organization Node", module.APPROVE_ROLE, "read"), added)
+
 	def test_setting_tier_collapses_legacy_business_roles_and_preserves_system_manager(self):
 		user = _UserDoc(["System Manager", "人事查看", "花名册导入提交", "Existing Custom Role"])
 		module = _load_module(user)

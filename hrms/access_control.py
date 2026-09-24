@@ -40,6 +40,21 @@ READ_ONLY_DOCTYPES = (
 	"Job Opening",
 )
 
+# The top business tier is expected to administer the organisation, not merely
+# approve workflow documents.  Keep account/role administration separate under
+# System Manager, while granting the real DocPerm operations used by the
+# organisation chart and its master-data editors.
+BUSINESS_ADMIN_DOCTYPE_PERMISSIONS = (
+	("Department", "read", "select", "create", "write", "delete"),
+	("Designation", "read", "select", "create", "write"),
+	("Employee Grade", "read", "select", "create", "write"),
+	("Organization Structure Version", "read", "create", "write"),
+	("Organization Node", "read", "create", "write", "delete"),
+	("Organization Position", "read", "create", "write", "delete"),
+	("Grade Tag", "read", "create", "write", "delete"),
+	("Employee Position Assignment", "read", "create", "write", "delete"),
+)
+
 def _capability(key, label, role, category, description, risk="medium", permissions=()):
 	return {
 		"key": key,
@@ -143,16 +158,16 @@ ACCESS_TIER_DEFINITIONS = (
 	},
 	{
 		"key": "submit",
-		"label": "可以提交",
+		"label": "经办与提交",
 		"role": SUBMIT_ROLE,
 		"description": "包含只读；可新增、修改、导入和提交，不能审批或确认最终结果。",
 		"capabilities": SUBMIT_TIER_CAPABILITY_KEYS,
 	},
 	{
 		"key": "approve",
-		"label": "审批",
+		"label": "业务管理员",
 		"role": APPROVE_ROLE,
-		"description": "包含提交；可审批、锁定或确认最终结果。",
+		"description": "包含经办与提交；可审批、锁定最终结果，并管理组织架构与业务基础资料；不包含账户与权限管理。",
 		"capabilities": APPROVE_TIER_CAPABILITY_KEYS,
 	},
 )
@@ -310,6 +325,17 @@ def ensure_hrms_access_roles():
 		for doctype, permission_types in permissions_by_doctype.items():
 			if frappe.db.exists("DocType", doctype):
 				_ensure_docperm_operations(doctype, role, tuple(sorted(permission_types)))
+		# Every public tier includes the baseline master-data reads.  Previously
+		# these were installed only on HRMS 基础只读, even though tier users
+		# receive exactly one HRMS tier role; that omission caused even the top tier
+		# to fail the Department permission check used by the organisation chart.
+		for doctype in READ_ONLY_DOCTYPES:
+			if frappe.db.exists("DocType", doctype):
+				_ensure_docperm_operations(doctype, role, ("read",))
+		if tier["key"] == "approve":
+			for doctype, *permission_types in BUSINESS_ADMIN_DOCTYPE_PERMISSIONS:
+				if frappe.db.exists("DocType", doctype):
+					_ensure_docperm_operations(doctype, role, permission_types)
 		if frappe.db.exists("DocType", "Company"):
 			_ensure_docperm_operations("Company", role, ("read",))
 	for doctype in READ_ONLY_DOCTYPES:
@@ -399,7 +425,8 @@ def get_hrms_capability_catalog():
 		],
 		"managed_roles": [item["role"] for item in ACCESS_TIER_DEFINITIONS],
 		"design_notes": [
-			"权限只分只读、可以提交、审批三档，且逐级包含。",
+			"权限只分只读、经办与提交、业务管理员三档，且逐级包含。",
+			"业务管理员是业务最高档，可管理部门与组织架构；不会因为缺少部门单据权限被拦截。",
 			"账户与权限管理仍只属于系统管理员，不随业务审批档自动授予。",
 			"提交和审批使用登录账号执行，操作人由单据 owner、modified_by 及业务审计字段保留。",
 			"角色决定可执行的操作；User Permission 继续限定公司、部门或员工数据范围。",

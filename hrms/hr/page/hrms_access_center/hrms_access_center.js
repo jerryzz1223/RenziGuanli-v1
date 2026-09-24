@@ -193,7 +193,7 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 					<div>
 						<span class="indicator blue"></span>
 						<h3>${__("一个入口管理账户、权限与角色")}</h3>
-						<p>${__("账户只选只读、可以提交、审批三档之一；数据范围仍可按公司、部门或员工限定。")}</p>
+						<p>${__("账户只选只读、经办与提交、业务管理员三档之一；业务最高档可管理组织架构，数据范围仍可按公司、部门或员工限定。")}</p>
 					</div>
 					<div class="hrms-access-center__scope"><strong>${__("管理员权限")}</strong><span>System Manager</span></div>
 				</section>
@@ -232,7 +232,7 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 
 				<section class="hrms-access-center__panel ${state.active_tab === "roles" ? "" : "is-hidden"}">
 					<div class="hrms-access-center__panel-head">
-					<div><h4>${__("三档业务权限")}</h4><p>${__("只读 → 可以提交 → 审批，逐级包含。")}</p></div>
+					<div><h4>${__("三档业务权限")}</h4><p>${__("只读 → 经办与提交 → 业务管理员，逐级包含。")}</p></div>
 					</div>
 					<div class="hrms-access-center__role-list">
 					${(data.tiers || []).map((tier) => `<article class="hrms-access-center__role-card">

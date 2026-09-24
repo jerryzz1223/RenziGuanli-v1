@@ -71,7 +71,7 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 30
+ATTENDANCE_POLICY_VERSION = 32
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
 DEFAULT_CALENDAR_WEEKEND_MODE = "休息日加班口径"
 
@@ -80,8 +80,9 @@ DEFAULT_CALENDAR_WEEKEND_MODE = "休息日加班口径"
 # 从具体到通用，避免 CCD 白班被“生产白班”等较宽泛规则覆盖。
 #
 # 中班是特殊边界：平日自动生成 2.5 小时，但周末栏明确写“加班单”。
-# 间接人员 17:00-18:00 是免加班单的特殊工时；18:30 起必须有有效加班
-# 审批，钉钉导出的工作日加班时长只能作为时长事实，不能替代审批。
+# 间接人员 17:00-18:00 是特殊工时；之后的完整半小时计平日加班。
+# 特殊工时与平日加班能覆盖全部班后时间（不足30分钟按容差）时无需加班单；
+# 时间无法闭合或跨日含糊时仍进入异常审核。
 # 药水分析组和生管仓库同样仍须加班单。
 SCHEDULE_OVERTIME_RULES = (
 	{
@@ -752,8 +753,10 @@ def _workday_overtime_time_match(
 	"""Match DingTalk overtime duration to the scheduled and actual clock-out.
 
 	The exported weekday-overtime value is usable evidence only when adding it to
-	the scheduled shift end reaches the employee's actual clock-out.  When a valid
-	approval is also present, its configured coverage check must pass as well.
+	the scheduled shift end reaches the employee's actual clock-out.  That source
+	duration is independent evidence: once it matches, approval presence or
+	coverage must not create an exception.  Approval remains an audit fact and is
+	used only when the source duration is absent or does not match.
 	"""
 	scheduled_end = shift_facts.get("scheduled_end_minutes")
 	actual_out = shift_facts.get("raw_actual_out_minutes")
@@ -765,7 +768,7 @@ def _workday_overtime_time_match(
 	has_approval = bool(approval_coverage.get("has_valid_approval"))
 	approval_matches = bool(approval_coverage.get("covered")) if has_approval else None
 	return {
-		"matched": bool(source_matches and (approval_matches is not False)),
+		"matched": source_matches,
 		"source_matches": source_matches,
 		"approval_matches": approval_matches,
 		"source_overtime_minutes": source_minutes,
@@ -1724,16 +1727,25 @@ def _aggregate_employee_rows(
 		workday_overtime_time_match = _workday_overtime_time_match(
 			shift_facts, raw_workday_overtime_hours, approval_coverage,
 		)
+		is_indirect_staff_shift = _is_indirect_staff_shift(row)
+		# Indirect shifts split the period after the scheduled end into special
+		# working time and weekday overtime.  A source duration that matches the
+		# whole outside-shift period is therefore not sufficient evidence by itself:
+		# the split must also balance below in ``calculated_overtime_covers_outside``.
+		source_time_match_clears_exception = bool(
+			workday_overtime_time_match["matched"] and not is_indirect_staff_shift
+		)
 		if shift_facts.get("punch_in_range_valid") is False and not genuine_restday:
 			_add_code(codes, "CLOCK_IN_OUTSIDE_PICK_RANGE")
 			exception_events.append(_exception_event("CLOCK_IN_OUTSIDE_PICK_RANGE", parsed_date, row_number))
-		# A matched overtime approval owns the out-of-range decision. If its content
-		# covers the punch, there is no exception; if the punch exceeds its approved
-		# end, the later WORKDAY_OUTSIDE_SHIFT_UNAPPROVED path records one clear issue.
+		# For ordinary shifts, a matching source duration or overtime approval owns
+		# the out-of-range decision.  Indirect shifts must first subtract special
+		# working time and are deliberately left for the split reconciliation below.
 		if (
 			shift_facts.get("punch_out_range_valid") is False
 			and not genuine_restday
 			and not has_overtime_approval
+			and not source_time_match_clears_exception
 		):
 			_add_code(codes, "CLOCK_OUT_OUTSIDE_PICK_RANGE")
 			exception_events.append(_exception_event("CLOCK_OUT_OUTSIDE_PICK_RANGE", parsed_date, row_number))
@@ -1791,11 +1803,56 @@ def _aggregate_employee_rows(
 		is_attendance_workday = _is_scheduled_attendance_workday(row, row_standard_hours, parsed_date)
 		derived_special_workday_hours = Decimal("0")
 		special_workday_exempt_minutes = 0
+		calculated_workday_overtime_hours = Decimal("0")
+		calculated_overtime_covers_outside = False
 		if is_attendance_workday and not policy["genuine_restday_mode"]:
 			derived_special_workday_hours, special_workday_exempt_minutes = _schedule_special_workday_hours(row, shift_rules)
 			row_numbers["special_workday_hours"] = max(
 				row_numbers["special_workday_hours"], derived_special_workday_hours,
 			)
+			# Always expose the completed half-hours after the scheduled shift so HR
+			# can reconcile missing/incorrect DingTalk overtime fields.  Special
+			# working time is excluded first.  This display candidate is deliberately
+			# separate from confirmed_workday_overtime_hours: the shift-specific
+			# reconciliation below decides whether it enters monthly payroll totals.
+			clock_out_text = _text(_value(row, ("下班时间", "下班打卡", "下班打卡时间", "clock_out")))
+			raw_clock_out = _clock_minutes(clock_out_text)
+			scheduled_start = shift_facts.get("scheduled_start_minutes")
+			scheduled_end = shift_facts.get("scheduled_end_minutes")
+			ambiguous_day_shift_crossing = bool(
+				raw_clock_out is not None
+				and scheduled_start is not None
+				and scheduled_end is not None
+				and scheduled_end < 24 * 60
+				and raw_clock_out <= scheduled_start
+				and "次日" not in clock_out_text
+			)
+			if eligible_workday_overtime_hours > 0:
+				# A non-zero DingTalk weekday-overtime field is already the calculated
+				# business value.  Preserve it; derive from punches only when DingTalk
+				# hides/leaves that field empty for an approval-required shift.
+				calculated_workday_overtime_hours = eligible_workday_overtime_hours
+			elif shift_facts.get("actual_out_minutes") is not None and not ambiguous_day_shift_crossing:
+				candidate_minutes = max(
+					int(shift_facts.get("outside_shift_minutes") or 0) - special_workday_exempt_minutes,
+					0,
+				)
+				calculated_workday_overtime_hours = Decimal(candidate_minutes // 30) / Decimal("2")
+			if shift_facts.get("actual_out_minutes") is not None and not ambiguous_day_shift_crossing:
+				coverage_gap_minutes = (
+					int(shift_facts.get("outside_shift_minutes") or 0)
+					- special_workday_exempt_minutes
+					- int(calculated_workday_overtime_hours * 60)
+				)
+				calculated_overtime_covers_outside = bool(
+					is_indirect_staff_shift
+					and abs(coverage_gap_minutes) < OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES
+				)
+			if calculated_overtime_covers_outside:
+				# A complete special-hours + weekday-overtime split is sufficient time
+				# evidence.  It does not need a second overtime application.
+				confirmed_workday_overtime_hours = calculated_workday_overtime_hours
+				row_numbers["workday_overtime_hours"] = confirmed_workday_overtime_hours
 		raw_late_minutes = int(shift_facts.get("late_minutes") or 0) if is_attendance_workday else 0
 		approved_clock_in_leave_hours = _morning_leave_approval_hours(
 			row,
@@ -1885,11 +1942,10 @@ def _aggregate_employee_rows(
 		outside_shift_requires_overtime = (
 			outside_shift_overtime_minutes > OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES
 		)
-		if _is_indirect_staff_shift(row):
-			# 17:00-18:00 is special working time.  18:29 remains within the
-			# 29-minute tolerance; 18:30 and later requires a valid overtime
-			# application. DingTalk's exported overtime duration is only a time fact
-			# and cannot replace that approval.
+		if is_indirect_staff_shift:
+			# 17:00-18:00 is special working time.  The initial marker remains true
+			# at the 30-minute boundary, then the complete special-hours + weekday-
+			# overtime reconciliation above clears it when the whole period balances.
 			overtime_evidence_missing = outside_shift_overtime_minutes >= OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES
 		elif schedule_overtime_mode == "schedule_auto":
 			# 固定加班免申请与其后的延班来源是两个独立口径。
@@ -1900,14 +1956,17 @@ def _aggregate_employee_rows(
 			)
 		else:
 			overtime_evidence_missing = outside_shift_requires_overtime or raw_workday_overtime_hours > 0
-		# A duration that lands exactly on the actual clock-out explains the time
-		# and therefore does not enter the exception queue.  It remains audit-only
-		# unless an approval or manual confirmation separately makes it payable.
-		if schedule_overtime_mode == "overtime_application" and workday_overtime_time_match["matched"]:
+		# For ordinary shifts, a DingTalk workday-overtime duration that lands exactly
+		# on the actual clock-out explains the time and bypasses approval validation.
+		# Indirect shifts instead require special hours + weekday overtime to balance.
+		if source_time_match_clears_exception:
 			overtime_evidence_missing = False
-		overtime_evidence_missing = overtime_evidence_missing or bool(
-			has_overtime_approval and not approval_covers_overtime
-		)
+		elif calculated_overtime_covers_outside:
+			overtime_evidence_missing = False
+		else:
+			overtime_evidence_missing = overtime_evidence_missing or bool(
+				has_overtime_approval and not approval_covers_overtime
+			)
 		workday_outside_shift_unapproved = bool(
 			_is_scheduled_workday(row_standard_hours)
 			and not policy["genuine_restday_mode"]
@@ -2023,6 +2082,10 @@ def _aggregate_employee_rows(
 			"overtime_approval_status": (
 				"人工确认" if manual_overtime_hours is not None
 				else "已匹配申请" if approval_covers_overtime
+				else "平日加班时长已计算" if calculated_overtime_covers_outside and calculated_workday_overtime_hours > 0
+				else "平日加班时长与班次外时段不匹配"
+				if is_indirect_staff_shift and calculated_workday_overtime_hours > 0
+				else "工作日加班时长已匹配" if workday_overtime_time_match["source_matches"]
 				else approval_coverage["status"] if has_overtime_approval
 				else "休息日打卡免申请" if policy["genuine_restday_mode"] and _has_clock_punch(row)
 				else "钉钉自动识别" if schedule_overtime_mode == "schedule_auto"
@@ -2048,6 +2111,11 @@ def _aggregate_employee_rows(
 			"schedule_auto_overtime_hours": _display_number(schedule_auto_overtime_hours) if schedule_auto_overtime_hours is not None else 0,
 			"raw_workday_overtime_hours": _display_number(raw_workday_overtime_hours),
 			"raw_outside_shift_hours": _display_number(raw_outside_shift_hours),
+			# The dated detail shows calculated time even when an application is
+			# required and missing.  The employee/month total above remains the
+			# separately confirmed (payroll-eligible) value.
+			"workday_overtime_hours": _display_number(calculated_workday_overtime_hours),
+			"calculated_workday_overtime_hours": _display_number(calculated_workday_overtime_hours),
 			"schedule_auto_excess_minutes": schedule_auto_excess_minutes,
 			"special_workday_hours": _display_number(row_numbers["special_workday_hours"]),
 			"derived_special_workday_hours": _display_number(derived_special_workday_hours),

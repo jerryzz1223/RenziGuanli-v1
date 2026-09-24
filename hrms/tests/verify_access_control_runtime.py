@@ -64,6 +64,42 @@ def verify_business_capability_matrix():
 		frappe.set_user(original_session_user)
 
 
+def verify_top_tier_organization_permissions():
+	"""Verify the highest business tier passes the chart's real DocPerm checks."""
+	original_session_user = frappe.session.user
+	test_user = f"organization.admin.{frappe.generate_hash(length=10).lower()}@example.invalid"
+	frappe.set_user("Administrator")
+	frappe.db.savepoint("verify_top_tier_organization_permissions")
+	try:
+		frappe.get_doc({
+			"doctype": "User", "email": test_user, "first_name": "Organization Admin",
+			"enabled": 1, "send_welcome_email": 0, "user_type": "System User",
+		}).insert(ignore_permissions=True)
+		set_hrms_user_access_tier(test_user, "approve")
+		frappe.set_user(test_user)
+		department = {
+			permission_type: bool(frappe.has_permission("Department", permission_type))
+			for permission_type in ("read", "select", "create", "write", "delete")
+		}
+		organization_node = {
+			permission_type: bool(frappe.has_permission("Organization Node", permission_type))
+			for permission_type in ("read", "create", "write", "delete")
+		}
+		assert all(department.values()), department
+		assert all(organization_node.values()), organization_node
+		return {
+			"tier": "approve",
+			"department": department,
+			"organization_node": organization_node,
+			"result": "passed_and_rolled_back",
+		}
+	finally:
+		frappe.set_user("Administrator")
+		frappe.db.rollback(save_point="verify_top_tier_organization_permissions")
+		frappe.clear_cache(user=test_user)
+		frappe.set_user(original_session_user)
+
+
 def execute():
 	original_session_user = frappe.session.user
 	frappe.set_user("Administrator")

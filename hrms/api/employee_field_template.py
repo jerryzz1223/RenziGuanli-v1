@@ -2593,8 +2593,8 @@ def get_hrms_access_center():
 		"Guest": "访客",
 		"HRMS 基础只读": "只读",
 		"HRMS 只读": "只读",
-		"HRMS 提交": "可以提交",
-		"HRMS 审批": "审批",
+		"HRMS 提交": "经办与提交",
+		"HRMS 审批": "业务管理员",
 		"Sales Master Manager": "销售主数据管理员",
 		"Maintenance Manager": "维护管理员",
 	}
@@ -5974,10 +5974,8 @@ def _build_employee_roster_import_plan(
 	file_url, mode="insert", match_by="employee_code", manual_mappings=None, row_overrides=None
 ):
 	mode = mode or "insert"
-	if mode not in {"insert", "update", "history", "replace"}:
+	if mode not in {"insert", "update", "replace"}:
 		frappe.throw(_("导入模式不正确"))
-	if mode == "history" and match_by != "employee_code":
-		frappe.throw(_("离职/历史人员补录只能按公司工号匹配，不能按姓名、身份证或手机号猜测。"))
 	if match_by not in EMPLOYEE_DUPLICATE_MATCH_FIELDS:
 		frappe.throw(_("重复员工匹配策略不正确"))
 
@@ -6046,15 +6044,6 @@ def _build_employee_roster_import_plan(
 				values, fields_by_name, meta_fields, row_index, parse_errors, mode=mode, match_by=match_by
 			)
 		)
-		if mode == "history" and values.get("custom_work_nature") != "离职":
-			row_errors.append(
-				_field_error(
-					row_index,
-					fields_by_name.get("custom_work_nature") or {"fieldname": "custom_work_nature", "field_label": _("工作性质")},
-					_("离职/历史人员补录的工作性质必须为“离职”"),
-					_("如需导入在职人员，请返回并使用“批量添加员工”或钉钉新成员入口。"),
-				)
-			)
 		source_conflict = _employee_roster_source_conflict(
 			values, dingtalk_snapshots[company], fields_by_name, row_index
 		)
@@ -6154,7 +6143,10 @@ def _build_employee_roster_import_plan(
 					"message": _("最新钉钉在职名单仍包含 {0} 名被花名册遗漏的员工，已阻止整表覆盖：{1}").format(
 						len(protected), "、".join(protected[:20]) + ("……" if len(protected) > 20 else "")
 					),
-					"suggestion": _("先重新同步钉钉并核对这些工号；离职人员请使用“离职/历史人员补录”，不要通过遗漏行推断离职。"),
+					"suggestion": _(
+						"先重新同步钉钉并核对这些工号；系统中不存在的离职员工请使用“批量添加员工”导入完整资料，"
+						"已存在的员工请使用“批量修改信息”，不要通过遗漏行推断离职。"
+					),
 				}
 			)
 		result["archived"] = len(replace_candidates) - len(protected)
