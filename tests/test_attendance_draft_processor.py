@@ -1158,10 +1158,10 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 			("17:59", 0, 0.5, 0, False),
 			("18:00", 0, 1, 0, False),
 			("18:29", 0, 1, 0, False),
-			("18:30", 0, 1, 0.5, False),
+			("18:30", 0, 1, 0, True),
 			("18:30", 0.5, 1, 0.5, False),
-			("18:31", 0, 1, 0.5, False),
-			("18:31", 0.49, 1, 0.5, False),
+			("18:31", 0, 1, 0, True),
+			("18:31", 0.49, 1, 0, True),
 			("18:31", 0.5, 1, 0.5, False),
 			("20:00", 2, 1, 2, False),
 		):
@@ -1179,7 +1179,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 					values["special_hours_days"],
 					[{"day": 1, "hours": special_hours}] if special_hours else [],
 				)
-				expected_status = "平日加班时长已计算" if expected_overtime > 0 else "无申请"
+				expected_status = "钉钉平日加班已匹配" if expected_overtime > 0 else "无申请"
 				self.assertEqual(values["attendance_details"][0]["overtime_approval_status"], expected_status)
 
 		configured = processor.process_attendance_draft_rows([
@@ -1239,8 +1239,11 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		missing_source_duration = processor.process_attendance_draft_rows([{
 			**base, "班次": "间接长白班 08:00-17:00", "下班时间": "20:00", "工作日加班（小时）": 0,
 		}], attendance_month="2026-07")["processed_rows"][0]
-		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", missing_source_duration["exception_codes"])
-		self.assertEqual(missing_source_duration["processed_value"]["workday_overtime_hours"], 2)
+		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", missing_source_duration["exception_codes"])
+		self.assertEqual(missing_source_duration["processed_value"]["workday_overtime_hours"], 0)
+		self.assertEqual(
+			missing_source_duration["processed_value"]["attendance_details"][0]["calculated_workday_overtime_hours"], 0,
+		)
 
 		approved = processor.process_attendance_draft_rows([{
 			**base, "班次": "间接长白班 08:00-17:00", "下班时间": "20:00",
@@ -1264,18 +1267,18 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 			("special_first_half_hour", {}, "17:30", 0, 0.5, 0, False, "无申请"),
 			("special_full_hour", {}, "18:00", 0, 1, 0, False, "无申请"),
 			("residual_29_minutes", {}, "18:29", 0, 1, 0, False, "无申请"),
-			# A hidden/zero source value is derived from punches after special time.
-			("derive_first_half_hour", {}, "18:30", 0.5, 1, 0.5, False, "平日加班时长已计算"),
-			("derive_with_residual", {}, "20:03", 2, 1, 2, False, "平日加班时长已计算"),
-			("derive_exact_boundary", {}, "20:30", 2.5, 1, 2.5, False, "平日加班时长已计算"),
+			# Punches never synthesize weekday overtime when DingTalk exports zero.
+			("missing_source_first_half_hour", {}, "18:30", 0, 1, 0, True, "无申请"),
+			("missing_source_with_residual", {}, "20:03", 0, 1, 0, True, "无申请"),
+			("missing_source_exact_boundary", {}, "20:30", 0, 1, 0, True, "无申请"),
 			# Existing source values must balance: residual 29 passes; +/-30 fails.
-			("source_residual_29", {"工作日加班（小时）": 2}, "20:29", 2, 1, 2, False, "平日加班时长已计算"),
-			("source_is_floored_to_half_hour", {"工作日加班（小时）": 2.49}, "20:29", 2, 1, 2, False, "平日加班时长已计算"),
+			("source_residual_29", {"工作日加班（小时）": 2}, "20:29", 2, 1, 2, False, "钉钉平日加班已匹配"),
+			("source_is_floored_to_half_hour", {"工作日加班（小时）": 2.49}, "20:29", 2, 1, 2, False, "钉钉平日加班已匹配"),
 			("source_short_by_30", {"工作日加班（小时）": 2}, "20:30", 2, 1, 0, True, "平日加班时长与班次外时段不匹配"),
 			("source_excess_by_30", {"工作日加班（小时）": 2.5}, "20:00", 2.5, 1, 0, True, "平日加班时长与班次外时段不匹配"),
 			("whole_outside_duration_is_not_net_overtime", {"工作日加班（小时）": 1.5}, "18:30", 1.5, 1, 0, True, "平日加班时长与班次外时段不匹配"),
 			# Rejection does not matter when the time split itself closes; approval is optional then.
-			("rejected_but_balanced", {"关联审批单": "加班申请 OT-REJECT 已驳回"}, "20:03", 2, 1, 2, False, "平日加班时长已计算"),
+			("rejected_but_balanced", {"工作日加班（小时）": 2, "关联审批单": "加班申请 OT-REJECT 已驳回"}, "20:03", 2, 1, 2, False, "钉钉平日加班已匹配"),
 			("rejected_and_unbalanced", {"工作日加班（小时）": 2, "关联审批单": "加班申请 OT-REJECT 已驳回"}, "20:30", 2, 1, 0, True, "平日加班时长与班次外时段不匹配"),
 			("approved_and_balanced", {"工作日加班（小时）": 2, "关联审批单": "加班申请 OT-OK 已通过"}, "20:00", 2, 1, 2, False, "已匹配申请"),
 			# An explicit HR confirmation is authoritative even when source evidence is incomplete.
@@ -1297,14 +1300,14 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 				)
 				self.assertEqual(detail["overtime_approval_status"], expected_status)
 
-		# All supported indirect-shift names use the same split rule.
+		# All supported indirect-shift names keep zero-source overtime pending.
 		for shift in ("间接人员 08:00-17:00", "间接长白班 08:00-17:00", "中班-间接长白班 08:00-17:00"):
 			with self.subTest(alias=shift):
 				row = processor.process_attendance_draft_rows([
 					{**base, "班次": shift, "下班时间": "20:03"},
 				], attendance_month="2026-08")["processed_rows"][0]
-				self.assertEqual(row["processed_value"]["workday_overtime_hours"], 2)
-				self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", row["exception_codes"])
+				self.assertEqual(row["processed_value"]["workday_overtime_hours"], 0)
+				self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", row["exception_codes"])
 
 		# Ambiguous/missing punches cannot be auto-closed, and unrelated approval-
 		# required shifts must not inherit the indirect-shift exception waiver.
@@ -1329,7 +1332,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(restday["processed_value"]["workday_overtime_hours"], 0)
 		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", restday["exception_codes"])
 
-	def test_required_approval_shift_still_displays_calculated_weekday_overtime(self):
+	def test_zero_dingtalk_weekday_overtime_is_not_synthesized_from_punches(self):
 		row = processor.process_attendance_draft_rows([{
 			"姓名": "胡祥会", "工号": "3694", "日期": "26-08-03", "日期类型": "工作日",
 			"实际部门": "品保课", "班次": "间接长白班 08:00-17:00", "标准工时": 8,
@@ -1341,12 +1344,12 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		detail = values["attendance_details"][0]
 		self.assertEqual(detail["raw_outside_shift_hours"], 3.05)
 		self.assertEqual(detail["special_workday_hours"], 1)
-		self.assertEqual(detail["calculated_workday_overtime_hours"], 2)
-		self.assertEqual(detail["workday_overtime_hours"], 2)
-		self.assertEqual(detail["confirmed_overtime_hours"], 2)
-		self.assertEqual(detail["overtime_approval_status"], "平日加班时长已计算")
-		self.assertEqual(values["workday_overtime_hours"], 2)
-		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", row["exception_codes"])
+		self.assertEqual(detail["calculated_workday_overtime_hours"], 0)
+		self.assertEqual(detail["workday_overtime_hours"], 0)
+		self.assertEqual(detail["confirmed_overtime_hours"], 0)
+		self.assertEqual(detail["overtime_approval_status"], "无申请")
+		self.assertEqual(values["workday_overtime_hours"], 0)
+		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", row["exception_codes"])
 
 	def test_shift_rule_checks_matched_approval_content_and_only_flags_later_uncovered_time(self):
 		base = {

@@ -6489,23 +6489,15 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 				raw.get("source_sheet") or record.get("source_sheet"), _daily_attendance_date(pick("日期", "考勤日期")),
 			)
 			detail = details_by_key.get(detail_key, {})
-			# Show the auditable, punch-derived weekday-overtime candidate even when
-			# approval rules keep confirmed/payroll overtime at zero.  New projections
-			# persist this value explicitly; the raw-minus-special fallback keeps older
-			# retained batches readable until they are revalidated under the new policy.
+			# Weekday overtime comes only from the DingTalk export.  Punches and special
+			# hours may validate it, but must not synthesize a value for older batches.
 			calculated_workday_overtime = detail.get("calculated_workday_overtime_hours")
 			if calculated_workday_overtime in (None, ""):
 				source_workday_overtime = max(flt(detail.get("raw_workday_overtime_hours")), 0)
 				if source_workday_overtime > 0:
 					calculated_workday_overtime = int(source_workday_overtime * 2) / 2
-				elif detail.get("raw_outside_shift_hours") not in (None, ""):
-					raw_outside = max(flt(detail.get("raw_outside_shift_hours")), 0)
-					special_hours = max(flt(detail.get("derived_special_workday_hours") or detail.get("special_workday_hours")), 0)
-					calculated_workday_overtime = int(max(raw_outside - special_hours, 0) * 2) / 2
 				else:
-					calculated_workday_overtime = detail.get(
-						"workday_overtime_hours", detail.get("confirmed_overtime_hours", pick("工作日加班（小时）")),
-					)
+					calculated_workday_overtime = max(flt(pick("工作日加班（小时）")), 0)
 			if calculated_workday_overtime in (None, ""):
 				calculated_workday_overtime = detail.get("confirmed_overtime_hours", pick("工作日加班（小时）"))
 

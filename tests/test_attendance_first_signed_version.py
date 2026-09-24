@@ -201,6 +201,29 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(rows[0][38], 1)
 		self.assertEqual(rows[0][40:46], ["08:00", "17:00", 1.75, 0.75, "人工确认", "2026-07-01迟到30分钟（半小时以内）"])
 
+	def test_daily_projection_never_derives_weekday_overtime_from_punches(self):
+		api = self.api
+		batch = types.SimpleNamespace(source_type="attendance_draft")
+		api._result_rows = lambda *_args, **_kwargs: [{
+			"employee_code": "E-001", "employee_name": "张三", "department": "工程课", "eligible_for_downstream": True,
+			"source_file": "sample.xlsx", "source_sheet": "每日统计",
+			"original_value": {"rows": [{
+				"姓名": "张三", "工号": "E-001", "日期": "26-07-01", "实际部门": "工程课", "工作类型": "工作日",
+				"班次": "间接长白班 08:00-17:00", "上班时间": "08:00", "下班时间": "20:03",
+				"工作日加班（小时）": 0, "source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+			}]},
+			"processed_value": {"attendance_details": [{
+				"attendance_date": "2026-07-01", "source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+				"raw_workday_overtime_hours": 0, "raw_outside_shift_hours": 3.05, "special_workday_hours": 1,
+				"confirmed_overtime_hours": 0, "overtime_approval_status": "无申请",
+			}]},
+		}]
+
+		rows = api._monthly_first_signed_daily_rows({"attendance_draft": batch})
+
+		self.assertEqual(rows[0][14], 0)
+		self.assertEqual(rows[0][42:45], [3.05, 0, "无申请"])
+
 	def test_second_signed_workbook_matches_supplied_header_contract(self):
 		api = self.api
 		captured = {}
