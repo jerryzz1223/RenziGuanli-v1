@@ -71,7 +71,7 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 25
+ATTENDANCE_POLICY_VERSION = 26
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
 DEFAULT_CALENDAR_WEEKEND_MODE = "休息日加班口径"
 
@@ -80,8 +80,9 @@ DEFAULT_CALENDAR_WEEKEND_MODE = "休息日加班口径"
 # 从具体到通用，避免 CCD 白班被“生产白班”等较宽泛规则覆盖。
 #
 # 中班是特殊边界：平日自动生成 2.5 小时，但周末栏明确写“加班单”。
-# 间接人员 17:00-18:00 是免加班单的特殊工时；18:00 以后若钉钉已给出
-# 工作日加班时长，则直接采用且不再要求审批。药水分析组和生管仓库仍须加班单。
+# 间接人员 17:00-18:00 是免加班单的特殊工时；18:30 起必须有有效加班
+# 审批，钉钉导出的工作日加班时长只能作为时长事实，不能替代审批。
+# 药水分析组和生管仓库同样仍须加班单。
 SCHEDULE_OVERTIME_RULES = (
 	{
 		"name": "间接长白班", "tokens": ("间接长白班",), "workday_hours": Decimal("0"),
@@ -1234,6 +1235,75 @@ def rows_from_dingtalk_daily_sheet(sheet: Any, *, source_file: str = "") -> list
 	return rows
 
 
+def _reassign_restday_0800_to_previous_overnight(
+	rows: list[dict[str, Any]], shift_rules: Sequence[Mapping[str, Any]] | None,
+) -> int:
+	"""Move a misclassified 08:00 rest-day punch back to the prior night shift.
+
+	DingTalk may export the final punch of an overnight shift as the next day's
+	``上班时间`` when that next day is actually rest/排休.  Reassign only the
+	unambiguous single-punch case: same employee, consecutive dates, previous
+	overnight shift with an in-punch but no out-punch, and a zero-hour rest row
+	whose sole punch is exactly 08:00.  A normally scheduled next-day shift is
+	left untouched.
+	"""
+	by_employee: dict[str, list[dict[str, Any]]] = defaultdict(list)
+	for row in rows:
+		code = _value(row, IDENTITY_FIELDS["employee_code"])
+		if code:
+			by_employee[code].append(row)
+	reassigned = 0
+	for employee_rows in by_employee.values():
+		dated_rows = sorted(
+			(
+				(_parse_date(_value(row, IDENTITY_FIELDS["attendance_date"]), ""), row)
+				for row in employee_rows
+			),
+			key=lambda item: item[0] or "",
+		)
+		for (previous_date, previous), (current_date, current) in zip(dated_rows, dated_rows[1:]):
+			if not previous_date or not current_date:
+				continue
+			if date.fromisoformat(current_date) - date.fromisoformat(previous_date) != timedelta(days=1):
+				continue
+			previous_rule = _schedule_overtime_rule(previous, shift_rules)
+			previous_bounds = _shift_bounds_minutes(previous, previous_rule)
+			if not previous_bounds or previous_bounds[1] <= 24 * 60:
+				continue
+			if not _value(previous, ("上班时间", "上班打卡", "上班打卡时间", "clock_in")):
+				continue
+			if _value(previous, ("下班时间", "下班打卡", "下班打卡时间", "clock_out")):
+				continue
+			current_shift = _value(current, IDENTITY_FIELDS["shift"])
+			is_rest_schedule = _is_rest_day(current) or any(token in current_shift for token in ("休息", "排休"))
+			standard_hours = _decimal(_value(current, NUMERIC_FIELDS["standard_hours"])) or Decimal("0")
+			if not is_rest_schedule or standard_hours > 0:
+				continue
+			current_in = _value(current, ("上班时间", "上班打卡", "上班打卡时间", "clock_in"))
+			current_out = _value(current, ("下班时间", "下班打卡", "下班打卡时间", "clock_out"))
+			if _clock_minutes(current_in) != 8 * 60 or current_out:
+				continue
+			previous["下班时间"] = "次日 08:00"
+			for alias in NUMERIC_FIELDS["clock_out_missing_count"]:
+				if alias in previous:
+					previous[alias] = 0
+			previous["_cross_day_punch_reassignment"] = {
+				"from_attendance_date": current_date,
+				"from_source_row": _source_row(current),
+				"original_field": "上班时间",
+				"original_value": current_in,
+			}
+			for alias in ("上班时间", "上班打卡", "上班打卡时间", "clock_in"):
+				if alias in current:
+					current[alias] = ""
+			for alias in (*NUMERIC_FIELDS["clock_in_missing_count"], *NUMERIC_FIELDS["clock_out_missing_count"]):
+				if alias in current:
+					current[alias] = 0
+			current["_cross_day_punch_reassigned_to"] = previous_date
+			reassigned += 1
+	return reassigned
+
+
 def process_attendance_draft_rows(
 	raw_rows: Iterable[Mapping[str, Any]],
 	*,
@@ -1250,6 +1320,7 @@ def process_attendance_draft_rows(
 	if not _MONTH_RE.fullmatch(_text(attendance_month)):
 		raise ValueError("attendance_month must use YYYY-MM")
 	input_rows = [dict(row) for row in raw_rows]
+	cross_day_punch_reassignments = _reassign_restday_0800_to_previous_overnight(input_rows, shift_rules)
 	structure = precheck_attendance_draft_structure(_ordered_headers(input_rows))
 	employee_index = _build_employee_index(employee_directory)
 	policy = {**DEFAULT_EXCEPTION_POLICY, **{key: bool(value) for key, value in (exception_policy or {}).items() if key in DEFAULT_EXCEPTION_POLICY}}
@@ -1334,6 +1405,7 @@ def process_attendance_draft_rows(
 		"structure_precheck": structure,
 		"processed_rows": processed_rows,
 		"data_quality": {
+			"cross_day_punch_reassignments": cross_day_punch_reassignments,
 			"excluded_missing_employee_code_rows": len(missing_code_rows),
 			"excluded_missing_employee_code_accounts": _source_account_summaries(missing_code_rows),
 			"excluded_future_joining_rows": len(future_joining_rows),
@@ -1342,9 +1414,10 @@ def process_attendance_draft_rows(
 			"supplemental_out_of_month_rows": len(supplemental_rows),
 			"supplemental_out_of_month_dates": supplemental_dates,
 			"boundary_restday_review_rows": len(boundary_review_rows),
-			"notice": "工号为空的来源行不作为员工考勤处理；入职日期晚于考勤月份的人员自动从当月加工结果删除；跨月边界行不计入当月工时，其中休息日有打卡但无加班申请的行仍进入异常复核。",
+			"notice": "工号为空的来源行不作为员工考勤处理；入职日期晚于考勤月份的人员自动从当月加工结果删除；夜班后排休日被误列为上班卡的08:00单卡归回前一夜班下班卡；跨月边界行不计入当月工时，其中其余休息日有打卡但无加班申请的行仍进入异常复核。",
 		},
 		"metrics": {
+			"cross_day_punch_reassignments": cross_day_punch_reassignments,
 			"source_rows": len(input_rows),
 			"eligible_employee_source_rows": len(processing_rows) - len(missing_code_rows) - len(future_joining_rows),
 			"supplemental_out_of_month_rows": len(supplemental_rows),
@@ -1531,8 +1604,6 @@ def _aggregate_employee_rows(
 			else eligible_workday_overtime_hours if has_overtime_approval
 			else Decimal("0") if shift_facts.get("punch_out_range_valid") is False
 			else eligible_workday_overtime_hours
-			if _is_indirect_staff_shift(row) and eligible_workday_overtime_hours > 0
-			else eligible_workday_overtime_hours
 			if schedule_overtime_mode == "schedule_auto" and extended_overtime_mode == "不提交加班单"
 			else schedule_auto_overtime_hours
 			if schedule_fixed_hours_reached
@@ -1682,14 +1753,11 @@ def _aggregate_employee_rows(
 			outside_shift_overtime_minutes > OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES
 		)
 		if _is_indirect_staff_shift(row):
-			# 17:00-18:00 is special working time.  After 18:00, a positive DingTalk
-			# weekday-overtime duration is the governing evidence and needs no separate
-			# approval. Exactly 30 completed minutes after 18:00 is already 0.5 hour
-			# of overtime, so this approval/evidence boundary is inclusive.
-			overtime_evidence_missing = (
-				outside_shift_overtime_minutes >= OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES
-				and eligible_workday_overtime_hours <= 0
-			)
+			# 17:00-18:00 is special working time.  18:29 remains within the
+			# 29-minute tolerance; 18:30 and later requires a valid overtime
+			# application. DingTalk's exported overtime duration is only a time fact
+			# and cannot replace that approval.
+			overtime_evidence_missing = outside_shift_overtime_minutes >= OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES
 		elif schedule_overtime_mode == "schedule_auto":
 			# 固定加班免申请与其后的延班来源是两个独立口径。
 			# 只有明确写“加班单”的后续时段才按超时证据提示缺申请。
@@ -1812,7 +1880,6 @@ def _aggregate_employee_rows(
 			"overtime_approval_status": (
 				"人工确认" if manual_overtime_hours is not None
 				else "已匹配申请" if has_overtime_approval
-				else "钉钉已计工作日加班" if _is_indirect_staff_shift(row) and eligible_workday_overtime_hours > 0
 				else "钉钉自动识别" if schedule_overtime_mode == "schedule_auto"
 				else "无申请"
 			),
@@ -1840,6 +1907,7 @@ def _aggregate_employee_rows(
 			"derived_special_workday_hours": _display_number(derived_special_workday_hours),
 			"special_workday_exempt_minutes": special_workday_exempt_minutes,
 			"confirmed_overtime_hours": _display_number(confirmed_workday_overtime_hours),
+			"cross_day_punch_reassignment": row.get("_cross_day_punch_reassignment") or {},
 			"late_minutes": late_minutes,
 			"raw_late_minutes": raw_late_minutes,
 			"approved_clock_in_leave_hours": _display_number(approved_clock_in_leave_hours),

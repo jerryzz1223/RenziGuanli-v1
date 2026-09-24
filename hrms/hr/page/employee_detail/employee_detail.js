@@ -1113,9 +1113,16 @@ class EmployeeDetailPage {
 	}
 
 	render_training_row(record) {
-		const score = record.score !== null && record.score !== undefined ? `${__("成绩")}：${this.format_training_number(record.score)}` : (record.grade ? `${__("成绩")}：${record.grade}` : "");
+		const date = this.format_training_date(record.training_date);
+		const actualDates = String(record.actual_dates || "").trim();
+		const scoreNumber = Number(record.score || 0);
+		const score = record.grade
+			? `${__("成绩")}：${record.grade}`
+			: scoreNumber !== 0
+				? `${__("成绩")}：${this.format_training_number(scoreNumber)}`
+				: "";
 		return `<tr>
-			<td><strong>${frappe.utils.escape_html(this.format_training_date(record.training_date))}</strong>${record.actual_dates ? `<small>${frappe.utils.escape_html(record.actual_dates)}</small>` : ""}</td>
+			<td><strong>${frappe.utils.escape_html(date)}</strong>${actualDates && actualDates !== date ? `<small>${frappe.utils.escape_html(actualDates)}</small>` : ""}</td>
 			<td><strong>${frappe.utils.escape_html(record.course || __("未命名课程"))}</strong><small>${frappe.utils.escape_html([record.training_mode, record.target].filter(Boolean).join(" · "))}</small></td>
 			<td>${frappe.utils.escape_html(record.course_type || "—")}</td>
 			<td>${frappe.utils.escape_html(record.owner_department || "—")}</td>
@@ -1132,7 +1139,7 @@ class EmployeeDetailPage {
 
 	format_training_number(value) {
 		const number = Number(value || 0);
-		return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+		return Number.isInteger(number) ? String(number) : number.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
 	}
 
 	render_employee_relationship_card() {

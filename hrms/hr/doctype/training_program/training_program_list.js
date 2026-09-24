@@ -350,14 +350,14 @@
 		const pendingIdentities = (state.preview?.identities || []).filter((item) => item.status !== "matched").length;
 		const importActionLabel = state.preview
 			? pendingIdentities ? __("继续匹配 {0} 组员工", [pendingIdentities]) : __("查看校验结果并导入")
-			: state.plan_file_url || state.record_file_url ? __("继续上传原表") : __("开始上传与匹配");
+			: state.plan_file_url || state.record_file_url ? __("继续独立导入") : __("分开导入计划 / 实际");
 
 		workspace.innerHTML = `
 			<div class="hrms-training-hero hrms-training-plan-hero">
 				<div>
 					<p class="hrms-training-eyebrow">TRAINING PLAN</p>
 					<h1>${__("培训计划")}</h1>
-					<p>${__("上传年度计划表与实际上课登记表，集中查看、筛选和核对全部计划课程。")}</p>
+					<p>${__("计划表独立建立课程；登记表独立匹配实际上课，缺少课程时自动补建。")}</p>
 				</div>
 				<div class="hrms-training-hero-actions">
 					<button class="btn btn-primary" data-training-action="import">${importActionLabel}</button>

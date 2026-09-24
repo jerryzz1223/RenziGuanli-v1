@@ -26,6 +26,8 @@ for (const marker of [
 	"累计学时",
 	"课时 / 学时",
 	"待复核",
+	"number.toFixed(3)",
+	"actualDates && actualDates !== date",
 ]) assert(page.includes(marker), `员工详情培训记录缺少：${marker}`);
 
 assert(sidebar.includes('{ label: "培训计划", route: "/desk/training-program", slug: "training-program" }'));
