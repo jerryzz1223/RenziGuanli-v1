@@ -35,14 +35,21 @@ class HRMSAttendanceShiftRule(Document):
 		for fieldname in ("weekday_overtime_mode", "weekend_overtime_mode", "holiday_overtime_mode"):
 			if (getattr(self, fieldname, "") or "") not in allowed_modes:
 				frappe.throw(_("加班来源只能选择“不提交加班单、加班单或无”。"))
+		if (getattr(self, "extended_overtime_mode", "") or "") not in allowed_modes:
+			frappe.throw(_("固定加班后续来源只能选择“不提交加班单、加班单或无”。"))
 		if self.weekday_overtime_mode == "不提交加班单" and (self.weekday_overtime_hours or 0) <= 0:
 			frappe.throw(_("平日免提交加班单时，必须填写大于 0 的自动加班小时。"))
 		if self.weekday_overtime_mode == "无" and (self.weekday_overtime_hours or 0) > 0:
 			frappe.throw(_("平日加班来源为“无”时，自动加班小时必须为 0。"))
+		if getattr(self, "extended_overtime_mode", "") == "不提交加班单" and self.weekday_overtime_mode != "不提交加班单":
+			frappe.throw(_("后续免申请仅适用于已配置平日固定自动加班的班次。"))
+		if getattr(self, "extended_overtime_mode", "") == "不提交加班单" and not self.weekday_overtime_time:
+			frappe.throw(_("后续免申请必须先配置平日固定加班结束时间。"))
 		for fieldname, label in (
 			("basic_time", "基本工时上下班时间"),
 			("weekday_overtime_time", "平日加班起止时间"),
 			("weekend_overtime_time", "周末加班起止时间"),
+			("special_workday_time", "平日特殊工时时段"),
 		):
 			value = getattr(self, fieldname, "") or ""
 			clocks = _clock_values(value)
@@ -50,6 +57,11 @@ class HRMSAttendanceShiftRule(Document):
 				frappe.throw(_("{0}必须由完整的 HH:MM-HH:MM 时间段组成。").format(label))
 			if any(int(hour) == 24 and int(minute) != 0 for hour, minute in clocks):
 				frappe.throw(_("24点只能写成 24:00。"))
+			if fieldname == "special_workday_time" and value and not re.fullmatch(
+				r"\s*(?:[01]?\d|2[0-3]):[0-5]\d\s*[-–—]\s*(?:次日)?(?:[01]?\d|2[0-4]):[0-5]\d\s*",
+				str(value).replace("：", ":"),
+			):
+				frappe.throw(_("平日特殊工时时段只能填写一个 HH:MM-HH:MM 时间段。"))
 		if self.overtime_begin_time and len(_clock_values(str(self.overtime_begin_time))) != 1:
 			frappe.throw(_("班后开始加班时间必须使用 HH:MM 固定格式。"))
 		for fieldname, label in (

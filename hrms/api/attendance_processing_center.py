@@ -29,6 +29,7 @@ from frappe.utils import cint, flt, getdate, now_datetime
 from hrms.api.attendance_processors.apple_tree import AppleTreeRules, preflight_apple_tree_rows, process_apple_tree_rows
 from hrms.api.attendance_processors.attendance_draft import (
 	ATTENDANCE_POLICY_VERSION,
+	SCHEDULE_OVERTIME_RULES,
 	LEAVE_FIELDS,
 	LEAVE_LABELS,
 	NUMERIC_FIELDS as ATTENDANCE_NUMERIC_FIELDS,
@@ -40,6 +41,7 @@ from hrms.api.attendance_processors.attendance_draft import (
 	precheck_attendance_draft_structure,
 	process_attendance_draft_rows,
 	rows_from_dingtalk_daily_sheet,
+	_schedule_overtime_rule,
 )
 from hrms.api.attendance_processors.missed_punch import MissedPunchRules, precheck_missed_punch_structure, process_missed_punch_rows
 
@@ -829,12 +831,23 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 		basic_time = _schedule_cell_text(values[4])
 		if not current_group or not basic_time:
 			continue
+		# The source sheet still says 烧饭阿姨; the confirmed live班别 is 食堂.
+		# Preserve the original row in source_payload_json while matching the live name.
+		display_group = "食堂" if current_group in {"烧饭阿姨", "食堂阿姨"} else current_group
 		sequence_value = cint(values[1]) if values[1] not in (None, "") else len(items) + 1
-		rule_name = current_group if not shift_name or shift_name in current_group else f"{current_group}{shift_name}"
+		rule_name = display_group if not shift_name or shift_name in display_group else f"{display_group}{shift_name}"
+		extended_text = _schedule_cell_text(values[12]).replace("：", ":")
+		special_match = re.search(r"((?:[01]?\d|2[0-4]):[0-5]\d)\s*[-–—]\s*((?:[01]?\d|2[0-4]):[0-5]\d)\s*特殊工时", extended_text)
+		special_time = f"{special_match.group(1)}-{special_match.group(2)}" if special_match else ""
+		extended_mode = (
+			"不提交加班单" if "不提交加班单" in extended_text
+			else "加班单" if "加班单" in extended_text
+			else "无" if extended_text.strip() == "无" else ""
+		)
 		weekday_value = values[11]
 		weekday_hours = flt(weekday_value) if isinstance(weekday_value, (int, float)) else 0
 		weekday_mode = "不提交加班单" if weekday_hours > 0 else "加班单" if "加班单" in _schedule_cell_text(weekday_value) else "无"
-		match_tokens = _schedule_match_tokens(current_group, shift_name)
+		match_tokens = _schedule_match_tokens(display_group, shift_name)
 		weekday_time = _schedule_cell_text(values[5])
 		if not match_tokens:
 			issues.append({"source_row": source_row, "message": "班次匹配关键词为空"})
@@ -842,6 +855,8 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 		item = {
 			"rule_code": f"SHIFT-{sequence_value:03d}",
 			"rule_name": rule_name,
+			"shift_group": display_group,
+			"shift_variant": shift_name or "标准班次",
 			"sequence": sequence_value,
 			"match_tokens": match_tokens,
 			"basic_time": basic_time,
@@ -850,10 +865,12 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 			"overtime_begin_time": _schedule_cell_text(values[7]),
 			"overnight": 1 if "是" in _schedule_cell_text(values[8]) else 0,
 			"meal_deduction_rule": _schedule_cell_text(values[9]),
+			"special_workday_time": special_time,
 			"basic_hours": flt(values[10]),
 			"weekday_overtime_hours": weekday_hours,
 			"weekday_overtime_mode": weekday_mode,
-			"extended_shift_rule": _schedule_cell_text(values[12]),
+			"extended_shift_rule": extended_text,
+			"extended_overtime_mode": extended_mode,
 			"weekend_overtime_mode": _schedule_cell_text(values[13]),
 			"holiday_overtime_mode": _schedule_cell_text(values[14]),
 			"small_night_rule": _schedule_cell_text(values[15]),
@@ -909,6 +926,7 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 			"生管仓库": ("生管课",),
 			# CCD 夜班与生产夜班共用同一组夜班津贴阈值。
 			"CCD人员": ("生产人员",),
+			"食堂": ("烧饭阿姨", "食堂阿姨"),
 		}
 		night_text = f"{item['small_night_rule']} {item['large_night_rule']}"
 		night_meaningful = re.sub(r"\s+", "", night_text).replace("无", "")
@@ -936,13 +954,13 @@ def _attendance_shift_rule_bundle(company: str) -> dict[str, Any]:
 		SHIFT_RULE_DOCTYPE,
 		filters={"company": company},
 		fields=[
-			"name", "enabled", "rule_code", "rule_name", "sequence", "match_tokens", "basic_time",
+			"name", "enabled", "rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "basic_time",
 			"weekday_overtime_time", "weekend_overtime_time", "overtime_begin_time", "basic_hours",
-			"weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule",
+			"weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule", "extended_overtime_mode", "special_workday_time",
 			"weekend_overtime_mode", "holiday_overtime_mode", "overnight", "meal_deduction_rule",
 			"small_night_rule", "large_night_rule", "remarks", "suggested_positions", "punch_in_range",
 			"punch_out_range", "effective_from", "source_version", "source_file", "source_sheet",
-			"source_row", "source_checksum", "shift_type", "shift_sync_status", "shift_sync_message", "modified", "modified_by",
+			"source_row", "source_checksum", "manual_override", "shift_type", "shift_sync_status", "shift_sync_message", "modified", "modified_by",
 		],
 		order_by="sequence asc, rule_code asc",
 		limit_page_length=500,
@@ -972,6 +990,8 @@ def _attendance_shift_rule_bundle(company: str) -> dict[str, Any]:
 			"weekend_overtime_mode": row.get("weekend_overtime_mode") or "",
 			"holiday_overtime_mode": row.get("holiday_overtime_mode") or "",
 			"extended_shift_rule": row.get("extended_shift_rule") or "",
+			"extended_overtime_mode": row.get("extended_overtime_mode") or "",
+			"special_workday_time": row.get("special_workday_time") or "",
 			"overnight": bool(cint(row.get("overnight"))),
 			"meal_deduction_rule": row.get("meal_deduction_rule") or "",
 			"meal_deduction_hours": _schedule_meal_deduction_hours(row.get("meal_deduction_rule")),
@@ -5441,6 +5461,53 @@ def upsert_attendance_scheduling_policy(company: str, policy: str | dict):
 	return {"name": doc.name, "notice": _("排班治理规则已保存并用于后续班次分配校验。")}
 
 
+def _builtin_shift_rule_items() -> list[dict[str, Any]]:
+	"""Expose the actual compatibility rules without pretending they are editable rows."""
+	def clock(minutes):
+		if minutes is None:
+			return ""
+		return f"{'次日' if minutes < 12 * 60 else ''}{minutes % (24 * 60) // 60:02d}:{minutes % 60:02d}"
+
+	def condition(value):
+		if not value:
+			return ""
+		hours = f">={value['minimum_hours']}小时"
+		if value.get("mode") == "区间":
+			return f"{hours}，下班在{clock(value.get('start_minutes'))}–{clock(value.get('end_minutes'))}"
+		return f"{hours}，下班不早于{clock(value.get('start_minutes'))}"
+
+	items = []
+	for index, rule in enumerate(SCHEDULE_OVERTIME_RULES, 1):
+		hours = float(rule.get("workday_hours") or 0)
+		end = rule.get("workday_end_minutes")
+		name = rule["name"]
+		variant = next((suffix for suffix in ("白班", "夜班", "中班") if name.endswith(suffix)), "标准班次")
+		group = name[:-len(variant)] if variant != "标准班次" else name
+		if name.startswith("烧饭阿姨"):
+			group = "食堂"
+			variant = f"{variant}（原烧饭阿姨）"
+		elif name.startswith("食堂"):
+			group = "食堂"
+			variant = name[len("食堂"):] or "标准班次"
+		if not group:
+			group = name
+		items.append({
+			"rule_code": f"BUILTIN-{index:02d}", "rule_name": name,
+			"shift_group": group, "shift_variant": variant,
+			"match_tokens": "|".join(rule["tokens"]), "basic_time": rule.get("basic_time") or "",
+			"meal_deduction_rule": rule.get("meal_deduction_rule") or "",
+			"weekday_overtime_hours": hours,
+			"weekday_overtime_mode": "不提交加班单" if rule.get("workday_auto", True) and hours else "按来源/审批",
+			"weekday_overtime_end": clock(end),
+			"special_workday_time": rule.get("special_workday_time") or "",
+			"extended_overtime_mode": rule.get("extended_overtime_mode") or "",
+			"weekend_overtime_mode": "不提交加班单" if rule.get("restday_auto") else "按来源/审批",
+			"small_night_rule": condition(rule.get("small_night_condition")),
+			"large_night_rule": condition(rule.get("large_night_condition")),
+		})
+	return items
+
+
 @frappe.whitelist()
 def get_complete_attendance_rules(company: str):
 	"""Return every maintainable attendance rule for the unified rule centre."""
@@ -5456,6 +5523,7 @@ def get_complete_attendance_rules(company: str):
 		"shift_rules": bundle["items"],
 		"shift_rule_version": bundle["version"],
 		"using_builtin_fallback": bundle["rules"] is None,
+		"builtin_shift_rules": _builtin_shift_rule_items(),
 		"policy_rules": policy_rules,
 		"system_boundaries": [
 			{"name": "员工身份匹配", "logic": "公司工号为主键；姓名、部门用于冲突核对", "impact": "冲突进入异常处理，不自动合并员工"},
@@ -5463,7 +5531,32 @@ def get_complete_attendance_rules(company: str):
 			{"name": "规则生效与版本", "logic": "按生效日期及匹配精度选择规则；每次有效修改生成新版本", "impact": "历史结果标记为待重新校验，不静默覆盖"},
 			{"name": "人工与审批优先", "logic": "人工确认值、已匹配审批优先于排班自动值", "impact": "保留审核结果及完整修改记录"},
 			{"name": "周末与调班边界", "logic": "普通周六日按排班治理规则处理；明确标为工作日、调班或补班的日期仍按工作日", "impact": "普通周末不制造标准工时、请假、旷工或工时差异，实际打卡转入休息日加班核对"},
+			{"name": "周末未排班中班夜班", "logic": "仅周末休息日、适用岗位且有打卡证据时，根据首末卡扣实际重叠休息时段；单侧卡待复核，无卡不报夜班异常", "impact": "净满8小时且不早于22:00记小夜；净满10.5小时且不早于次日01:00记大夜，优先大夜且不重复"},
 		],
+	}
+
+
+@frappe.whitelist()
+def preview_attendance_shift_match(company: str, shift_name: str, attendance_date: str = ""):
+	"""Read-only check using exactly the matcher used by attendance processing."""
+	_require_processing_manager()
+	company = _require_company(company)
+	shift_name = str(shift_name or "").strip()
+	if not shift_name or len(shift_name) > 120:
+		frappe.throw(_("请输入不超过 120 字的实际班次名称。"))
+	day = getdate(attendance_date) if attendance_date else now_datetime().date()
+	bundle = _attendance_shift_rule_bundle(company)
+	matched = _schedule_overtime_rule(
+		{"班次": shift_name, "日期": day.isoformat()}, bundle["rules"],
+	)
+	return {
+		"shift_name": shift_name, "attendance_date": day.isoformat(),
+		"rule_version": bundle["version"],
+		"matched": bool(matched),
+		"rule_name": matched.get("name") if matched else "",
+		"rule_code": matched.get("rule_code") if matched else "",
+		"source": "公司规则" if matched and matched.get("rule_code") else "内置兼容规则" if matched else "无匹配",
+		"match_tokens": list(matched.get("tokens") or ()) if matched else [],
 	}
 
 
@@ -5492,7 +5585,7 @@ def import_attendance_shift_rules(
 		for row in frappe.get_all(
 			SHIFT_RULE_DOCTYPE,
 			filters={"company": company},
-			fields=["name", "rule_code", "shift_type", "shift_sync_status", "shift_sync_message"],
+			fields=["name", "rule_code", "manual_override", "shift_type", "shift_sync_status", "shift_sync_message"],
 			limit_page_length=500,
 		)
 	}
@@ -5502,7 +5595,7 @@ def import_attendance_shift_rules(
 		shift_plan = _schedule_shift_type_plan(company, item, existing_row.get("shift_type") or "")
 		preview.append({
 			**item,
-			"import_action": "更新" if existing_row else "新增",
+			"import_action": "保留人工编辑" if cint(existing_row.get("manual_override")) else "更新" if existing_row else "新增",
 			"shift_type_name": shift_plan.get("name"),
 			"shift_type_action": shift_plan.get("action"),
 			"shift_type_message": shift_plan.get("message"),
@@ -5524,8 +5617,9 @@ def import_attendance_shift_rules(
 			"existing_count": len(existing),
 			"created_count": sum(1 for item in preview if item["import_action"] == "新增"),
 			"updated_count": sum(1 for item in preview if item["import_action"] == "更新"),
-			"shift_type_created_count": sum(1 for item in preview if item["shift_type_action"] == "新增"),
-			"shift_type_review_count": sum(1 for item in preview if item["shift_type_action"] == "保留并复核"),
+			"skipped_manual_count": sum(1 for item in preview if item["import_action"] == "保留人工编辑"),
+			"shift_type_created_count": sum(1 for item in preview if item["import_action"] != "保留人工编辑" and item["shift_type_action"] == "新增"),
+			"shift_type_review_count": sum(1 for item in preview if item["import_action"] != "保留人工编辑" and item["shift_type_action"] == "保留并复核"),
 			"scheduling_policy_action": "更新来源绑定" if generated_policy else "新增待确认",
 			"suggested_max_daily_hours": suggested_limit,
 		}
@@ -5543,21 +5637,26 @@ def import_attendance_shift_rules(
 			if fieldname in options and flt(options[fieldname]) <= 0:
 				frappe.throw(_("排班工时上限必须大于 0。"))
 	write_fields = (
-		"rule_code", "rule_name", "sequence", "match_tokens", "basic_time", "weekday_overtime_time",
+		"rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "basic_time", "weekday_overtime_time",
 		"weekend_overtime_time", "overtime_begin_time", "overnight", "meal_deduction_rule", "basic_hours",
-		"weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule", "weekend_overtime_mode",
+		"weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule", "extended_overtime_mode", "special_workday_time", "weekend_overtime_mode",
 		"holiday_overtime_mode", "small_night_rule", "large_night_rule", "remarks", "suggested_positions",
 		"punch_in_range", "punch_out_range", "source_version", "source_file", "source_sheet", "source_row",
 		"source_checksum", "source_payload_json",
 	)
 	created = updated = shift_types_created = shift_types_reviewed = 0
+	skipped_manual = 0
 	for item in parsed["items"]:
+		if cint(existing.get(item["rule_code"], {}).get("manual_override")) and not cint(options.get("overwrite_manual_rules")):
+			skipped_manual += 1
+			continue
 		values = {field: item.get(field) for field in write_fields}
 		values["effective_from"] = effective_from
 		if item["rule_code"] in existing:
 			existing_row = existing[item["rule_code"]]
 			doc = frappe.get_doc(SHIFT_RULE_DOCTYPE, existing_row["name"])
 			doc.update(values)
+			doc.manual_override = 0
 			updated += 1
 		else:
 			existing_row = {}
@@ -5625,6 +5724,7 @@ def import_attendance_shift_rules(
 	return {
 		"created_count": created,
 		"updated_count": updated,
+		"skipped_manual_count": skipped_manual,
 		"shift_types_created_count": shift_types_created,
 		"shift_types_review_count": shift_types_reviewed,
 		"scheduling_policy": policy_name,
@@ -5656,6 +5756,8 @@ def upsert_attendance_shift_rule(company: str, rule: str | dict):
 	existing = str(rule.name or "").strip() or frappe.db.get_value(
 		SHIFT_RULE_DOCTYPE, {"company": company, "rule_code": rule_code}, "name"
 	)
+	if not existing and not frappe.db.count(SHIFT_RULE_DOCTYPE, {"company": company}):
+		frappe.throw(_("当前仍使用整套内置班次规则。请先预览并导入排班表，再新增或修改公司规则；单独新增首条规则会使其他内置规则全部失效。"))
 	if existing:
 		doc = frappe.get_doc(SHIFT_RULE_DOCTYPE, existing)
 		if doc.company != company:
@@ -5663,10 +5765,10 @@ def upsert_attendance_shift_rule(company: str, rule: str | dict):
 	else:
 		doc = frappe.get_doc({"doctype": SHIFT_RULE_DOCTYPE, "company": company})
 	write_fields = (
-		"enabled", "rule_code", "rule_name", "sequence", "match_tokens", "effective_from", "shift_type", "basic_time",
+		"enabled", "rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "effective_from", "shift_type", "basic_time",
 		"weekday_overtime_time", "weekend_overtime_time", "overtime_begin_time", "overnight",
 		"meal_deduction_rule", "basic_hours", "weekday_overtime_hours", "weekday_overtime_mode",
-		"extended_shift_rule", "weekend_overtime_mode", "holiday_overtime_mode", "small_night_rule",
+		"extended_shift_rule", "extended_overtime_mode", "special_workday_time", "weekend_overtime_mode", "holiday_overtime_mode", "small_night_rule",
 		"large_night_rule", "remarks", "suggested_positions", "punch_in_range", "punch_out_range",
 	)
 	for field in write_fields:
@@ -5676,6 +5778,7 @@ def upsert_attendance_shift_rule(company: str, rule: str | dict):
 		doc.shift_sync_status = "需复核" if rule.get("shift_type") else "待联动"
 		doc.shift_sync_message = "人工绑定系统 Shift Type，请核对班次时间与取卡范围" if rule.get("shift_type") else "尚未绑定系统 Shift Type"
 	doc.enabled = cint(rule.get("enabled", 1))
+	doc.manual_override = 1
 	doc.save(ignore_permissions=True)
 	frappe.db.commit()
 	bundle = _attendance_shift_rule_bundle(company)

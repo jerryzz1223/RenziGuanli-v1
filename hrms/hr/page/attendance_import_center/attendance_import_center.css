@@ -790,8 +790,68 @@
 }
 
 .hrms-attendance-rule-kpis {
+	grid-template-columns: repeat(3, minmax(0, 1fr));
 	margin: 0;
 	padding: 0 0 16px;
+}
+
+.hrms-attendance-rule-browser {
+	padding: 16px;
+}
+
+.hrms-attendance-rule-browser-head {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	margin-bottom: 14px;
+}
+
+.hrms-attendance-rule-browser-head h4 {
+	margin: 0;
+}
+
+.hrms-attendance-rule-browser-head small {
+	color: var(--text-muted, #6b7280);
+}
+
+.hrms-attendance-rule-browser-head > .btn:last-child {
+	margin-left: auto;
+}
+
+.hrms-attendance-rule-tiles,
+.hrms-attendance-rule-detail-grid {
+	display: grid;
+	gap: 12px;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.hrms-attendance-rule-tile {
+	background: #fff;
+	border: 1px solid var(--border-color, #e5e7eb);
+	border-radius: 8px;
+	color: inherit;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-height: 76px;
+	padding: 14px;
+	text-align: left;
+}
+
+.hrms-attendance-rule-tile:hover,
+.hrms-attendance-rule-tile:focus-visible {
+	border-color: var(--primary, #2490ef);
+}
+
+.hrms-attendance-rule-tile span {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+}
+
+.hrms-attendance-rule-detail-grid .hrms-attendance-rule-field {
+	border: 1px solid var(--border-color, #e5e7eb);
+	min-height: 64px;
 }
 
 .hrms-attendance-dialog-note pre {
@@ -1319,6 +1379,31 @@
 
 .hrms-attendance-rule-search {
 	max-width: 360px;
+}
+
+.hrms-attendance-rule-match {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin-top: 12px;
+}
+
+.hrms-attendance-rule-match input:first-child {
+	flex: 1 1 260px;
+}
+
+.hrms-attendance-rule-match input[type="date"] {
+	flex: 0 1 180px;
+}
+
+.hrms-attendance-rule-match-result {
+	color: var(--text-muted, #6b7280);
+	min-height: 22px;
+	padding-top: 10px;
+}
+
+.hrms-attendance-rule-card[hidden] {
+	display: none;
 }
 
 .hrms-attendance-rule-cards {

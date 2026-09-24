@@ -295,8 +295,32 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(result["shift_rule_version"], "rules-v1")
 		self.assertEqual(result["shift_rules"][0]["rule_code"], "SHIFT-001")
 		self.assertEqual(result["policy_rules"][0]["rule_code"], "ATT-LATE-30")
-		self.assertEqual(len(result["system_boundaries"]), 5)
+		self.assertTrue(any(row["rule_name"] == "中班" for row in result["builtin_shift_rules"]))
+		self.assertEqual(len(result["system_boundaries"]), 6)
 		self.assertTrue(any(item["name"] == "周末与调班边界" for item in result["system_boundaries"]))
+		self.assertTrue(any(item["name"] == "周末未排班中班夜班" for item in result["system_boundaries"]))
+
+	def test_shift_match_preview_uses_active_matcher_without_writing(self):
+		api = self.api
+		old_bundle = api._attendance_shift_rule_bundle
+		old_permission = api._require_processing_manager
+		old_company = api._require_company
+		try:
+			api._attendance_shift_rule_bundle = lambda company: {"rules": None, "version": "builtin-test"}
+			api._require_processing_manager = lambda: None
+			api._require_company = lambda company: company
+			result = api.preview_attendance_shift_match("永新", "中班 13:00-22:00", "2026-07-05")
+			api._attendance_shift_rule_bundle = lambda company: {"rules": [], "version": "company-disabled"}
+			disabled = api.preview_attendance_shift_match("永新", "中班 13:00-22:00", "2026-07-05")
+		finally:
+			api._attendance_shift_rule_bundle = old_bundle
+			api._require_processing_manager = old_permission
+			api._require_company = old_company
+		self.assertTrue(result["matched"])
+		self.assertEqual(result["rule_name"], "中班")
+		self.assertEqual(result["source"], "内置兼容规则")
+		self.assertEqual(result["rule_version"], "builtin-test")
+		self.assertFalse(disabled["matched"])
 
 
 if __name__ == "__main__":

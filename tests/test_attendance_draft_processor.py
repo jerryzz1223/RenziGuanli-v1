@@ -377,6 +377,60 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertFalse(row["eligible_for_downstream"])
 		self.assertIn("ATTENDANCE_HOURS_MISMATCH", row["exception_codes"])
 
+	def test_leave_approval_covering_clock_out_to_shift_end_clears_effective_early_count(self):
+		rows = [{
+			"姓名": "戴佳妮", "工号": "4047", "日期": "26-08-24", "日期类型": "工作日", "实际部门": "行政课",
+			"班次": "间接长白班 08:00-17:00", "标准工时": 8, "实际出勤（小时）": 4.5,
+			"上班时间": "07:43", "下班时间": "09:00", "请假/病假(小时)": 7, "早退次数": 1,
+			"关联审批单": "病假08-24 09:00到08-24 17:00 7小时",
+			"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 5174,
+		}]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-08")["processed_rows"][0]
+		values = row["processed_value"]
+		detail = values["attendance_details"][0]
+
+		self.assertEqual(values["early_count"], 0)
+		self.assertNotIn("EARLY_MARKED", row["exception_codes"])
+		self.assertEqual(detail["source_numbers"]["early_count"], 1)
+		self.assertEqual(detail["early_count"], 0)
+		self.assertTrue(detail["early_approval_covered"])
+
+	def test_early_approval_must_be_approved_and_cover_the_complete_remaining_shift(self):
+		base = {
+			"姓名": "张三", "工号": "E-001", "日期": "26-08-24", "日期类型": "工作日", "实际部门": "工程课",
+			"班次": "间接长白班 08:00-17:00", "标准工时": 8, "实际出勤（小时）": 4.5,
+			"上班时间": "08:00", "下班时间": "09:00", "请假/事假(小时)": 7, "早退次数": 1,
+			"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+		}
+		cases = (
+			("事假08-24 10:00到08-24 17:00 7小时", False),
+			("事假08-24 09:00到08-24 16:30 7小时", False),
+			("事假08-24 09:00到08-24 17:00 7小时 已驳回", False),
+			("事假08-24 09:00到08-24 12:00 3小时，事假08-24 12:00到08-24 17:00 4小时", True),
+		)
+		for approval, covered in cases:
+			with self.subTest(approval=approval):
+				row = processor.process_attendance_draft_rows([
+					{**base, "关联审批单": approval}
+				], attendance_month="2026-08")["processed_rows"][0]
+				detail = row["processed_value"]["attendance_details"][0]
+				self.assertEqual(detail["early_approval_covered"], covered)
+				self.assertEqual(row["processed_value"]["early_count"], 0 if covered else 1)
+				self.assertEqual("EARLY_MARKED" in row["exception_codes"], not covered)
+
+	def test_overnight_leave_approval_can_cover_early_departure(self):
+		row = processor.process_attendance_draft_rows([{
+			"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "日期类型": "工作日", "实际部门": "工程课",
+			"班次": "生产夜班 20:00-次日04:30", "标准工时": 8, "实际出勤（小时）": 3.5,
+			"上班时间": "20:00", "下班时间": "次日 00:04", "请假/事假(小时)": 4.5, "早退次数": 1,
+			"关联审批单": "事假06-02 00:04到06-02 04:30 4.5小时",
+			"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+		}], attendance_month="2026-06")["processed_rows"][0]
+
+		self.assertEqual(row["processed_value"]["early_count"], 0)
+		self.assertNotIn("EARLY_MARKED", row["exception_codes"])
+		self.assertTrue(row["processed_value"]["attendance_details"][0]["early_approval_covered"])
+
 	def test_historic_attendance_details_restore_only_actual_exception_dates(self):
 		lines = processor.exception_lines_from_attendance_details([
 			{"attendance_date": "2026-06-01", "early_count": 0, "clock_in_missing": 0, "clock_out_missing": 0, "late_count": 0, "absence_marker_count": 0, "source_row": 3},
@@ -611,6 +665,108 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", row["exception_codes"])
 		self.assertEqual(row["review_status"], "无需审核")
 
+	def test_dingtalk_canteen_white_alias_auto_generates_overtime_without_application(self):
+		row = processor.process_attendance_draft_rows([{
+			"姓名": "王大虎", "工号": "3011", "日期": "26-08-04", "日期类型": "工作日",
+			"实际部门": "品保课", "班次": "食堂白班 06:30-15:00", "标准工时": 8,
+			"实际出勤（小时）": 8, "上班时间": "06:20", "下班时间": "18:39",
+			"工作日加班（小时）": 0, "关联审批单": "", "source_file": "sample.xlsx", "source_row": 3,
+		}], attendance_month="2026-08")["processed_rows"][0]
+
+		values = row["processed_value"]
+		detail = values["attendance_details"][0]
+		self.assertEqual(values["workday_overtime_hours"], 2.5)
+		self.assertEqual(detail["shift_rule_name"], "食堂白班")
+		self.assertEqual(detail["overtime_approval_status"], "钉钉自动识别")
+		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", row["exception_codes"])
+		self.assertEqual(row["review_status"], "无需审核")
+
+	def test_canteen_aliases_respect_white_and_night_boundaries_without_application(self):
+		cases = (
+			("食堂白班 06:30-15:00", "06:30", "17:59", 0, 0),
+			("食堂白班 06:30-15:00", "06:30", "18:00", 2.5, 0),
+			("食堂白班 06:30-15:00", "06:30", "18:39", 2.5, 0),
+			("食堂阿姨白班 06:30-15:00", "06:30", "18:00", 2.5, 0),
+			("烧饭阿姨白班 06:30-15:00", "06:30", "18:00", 2.5, 0),
+			("食堂夜班 08:00-18:00", "08:00", "23:59", 0, 0),
+			("食堂夜班 08:00-18:00", "08:00", "24:00", 3, 1),
+			("食堂夜班 08:00-13:00 15:30-18:00", "08:00", "24:00", 3, 1),
+			("食堂阿姨夜班 08:00-13:00 15:30-18:00", "08:00", "24:00", 3, 1),
+			("烧饭阿姨夜班 08:00-18:00", "08:00", "24:00", 3, 1),
+		)
+		for shift, clock_in, clock_out, expected_overtime, expected_small_night in cases:
+			with self.subTest(shift=shift, clock_out=clock_out):
+				row = processor.process_attendance_draft_rows([{
+					"姓名": "食堂测试", "工号": "C-001", "日期": "26-08-04", "日期类型": "工作日",
+					"班次": shift, "标准工时": 8, "实际出勤（小时）": 8,
+					"上班时间": clock_in, "下班时间": clock_out, "工作日加班（小时）": 0,
+					"关联审批单": "", "source_file": "sample.xlsx", "source_row": 3,
+				}], attendance_month="2026-08")["processed_rows"][0]
+				values = row["processed_value"]
+				self.assertEqual(values["workday_overtime_hours"], expected_overtime)
+				self.assertEqual(values["small_night_shifts"], expected_small_night)
+				if "13:00 15:30" in shift:
+					self.assertEqual(values["attendance_details"][0]["scheduled_end"], "18:00")
+				self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", row["exception_codes"])
+				self.assertEqual(row["review_status"], "无需审核")
+
+	def test_canteen_current_legacy_and_late_shifts_never_require_overtime_application(self):
+		cases = (
+			("食堂白班 06:30-15:00", "06:30", "18:00", 8, 2.5),
+			("食堂阿姨白班 06:30-15:00", "06:30", "18:00", 8, 2.5),
+			("烧饭阿姨白班 06:30-15:00", "06:30", "18:00", 8, 2.5),
+			("食堂夜班 08:00-13:00 15:30-18:00", "08:00", "24:00", 8, 3),
+			("烧饭阿姨夜班 08:00-18:00", "08:00", "24:00", 8, 3),
+			("食堂凌晨班次 21:00-次日00:00", "21:00", "次日 00:00", 3, 0),
+		)
+		for shift, clock_in, clock_out, actual_hours, weekday_hours in cases:
+			for weekend in (False, True):
+				with self.subTest(shift=shift, weekend=weekend):
+					row = processor.process_attendance_draft_rows([{
+						"姓名": "食堂测试", "工号": "C-001", "日期": "26-07-05" if weekend else "26-07-06",
+						"日期类型": "周末休息日" if weekend else "工作日", "实际部门": "食堂",
+						"班次": shift, "标准工时": 0 if weekend else 8,
+						"实际出勤（小时）": actual_hours, "上班时间": clock_in, "下班时间": clock_out,
+						"工作日加班（小时）": 0, "休息日加班（小时）": 0,
+						"关联审批单": "", "source_file": "sample.xlsx", "source_row": 3,
+					}], attendance_month="2026-07")["processed_rows"][0]
+					detail = row["processed_value"]["attendance_details"][0]
+					self.assertEqual(detail["overtime_source_mode"], "schedule_auto")
+					self.assertEqual(detail["restday_overtime_source_mode"], "schedule_auto")
+					if weekend:
+						self.assertEqual(row["processed_value"]["restday_overtime_hours"], actual_hours)
+						self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", row["exception_codes"])
+					else:
+						self.assertEqual(row["processed_value"]["workday_overtime_hours"], weekday_hours)
+						self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", row["exception_codes"])
+
+	def test_canteen_application_exemption_survives_imported_rule_modes(self):
+		row = processor.process_attendance_draft_rows([{
+			"姓名": "食堂测试", "工号": "C-001", "日期": "26-07-05", "日期类型": "周末休息日",
+			"班次": "食堂白班 06:30-15:00", "标准工时": 0, "实际出勤（小时）": 8,
+			"上班时间": "06:30", "下班时间": "18:00", "休息日加班（小时）": 0,
+			"关联审批单": "", "source_file": "sample.xlsx", "source_row": 3,
+		}], attendance_month="2026-07", shift_rules=[{
+			"name": "食堂白班", "tokens": ("食堂", "白班"), "workday_hours": "2.5",
+			"workday_end_minutes": 18 * 60, "workday_auto": False, "restday_auto": False,
+			"basic_time": "06:30-15:00",
+		}])["processed_rows"][0]
+		self.assertEqual(row["processed_value"]["restday_overtime_hours"], 8)
+		self.assertEqual(row["processed_value"]["attendance_details"][0]["restday_overtime_source_mode"], "schedule_auto")
+		self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", row["exception_codes"])
+		late = processor.process_attendance_draft_rows([{
+			"姓名": "食堂测试", "工号": "C-001", "日期": "26-07-05", "日期类型": "周末休息日",
+			"班次": "食堂凌晨班次 21:00-次日00:00", "标准工时": 0, "实际出勤（小时）": 3,
+			"上班时间": "21:00", "下班时间": "次日 00:00", "休息日加班（小时）": 0,
+			"关联审批单": "", "source_file": "sample.xlsx", "source_row": 3,
+		}], attendance_month="2026-07", shift_rules=[{
+			"name": "食堂白班", "tokens": ("食堂", "白班"), "workday_hours": "2.5",
+			"workday_end_minutes": 18 * 60, "workday_auto": False, "restday_auto": False,
+			"basic_time": "06:30-15:00",
+		}])["processed_rows"][0]
+		self.assertEqual(late["processed_value"]["restday_overtime_hours"], 3)
+		self.assertEqual(late["processed_value"]["attendance_details"][0]["shift_rule_name"], "食堂凌晨班次")
+
 	def test_production_night_schedule_generates_three_point_five_workday_overtime(self):
 		row = processor.process_attendance_draft_rows([{
 			"姓名": "王浩", "工号": "4145", "日期": "26-07-13", "日期类型": "工作日",
@@ -664,6 +820,58 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 
 		self.assertEqual(row["processed_value"]["workday_overtime_hours"], 0)
 		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", row["exception_codes"])
+
+	def test_fixed_overtime_and_later_application_are_separate(self):
+		base = {
+			"姓名": "王浩", "工号": "4145", "日期": "26-07-13", "日期类型": "工作日",
+			"实际部门": "生产课", "班次": "生产夜班 20:00-次日04:30", "标准工时": 8,
+			"实际出勤（小时）": 8, "上班时间": "19:41", "下班时间": "次日 08:45",
+			"工作日加班（小时）": 4, "关联审批单": "", "source_file": "sample.xlsx", "source_row": 2865,
+		}
+		rule = {
+			"name": "公司生产夜班", "rule_code": "SHIFT-NIGHT", "tokens": ("生产", "夜班"),
+			"workday_hours": "3.5", "workday_end_minutes": 8 * 60, "workday_auto": True,
+			"restday_auto": False, "basic_time": "20:00-次日04:30",
+			"extended_overtime_mode": "加班单",
+		}
+		needs_application = processor.process_attendance_draft_rows(
+			[base], attendance_month="2026-07", shift_rules=[rule], shift_rule_version="extension-v1",
+		)["processed_rows"][0]
+		no_application = processor.process_attendance_draft_rows(
+			[base], attendance_month="2026-07", shift_rules=[{**rule, "extended_overtime_mode": "不提交加班单"}], shift_rule_version="extension-v2",
+		)["processed_rows"][0]
+		self.assertEqual(needs_application["processed_value"]["workday_overtime_hours"], 3.5)
+		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", needs_application["exception_codes"])
+		self.assertEqual(no_application["processed_value"]["workday_overtime_hours"], 4)
+		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", no_application["exception_codes"])
+
+	def test_company_special_workday_interval_is_used(self):
+		row = processor.process_attendance_draft_rows([{
+			"姓名": "李四", "工号": "A-001", "日期": "26-07-13", "日期类型": "工作日",
+			"实际部门": "分析组", "班次": "药水分析组 10:00-20:00", "标准工时": 8,
+			"实际出勤（小时）": 8, "上班时间": "10:00", "下班时间": "20:00",
+			"工作日加班（小时）": 0, "关联审批单": "", "source_file": "sample.xlsx", "source_row": 10,
+		}], attendance_month="2026-07", shift_rules=[{
+			"name": "药水分析组", "rule_code": "SHIFT-SPECIAL", "tokens": ("药水分析组",),
+			"workday_hours": "0", "workday_end_minutes": None, "workday_auto": False,
+			"restday_auto": False, "basic_time": "10:00-20:00", "special_workday_time": "17:00-18:00",
+		}], shift_rule_version="special-v1")["processed_rows"][0]
+		detail = row["processed_value"]["attendance_details"][0]
+		self.assertEqual(detail["derived_special_workday_hours"], 1)
+		self.assertEqual(detail["shift_rule_snapshot"]["special_workday_time"], "17:00-18:00")
+		late_start = processor._schedule_special_workday_hours({
+			"班次": "药水分析组 10:00-20:00", "上班时间": "17:30", "下班时间": "20:00",
+		}, [{
+			"name": "药水分析组", "tokens": ("药水分析组",),
+			"basic_time": "10:00-20:00", "special_workday_time": "17:00-18:00",
+		}])
+		self.assertEqual(late_start[0], 0.5)
+
+	def test_canteen_group_matches_legacy_shift_name(self):
+		rule = {"name": "食堂夜班", "tokens": ("食堂", "夜班"), "workday_hours": "3", "workday_auto": True, "restday_auto": True}
+		matched = processor._schedule_overtime_rule({"班次": "烧饭阿姨夜班"}, [rule])
+		self.assertIsNotNone(matched)
+		self.assertEqual(matched["name"], "食堂夜班")
 
 	def test_explicit_empty_company_shift_rules_do_not_reactivate_builtin_rules(self):
 		row = processor.process_attendance_draft_rows([{
@@ -771,7 +979,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 					(values["small_night_shifts"], values["large_night_shifts"]),
 					(expected_small, expected_large),
 				)
-				self.assertEqual(values["shift_rule_version"], "builtin-20")
+				self.assertEqual(values["shift_rule_version"], "builtin-25")
 				self.assertEqual(values["night_shift_matching"]["mode"], "source_or_configured_schedule")
 				snapshot = values["attendance_details"][0]["shift_rule_snapshot"]
 				self.assertIn("small_night_condition", snapshot)
@@ -862,7 +1070,9 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 			("17:30", 0, 0.5, 0, False),
 			("17:59", 0, 0.5, 0, False),
 			("18:00", 0, 1, 0, False),
-			("18:30", 0, 1, 0, False),
+			("18:29", 0, 1, 0, False),
+			("18:30", 0, 1, 0, True),
+			("18:30", 0.5, 1, 0.5, False),
 			("18:31", 0, 1, 0, True),
 			("18:31", 0.49, 1, 0, True),
 			("18:31", 0.5, 1, 0.5, False),
@@ -1004,6 +1214,38 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		missing = calculate({"下班时间": ""})
 		self.assertIn("UNSCHEDULED_MIDDLE_NIGHT_REVIEW", missing["exception_codes"])
 		self.assertEqual(missing["processed_value"]["small_night_shifts"], 0)
+		for changes in ({"上班时间": "", "下班时间": ""}, {"上班时间": "", "下班时间": "", "未排班中班适用": "是"}):
+			with self.subTest(changes=changes):
+				no_punch = calculate(changes)
+				self.assertNotIn("UNSCHEDULED_MIDDLE_NIGHT_REVIEW", no_punch["exception_codes"])
+				self.assertEqual(no_punch["processed_value"]["small_night_shifts"], 0)
+				self.assertEqual(no_punch["processed_value"]["large_night_shifts"], 0)
+
+	def test_weekend_scheduled_middle_without_punches_has_no_night_review(self):
+		row = processor.process_attendance_draft_rows([{
+			"姓名": "张三", "工号": "E-001", "日期": "26-07-05", "日期类型": "周末休息日",
+			"实际部门": "维修课", "班次": "中班 13:00-22:00", "标准工时": 8,
+			"实际出勤（小时）": 0, "上班时间": "", "下班时间": "",
+			"小夜班": 0, "大夜班": 0, "source_file": "sample.xlsx", "source_row": 3,
+		}], attendance_month="2026-07")["processed_rows"][0]
+		self.assertEqual(row["exception_codes"], [])
+		self.assertEqual(row["review_status"], "无需审核")
+		self.assertEqual(row["processed_value"]["small_night_shifts"], 0)
+		self.assertEqual(row["processed_value"]["large_night_shifts"], 0)
+
+	def test_scheduled_warehouse_weekend_night_uses_punches_and_defined_small_rule(self):
+		base = {
+			"姓名": "仓库测试", "工号": "W-001", "日期": "26-07-05", "日期类型": "周末休息日",
+			"实际部门": "生管课", "班次": "生管仓库 06:30-15:30", "标准工时": 8,
+			"上班时间": "06:30", "下班时间": "17:00", "实际出勤（小时）": 9.5,
+			"source_file": "sample.xlsx", "source_row": 3,
+		}
+		for changes, expected_small in (({}, 1), ({"下班时间": "16:59"}, 0), ({"上班时间": "", "下班时间": ""}, 0)):
+			with self.subTest(changes=changes):
+				row = processor.process_attendance_draft_rows([{**base, **changes}], attendance_month="2026-07")["processed_rows"][0]
+				self.assertEqual(row["processed_value"]["small_night_shifts"], expected_small)
+				self.assertEqual(row["processed_value"]["large_night_shifts"], 0)
+				self.assertEqual(row["processed_value"]["attendance_details"][0]["shift_rule_name"], "生管仓库")
 
 	def test_ccd_schedule_auto_overtime_is_three_hours(self):
 		row = processor.process_attendance_draft_rows([{

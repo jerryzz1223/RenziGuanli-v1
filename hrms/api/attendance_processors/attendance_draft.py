@@ -71,7 +71,7 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 20
+ATTENDANCE_POLICY_VERSION = 25
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
 DEFAULT_CALENDAR_WEEKEND_MODE = "休息日加班口径"
 
@@ -128,11 +128,26 @@ SCHEDULE_OVERTIME_RULES = (
 	},
 	{"name": "警卫白班", "tokens": ("警卫", "白班"), "workday_hours": Decimal("2.5"), "workday_end_minutes": 19 * 60 + 30, "restday_auto": True},
 	{
-		"name": "烧饭阿姨夜班", "tokens": ("烧饭阿姨", "夜班"), "workday_hours": Decimal("3"),
-		"workday_end_minutes": 0, "restday_auto": True, "basic_time": "08:00-18:00", "meal_deduction_rule": "不扣吃饭时间",
+		"name": "食堂凌晨班次", "tokens": ("食堂", "凌晨班次"), "workday_hours": Decimal("0"),
+		"workday_end_minutes": None, "workday_auto": True, "restday_auto": True,
+		"basic_time": "21:00-次日00:00",
+	},
+	{
+		"name": "食堂夜班", "tokens": ("食堂", "夜班"), "workday_hours": Decimal("3"),
+		"workday_end_minutes": 0, "workday_auto": True, "restday_auto": True,
+		"basic_time": "08:00-13:00 15:30-18:00", "meal_deduction_rule": "不扣吃饭时间",
 		"small_night_condition": {"minimum_hours": 8, "mode": "不早于", "start_minutes": 24 * 60, "end_minutes": None},
 	},
-	{"name": "烧饭阿姨白班", "tokens": ("烧饭阿姨",), "workday_hours": Decimal("2.5"), "workday_end_minutes": 18 * 60, "restday_auto": True},
+	{"name": "食堂白班", "tokens": ("食堂", "白班"), "workday_hours": Decimal("2.5"), "workday_end_minutes": 18 * 60,
+		"workday_auto": True, "restday_auto": True, "basic_time": "06:30-15:00"},
+	{
+		"name": "烧饭阿姨夜班", "tokens": ("烧饭阿姨", "夜班"), "workday_hours": Decimal("3"),
+		"workday_end_minutes": 0, "workday_auto": True, "restday_auto": True,
+		"basic_time": "08:00-13:00 15:30-18:00", "meal_deduction_rule": "不扣吃饭时间",
+		"small_night_condition": {"minimum_hours": 8, "mode": "不早于", "start_minutes": 24 * 60, "end_minutes": None},
+	},
+	{"name": "烧饭阿姨白班", "tokens": ("烧饭阿姨",), "workday_hours": Decimal("2.5"), "workday_end_minutes": 18 * 60,
+		"workday_auto": True, "restday_auto": True, "basic_time": "06:30-15:00"},
 	{"name": "清洁阿姨", "tokens": ("清洁阿姨",), "workday_hours": Decimal("2.5"), "workday_end_minutes": 17 * 60, "restday_auto": True},
 	{"name": "IQC白班", "tokens": ("IQC",), "workday_hours": Decimal("3"), "workday_end_minutes": 19 * 60, "restday_auto": True},
 	{
@@ -484,6 +499,56 @@ def _morning_leave_approval_hours(
 	)
 
 
+def _leave_approval_covers_early_departure(
+	row: Mapping[str, Any], attendance_date: str, scheduled_end: int, actual_out: int | None,
+) -> bool:
+	"""Return whether approved leave continuously covers clock-out to shift end.
+
+	DingTalk keeps its raw early-departure marker even when a leave application
+	starts at the employee's clock-out time.  HRMS retains that source marker in
+	``source_numbers`` but suppresses the effective early count only when parsed
+	leave intervals cover the complete remaining shift without a gap.  A pending,
+	rejected, cancelled or withdrawn leave clause is never coverage.
+	"""
+	if actual_out is None or actual_out >= scheduled_end:
+		return False
+	approval = _text(_value(row, IDENTITY_FIELDS["approval"]))
+	if not approval:
+		return False
+	try:
+		attendance_day = date.fromisoformat(attendance_date)
+	except (TypeError, ValueError):
+		return False
+	actual = datetime.combine(attendance_day, datetime.min.time()) + timedelta(minutes=actual_out)
+	scheduled = datetime.combine(attendance_day, datetime.min.time()) + timedelta(minutes=scheduled_end)
+	segments = []
+	for match in _LEAVE_APPROVAL_RE.finditer(approval):
+		clause_start = max(approval.rfind(separator, 0, match.start()) for separator in (",", "，", ";", "；")) + 1
+		clause_ends = [approval.find(separator, match.end()) for separator in (",", "，", ";", "；")]
+		clause_end = min((position for position in clause_ends if position >= 0), default=len(approval))
+		clause = approval[clause_start:clause_end].casefold()
+		if any(token in clause for token in (
+			"未通过", "已驳回", "已拒绝", "已撤销", "已作废", "审批中",
+			"running", "refuse", "rejected", "terminated", "canceled", "cancelled",
+		)):
+			continue
+		start = _approval_datetime(match.group("start_date"), match.group("start_time"), attendance_date)
+		end = _approval_datetime(match.group("end_date"), match.group("end_time"), attendance_date)
+		if start and end and end >= start:
+			segments.append((start, end))
+	segments.sort(key=lambda item: item[0])
+	cursor = actual
+	for start, end in segments:
+		if end <= cursor:
+			continue
+		if start > cursor:
+			return False
+		cursor = max(cursor, end)
+		if cursor >= scheduled:
+			return True
+	return False
+
+
 def _late_minutes_after_approval(
 	raw_late_minutes: int,
 	approved_leave_hours: Decimal,
@@ -588,16 +653,29 @@ def _has_overtime_approval(row: Mapping[str, Any]) -> bool:
 def _schedule_overtime_rule(row: Mapping[str, Any], shift_rules: Sequence[Mapping[str, Any]] | None = None) -> Mapping[str, Any] | None:
 	"""Return the configured schedule row matched by the assigned shift."""
 	shift = re.sub(r"\s+", "", _text(_value(row, IDENTITY_FIELDS["shift"]))).casefold()
+	shift_aliases = (shift, shift.replace("烧饭阿姨", "食堂").replace("食堂阿姨", "食堂"))
 	for raw_rule in shift_rules if shift_rules is not None else SCHEDULE_OVERTIME_RULES:
 		rule = dict(raw_rule)
 		effective_from = _parse_date(rule.get("effective_from"), "")
 		attendance_date = _parse_date(_value(row, IDENTITY_FIELDS["attendance_date"]), "")
 		if effective_from and attendance_date and attendance_date < effective_from:
 			continue
-		if rule.get("tokens") and all(token.casefold() in shift for token in rule["tokens"]):
+		if rule.get("tokens") and any(all(token.casefold() in candidate for token in rule["tokens"]) for candidate in shift_aliases):
 			rule["workday_hours"] = _decimal(rule.get("workday_hours")) or Decimal("0")
 			rule["workday_auto"] = bool(rule.get("workday_auto", True))
+			# The canteen white/night/late shift is application-exempt under the
+			# confirmed business rule, including legacy 烧饭阿姨 and 食堂阿姨 names.
+			if ("食堂" in shift or "烧饭阿姨" in shift) and any(
+				name in shift for name in ("白班", "夜班", "凌晨班次")
+			):
+				rule["workday_auto"] = True
+				rule["restday_auto"] = True
 			return rule
+	# The source workbook defines the canteen white/night rows but not DingTalk's
+	# additional late-shift label.  Keep that observed label exempt even when a
+	# company has imported its workbook rules (which otherwise suppress built-ins).
+	if "食堂" in shift and "凌晨班次" in shift:
+		return dict(next(rule for rule in SCHEDULE_OVERTIME_RULES if rule["name"] == "食堂凌晨班次"))
 	return None
 
 
@@ -712,13 +790,13 @@ def _schedule_special_workday_hours(row: Mapping[str, Any], shift_rules: Sequenc
 	if not shift_bounds:
 		return Decimal("0"), 0
 	shift_start, _shift_end = shift_bounds
-	_actual_in, actual_out = _actual_bounds_minutes(row, shift_start, _schedule_overtime_rule(row, shift_rules))
-	if actual_out is None:
+	actual_in, actual_out = _actual_bounds_minutes(row, shift_start, _schedule_overtime_rule(row, shift_rules))
+	if actual_in is None or actual_out is None:
 		return Decimal("0"), 0
 	while start <= shift_start:
 		start += 24 * 60
 		end += 24 * 60
-	exempt_minutes = max(min(actual_out, end) - start, 0)
+	exempt_minutes = max(min(actual_out, end) - max(actual_in, start), 0)
 	credited_minutes = exempt_minutes // 30 * 30
 	return Decimal(credited_minutes) / Decimal("60"), exempt_minutes
 
@@ -765,7 +843,11 @@ def _shift_bounds_minutes(row: Mapping[str, Any], shift_rule: Mapping[str, Any] 
 		if len(clocks) < 2:
 			return None
 		start = int(clocks[0][0]) * 60 + int(clocks[0][1])
-		end = int(clocks[1][0]) * 60 + int(clocks[1][1])
+		# 食堂夜班的基本班次有两段：08:00-13:00、15:30-18:00。
+		# The second clock is only the first segment's end, not shift end.
+		canteen_night = ("食堂" in shift or "烧饭阿姨" in shift) and "夜班" in shift
+		end_clock = clocks[3] if canteen_night and len(clocks) >= 4 else clocks[1]
+		end = int(end_clock[0]) * 60 + int(end_clock[1])
 		end_text = shift
 	if start is None or end is None:
 		return None
@@ -836,6 +918,8 @@ def _shift_time_facts(row: Mapping[str, Any], shift_rule: Mapping[str, Any] | No
 		"scheduled_start_minutes": start,
 		"scheduled_end_minutes": end,
 		"actual_in_minutes": actual_in,
+		"actual_out_minutes": actual_out,
+		"raw_actual_out_minutes": raw_actual_out,
 		"late_minutes": late_minutes,
 		"pre_shift_minutes": early_minutes,
 		"post_shift_minutes": late_out_minutes,
@@ -923,6 +1007,10 @@ def _unscheduled_middle_night_allowances(
 	"""
 	shift = _text(_value(row, IDENTITY_FIELDS["shift"]))
 	if not (is_calendar_weekend(attendance_date) and _is_rest_day(row)):
+		return None
+	# No punch time means there is no worked-night candidate to review.  A single
+	# punch still needs review because its duration and end time are unknown.
+	if not _has_clock_punch(row):
 		return None
 	if shift and not any(token in shift for token in ("未排班", "休息", "排休")):
 		return None
@@ -1414,6 +1502,7 @@ def _aggregate_employee_rows(
 				_add_code(codes, exception_code)
 				exception_events.append(_exception_event(exception_code, parsed_date, row_number))
 		schedule_overtime_mode = _schedule_overtime_mode(row, shift_rules)
+		extended_overtime_mode = _text(matched_shift_rule.get("extended_overtime_mode")) if matched_shift_rule else ""
 		schedule_restday_overtime_mode = _schedule_restday_overtime_mode(row, shift_rules)
 		schedule_auto_overtime_hours = _schedule_auto_overtime_hours(row, shift_rules)
 		manual_overtime_value, manual_overtime_present = _field_value(
@@ -1443,6 +1532,8 @@ def _aggregate_employee_rows(
 			else Decimal("0") if shift_facts.get("punch_out_range_valid") is False
 			else eligible_workday_overtime_hours
 			if _is_indirect_staff_shift(row) and eligible_workday_overtime_hours > 0
+			else eligible_workday_overtime_hours
+			if schedule_overtime_mode == "schedule_auto" and extended_overtime_mode == "不提交加班单"
 			else schedule_auto_overtime_hours
 			if schedule_fixed_hours_reached
 			else eligible_workday_overtime_hours if schedule_overtime_mode == "schedule_auto"
@@ -1538,6 +1629,19 @@ def _aggregate_employee_rows(
 			row_late_count = Decimal("0")
 			row_numbers["late_count"] = row_late_count
 		row_early_count = row_numbers["early_count"]
+		early_approval_covered = bool(
+			row_early_count > 0
+			and shift_facts.get("schedule_available")
+			and _leave_approval_covers_early_departure(
+				row,
+				parsed_date,
+				int(shift_facts.get("scheduled_end_minutes") or 0),
+				shift_facts.get("raw_actual_out_minutes"),
+			)
+		)
+		if early_approval_covered:
+			row_early_count = Decimal("0")
+			row_numbers["early_count"] = row_early_count
 		row_absence_marker_count = row_numbers["absence_marker_count"]
 		row_absence_hours = row_numbers["absence_hours"]
 		# Only schedule rows whose weekend column says “不提交加班单” may generate
@@ -1569,24 +1673,30 @@ def _aggregate_employee_rows(
 		if row_late_count <= 0 and late_minutes > 0:
 			row_late_count = Decimal("1")
 		row_numbers["late_count"] = row_late_count
+		outside_shift_overtime_minutes = max(
+			(shift_facts.get("outside_shift_minutes") or 0)
+			- special_workday_exempt_minutes,
+			0,
+		)
 		outside_shift_requires_overtime = (
-			max(
-				(shift_facts.get("outside_shift_minutes") or 0)
-				- special_workday_exempt_minutes,
-				0,
-			)
-			> OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES
+			outside_shift_overtime_minutes > OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES
 		)
 		if _is_indirect_staff_shift(row):
 			# 17:00-18:00 is special working time.  After 18:00, a positive DingTalk
 			# weekday-overtime duration is the governing evidence and needs no separate
-			# approval; without that duration, time beyond the tolerance stays abnormal.
-			overtime_evidence_missing = outside_shift_requires_overtime and eligible_workday_overtime_hours <= 0
+			# approval. Exactly 30 completed minutes after 18:00 is already 0.5 hour
+			# of overtime, so this approval/evidence boundary is inclusive.
+			overtime_evidence_missing = (
+				outside_shift_overtime_minutes >= OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES
+				and eligible_workday_overtime_hours <= 0
+			)
 		elif schedule_overtime_mode == "schedule_auto":
-			# 排班表注明“不提交加班单”的班别直接采用钉钉已计算的平日加班。
-			# 超过表内加班截止时间的部分由后续特殊工时来源另行提交；这里保留
-			# 超出分钟数作审计，但不要求审批，也不生成班次外异常。
-			overtime_evidence_missing = False
+			# 固定加班免申请与其后的延班来源是两个独立口径。
+			# 只有明确写“加班单”的后续时段才按超时证据提示缺申请。
+			overtime_evidence_missing = (
+				extended_overtime_mode == "加班单"
+				and schedule_auto_excess_minutes > OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES
+			)
 		else:
 			overtime_evidence_missing = outside_shift_requires_overtime or raw_workday_overtime_hours > 0
 		workday_outside_shift_unapproved = bool(
@@ -1714,7 +1824,7 @@ def _aggregate_employee_rows(
 				for key in (
 					"basic_time", "basic_hours", "weekday_overtime_time", "weekend_overtime_time",
 					"overtime_begin_time", "weekday_overtime_mode", "weekend_overtime_mode",
-					"holiday_overtime_mode", "extended_shift_rule", "overnight", "meal_deduction_rule",
+					"holiday_overtime_mode", "extended_shift_rule", "extended_overtime_mode", "special_workday_time", "overnight", "meal_deduction_rule",
 					"meal_deduction_hours", "punch_in_range", "punch_out_range", "small_night_rule",
 					"large_night_rule", "small_night_condition", "large_night_condition", "remarks",
 					"suggested_positions",
@@ -1734,6 +1844,7 @@ def _aggregate_employee_rows(
 			"raw_late_minutes": raw_late_minutes,
 			"approved_clock_in_leave_hours": _display_number(approved_clock_in_leave_hours),
 			"late_approval_covered": bool(raw_late_minutes > 0 and approved_clock_in_leave_hours > 0 and late_minutes <= 0),
+			"early_approval_covered": early_approval_covered,
 			"late_personal_leave_hours": _display_number(late_personal_leave_hours),
 			"attendance_note": attendance_notes[-1] if late_minutes else "",
 			"scheduled_start": _format_minutes(shift_facts.get("scheduled_start_minutes")),
