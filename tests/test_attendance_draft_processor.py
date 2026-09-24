@@ -628,6 +628,38 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(confirmed["processed_value"]["workday_overtime_hours"], 1)
 		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", confirmed["exception_codes"])
 
+	def test_workday_overtime_duration_matches_schedule_end_and_approval_time(self):
+		base = {
+			"姓名": "张三", "工号": "E-TIME-MATCH", "日期": "26-06-01", "日期类型": "工作日",
+			"实际部门": "工程课", "班次": "白班 08:00-17:00", "标准工时": 8, "实际出勤（小时）": 8,
+			"上班时间": "08:00", "工作日加班（小时）": 1.5,
+			"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+		}
+		matched = processor.process_attendance_draft_rows([
+			{**base, "下班时间": "18:30", "关联审批单": ""},
+		], attendance_month="2026-06")["processed_rows"][0]
+		mismatched = processor.process_attendance_draft_rows([
+			{**base, "下班时间": "18:31", "关联审批单": ""},
+		], attendance_month="2026-06")["processed_rows"][0]
+		approved = processor.process_attendance_draft_rows([
+			{**base, "下班时间": "18:30", "关联审批单": "加班06-01 17:00到06-01 18:30 1.5小时 已通过"},
+		], attendance_month="2026-06")["processed_rows"][0]
+		approval_mismatched = processor.process_attendance_draft_rows([
+			{**base, "下班时间": "18:30", "关联审批单": "加班06-01 17:00到06-01 18:00 1小时 已通过"},
+		], attendance_month="2026-06")["processed_rows"][0]
+
+		self.assertEqual(matched["processed_value"]["workday_overtime_hours"], 0)
+		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", matched["exception_codes"])
+		match_detail = matched["processed_value"]["attendance_details"][0]["workday_overtime_time_match"]
+		self.assertTrue(match_detail["matched"])
+		self.assertEqual(match_detail["expected_out"], "18:30")
+		self.assertEqual(match_detail["actual_out"], "18:30")
+		self.assertEqual(mismatched["processed_value"]["workday_overtime_hours"], 0)
+		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", mismatched["exception_codes"])
+		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", approved["exception_codes"])
+		self.assertEqual(approved["processed_value"]["workday_overtime_hours"], 1.5)
+		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", approval_mismatched["exception_codes"])
+
 	def test_automatic_overtime_counts_only_completed_half_hours(self):
 		self.assertEqual(processor._floor_overtime_half_hour(0.49), 0)
 		self.assertEqual(processor._floor_overtime_half_hour(0.5), 0.5)
@@ -1165,7 +1197,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(dingtalk_named["processed_value"]["special_workday_hours"], 0.5)
 		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", dingtalk_named["exception_codes"])
 
-	def test_indirect_long_day_requires_approval_after_1829(self):
+	def test_indirect_long_day_accepts_matching_workday_overtime_duration(self):
 		base = {
 			"姓名": "张三", "工号": "E-001", "日期": "26-07-01", "日期类型": "工作日",
 			"实际部门": "工程课", "标准工时": 8, "实际出勤（小时）": 8,
@@ -1181,8 +1213,8 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 					{**base, "班次": shift, "下班时间": "18:31", "工作日加班（小时）": 1.52},
 				], attendance_month="2026-07")["processed_rows"][0]
 
-				self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", within_tolerance["exception_codes"])
-				self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", over_tolerance["exception_codes"])
+				self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", within_tolerance["exception_codes"])
+				self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", over_tolerance["exception_codes"])
 				self.assertEqual(within_tolerance["processed_value"]["special_workday_hours"], 1)
 				self.assertEqual(within_tolerance["processed_value"]["workday_overtime_hours"], 0)
 				self.assertEqual(over_tolerance["processed_value"]["workday_overtime_hours"], 0)

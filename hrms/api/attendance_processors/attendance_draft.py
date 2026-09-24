@@ -71,7 +71,7 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 29
+ATTENDANCE_POLICY_VERSION = 30
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
 DEFAULT_CALENDAR_WEEKEND_MODE = "休息日加班口径"
 
@@ -743,6 +743,34 @@ def _overtime_approval_coverage(
 		"intervals": [{"start_minutes": start, "end_minutes": end} for start, end in intervals],
 		"approved_end_minutes": latest_end,
 		"post_approval_minutes": post_end_minutes,
+	}
+
+
+def _workday_overtime_time_match(
+	shift_facts: Mapping[str, Any], raw_hours: Decimal, approval_coverage: Mapping[str, Any],
+) -> dict[str, Any]:
+	"""Match DingTalk overtime duration to the scheduled and actual clock-out.
+
+	The exported weekday-overtime value is usable evidence only when adding it to
+	the scheduled shift end reaches the employee's actual clock-out.  When a valid
+	approval is also present, its configured coverage check must pass as well.
+	"""
+	scheduled_end = shift_facts.get("scheduled_end_minutes")
+	actual_out = shift_facts.get("raw_actual_out_minutes")
+	source_minutes = int(
+		(raw_hours * Decimal("60") + Decimal("0.5")).to_integral_value(rounding=ROUND_FLOOR)
+	) if raw_hours > 0 else 0
+	expected_out = scheduled_end + source_minutes if scheduled_end is not None and source_minutes > 0 else None
+	source_matches = bool(expected_out is not None and actual_out is not None and expected_out == actual_out)
+	has_approval = bool(approval_coverage.get("has_valid_approval"))
+	approval_matches = bool(approval_coverage.get("covered")) if has_approval else None
+	return {
+		"matched": bool(source_matches and (approval_matches is not False)),
+		"source_matches": source_matches,
+		"approval_matches": approval_matches,
+		"source_overtime_minutes": source_minutes,
+		"expected_out_minutes": expected_out,
+		"actual_out_minutes": actual_out,
 	}
 
 
@@ -1693,6 +1721,9 @@ def _aggregate_employee_rows(
 		if genuine_restday and has_overtime_approval:
 			approval_coverage = {**approval_coverage, "covered": True, "status": "休息日不校验审批时段"}
 		approval_covers_overtime = approval_coverage["covered"]
+		workday_overtime_time_match = _workday_overtime_time_match(
+			shift_facts, raw_workday_overtime_hours, approval_coverage,
+		)
 		if shift_facts.get("punch_in_range_valid") is False and not genuine_restday:
 			_add_code(codes, "CLOCK_IN_OUTSIDE_PICK_RANGE")
 			exception_events.append(_exception_event("CLOCK_IN_OUTSIDE_PICK_RANGE", parsed_date, row_number))
@@ -1869,6 +1900,11 @@ def _aggregate_employee_rows(
 			)
 		else:
 			overtime_evidence_missing = outside_shift_requires_overtime or raw_workday_overtime_hours > 0
+		# A duration that lands exactly on the actual clock-out explains the time
+		# and therefore does not enter the exception queue.  It remains audit-only
+		# unless an approval or manual confirmation separately makes it payable.
+		if schedule_overtime_mode == "overtime_application" and workday_overtime_time_match["matched"]:
+			overtime_evidence_missing = False
 		overtime_evidence_missing = overtime_evidence_missing or bool(
 			has_overtime_approval and not approval_covers_overtime
 		)
@@ -2020,6 +2056,11 @@ def _aggregate_employee_rows(
 			"overtime_approval_coverage": {
 				**approval_coverage,
 				"approved_end": _format_minutes(approval_coverage["approved_end_minutes"]),
+			},
+			"workday_overtime_time_match": {
+				**workday_overtime_time_match,
+				"expected_out": _format_minutes(workday_overtime_time_match["expected_out_minutes"]),
+				"actual_out": _format_minutes(workday_overtime_time_match["actual_out_minutes"]),
 			},
 			"cross_day_punch_reassignment": row.get("_cross_day_punch_reassignment") or {},
 			"late_minutes": late_minutes,
