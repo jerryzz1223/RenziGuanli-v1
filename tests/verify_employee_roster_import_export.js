@@ -299,6 +299,29 @@ for (const marker of [
 }
 
 for (const marker of [
+	"离职/历史人员补录",
+	'state.mode === "history"',
+	"最新钉钉在职名单",
+	"source_conflicts",
+	"钉钉负责待入职、当前在职资料和附件",
+	"公司 + 公司工号",
+	"get_employee_import_source_balance",
+	"查看人工核对明细",
+]) {
+	mustInclude(api + importJs, marker, `钉钉与表单互补导入缺少冲突保护：${marker}`);
+}
+
+for (const marker of [
+	"def _get_latest_dingtalk_onjob_snapshot",
+	"def _employee_roster_source_conflict",
+	'if mode == "history" and match_by != "employee_code"',
+	'values.get("custom_work_nature") != "离职"',
+	"已阻止整表覆盖",
+]) {
+	mustInclude(api, marker, `离职补录与钉钉在职快照缺少服务端保护：${marker}`);
+}
+
+for (const marker of [
 	'"replace"',
 	"_get_employee_roster_replace_candidates",
 	'filters={"company": company, "status": ["!=", "Left"]}',

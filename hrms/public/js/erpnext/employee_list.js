@@ -393,7 +393,7 @@
 			wrapper.innerHTML = `<div class="text-muted">${__("正在加载钉钉待审数据…")}</div>`;
 			frappe.call({
 				method: "hrms.api.dingtalk_integration.list_dingtalk_employee_imports",
-				args: { company, import_status: options.import_status || "", source_type: "preentry", page_length: 1000 },
+				args: { company, import_status: options.import_status || "", source_type: "preentry,manual_new_employee", page_length: 1000 },
 			}).then((response) => {
 				const rows = response.message || [];
 				if (!rows.length) {
@@ -449,7 +449,7 @@
 		function queue_all_dingtalk_imports() {
 			frappe.call({
 				method: "hrms.api.dingtalk_integration.queue_approve_all_dingtalk_employee_imports",
-				args: { company, source_type: "preentry" },
+				args: { company, source_type: "preentry,manual_new_employee" },
 				freeze: true,
 				freeze_message: __("正在提交钉钉员工及附件一键导入任务…"),
 			}).then((response) => {

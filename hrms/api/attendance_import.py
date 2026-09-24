@@ -2762,6 +2762,38 @@ def _attendance_demo_employee(employee_code):
 	)
 
 
+def _ensure_attendance_demo_employee_departments(people):
+	"""Repair only missing TEST-HRMS department masters used by the demo rows.
+
+	Older cleanup runs could remove TEST departments while leaving the isolated
+	demo employees in place.  Keep the real month-lock gate strict and recreate
+	only the exact TEST-HRMS departments referenced by those employees.
+	"""
+	abbr = (frappe.db.get_value("Company", TEST_ATTENDANCE_DEMO_COMPANY, "abbr") or "").strip()
+	for employee in people.values():
+		department = (employee.department or "").strip()
+		if not department:
+			frappe.throw(_("TEST-HRMS 演示员工 {0} 缺少部门。").format(employee.name))
+		if frappe.db.exists("Department", department):
+			continue
+		suffix = f" - {abbr}" if abbr else ""
+		department_name = department[:-len(suffix)] if suffix and department.endswith(suffix) else department
+		department_docname = frappe.db.get_value(
+			"Department",
+			{"department_name": department_name, "company": TEST_ATTENDANCE_DEMO_COMPANY},
+			"name",
+		)
+		if not department_docname:
+			department_docname = frappe.get_doc({
+				"doctype": "Department",
+				"department_name": department_name,
+				"company": TEST_ATTENDANCE_DEMO_COMPANY,
+			}).insert(ignore_permissions=True).name
+		if department_docname != department:
+			frappe.db.set_value("Employee", employee.name, "department", department_docname)
+			employee.department = department_docname
+
+
 def _get_or_create_attendance_demo_batch():
 	name = frappe.db.get_value(
 		ATTENDANCE_BATCH_DOCTYPE,
@@ -2787,7 +2819,7 @@ def _get_or_create_attendance_demo_batch():
 
 def _seed_attendance_demo_day_check(batch, row, source_kind, source_row):
 	employee_code = row["工号"]
-	if frappe.db.exists(
+	existing = frappe.db.exists(
 		DAY_CHECK_DOCTYPE,
 		{
 			"import_batch": batch.name,
@@ -2795,7 +2827,12 @@ def _seed_attendance_demo_day_check(batch, row, source_kind, source_row):
 			"attendance_date": _parse_date(row["日期"]),
 			"source_kind": source_kind,
 		},
-	):
+	)
+	if existing:
+		doc = frappe.get_doc(DAY_CHECK_DOCTYPE, existing)
+		if not doc.department:
+			doc.department = _department_lookup(_first_value(row, "实际部门", "部门"))
+			doc.save(ignore_permissions=True)
 		return False
 	return bool(
 		_insert_day_check(
@@ -2826,6 +2863,7 @@ def seed_test_attendance_demo(dry_run: int | str = 0):
 			"dry_run": True,
 			"would_create": ["导入批次", "钉钉原始日统计", "人工调整日统计", "考勤异常", "月度终稿", "月度锁定", "锁定审计"],
 		}
+	_ensure_attendance_demo_employee_departments(people)
 
 	lock = _get_or_create_month_lock(TEST_ATTENDANCE_DEMO_COMPANY, TEST_ATTENDANCE_DEMO_MONTH)
 	if lock.status == "已锁定":

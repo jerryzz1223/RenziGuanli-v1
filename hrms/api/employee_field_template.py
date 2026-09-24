@@ -5772,6 +5772,133 @@ def _preview_employee_action(values, meta_fields, mode, match_by):
 	return "insert", None
 
 
+def _get_latest_dingtalk_onjob_snapshot(company):
+	"""Return confirmed on-job codes from the latest completed DingTalk roster sync.
+
+	The form importer uses this only as a conflict guard.  DingTalk never decides
+	a departure, but a person confirmed as on-job by the latest roster snapshot
+	must not be made Left merely because a spreadsheet says so or omits the row.
+	"""
+	if not company:
+		return {"sync_log": "", "status": "", "started_at": "", "employee_codes": set()}
+	if not frappe.db.exists("DocType", "HRMS DingTalk Sync Log") or not frappe.db.exists(
+		"DocType", "HRMS DingTalk Employee Import"
+	):
+		return {"sync_log": "", "status": "", "started_at": "", "employee_codes": set()}
+
+	log = frappe.get_all(
+		"HRMS DingTalk Sync Log",
+		filters={
+			"company": company,
+			"sync_type": "员工档案同步",
+			"status": ["in", ["已完成", "部分失败"]],
+		},
+		fields=["name", "status", "started_at"],
+		order_by="started_at desc",
+		limit_page_length=1,
+	)
+	if not log:
+		return {"sync_log": "", "status": "", "started_at": "", "employee_codes": set()}
+	rows = frappe.get_all(
+		"HRMS DingTalk Employee Import",
+		filters={"company": company, "sync_log": log[0].name, "employee_code": ["!=", ""]},
+		pluck="employee_code",
+		limit_page_length=0,
+	)
+	return {
+		"sync_log": log[0].name,
+		"status": log[0].status,
+		"started_at": str(log[0].started_at or ""),
+		"employee_codes": {str(code).strip() for code in rows if str(code or "").strip()},
+	}
+
+
+def _employee_roster_source_conflict(values, dingtalk_snapshot, fields_by_name, row_index):
+	if values.get("custom_work_nature") != "离职" and values.get("status") != "Left":
+		return None
+	employee_code = str(values.get("custom_employee_code") or "").strip()
+	if not employee_code or employee_code not in dingtalk_snapshot.get("employee_codes", set()):
+		return None
+	field = fields_by_name.get("custom_work_nature") or {
+		"fieldname": "custom_work_nature",
+		"field_label": _("工作性质"),
+	}
+	return _field_error(
+		row_index,
+		field,
+		_("来源冲突：最新钉钉在职名单仍包含工号 {0}，不能由表单自动改为离职").format(employee_code),
+		_("请先核实钉钉在职状态和离职审批；确认钉钉已移除后重新同步，或在员工档案中人工处理并保留审核依据。"),
+	)
+
+
+@frappe.whitelist()
+def get_employee_import_source_balance(company: str = ""):
+	"""Summarise actionable differences between Employee and the latest DingTalk roster."""
+	require_hrms_capability("roster_import_submit")
+	company = company or _get_default_company()
+	if not company:
+		frappe.throw(_("请先设置默认公司。"))
+	snapshot = _get_latest_dingtalk_onjob_snapshot(company)
+	if not snapshot.get("sync_log"):
+		return {"company": company, "has_snapshot": False, "current_not_in_dingtalk": [], "left_in_dingtalk": [], "dingtalk_not_in_employee": []}
+
+	employees = frappe.get_all(
+		EMPLOYEE_DOCTYPE,
+		filters={"company": company},
+		fields=["name", "custom_employee_code", "employee_name", "status", "custom_work_nature"],
+		limit_page_length=0,
+	)
+	by_code = {
+		str(row.custom_employee_code or "").strip(): row
+		for row in employees
+		if str(row.custom_employee_code or "").strip()
+	}
+	dingtalk_codes = snapshot["employee_codes"]
+	current_not_in_dingtalk = [
+		row for code, row in by_code.items() if row.status != "Left" and code not in dingtalk_codes
+	]
+	left_in_dingtalk = [row for code, row in by_code.items() if row.status == "Left" and code in dingtalk_codes]
+	dingtalk_missing_codes = sorted(dingtalk_codes.difference(by_code))
+	dingtalk_missing_code_count = frappe.db.count(
+		"HRMS DingTalk Employee Import",
+		{"company": company, "sync_log": snapshot["sync_log"], "employee_code": ["in", ["", None]]},
+	)
+	dingtalk_rows = frappe.get_all(
+		"HRMS DingTalk Employee Import",
+		filters={
+			"company": company,
+			"sync_log": snapshot["sync_log"],
+			"employee_code": ["in", dingtalk_missing_codes or ["__no_employee__"]],
+		},
+		fields=["employee_code", "employee_name", "import_status"],
+		order_by="employee_code asc",
+		limit_page_length=0,
+	)
+	def serialise_employee(row):
+		return {
+			"employee": row.name,
+			"employee_code": row.custom_employee_code,
+			"employee_name": row.employee_name,
+			"status": row.status,
+			"custom_work_nature": row.custom_work_nature,
+		}
+
+	return {
+		"company": company,
+		"has_snapshot": True,
+		"snapshot": {
+			"sync_log": snapshot["sync_log"],
+			"status": snapshot["status"],
+			"started_at": snapshot["started_at"],
+			"employee_count": len(dingtalk_codes),
+		},
+		"current_not_in_dingtalk": [serialise_employee(row) for row in current_not_in_dingtalk],
+		"left_in_dingtalk": [serialise_employee(row) for row in left_in_dingtalk],
+		"dingtalk_not_in_employee": [dict(row) for row in dingtalk_rows],
+		"dingtalk_missing_code_count": dingtalk_missing_code_count,
+	}
+
+
 def _get_employee_roster_replace_candidates(planned_rows, company=""):
 	"""Return only same-company staff omitted from a verified full-roster import.
 
@@ -5844,8 +5971,10 @@ def _build_employee_roster_import_plan(
 	file_url, mode="insert", match_by="employee_code", manual_mappings=None, row_overrides=None
 ):
 	mode = mode or "insert"
-	if mode not in {"insert", "update", "replace"}:
+	if mode not in {"insert", "update", "history", "replace"}:
 		frappe.throw(_("导入模式不正确"))
+	if mode == "history" and match_by != "employee_code":
+		frappe.throw(_("离职/历史人员补录只能按公司工号匹配，不能按姓名、身份证或手机号猜测。"))
 	if match_by not in EMPLOYEE_DUPLICATE_MATCH_FIELDS:
 		frappe.throw(_("重复员工匹配策略不正确"))
 
@@ -5882,8 +6011,11 @@ def _build_employee_roster_import_plan(
 		"manual_corrections": sum(
 			len(overrides) for overrides in row_overrides.values() if isinstance(overrides, dict)
 		),
+		"source_conflicts": 0,
+		"dingtalk_snapshots": {},
 	}
 	planned_rows = []
+	dingtalk_snapshots = {}
 
 	for row_index, row in enumerate(context["rows"][context["data_start_index"] :], start=context["data_start_index"] + 1):
 		if not any(not _is_blank_value(value) for value in row):
@@ -5902,12 +6034,31 @@ def _build_employee_roster_import_plan(
 		# A blank company column means the selected/default company, never a
 		# cross-company search of an administrator's entire employee table.
 		values["company"] = _resolve_company(values.get("company"), _get_default_company(), result["warnings"])
+		company = values.get("company")
+		if company not in dingtalk_snapshots:
+			dingtalk_snapshots[company] = _get_latest_dingtalk_onjob_snapshot(company)
 		row_errors = _dedupe_import_errors(
 			parse_errors
 			+ _validate_employee_import_row(
 				values, fields_by_name, meta_fields, row_index, parse_errors, mode=mode, match_by=match_by
 			)
 		)
+		if mode == "history" and values.get("custom_work_nature") != "离职":
+			row_errors.append(
+				_field_error(
+					row_index,
+					fields_by_name.get("custom_work_nature") or {"fieldname": "custom_work_nature", "field_label": _("工作性质")},
+					_("离职/历史人员补录的工作性质必须为“离职”"),
+					_("如需导入在职人员，请返回并使用“批量添加员工”或钉钉新成员入口。"),
+				)
+			)
+		source_conflict = _employee_roster_source_conflict(
+			values, dingtalk_snapshots[company], fields_by_name, row_index
+		)
+		if source_conflict:
+			row_errors.append(source_conflict)
+			result["source_conflicts"] += 1
+		row_errors = _dedupe_import_errors(row_errors)
 		action, existing = _preview_employee_action(values, meta_fields, mode, match_by)
 
 		if mode == "update" and action == "skip" and not row_errors:
@@ -5964,7 +6115,55 @@ def _build_employee_roster_import_plan(
 		target_companies = {row["values"].get("company") for row in planned_rows if row["values"].get("company")}
 		if len(target_companies) > 1:
 			frappe.throw(_("覆盖当前花名册一次只能处理一个公司，请按公司分别导入。"))
-		result["archived"] = len(_get_employee_roster_replace_candidates(planned_rows, next(iter(target_companies), "")))
+		target_company = next(iter(target_companies), "")
+		replace_candidates = _get_employee_roster_replace_candidates(planned_rows, target_company)
+		candidate_codes = {
+			str(row.custom_employee_code or "").strip(): row.name
+			for row in frappe.get_all(
+				EMPLOYEE_DOCTYPE,
+				filters={"name": ["in", replace_candidates or ["__no_employee__"]]},
+				fields=["name", "custom_employee_code"],
+				limit_page_length=0,
+			)
+		}
+		snapshot = dingtalk_snapshots.get(target_company) or _get_latest_dingtalk_onjob_snapshot(target_company)
+		protected = sorted(set(candidate_codes).intersection(snapshot.get("employee_codes", set())))
+		if replace_candidates and snapshot.get("status") == "部分失败":
+			result["source_conflicts"] += 1
+			result["failed"] += 1
+			result["errors"].append(
+				{
+					"row": "",
+					"fieldname": "custom_employee_code",
+					"field_label": _("来源冲突"),
+					"message": _("最新钉钉在职快照为“部分失败”，无法确认遗漏人员是否确已离职，已阻止整表覆盖。"),
+					"suggestion": _("请先成功完成一次钉钉全量在职同步，再重新预览完整花名册。"),
+				}
+			)
+		if protected:
+			result["source_conflicts"] += len(protected)
+			result["failed"] += len(protected)
+			result["errors"].append(
+				{
+					"row": "",
+					"fieldname": "custom_employee_code",
+					"field_label": _("来源冲突"),
+					"message": _("最新钉钉在职名单仍包含 {0} 名被花名册遗漏的员工，已阻止整表覆盖：{1}").format(
+						len(protected), "、".join(protected[:20]) + ("……" if len(protected) > 20 else "")
+					),
+					"suggestion": _("先重新同步钉钉并核对这些工号；离职人员请使用“离职/历史人员补录”，不要通过遗漏行推断离职。"),
+				}
+			)
+		result["archived"] = len(replace_candidates) - len(protected)
+
+	for company, snapshot in dingtalk_snapshots.items():
+		if snapshot.get("sync_log"):
+			result["dingtalk_snapshots"][company] = {
+				"sync_log": snapshot["sync_log"],
+				"status": snapshot["status"],
+				"started_at": snapshot["started_at"],
+				"employee_count": len(snapshot["employee_codes"]),
+			}
 	return result, planned_rows, meta_fields
 
 

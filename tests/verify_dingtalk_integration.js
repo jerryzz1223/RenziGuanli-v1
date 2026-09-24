@@ -202,8 +202,11 @@ for (const marker of [
 	"queue_existing_dingtalk_employee_attachments",
 	"list_dingtalk_employee_comparisons",
 	"apply_dingtalk_employee_comparison",
+	"list_dingtalk_unmatched_roster_employees",
+	"promote_dingtalk_roster_to_new_employee",
 	"全量档案只读比对",
 	"人工对比已有员工",
+	"处理未入系统成员",
 	"补齐已有员工附件",
 	"list_dingtalk_attendance_sync_runs",
 ]) {
@@ -229,6 +232,13 @@ for (const marker of [
 if (!/def sync_new_employees_from_dingtalk\([\s\S]{0,320}return _sync_preentry_employees\(company\)/.test(dingtalkIntegration)) {
 	throw new Error("The new-employee action must stay scoped to DingTalk pre-entry employees.");
 }
+const fullRosterBody = dingtalkIntegration.match(/def _sync_all_employee_rosters\([\s\S]*?\n\n@frappe\.whitelist\(\)/)?.[0] || "";
+if (!fullRosterBody.includes("_fetch_dingtalk_onjob_userids") || fullRosterBody.includes("_fetch_dingtalk_preentry_userids")) {
+	throw new Error("The full-roster comparison must contain on-job employees only and must not consume pre-entry records.");
+}
+for (const marker of ["same_source_records", "_latest_dingtalk_employee_roster_sync_log", "validation_message"]) {
+	mustInclude(dingtalkIntegration, marker, `DingTalk source separation/comparison maintenance is missing marker: ${marker}`);
+}
 
 const employeeImport = read("hrms/hr/doctype/hrms_dingtalk_employee_import/hrms_dingtalk_employee_import.json");
 for (const marker of ["import_status", "mapped_values_json", "approved_by", "approval_note"]) {
@@ -240,7 +250,7 @@ for (const marker of [
 	"正在拉取并匹配钉钉待入职新员工",
 	"一键审批并导入全部",
 	"queue_approve_all_dingtalk_employee_imports",
-	'source_type: "preentry"',
+	'source_type: "preentry,manual_new_employee"',
 ]) {
 	mustInclude(employeeList, marker, `DingTalk employee import UI is missing marker: ${marker}`);
 }

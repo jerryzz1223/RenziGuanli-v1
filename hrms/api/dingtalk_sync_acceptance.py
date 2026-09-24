@@ -34,9 +34,15 @@ def run_dingtalk_daily_sync_acceptance() -> dict:
 	"""Create only TEST-HRMS evidence and verify an idempotent conversion."""
 	if not frappe.db.exists("Company", TEST_COMPANY):
 		frappe.throw("TEST-HRMS company is required before running DingTalk sync acceptance.")
-	employee = frappe.db.get_value("Employee", {"company": TEST_COMPANY, "status": "Active"}, ["name", "employee_name", "department"], as_dict=True)
+	employee = frappe.db.get_value(
+		"Employee", {"company": TEST_COMPANY, "status": "Active"},
+		["name", "employee_name", "department"], as_dict=True,
+	) or frappe.db.get_value(
+		"Employee", {"company": TEST_COMPANY},
+		["name", "employee_name", "department"], as_dict=True,
+	)
 	if not employee:
-		frappe.throw("TEST-HRMS needs one active employee before running DingTalk sync acceptance.")
+		frappe.throw("TEST-HRMS needs one employee before running DingTalk sync acceptance.")
 	protected_before = _protected_snapshot()
 
 	map_name = frappe.db.exists(USER_MAP_DOCTYPE, {"company": TEST_COMPANY, "dingtalk_userid": TEST_USER_ID})
@@ -77,7 +83,12 @@ def run_dingtalk_daily_sync_acceptance() -> dict:
 	)
 	raw.save(ignore_permissions=True)
 
-	first = convert_dingtalk_raw_attendance_to_daily_checks(TEST_COMPANY, TEST_DATE, enforce_role=False)
+	first = convert_dingtalk_raw_attendance_to_daily_checks(
+		TEST_COMPANY,
+		TEST_DATE,
+		enforce_role=False,
+		resync_reason="TEST-HRMS 重复转换验收（第一轮）",
+	)
 	second = convert_dingtalk_raw_attendance_to_daily_checks(
 		TEST_COMPANY,
 		TEST_DATE,

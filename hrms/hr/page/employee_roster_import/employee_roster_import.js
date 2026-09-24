@@ -20,6 +20,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		import_in_progress: false,
 		capabilities_loaded: false,
 		can_import: false,
+		source_balance: null,
 	};
 
 	$(page.body).addClass("hrms-roster-import-page");
@@ -70,12 +71,24 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		page.set_primary_action(null);
 		$(page.body).html(`
 			<div class="hrms-import-landing">
+				<div class="alert alert-info">
+					<strong>${__("两个入口的分工：")}</strong>
+					${__("钉钉负责待入职、当前在职资料和附件；表单负责历史/离职补录及经审核的批量修正。两边统一按“公司 + 公司工号”识别员工；在职/离职结论冲突时只提示人工核对，不自动覆盖。")}
+				</div>
+				<div class="alert alert-secondary" data-source-balance>${__("正在读取钉钉与系统员工来源核对摘要...")}</div>
 				<div class="hrms-import-card">
 					<div>
-						<div class="hrms-import-card__title"><span class="orange-dot"></span>${__("覆盖当前花名册")}</div>
-						<p>${__("仅用于首次同步最新版花名册：按工号更新已有员工、补充新员工，并将本表未出现的当前员工标记为已离职（不会删除档案）。")}</p>
+						<div class="hrms-import-card__title"><span class="orange-dot"></span>${__("离职/历史人员补录")}</div>
+						<p>${__("用于补录钉钉中已不存在的离职、历史员工。只按公司工号匹配，必须填写离职状态和离职日期；若钉钉最新名单仍显示在职，将阻止写入并提示人工核对。")}</p>
 					</div>
-					<button class="btn btn-warning" data-action="start-replace">${__("覆盖当前花名册")}</button>
+					<button class="btn btn-warning" data-action="start-history">${__("补录离职人员")}</button>
+				</div>
+				<div class="hrms-import-card">
+					<div>
+						<div class="hrms-import-card__title"><span class="orange-dot"></span>${__("完整花名册核对（高风险）")}</div>
+						<p>${__("仅用于经过审核的完整名册。表中遗漏会被视为拟离职；若与钉钉最新在职名单冲突，系统将停止覆盖，不会自动判定离职。")}</p>
+					</div>
+					<button class="btn btn-default" data-action="start-replace">${__("进入完整核对")}</button>
 				</div>
 				<div class="hrms-import-card">
 					<div>
@@ -94,11 +107,51 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 				<button class="btn btn-link hrms-import-records" data-action="records">${__("查看导入花名册记录")}</button>
 			</div>
 		`);
+		load_source_balance();
+	}
+
+	function load_source_balance() {
+		const company = frappe.defaults.get_user_default("Company") || "";
+		if (!company) {
+			$(page.body).find("[data-source-balance]").text(__("请先设置默认公司，再查看来源核对摘要。"));
+			return;
+		}
+		frappe.call("hrms.api.employee_field_template.get_employee_import_source_balance", { company }).then((response) => {
+			state.source_balance = response.message || {};
+			const target = $(page.body).find("[data-source-balance]");
+			if (!target.length) return;
+			if (!state.source_balance.has_snapshot) {
+				target.removeClass("alert-secondary").addClass("alert-warning").text(__("当前没有可用的钉钉在职快照，暂时无法进行跨来源核对。"));
+				return;
+			}
+			const system_only = state.source_balance.current_not_in_dingtalk?.length || 0;
+			const status_conflicts = state.source_balance.left_in_dingtalk?.length || 0;
+			const dingtalk_only = state.source_balance.dingtalk_not_in_employee?.length || 0;
+			const missing_code = state.source_balance.dingtalk_missing_code_count || 0;
+			target.html(`${__("来源核对：系统当前员工未出现在钉钉 {0} 人；系统已离职但钉钉仍在职 {1} 人；钉钉在职但系统无档案 {2} 人；钉钉缺少公司工号 {3} 人。", [system_only, status_conflicts, dingtalk_only, missing_code])} <button class="btn btn-xs btn-default" data-action="view-source-balance">${__("查看人工核对明细")}</button>`);
+		}).catch(() => {
+			$(page.body).find("[data-source-balance]").text(__("来源核对摘要读取失败，请稍后刷新。"));
+		});
+	}
+
+	function open_source_balance() {
+		const balance = state.source_balance || {};
+		const groups = [
+			[__("系统当前员工未出现在钉钉"), balance.current_not_in_dingtalk || []],
+			[__("系统已离职但钉钉仍在职"), balance.left_in_dingtalk || []],
+			[__("钉钉在职但系统无档案"), balance.dingtalk_not_in_employee || []],
+		];
+		const content = groups.map(([label, rows]) => `
+			<h5>${frappe.utils.escape_html(label)} (${rows.length})</h5>
+			${rows.length ? `<table class="table table-bordered"><thead><tr><th>${__("公司工号")}</th><th>${__("姓名")}</th><th>${__("状态")}</th></tr></thead><tbody>${rows.slice(0, 100).map((row) => `<tr><td>${frappe.utils.escape_html(row.employee_code || "")}</td><td>${frappe.utils.escape_html(row.employee_name || "")}</td><td>${frappe.utils.escape_html(row.custom_work_nature || row.status || row.import_status || "")}</td></tr>`).join("")}</tbody></table>` : `<p class="text-muted">${__("无")}</p>`}
+		`).join("") + `<p class="text-muted">${__("钉钉缺少公司工号 {0} 人；这类记录不能猜测匹配，需先在钉钉补齐工号。", [balance.dingtalk_missing_code_count || 0])}</p>`;
+		frappe.msgprint({ title: __("钉钉与表单来源核对"), wide: true, message: content });
 	}
 
 	function render_upload() {
 		const title = {
 			replace: __("智能花名册导入-覆盖当前花名册"),
+			history: __("智能花名册导入-离职/历史人员补录"),
 			update: __("智能花名册导入-批量修改信息"),
 			insert: __("智能花名册导入-批量添加员工"),
 		}[state.mode] || __("智能花名册导入");
@@ -114,7 +167,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 				</div>
 				<div class="hrms-import-tips">
 					<h4>${__("温馨提示")}</h4>
-					<p>1. ${__("可导入在职员工和离职员工。上传后会先匹配表头，不会立即写入员工资料。")}</p>
+					<p>1. ${state.mode === "history" ? __("本入口只处理离职/历史人员；按公司工号与钉钉最新在职名单核对后才允许写入。") : __("可导入在职员工和离职员工。上传后会先匹配表头，不会立即写入员工资料。")}</p>
 					<p>2. ${__("您可以用自有花名册导入，也可以")} <button class="btn btn-link btn-xs" data-action="download-template">${__("下载标准模板")}</button></p>
 				</div>
 				<div class="hrms-import-effects">
@@ -165,7 +218,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 					</div>
 					<div class="form-group">
 						<label class="control-label">${__("重复员工更新策略")}</label>
-						<select class="form-control" data-match-by>
+						<select class="form-control" data-match-by ${state.mode === "history" ? "disabled" : ""}>
 							<option value="employee_code" ${state.match_by === "employee_code" ? "selected" : ""}>${__("按工号")}</option>
 							<option value="id_card" ${state.match_by === "id_card" ? "selected" : ""}>${__("按身份证")}</option>
 							<option value="phone" ${state.match_by === "phone" ? "selected" : ""}>${__("按手机号")}</option>
@@ -304,6 +357,8 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 							: ""
 					}
 					${result.manual_corrections ? `<div class="alert alert-info">${__("已应用 {0} 项本次导入的人工校正；原 Excel 文件不会被修改。", [result.manual_corrections])}</div>` : ""}
+					${result.source_conflicts ? `<div class="alert alert-danger">${__("发现 {0} 个钉钉与表单来源冲突，冲突行不会写入；请按公司工号人工核对在职/离职状态。", [result.source_conflicts])}</div>` : ""}
+					${Object.keys(result.dingtalk_snapshots || {}).length ? `<div class="alert alert-info">${__("本次已同时核对最新钉钉在职快照：{0}", [Object.entries(result.dingtalk_snapshots).map(([company, snapshot]) => `${company} / ${snapshot.sync_log} / ${snapshot.started_at || "-"} / ${snapshot.status} / ${snapshot.employee_count}${__("人")}`).join("；")])}</div>` : `<div class="alert alert-warning">${__("当前没有可用的钉钉在职快照；表单仍按公司工号导入，但无法自动检查跨来源在职/离职冲突。")}</div>`}
 					${result.deferred ? `<div class="alert alert-info">${__("有 {0} 项资料以“-”暂缓填写，将以空值导入，可在员工档案中后续补充。", [result.deferred])}</div>` : ""}
 					${render_warnings(warnings)}
 					${errors.length ? render_errors(errors, "", true) : ""}
@@ -625,9 +680,10 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 
 	$(page.body).on("click", "[data-action]", function () {
 		const action = this.dataset.action;
-		if (["start-insert", "start-update", "start-replace"].includes(action)) {
+		if (["start-insert", "start-update", "start-history", "start-replace"].includes(action)) {
 			if (!require_import_permission()) return;
-			state.mode = { "start-insert": "insert", "start-update": "update", "start-replace": "replace" }[action];
+			state.mode = { "start-insert": "insert", "start-update": "update", "start-history": "history", "start-replace": "replace" }[action];
+			if (state.mode === "history") state.match_by = "employee_code";
 			state.step = 1;
 			render_upload();
 		}
@@ -640,6 +696,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			render_match();
 		}
 		if (action === "use-departure-update-fields") use_departure_update_fields();
+		if (action === "view-source-balance") open_source_balance();
 		if (action === "confirm-import") confirm_import();
 		if (action === "edit-error-row") open_error_row_editor(
 			this.dataset.rowIndex,

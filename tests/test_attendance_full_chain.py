@@ -211,8 +211,19 @@ class AttendanceFullChainAcceptanceTest(unittest.TestCase):
 		)
 
 		self.assertEqual(len(self.apple_rows), 761)
-		self.assertEqual(len(self.apple_result), len(self.apple_rows))
-		self.assertEqual(len({row["source_row"] for row in self.apple_result}), len(self.apple_rows))
+		auto_excluded_apple_rows = [
+			row for row in self.apple_rows if apple_tree.is_auto_excluded_apple_tree_row(row)
+		]
+		self.assertEqual(len(auto_excluded_apple_rows), 11)
+		self.assertEqual(len(self.apple_result) + len(auto_excluded_apple_rows), len(self.apple_rows))
+		self.assertEqual(
+			{
+				(str(row.get("审批结果") or ""), str(row.get("审批状态") or ""))
+				for row in auto_excluded_apple_rows
+			},
+			{("--", "终止"), ("审批未通过", "已结束")},
+		)
+		self.assertEqual(len({row["source_row"] for row in self.apple_result}), len(self.apple_result))
 
 		self.assertEqual(len(self.missing_rows), 52)
 		self.assertEqual(self.missing_result["metrics"]["source_rows"], len(self.missing_rows))
@@ -220,7 +231,20 @@ class AttendanceFullChainAcceptanceTest(unittest.TestCase):
 			self.missing_result["metrics"]["processed_rows"] + self.missing_result["metrics"]["excluded_source_rows"],
 			len(self.missing_rows),
 		)
-		self.assertEqual(self.missing_result["metrics"]["excluded_source_rows"], 8)
+		business_punch_rows = [row for row in self.missing_rows if row.get("补卡类型") in {"因公补卡", "因公打卡"}]
+		closed_approval_rows = [
+			row for row in self.missing_rows
+			if row.get("审批状态") in {"终止", "已终止", "已撤销", "撤销"}
+			or row.get("审批结果") in {"审批未通过", "审批不通过", "未通过", "已拒绝", "拒绝", "驳回", "已驳回"}
+		]
+		self.assertEqual(len(business_punch_rows), 8)
+		self.assertEqual(len(closed_approval_rows), 1)
+		self.assertEqual(self.missing_result["metrics"]["excluded_source_rows"], 9)
+		self.assertEqual(
+			sum("OUTSIDE_ATTENDANCE_MONTH" in row["exception_codes"] for row in self.missing_result["processed_rows"]),
+			6,
+			"Out-of-month approvals stay visible for review instead of being silently discarded.",
+		)
 
 	def test_02_missing_punch_is_an_independent_penalty_source_not_a_daily_detail_duplicate(self):
 		"""A daily missing-checkin flag is not a substitute for an approved forgotten-punch event.

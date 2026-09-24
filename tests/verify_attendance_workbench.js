@@ -28,7 +28,7 @@ if (workbenchJs.includes("window.location.replace")) {
 	throw new Error("hrms-workbench must render the unified HR shell, not redirect to /desk/hr-setup.");
 }
 
-for (const marker of ["人资主页", "本月人员状况", "今日考勤状况", "薪资数据不在首页展示", "get_data"]) {
+for (const marker of ["系统主页", "本月概览", "今日考勤", "薪酬中心", "get_data"]) {
 	mustInclude(workbenchJs + workbenchPy, marker, `Integrated HR home page is missing marker: ${marker}`);
 }
 
@@ -61,7 +61,7 @@ for (const marker of [
 	"异常处理",
 	"数据台账",
 	"导入批次",
-	"人工调整记录",
+	"考勤修改记录",
 	"规则设置",
 	"排班管理",
 	"字段映射",
@@ -141,7 +141,7 @@ for (const marker of [
 	"下载无 Logo 版本",
 	"data-download-processing-result-without-logo",
 	"hide_logo: hideLogo ? 1 : 0",
-	"异常日期及原因",
+	"异常类型、日期及原因",
 	"修改记录",
 	"data-open-attendance-adjustments",
 	"set_view(\"manual-adjustments\")",
@@ -162,7 +162,7 @@ for (const marker of [
 	"reset_attendance_month",
 	"render_daily_attendance_markup",
 	"清空本月数据",
-	"list_manual_adjustments",
+	"list_attendance_manual_adjustments",
 	"generate_monthly_final_files",
 	"get_monthly_final_preview",
 	"update_monthly_final_rows",
@@ -173,7 +173,7 @@ for (const marker of [
 	"open_monthly_final_editor",
 	"保存修改并重新锁定",
 	"特殊工时 → 手动修改",
-	"同一已锁定数据",
+	"来源完备性 / 锁定快照",
 	"住房补贴",
 	"全勤奖",
 	"特殊工时",
@@ -204,12 +204,12 @@ for (const marker of [
 	"requestId !== this.ledger_query_request_id || this.active_view !== expectedView",
 	"render_exception_pagination",
 	"data-exception-page",
-	"选择当前页的全部异常",
+	"全选当前筛选来源的全部待处理异常",
 	"data-exception-record-select",
 	"data-select-exception-all",
 	"data-bulk-exception-process",
-	"请选择一个来源后，可勾选并批量处理异常。",
-	"处理当前页已勾选",
+	"请选择一个来源后，可勾选并批量处理该来源的异常。",
+	"处理已勾选",
 	"page_start: (this.exception_page - 1) * this.exception_page_size",
 	"show_bulk_processing_dialog(this.exception_source_filter)",
 	"hrms-attendance-monthly-support-grid",
@@ -279,7 +279,7 @@ for (const marker of [
 	"load_attendance_reports",
 	"load_custom_rules",
 	"open_rule_dialog",
-	"钉钉打卡对接",
+	"钉钉集成",
 	"自定义规则",
 	"系统报表",
 	"自定义报表",
@@ -368,7 +368,7 @@ for (let index = 1; index < monthlyFinalSections.length; index += 1) {
 	}
 }
 for (const marker of ["employee_recognition", "初稿识别员工", "花名册员工", "成功识别员工", "hrms-attendance-final-recognition"]) {
-	mustInclude(monthlyFinalBody, marker, `Monthly final must display employee-recognition statistics: ${marker}`);
+	mustInclude(attendancePageJs, marker, `Monthly final must display employee-recognition statistics: ${marker}`);
 }
 if (attendancePageJs.includes("data-monthly-support-precheck")) {
 	throw new Error("Monthly support sources must check structure during processing, without a separate precheck button.");
@@ -399,7 +399,7 @@ for (const queueControl of ["data-bulk-process", "data-processing-record-select"
 		throw new Error(`Processing results must not expose exception-queue bulk controls: ${queueControl}.`);
 	}
 }
-mustInclude(processingResults, "data-edit-processing-record", "Every processing-result row must provide an audited manual-edit action.");
+mustInclude(attendancePageJs, "data-edit-processing-record", "Every processing-result row must provide an audited manual-edit action.");
 const processingSlotStart = attendancePageJs.indexOf("render_processing_slot(slot");
 const processingSlotEnd = attendancePageJs.indexOf("\n\topen_slot_uploader", processingSlotStart);
 const processingSlot = attendancePageJs.slice(processingSlotStart, processingSlotEnd);
@@ -456,14 +456,15 @@ for (const marker of ["flex: 0 0 220px", "min-width: 220px", "white-space: nowra
 	mustInclude(topNavCss, marker, `Attendance sidebar header layout is missing ${marker}.`);
 }
 
-mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260826k", "The sidebar stylesheet cache key must change with its layout.");
+mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260918-sidebar-layout-v2", "The sidebar stylesheet cache key must change with its layout.");
 
 if (attendancePageJs.includes('this.wrapper.querySelector("[data-company]").addEventListener("change"')) {
 	throw new Error("Attendance company must be controlled by the global company selector, not a local editable field.");
 }
 
 const apiPath = mustExist("hrms/api/attendance_import.py");
-const api = fs.readFileSync(apiPath, "utf8");
+const processingApiPath = mustExist("hrms/api/attendance_processing_center.py");
+const api = fs.readFileSync(apiPath, "utf8") + fs.readFileSync(processingApiPath, "utf8");
 
 for (const marker of [
 	"REQUIRED_ATTENDANCE_SHEETS",

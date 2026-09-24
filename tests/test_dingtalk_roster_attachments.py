@@ -61,6 +61,8 @@ class DingTalkRosterAttachmentTests(unittest.TestCase):
 		self.assertEqual(module._normalise_dingtalk_employee_value("custom_education_level", "初中及以下", select), "初中")
 		self.assertEqual(module._normalise_dingtalk_employee_value("employment_type", "全职", select), "Full-time")
 		self.assertIsNone(module._normalise_dingtalk_employee_value("emergency_phone_number", "0", select))
+		self.assertEqual(module._normalise_dingtalk_employee_value("department", "设备组", select), "设备课")
+		self.assertEqual(module._normalise_dingtalk_employee_value("designation", "网管", select), "网管员")
 
 	def test_actual_department_overrides_multi_membership_department(self):
 		module = load_module()

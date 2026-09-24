@@ -121,7 +121,8 @@ class AttendanceExceptionExportTest(unittest.TestCase):
 			'sort_field: this.exception_sort_field', 'sort_order: this.exception_sort_order',
 		):
 			self.assertIn(marker, page)
-		self.assertIn('require_hrms_capability("attendance_export", legacy_roles=("HR Manager",))', api)
+		self.assertIn('require_hrms_capability("attendance_export")', api)
+		self.assertNotIn('require_hrms_capability("attendance_export", legacy_roles=', api)
 		self.assertIn('save_file(filename, output.getvalue(), None, None, is_private=1)', api)
 
 

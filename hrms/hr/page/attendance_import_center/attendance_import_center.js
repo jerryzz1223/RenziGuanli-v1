@@ -4285,6 +4285,7 @@ class AttendanceImportCenter {
 						<button class="btn btn-default btn-sm" data-action="dingtalk-preentry">${this.escape(__("同步扫码入职"))}</button>
 						<button class="btn btn-default btn-sm" data-action="dingtalk-full-roster">${this.escape(__("全量档案只读比对"))}</button>
 						<button class="btn btn-default btn-sm" data-action="dingtalk-employee-comparisons">${this.escape(__("人工对比已有员工"))}</button>
+						<button class="btn btn-default btn-sm" data-action="dingtalk-unmatched-employees">${this.escape(__("处理未入系统成员"))}</button>
 						<button class="btn btn-default btn-sm" data-action="dingtalk-existing-attachments">${this.escape(__("补齐已有员工附件"))}</button>
 						<button class="btn btn-default btn-sm" data-action="dingtalk-manual-sync">${this.escape(__("手动拉取指定日期"))}</button>
 						<button class="btn btn-default btn-sm" data-action="open-sync-logs">${this.escape(__("同步记录"))}</button>
@@ -4312,6 +4313,7 @@ class AttendanceImportCenter {
 		this.body().querySelector("[data-action='dingtalk-preentry']").addEventListener("click", () => this.sync_dingtalk_preentries());
 		this.body().querySelector("[data-action='dingtalk-full-roster']").addEventListener("click", () => this.sync_dingtalk_full_roster());
 		this.body().querySelector("[data-action='dingtalk-employee-comparisons']").addEventListener("click", () => this.open_dingtalk_employee_comparisons());
+		this.body().querySelector("[data-action='dingtalk-unmatched-employees']").addEventListener("click", () => this.open_dingtalk_unmatched_employees());
 		this.body().querySelector("[data-action='dingtalk-existing-attachments']").addEventListener("click", () => this.sync_existing_dingtalk_attachments());
 		this.body().querySelector("[data-action='dingtalk-manual-sync']").addEventListener("click", () => this.sync_dingtalk_attendance_for_date());
 		this.body().querySelector("[data-action='dingtalk-directory']").addEventListener("click", () => this.sync_dingtalk_directory());
@@ -4376,8 +4378,8 @@ class AttendanceImportCenter {
 						<div class="table-responsive"><table class="table table-bordered table-sm">
 							<thead><tr><th style="width:64px;">${escape(__("采用"))}</th><th>${escape(__("字段"))}</th><th>${escape(__("系统现值"))}</th><th>${escape(__("钉钉值"))}</th></tr></thead>
 							<tbody>${row.differences.map((diff) => `<tr>
-								<td><input type="checkbox" data-comparison-field="${escape(diff.fieldname)}"></td>
-								<td><strong>${escape(diff.label)}</strong><br><small class="text-muted">${escape(diff.fieldname)}</small></td>
+								<td><input type="checkbox" data-comparison-field="${escape(diff.fieldname)}" ${diff.can_apply === false ? "disabled" : ""}></td>
+								<td><strong>${escape(diff.label)}</strong><br><small class="text-muted">${escape(diff.fieldname)}</small>${diff.validation_message ? `<br><small class="text-danger">${escape(diff.validation_message)}</small>` : ""}</td>
 								<td>${escape(diff.system_value || __("未填写"))}</td>
 								<td>${escape(diff.dingtalk_value || __("未填写"))}</td>
 							</tr>`).join("")}</tbody>
@@ -4402,6 +4404,58 @@ class AttendanceImportCenter {
 
 		dialog.show();
 		loadComparisons();
+	}
+
+	open_dingtalk_unmatched_employees() {
+		if (!this.ensure_company()) return;
+		const dialog = new frappe.ui.Dialog({
+			title: __("全量档案中未入系统成员"),
+			size: "large",
+			fields: [{ fieldtype: "HTML", fieldname: "unmatched_html" }],
+			primary_action_label: __("刷新"),
+			primary_action: () => loadRows(),
+		});
+		const wrapper = dialog.fields_dict.unmatched_html.$wrapper[0];
+		const escape = (value) => this.escape(value ?? "");
+		const promote = (row) => {
+			frappe.prompt(
+				[{ fieldname: "reason", fieldtype: "Small Text", label: __("转入新成员审批原因"), reqd: 1 }],
+				(values) => frappe.call({
+					method: "hrms.api.dingtalk_integration.promote_dingtalk_roster_to_new_employee",
+					args: { import_name: row.name, reason: values.reason },
+					freeze: true,
+					freeze_message: __("正在转入新成员审批…"),
+				}).then((response) => {
+					const result = response.message || {};
+					frappe.show_alert({ message: __("{0} ({1}) 已转入新成员审批。", [result.employee_name || row.employee_name, result.employee_code || row.employee_code]), indicator: "green" });
+					loadRows();
+				}),
+				__("转入新成员审批"),
+				__("确认转入"),
+			);
+		};
+		const render = (rows) => {
+			if (!rows.length) {
+				wrapper.innerHTML = `<div class="alert alert-success">${escape(__("当前没有有公司工号但未入系统的在职成员。"))}</div>`;
+				return;
+			}
+			wrapper.innerHTML = `<div class="alert alert-warning">${escape(__("全量档案不会直接创建员工。请确认真实新成员后手动转入审批；资料不符合系统字段标准的记录会被阻止。"))}</div>${rows.map((row) => `
+				<div data-unmatched-import="${escape(row.name)}" style="border:1px solid var(--border-color);border-radius:8px;padding:12px;margin-bottom:10px;display:flex;justify-content:space-between;gap:16px;align-items:flex-start;">
+					<div><strong>${escape(row.employee_name)} (${escape(row.employee_code)})</strong><div class="text-muted">${escape(row.department || "--")} · ${escape(row.designation || "--")} · ${escape(row.date_of_joining || "--")}</div>${row.validation_issues?.length ? `<div class="text-danger" style="margin-top:6px;">${escape(row.validation_issues.join("；"))}</div>` : `<div class="text-success" style="margin-top:6px;">${escape(__("资料校验通过，可转入新成员审批。"))}</div>`}</div>
+					<button class="btn btn-primary btn-sm" data-promote-unmatched ${row.can_promote ? "" : "disabled"}>${escape(__("转入新成员审批"))}</button>
+				</div>`).join("")}`;
+			wrapper.querySelectorAll("[data-unmatched-import]").forEach((card) => {
+				const row = rows.find((item) => item.name === card.dataset.unmatchedImport);
+				card.querySelector("[data-promote-unmatched]")?.addEventListener("click", () => promote(row));
+			});
+		};
+		const loadRows = () => {
+			wrapper.innerHTML = `<div class="text-muted">${escape(__("正在检查未入系统成员…"))}</div>`;
+			frappe.call({ method: "hrms.api.dingtalk_integration.list_dingtalk_unmatched_roster_employees", args: { company: this.company } })
+				.then((response) => render(response.message || []));
+		};
+		dialog.show();
+		loadRows();
 	}
 
 	sync_existing_dingtalk_attachments() {
