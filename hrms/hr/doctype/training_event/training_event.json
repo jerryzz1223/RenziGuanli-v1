@@ -44,6 +44,10 @@
   "source_target",
   "source_actual_dates",
   "source_date_only",
+  "plan_match_section",
+  "plan_match_status",
+  "plan_match_basis",
+  "plan_match_score",
   "source_audit_section",
   "source_file",
   "source_sheet",
@@ -68,6 +72,7 @@
    "unique": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "training_program",
    "fieldtype": "Link",
    "label": "Training Program",
@@ -271,6 +276,35 @@
    "fieldname": "source_date_only",
    "fieldtype": "Check",
    "label": "来源仅提供日期",
+   "read_only": 1
+  },
+  {
+   "fieldname": "plan_match_section",
+   "fieldtype": "Section Break",
+   "label": "计划执行匹配"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "plan_match_status",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "计划匹配状态",
+   "options": "\n已匹配计划\n待确认\n临时新增",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "plan_match_basis",
+   "fieldtype": "Small Text",
+   "label": "匹配依据",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "plan_match_score",
+   "fieldtype": "Float",
+   "label": "匹配分数",
+   "precision": "1",
    "read_only": 1
   },
   {

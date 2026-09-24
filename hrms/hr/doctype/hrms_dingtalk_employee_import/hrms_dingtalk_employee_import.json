@@ -33,7 +33,7 @@
  ],
  "fields": [
   {"fieldname": "company", "fieldtype": "Link", "in_list_view": 1, "label": "公司", "options": "Company", "reqd": 1},
-  {"default": "待审批", "fieldname": "import_status", "fieldtype": "Select", "in_list_view": 1, "label": "导入审批状态", "options": "待匹配\n待审批\n已批准\n已驳回\n冲突", "reqd": 1},
+  {"default": "待审批", "fieldname": "import_status", "fieldtype": "Select", "in_list_view": 1, "label": "导入审批状态", "options": "待匹配\n待审批\n待人工比对\n已人工处理\n无变更\n已批准\n已驳回\n冲突", "reqd": 1},
   {"fieldname": "dingtalk_userid", "fieldtype": "Data", "in_list_view": 1, "label": "钉钉用户编号", "reqd": 1},
   {"fieldname": "source_record", "fieldtype": "Link", "label": "钉钉原始记录", "options": "HRMS DingTalk Raw Record"},
   {"fieldname": "sync_log", "fieldtype": "Link", "label": "同步批次", "options": "HRMS DingTalk Sync Log"},

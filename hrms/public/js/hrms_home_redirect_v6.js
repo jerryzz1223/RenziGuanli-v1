@@ -647,20 +647,16 @@
 		},
 		{
 			label: "培训学习",
-			route: "/desk/training-program",
+			route: "/desk/training-learning-center",
 			icon: "T",
-			keys: ["training-program", "training-event", "training-result", "training-feedback", "employee-skill-map"],
+			keys: ["training-learning-center", "training-program", "training-event", "training-result", "training-feedback", "employee-skill-map"],
 			items: [
-				{ type: "link", label: "主页", route: "/desk/training-program", slug: "training-program" },
+				{ type: "link", label: "主页", route: "/desk/training-learning-center", slug: "training-learning-center" },
 				{
 					type: "section",
 					label: "培训学习",
 					children: [
 						{ label: "培训计划", route: "/desk/training-program", slug: "training-program" },
-						{ label: "培训活动", route: "/desk/training-event", slug: "training-event" },
-						{ label: "培训结果", route: "/desk/training-result", slug: "training-result" },
-						{ label: "培训反馈", route: "/desk/training-feedback", slug: "training-feedback" },
-						{ label: "员工技能", route: "/desk/employee-skill-map", slug: "employee-skill-map" },
 					],
 				},
 			],
@@ -807,7 +803,7 @@
 		"考勤假期": "attendance-import-center",
 		"薪酬": "payroll-input-center",
 		"审批": "workflow",
-		"培训学习": "training-program",
+		"培训学习": "training-learning-center",
 		"绩效": "performance",
 		"更多": "attendance-import-center/dingtalk",
 		"HR Setup": "hrms-workbench",
@@ -1705,7 +1701,6 @@
 	}
 
 	function apply_hrms_shell_rules() {
-		redirect_legacy_training_learning_center();
 		redirect_legacy_home_workspace();
 		hide_frappe_breadcrumbs();
 		fix_desk_home_links();
@@ -1722,17 +1717,6 @@
 		// HR Setup used to be a native Workspace.  Keep the record only for old
 		// bookmarks, then take users to the data-integrated home page instead.
 		frappe.set_route("hrms-workbench");
-	}
-
-	// A short-lived compatibility route for browser tabs opened while the
-	// training centre experiment was active. The centre itself has been removed;
-	// stale links must return to the existing Training Program list.
-	function redirect_legacy_training_learning_center() {
-		var route = window.frappe?.get_route?.() || [];
-		if (route[0] !== "training-learning-center") {
-			return;
-		}
-		frappe.set_route("List", "Training Program");
 	}
 
 	// The sidebar is the primary navigation.  Optional improvements such as

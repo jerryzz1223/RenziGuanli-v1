@@ -3,6 +3,10 @@
 	max-width: none;
 }
 
+.hrms-training-native-list-hidden {
+	display: none !important;
+}
+
 .hrms-training-learning-workspace {
 	margin: 0 0 24px;
 	color: #263246;
@@ -72,7 +76,7 @@
 .hrms-training-import-center > .btn { min-width: 168px; white-space: nowrap; }
 .hrms-training-import-center > .btn span { margin-left: 12px; }
 
-.hrms-training-import-path { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.hrms-training-import-path { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .hrms-training-import-path > div { position: relative; min-width: 0; padding: 2px 14px 2px 34px; }
 .hrms-training-import-path > div:not(:last-child)::after {
 	position: absolute;
@@ -93,7 +97,7 @@
 
 .hrms-training-summary {
 	display: grid;
-	grid-template-columns: repeat(4, minmax(0, 1fr));
+	grid-template-columns: repeat(5, minmax(0, 1fr));
 	gap: 12px;
 	margin-top: 14px;
 }
@@ -182,10 +186,111 @@
 .hrms-training-empty { padding: 22px; border: 1px dashed #dce3ee; border-radius: 10px; color: #7a8699; font-size: 13px; text-align: center; }
 .hrms-training-events .hrms-training-empty { grid-column: 1 / -1; }
 
+.hrms-training-plan-panel { margin-top: 14px; }
+.hrms-training-plan-note { margin-top: 10px; color: #748197; font-size: 12px; line-height: 1.6; }
+.hrms-training-plan-tools { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 16px 0 10px; }
+.hrms-training-plan-tools > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.hrms-training-plan-tools .btn { border-color: #e1e6ee; background: #f7f9fc; color: #5e6b7f; }
+.hrms-training-plan-tools .btn.active { border-color: #2b6cdb; background: #edf4ff; color: #245fae; }
+.hrms-training-search { position: relative; display: block; margin: 0; }
+.hrms-training-search > span { position: absolute; top: 6px; left: 10px; z-index: 1; color: #8793a5; }
+.hrms-training-search input { min-width: 300px; padding-left: 30px; }
+.hrms-training-column-filters { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
+.hrms-training-column-filters select { width: auto; min-width: 150px; }
+.hrms-training-person-filter { display: flex; align-items: center; gap: 7px; margin: 0; color: #657286; font-size: 12px; }
+.hrms-training-person-filter input { width: 160px; }
+.hrms-training-result-count { margin-left: auto; color: #778499; font-size: 12px; }
+.hrms-training-plan-table { height: clamp(620px, 68vh, 920px); max-height: none; border: 1px solid #e8edf3; border-radius: 11px; }
+.hrms-training-plan-table table { min-width: 2050px; margin-bottom: 0; }
+.hrms-training-plan-table thead th { position: sticky; top: 0; z-index: 1; background: #f7f9fc; color: #6c798c; font-size: 11px; white-space: nowrap; }
+.hrms-training-sort { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 650; }
+.hrms-training-sort span { color: #a1acbb; font-size: 12px; }
+.hrms-training-sort.active { color: #2b64b4; }
+.hrms-training-plan-table tbody tr:hover { background: #f8fbff; }
+.hrms-training-plan-table td { vertical-align: middle !important; }
+.hrms-training-plan-table .sticky-status { position: sticky; left: 0; z-index: 2; width: 92px; min-width: 92px; background: #fff; }
+.hrms-training-plan-table .sticky-course { position: sticky; left: 92px; z-index: 2; width: 280px; min-width: 280px; background: #fff; box-shadow: 8px 0 12px -12px #697386; }
+.hrms-training-plan-table thead .sticky-status, .hrms-training-plan-table thead .sticky-course { z-index: 4; background: #f7f9fc; }
+.hrms-training-plan-table tbody tr:hover .sticky-status, .hrms-training-plan-table tbody tr:hover .sticky-course { background: #f8fbff; }
+.hrms-training-plan-table .target-cell { min-width: 260px; max-width: 360px; white-space: normal; }
+.hrms-training-plan-table .actual-cell { min-width: 190px; }
+.hrms-training-plan-table .match-cell { min-width: 170px; }
+.hrms-training-plan-table td strong, .hrms-training-plan-table td small { display: block; }
+.hrms-training-plan-table td small { margin-top: 4px; color: #7b8799; line-height: 1.4; }
+.hrms-training-plan-table td:last-child .btn { margin-top: 7px; }
+.hrms-training-plan-status { display: inline-flex; padding: 4px 9px; border-radius: 999px; background: #f0f2f5; color: #59667a; font-size: 11px; white-space: nowrap; }
+.hrms-training-plan-status.status-已实施 { background: #e8f7ee; color: #25764d; }
+.hrms-training-plan-status.status-待实施 { background: #edf4ff; color: #2b64b4; }
+.hrms-training-plan-status.status-待确认 { background: #fff4d9; color: #916000; }
+.hrms-training-plan-status.status-临时新增,
+.hrms-training-plan-status.status-临时课程 { background: #f2efff; color: #6851a6; }
+.hrms-training-match-dialog > strong, .hrms-training-match-dialog > small { display: block; }
+.hrms-training-match-dialog > small { margin: 4px 0 12px; color: #748197; }
+.hrms-training-match-dialog > p { margin: 10px 0 7px; color: #748197; font-size: 12px; }
+.hrms-training-match-dialog .btn { display: block; width: 100%; margin-bottom: 6px; text-align: left; }
+.hrms-training-match-dialog .btn b, .hrms-training-match-dialog .btn span { display: block; }
+.hrms-training-match-dialog .btn span { margin-top: 3px; color: #748197; font-size: 11px; }
+.hrms-training-pagination { display: flex; align-items: center; justify-content: space-between; padding-top: 12px; color: #748197; font-size: 12px; }
+.hrms-training-pagination > div { display: flex; gap: 6px; }
+
+.hrms-training-detail-page { color: #263246; }
+.hrms-training-detail-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; color: #78859a; font-size: 12px; }
+.hrms-training-detail-hero { display: flex; align-items: stretch; justify-content: space-between; gap: 32px; padding: 28px 30px; border: 1px solid #dce6f3; border-radius: 18px; background: linear-gradient(125deg, #edf5ff 0%, #fff 66%); }
+.hrms-training-detail-hero > div:first-child { min-width: 0; }
+.hrms-training-detail-hero p { margin: 12px 0 3px; color: #6d7c92; font-size: 12px; }
+.hrms-training-detail-hero h1 { margin: 0; color: #1e2c40; font-size: 28px; line-height: 1.25; }
+.hrms-training-detail-hero small { display: block; margin-top: 9px; color: #718096; }
+.hrms-training-detail-metrics { display: grid; grid-template-columns: repeat(3, minmax(100px, 1fr)); min-width: 390px; overflow: hidden; border: 1px solid #e3eaf3; border-radius: 14px; background: rgba(255,255,255,.84); }
+.hrms-training-detail-metrics > div { display: grid; align-content: center; padding: 18px; border-right: 1px solid #e7ecf3; }
+.hrms-training-detail-metrics > div:last-child { border-right: 0; }
+.hrms-training-detail-metrics span { color: #7b8799; font-size: 11px; }
+.hrms-training-detail-metrics strong { margin-top: 5px; color: #223149; font-size: 24px; }
+.hrms-training-detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; margin-top: 14px; }
+.hrms-training-detail-layout main { display: grid; gap: 14px; min-width: 0; }
+.hrms-training-detail-layout aside { display: grid; align-content: start; gap: 14px; }
+.hrms-training-detail-card { padding: 22px; border: 1px solid #e4e9f1; border-radius: 16px; background: #fff; }
+.hrms-training-detail-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 17px; }
+.hrms-training-detail-title p { margin: 0 0 3px; color: #8090a8; font-size: 10px; font-weight: 700; letter-spacing: .1em; }
+.hrms-training-detail-title h2 { margin: 0; color: #27354a; font-size: 18px; }
+.hrms-training-detail-title > span { color: #78859a; font-size: 12px; }
+.hrms-training-detail-fields, .hrms-training-execution-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.hrms-training-detail-field { min-width: 0; padding: 12px 13px; border-radius: 10px; background: #f7f9fc; }
+.hrms-training-detail-field.wide { grid-column: span 2; }
+.hrms-training-detail-field span, .hrms-training-detail-field strong { display: block; overflow-wrap: anywhere; }
+.hrms-training-detail-field span { margin-bottom: 5px; color: #8591a4; font-size: 10px; }
+.hrms-training-detail-field strong { color: #344157; font-size: 12px; font-weight: 600; line-height: 1.45; }
+.hrms-training-audience { margin-top: 14px; padding-top: 14px; border-top: 1px solid #edf0f4; }
+.hrms-training-audience > span { color: #7e8b9f; font-size: 11px; }
+.hrms-training-audience > div { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.hrms-training-audience > div > span { display: inline-flex; gap: 7px; padding: 6px 9px; border-radius: 8px; background: #eef4fd; color: #57708f; font-size: 11px; }
+.hrms-training-audience b { color: #315f9f; }
+.hrms-training-match-summary { margin-top: 14px; padding: 14px; border: 1px solid #cfe2f7; border-radius: 11px; background: #f3f8fe; }
+.hrms-training-match-summary span, .hrms-training-match-summary strong, .hrms-training-match-summary small { display: block; }
+.hrms-training-match-summary span, .hrms-training-match-summary small { color: #6f8096; font-size: 11px; }
+.hrms-training-match-summary strong { margin: 4px 0; color: #2c5f9f; }
+.hrms-training-executions { display: grid; gap: 10px; }
+.hrms-training-execution { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 13px; padding: 15px; border: 1px solid #e8edf3; border-radius: 12px; }
+.hrms-training-execution-index { display: grid; place-items: center; align-self: start; width: 42px; height: 42px; border-radius: 11px; background: #edf4ff; color: #2b67b7; font-size: 11px; font-weight: 700; }
+.hrms-training-execution-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.hrms-training-execution-heading strong, .hrms-training-execution-heading span { display: block; }
+.hrms-training-execution-heading > div > span { margin-top: 4px; color: #7d899c; font-size: 11px; }
+.hrms-training-execution-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 12px; }
+.hrms-training-execution-meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.hrms-training-execution-meta span { padding: 4px 7px; border-radius: 6px; background: #f3f5f8; color: #6e7c91; font-size: 10px; }
+.hrms-training-participant-table { max-height: 420px; border: 1px solid #e8edf3; border-radius: 10px; }
+.hrms-training-participant-table table { margin: 0; }
+.hrms-training-participant-table thead th { position: sticky; top: 0; z-index: 1; background: #f7f9fc; color: #748197; font-size: 11px; white-space: nowrap; }
+.hrms-training-participant-table td { vertical-align: middle !important; font-size: 12px; }
+.hrms-training-source-list { display: grid; gap: 8px; }
+.hrms-training-source-list .hrms-training-detail-field { background: #f8fafc; }
+.hrms-training-detail-help { background: #f4f8fe; }
+.hrms-training-detail-help strong { color: #315f9f; }
+.hrms-training-detail-help p { margin: 7px 0 0; color: #718096; font-size: 12px; line-height: 1.65; }
+
 .hrms-training-list-heading { margin-top: 14px; padding: 16px 20px; }
 
 .hrms-training-import h5 { margin: 0 0 6px; font-weight: 650; }
-.hrms-training-import-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 18px; border: 1px solid #e4eaf2; border-radius: 12px; overflow: hidden; }
+.hrms-training-import-steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0 0 18px; border: 1px solid #e4eaf2; border-radius: 12px; overflow: hidden; }
 .hrms-training-import-steps span { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-right: 1px solid #e8edf4; background: #f8fafc; color: #7a879a; font-size: 12px; font-weight: 600; }
 .hrms-training-import-steps span:last-child { border-right: 0; }
 .hrms-training-import-steps b { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #e9eef5; font-size: 11px; }
@@ -208,7 +313,7 @@
 .hrms-training-upload-card i { position: absolute; top: calc(50% - 18px); right: 20px; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: #edf4ff; color: #2b6cdb; font-size: 20px; font-style: normal; }
 .hrms-training-upload-card.selected i { background: #e4f5eb; color: #238253; }
 
-.hrms-training-import-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+.hrms-training-import-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
 .hrms-training-import-summary > div { padding: 14px; border: 1px solid #e6ebf2; border-radius: 11px; background: #fafbfd; }
 .hrms-training-import-summary span, .hrms-training-import-summary small { display: block; color: #78869a; font-size: 11px; }
 .hrms-training-import-summary strong { display: block; margin: 5px 0 3px; color: #2c384c; font-size: 24px; line-height: 1; }
@@ -241,11 +346,46 @@
 .hrms-training-match-complete strong { color: #276944; }
 .hrms-training-match-complete p { margin: 4px 0 0; color: #668073; }
 
+.hrms-training-plan-hero { margin-bottom: 12px; padding: 18px 24px; }
+.hrms-training-plan-source-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.hrms-training-plan-source-strip > div { min-width: 0; padding: 11px 14px; border: 1px solid #e5eaf1; border-radius: 11px; background: #fafbfd; }
+.hrms-training-plan-source-strip span, .hrms-training-plan-source-strip strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hrms-training-plan-source-strip span { margin-bottom: 4px; color: #8290a4; font-size: 10px; font-weight: 700; letter-spacing: .05em; }
+.hrms-training-plan-source-strip strong { color: #344258; font-size: 12px; }
+.hrms-training-plan-panel { padding: 18px 20px; }
+
+.hrms-training-home { display: grid; gap: 14px; padding-bottom: 28px; color: #263246; }
+.hrms-training-home-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px 28px; border: 1px solid #dce5f2; border-radius: 16px; background: linear-gradient(117deg, #edf4ff 0%, #fff 65%); }
+.hrms-training-home-hero p { margin: 0 0 5px; color: #6681ab; font-size: 11px; font-weight: 700; letter-spacing: .11em; }
+.hrms-training-home-hero h1 { margin: 0; color: #1f2d42; font-size: 28px; font-weight: 700; }
+.hrms-training-home-hero span { display: block; margin-top: 7px; color: #748197; }
+.hrms-training-home-hero > div:last-child { display: flex; gap: 8px; }
+.hrms-training-home-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.hrms-training-home-metric { position: relative; min-height: 112px; padding: 17px 42px 15px 18px; border: 1px solid #e3e9f1; border-radius: 13px; background: #fff; text-align: left; transition: .16s ease; }
+.hrms-training-home-metric:hover { border-color: #b7c9e6; box-shadow: 0 8px 22px rgba(46, 79, 128, .08); transform: translateY(-1px); }
+.hrms-training-home-metric span, .hrms-training-home-metric small { display: block; color: #7a879a; font-size: 11px; }
+.hrms-training-home-metric strong { display: block; margin: 7px 0 5px; color: #243248; font-size: 27px; line-height: 1; }
+.hrms-training-home-metric i { position: absolute; top: 18px; right: 17px; color: #5b7fb8; font-style: normal; }
+.hrms-training-home-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); gap: 14px; }
+.hrms-training-home .hrms-training-panel { margin: 0; }
+.hrms-training-home-event-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.hrms-training-home-event-list > button { display: grid; grid-template-columns: 104px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 78px; padding: 13px 15px; border: 1px solid #e5eaf1; border-radius: 11px; background: #fff; text-align: left; }
+.hrms-training-home-event-list > button > span { color: #376db8; font-size: 11px; font-weight: 700; }
+.hrms-training-home-event-list strong, .hrms-training-home-event-list small { display: block; }
+.hrms-training-home-event-list strong { color: #2e3a4e; }
+.hrms-training-home-event-list small { margin-top: 4px; color: #8290a4; font-size: 11px; }
+.hrms-training-home-event-list i { color: #6f8bb4; font-style: normal; }
+.hrms-training-home-state { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 360px; border: 1px dashed #d7e0ec; border-radius: 16px; color: #79879b; }
+
 @media (max-width: 1120px) {
 	.hrms-training-flow, .hrms-training-events { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+	.hrms-training-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 	.hrms-training-content-grid { grid-template-columns: 1fr; }
 	.hrms-training-import-center { grid-template-columns: 1fr; }
 	.hrms-training-import-center > .btn { justify-self: start; }
+	.hrms-training-home-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+	.hrms-training-home-grid { grid-template-columns: 1fr; }
+	.hrms-training-home-event-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 767px) {
@@ -262,4 +402,17 @@
 	.hrms-training-match-heading { align-items: flex-start; flex-direction: column; }
 	.hrms-training-match-progress { width: 100%; flex-basis: auto; }
 	.hrms-training-match-toolbar { grid-template-columns: 1fr; }
+	.hrms-training-plan-tools { align-items: stretch; flex-direction: column; }
+	.hrms-training-search input { width: 100%; min-width: 0; }
+	.hrms-training-column-filters { align-items: stretch; flex-direction: column; }
+	.hrms-training-column-filters select { width: 100%; }
+	.hrms-training-column-filters > span { margin-left: 0; }
+	.hrms-training-detail-hero, .hrms-training-detail-nav { align-items: flex-start; flex-direction: column; }
+	.hrms-training-detail-metrics { grid-template-columns: 1fr; width: 100%; min-width: 0; }
+	.hrms-training-detail-metrics > div { border-right: 0; border-bottom: 1px solid #e7ecf3; }
+	.hrms-training-detail-layout { grid-template-columns: 1fr; }
+	.hrms-training-detail-fields, .hrms-training-execution-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	.hrms-training-plan-source-strip, .hrms-training-home-metrics, .hrms-training-home-event-list { grid-template-columns: 1fr; }
+	.hrms-training-home-hero { align-items: flex-start; flex-direction: column; padding: 19px; }
+	.hrms-training-home-hero > div:last-child, .hrms-training-home-hero .btn { width: 100%; }
 }

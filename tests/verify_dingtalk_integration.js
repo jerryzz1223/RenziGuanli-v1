@@ -198,7 +198,13 @@ for (const marker of [
 	"get_dingtalk_directory_sync_status",
 	"sync_preentry_employees_from_dingtalk",
 	"sync_all_employee_rosters_from_dingtalk",
-	"首次全量档案同步",
+	"preview_existing_dingtalk_employee_attachments",
+	"queue_existing_dingtalk_employee_attachments",
+	"list_dingtalk_employee_comparisons",
+	"apply_dingtalk_employee_comparison",
+	"全量档案只读比对",
+	"人工对比已有员工",
+	"补齐已有员工附件",
 	"list_dingtalk_attendance_sync_runs",
 ]) {
 	mustInclude(attendanceCenter, marker, `Standalone DingTalk integration is missing marker: ${marker}`);
@@ -210,6 +216,9 @@ for (const marker of [
 	"_stage_dingtalk_employee_import",
 	"list_dingtalk_employee_imports",
 	"approve_dingtalk_employee_import",
+	"queue_approve_all_dingtalk_employee_imports",
+	"run_queued_dingtalk_employee_imports",
+	"该记录来自全量员工档案，不属于钉钉待入职新员工，禁止写入员工主档",
 	"reject_dingtalk_employee_import",
 	"_roster_attachment_items",
 	"_import_dingtalk_attachments",
@@ -217,10 +226,23 @@ for (const marker of [
 ]) {
 	mustInclude(dingtalkIntegration, marker, `DingTalk employee approval is missing marker: ${marker}`);
 }
+if (!/def sync_new_employees_from_dingtalk\([\s\S]{0,320}return _sync_preentry_employees\(company\)/.test(dingtalkIntegration)) {
+	throw new Error("The new-employee action must stay scoped to DingTalk pre-entry employees.");
+}
 
 const employeeImport = read("hrms/hr/doctype/hrms_dingtalk_employee_import/hrms_dingtalk_employee_import.json");
 for (const marker of ["import_status", "mapped_values_json", "approved_by", "approval_note"]) {
 	mustInclude(employeeImport, marker, `DingTalk employee import DocType is missing field: ${marker}`);
+}
+
+const employeeList = read("hrms/public/js/erpnext/employee_list.js");
+for (const marker of [
+	"正在拉取并匹配钉钉待入职新员工",
+	"一键审批并导入全部",
+	"queue_approve_all_dingtalk_employee_imports",
+	'source_type: "preentry"',
+]) {
+	mustInclude(employeeList, marker, `DingTalk employee import UI is missing marker: ${marker}`);
 }
 for (const marker of ["attachments_json", "attachment_count", "attachment_status"]) {
 	mustInclude(employeeImport, marker, `DingTalk employee import DocType is missing attachment field: ${marker}`);

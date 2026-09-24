@@ -353,15 +353,16 @@
 			method: "hrms.api.dingtalk_integration.sync_new_employees_from_dingtalk",
 			args: { company },
 			freeze: true,
-			freeze_message: __("正在拉取并匹配钉钉新员工…"),
+			freeze_message: __("正在拉取并匹配钉钉待入职新员工…"),
 		}).then((response) => {
 			const result = response.message || {};
 			const message = __(
-				"钉钉同步完成：拉取 {0}，待审批 {1}，待匹配 {2}，失败 {3}",
+				"钉钉新员工同步完成：拉取待入职 {0}，待审批 {1}，待匹配 {2}，无变更 {3}，失败 {4}",
 				[
 					result.received || 0,
 					result.pending_approval || 0,
 					(result.pending_match || 0) + (result.conflicts || 0),
+					result.unchanged || 0,
 					result.failed || 0,
 				],
 			);
@@ -392,14 +393,18 @@
 			wrapper.innerHTML = `<div class="text-muted">${__("正在加载钉钉待审数据…")}</div>`;
 			frappe.call({
 				method: "hrms.api.dingtalk_integration.list_dingtalk_employee_imports",
-				args: { company, import_status: options.import_status || "" },
+				args: { company, import_status: options.import_status || "", source_type: "preentry", page_length: 1000 },
 			}).then((response) => {
 				const rows = response.message || [];
 				if (!rows.length) {
 					wrapper.innerHTML = `<div class="text-muted">${__("当前没有待审批、待匹配或冲突的钉钉员工数据。")}</div>`;
 					return;
 				}
-				wrapper.innerHTML = rows.map((row) => {
+				const actionable_count = rows.filter((row) => row.import_status === "待审批").length;
+				const bulk_action = actionable_count
+					? `<div class="alert alert-info" style="display:flex;justify-content:space-between;align-items:center;gap:12px;"><span>${__("已按公司工号精确比对；可一次导入 {0} 条新增/变更记录及其附件。", [actionable_count])}</span><button class="btn btn-primary btn-sm" data-bulk-approve>${__("一键审批并导入全部")}</button></div>`
+					: "";
+				wrapper.innerHTML = bulk_action + rows.map((row) => {
 					const values = row.mapped_values || {};
 					const labels = row.field_labels || {};
 					const detail = Object.entries(values)
@@ -432,6 +437,30 @@
 				wrapper.querySelectorAll("[data-action]").forEach((button) => {
 					button.addEventListener("click", () => handle_dingtalk_import_action(button.closest("[data-import-name]")?.dataset.importName, button.dataset.action));
 				});
+				wrapper.querySelector("[data-bulk-approve]")?.addEventListener("click", () => {
+					frappe.confirm(
+						__("确认将全部 {0} 条新增/变更记录写入员工档案，并把可下载的钉钉附件一并归档吗？任务将在后台执行。", [actionable_count]),
+						() => queue_all_dingtalk_imports(),
+					);
+				});
+			});
+		}
+
+		function queue_all_dingtalk_imports() {
+			frappe.call({
+				method: "hrms.api.dingtalk_integration.queue_approve_all_dingtalk_employee_imports",
+				args: { company, source_type: "preentry" },
+				freeze: true,
+				freeze_message: __("正在提交钉钉员工及附件一键导入任务…"),
+			}).then((response) => {
+				const result = response.message || {};
+				frappe.show_alert({
+					message: result.queued
+						? __("已提交 {0} 条员工及附件后台导入任务，可在同步记录查看结果。", [result.count || 0])
+						: __("当前没有需要导入的新增或变更记录。"),
+					indicator: result.queued ? "green" : "blue",
+				});
+				load_dingtalk_employee_imports();
 			});
 		}
 

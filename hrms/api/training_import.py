@@ -14,6 +14,7 @@ from frappe.utils import flt, now_datetime
 
 from hrms.access_control import require_hrms_capability
 from hrms.hr.training_importer import (
+	match_training_events,
 	parse_plan_workbook,
 	parse_record_workbook,
 	preview_token,
@@ -148,64 +149,134 @@ def _identity_preview(records, employees):
 	return items
 
 
-def _preview(plan_file_url, record_file_url, company):
-	plan_file, plan_content = _file(plan_file_url)
-	record_file, record_content = _file(record_file_url)
-	plan = parse_plan_workbook(plan_content)
-	records = parse_record_workbook(record_content)
-	identities = _identity_preview(records, _employee_directory(company))
-	plan_errors = sum(bool(row["errors"]) for row in plan["rows"])
-	record_errors = sum(bool(row["errors"]) for row in records["rows"])
-	unresolved = sum(item["record_count"] for item in identities if item["status"] != "matched")
-	plan_digest = workbook_digest(plan_content)
-	record_digest = workbook_digest(record_content)
+def _plan_summary(plan):
 	return {
+		"sheet_name": plan["sheet_name"],
+		"year": plan["plan_year"],
+		"row_count": len(plan["rows"]),
+		"error_count": sum(bool(row["errors"]) for row in plan["rows"]),
+		"planned_count": sum(row["classification"] == "计划" for row in plan["rows"]),
+		"temporary_count": sum(row["classification"] == "临时" for row in plan["rows"]),
+		"missing_hours": sum(row["course_hours"] is None for row in plan["rows"]),
+		"sample_rows": plan["rows"][:8],
+	}
+
+
+def _record_summary(records):
+	return {
+		"sheet_name": records["sheet_name"],
+		"row_count": len(records["rows"]),
+		"event_count": len(records["events"]),
+		"error_count": sum(bool(row["errors"]) for row in records["rows"]),
+		"scored_count": sum(bool(row["score_text"]) for row in records["rows"]),
+		"sample_events": [
+			{
+				"actual_date_text": event["actual_date_text"],
+				"content": event["content"],
+				"participant_count": len(event["participants"]),
+				"owner_department": event["owner_department"],
+				"instructor": event["instructor"],
+			}
+			for event in records["events"][:8]
+		],
+	}
+
+
+def _course_match_summary(course_matches):
+	return {
+		"matched_planned": sum(item["status"] == "matched" and item["plan_classification"] == "计划" for item in course_matches),
+		"matched_temporary": sum(item["status"] == "matched" and item["plan_classification"] == "临时" for item in course_matches),
+		"review": sum(item["status"] == "review" for item in course_matches),
+		"temporary": sum(item["status"] == "temporary" for item in course_matches),
+	}
+
+
+def _existing_program_sources(company):
+	programs = frappe.get_all(
+		"Training Program",
+		filters={"company": company, "source_import_key": ["!=", ""]},
+		fields=[
+			"name", "source_import_key", "source_content", "training_program", "source_department",
+			"source_classification", "source_training_type", "source_course_hours", "source_planned_month", "training_mode",
+		],
+		limit_page_length=0,
+	)
+	rows = []
+	by_key = {}
+	for program in programs:
+		content = text(program.source_content or program.training_program)
+		rows.append(
+			{
+				"source_key": program.source_import_key,
+				"content": content,
+				"department": text(program.source_department),
+				"classification": text(program.source_classification) or "计划",
+				"training_type": text(program.source_training_type),
+				"course_hours": program.source_course_hours,
+				"planned_month": text(program.source_planned_month),
+				"internal_external": "外" if program.training_mode == "外部" else "内",
+			}
+		)
+		by_key[program.source_import_key] = program
+	return rows, by_key
+
+
+def _preview_plan(plan_file_url, company):
+	plan_file, plan_content = _file(plan_file_url)
+	plan = parse_plan_workbook(plan_content)
+	plan_digest = workbook_digest(plan_content)
+	return {
+		"import_type": "plan",
 		"company": company,
 		"plan_file": {"file_url": plan_file.file_url, "file_name": plan_file.file_name, "sha256": plan_digest},
+		"plan": _plan_summary(plan),
+		"blocking_error_count": sum(bool(row["errors"]) for row in plan["rows"]),
+		"plan_token": preview_token(company, plan_digest, "", plan["rows"], []),
+		"_plan": plan,
+	}
+
+
+def _preview_records(record_file_url, company):
+	record_file, record_content = _file(record_file_url)
+	records = parse_record_workbook(record_content)
+	plan_rows, program_by_key = _existing_program_sources(company)
+	course_matches = match_training_events(plan_rows, records["events"])
+	identities = _identity_preview(records, _employee_directory(company))
+	record_errors = sum(bool(row["errors"]) for row in records["rows"])
+	unresolved = sum(item["record_count"] for item in identities if item["status"] != "matched")
+	record_digest = workbook_digest(record_content)
+	return {
+		"import_type": "records",
+		"company": company,
 		"record_file": {"file_url": record_file.file_url, "file_name": record_file.file_name, "sha256": record_digest},
-		"plan": {
-			"sheet_name": plan["sheet_name"],
-			"year": plan["plan_year"],
-			"row_count": len(plan["rows"]),
-			"error_count": plan_errors,
-			"planned_count": sum(row["classification"] == "计划" for row in plan["rows"]),
-			"temporary_count": sum(row["classification"] == "临时" for row in plan["rows"]),
-			"missing_hours": sum(row["course_hours"] is None for row in plan["rows"]),
-			"sample_rows": plan["rows"][:8],
-		},
-		"records": {
-			"sheet_name": records["sheet_name"],
-			"row_count": len(records["rows"]),
-			"event_count": len(records["events"]),
-			"error_count": record_errors,
-			"scored_count": sum(bool(row["score_text"]) for row in records["rows"]),
-			"sample_events": [
-				{
-					"actual_date_text": event["actual_date_text"],
-					"content": event["content"],
-					"participant_count": len(event["participants"]),
-					"owner_department": event["owner_department"],
-					"instructor": event["instructor"],
-				}
-				for event in records["events"][:8]
-			],
-		},
+		"records": _record_summary(records),
+		"course_matches": course_matches,
+		"course_match_summary": _course_match_summary(course_matches),
 		"identities": identities,
 		"unresolved_record_count": unresolved,
-		"blocking_error_count": plan_errors + record_errors + unresolved,
-		"plan_token": preview_token(company, plan_digest, record_digest, plan["rows"], records["rows"]),
-		"_plan": plan,
+		"blocking_error_count": record_errors + unresolved,
+		"plan_token": preview_token(company, "", record_digest, plan_rows, records["rows"]),
 		"_records": records,
+		"_program_by_key": program_by_key,
 	}
 
 
 @frappe.whitelist()
-def preview_training_workbooks(plan_file_url: str, record_file_url: str, company: str):
+def preview_training_plan(plan_file_url: str, company: str):
 	require_hrms_capability("training_submit", legacy_roles=("HR Manager",))
 	_company(company)
-	preview = _preview(plan_file_url, record_file_url, company)
+	preview = _preview_plan(plan_file_url, company)
 	preview.pop("_plan", None)
+	return preview
+
+
+@frappe.whitelist()
+def preview_training_records(record_file_url: str, company: str):
+	require_hrms_capability("training_submit", legacy_roles=("HR Manager",))
+	_company(company)
+	preview = _preview_records(record_file_url, company)
 	preview.pop("_records", None)
+	preview.pop("_program_by_key", None)
 	return preview
 
 
@@ -315,9 +386,10 @@ def _upsert_program(company, source_file, source_digest, row):
 		"training_mode": _training_mode(row["internal_external"]),
 		"trainer_name": row["convener"],
 		"description": _plan_description(row),
+		"source_content": row["content"],
 		"source_import_key": row["source_key"],
 		"source_file": source_file,
-		"source_sheet": "2026年计划总表",
+		"source_sheet": row.get("source_sheet") or "2026年计划总表",
 		"source_row": row["source_row"],
 		"source_fingerprint": source_digest,
 		"source_department": row["department"],
@@ -347,6 +419,32 @@ def _upsert_program(company, source_file, source_digest, row):
 	return doc, "created"
 
 
+def _actual_course_plan_row(event):
+	actual_dates = event.get("actual_dates") or []
+	first_date = datetime.fromisoformat(actual_dates[0]).date() if actual_dates else now_datetime().date()
+	return {
+		"source_row": min(event.get("source_rows") or [0]),
+		"source_sheet": event.get("source_sheet"),
+		"source_key": f"TRAIN-AUTO-{event['source_key']}",
+		"plan_year": first_date.year,
+		"department": event.get("owner_department"),
+		"classification": "临时",
+		"training_type": event.get("course_type"),
+		"content": event.get("content"),
+		"internal_external": event.get("internal_external"),
+		"course_hours": event.get("hours"),
+		"convener": event.get("instructor"),
+		"convener_department": event.get("owner_department"),
+		"location": event.get("location"),
+		"target": event.get("target"),
+		"planned_month": f"{first_date.month}月",
+		"actual_dates": actual_dates,
+		"actual_dates_text": event.get("actual_date_text"),
+		"audience_matrix": [],
+		"remarks": "由实际培训登记表自动创建；非年度计划课程。",
+	}
+
+
 def _event_name(event):
 	date_label = "、".join(event["actual_dates"]) or event["actual_date_text"]
 	base = f"{date_label}｜{event['content']}｜{event['instructor']}"
@@ -367,9 +465,41 @@ def _event_introduction(event):
 	)
 
 
-def _insert_event_and_result(company, source_file, source_digest, event, identities, program_by_content):
+def _event_match_values(course_match, program_by_key):
+	program = program_by_key.get(course_match.get("plan_key")) if course_match.get("plan_key") else None
+	if program and course_match.get("plan_classification") == "计划":
+		status = "已匹配计划"
+	elif program:
+		status = "临时新增"
+	elif course_match.get("status") == "review":
+		status = "待确认"
+	else:
+		status = "临时新增"
+	return {
+		"training_program": program.name if program else "",
+		"plan_match_status": status,
+		"plan_match_basis": course_match.get("basis") or "未匹配计划",
+		"plan_match_score": course_match.get("score") or 0,
+	}
+
+
+def _apply_existing_event_match(event_name, values):
+	existing = frappe.db.get_value(
+		"Training Event",
+		event_name,
+		["plan_match_basis", "training_program"],
+		as_dict=True,
+	)
+	if existing and existing.plan_match_basis == "人工确认":
+		return
+	frappe.db.set_value("Training Event", event_name, values, update_modified=False)
+
+
+def _insert_event_and_result(company, source_file, source_digest, event, identities, program_by_key, course_match):
+	match_values = _event_match_values(course_match, program_by_key)
 	existing = frappe.db.get_value("Training Event", {"source_import_key": event["source_key"]}, "name")
 	if existing:
+		_apply_existing_event_match(existing, match_values)
 		return existing, "existing", bool(frappe.db.exists("Training Result", {"training_event": existing}))
 	start_day = datetime.fromisoformat(event["actual_dates"][0]).date()
 	start_time = datetime.combine(start_day, time.min)
@@ -404,13 +534,11 @@ def _insert_event_and_result(company, source_file, source_digest, event, identit
 				"source_study_hours": row["study_hours"],
 			}
 		)
-	programs = program_by_content.get(event["content"], [])
-	program = programs[0] if len(programs) == 1 else ""
 	doc = frappe.get_doc(
 		{
 			"doctype": "Training Event",
 			"event_name": _event_name(event),
-			"training_program": program,
+			**match_values,
 			"event_status": "Completed",
 			"type": _event_type(event["course_type"], event["courseware"]),
 			"company": company,
@@ -445,6 +573,91 @@ def _insert_event_and_result(company, source_file, source_digest, event, identit
 	return doc.name, "created", True
 
 
+def _confirm_separate_import(company, confirm_import):
+	require_hrms_capability("training_submit", legacy_roles=("HR Manager",))
+	_company(company)
+	if not int(confirm_import or 0):
+		frappe.throw(_("请先预览并明确确认导入。"))
+
+
+@frappe.whitelist()
+def import_training_plan(plan_file_url: str, company: str, plan_token: str, confirm_import: int = 0):
+	_confirm_separate_import(company, confirm_import)
+	preview = _preview_plan(plan_file_url, company)
+	if plan_token != preview["plan_token"]:
+		frappe.throw(_("文件或预览结果已变化，请重新预览后再导入。"))
+	if preview["plan"]["error_count"]:
+		frappe.throw(_("来源表仍有结构或数据错误，不能导入。"))
+	counts = Counter()
+	previous_import_flag = getattr(frappe.flags, "in_import", False)
+	frappe.flags.in_import = True
+	try:
+		for row in preview["_plan"]["rows"]:
+			row["source_sheet"] = preview["_plan"]["sheet_name"]
+			_doc, outcome = _upsert_program(company, plan_file_url, preview["plan_file"]["sha256"], row)
+			counts[outcome] += 1
+		frappe.db.commit()
+	except Exception:
+		frappe.db.rollback()
+		raise
+	finally:
+		frappe.flags.in_import = previous_import_flag
+	return {
+		"company": company, "plan_rows": len(preview["_plan"]["rows"]),
+		"programs_created": counts["created"], "programs_updated": counts["updated"], "programs_locked": counts["locked"],
+		"message": "年度计划课程已独立导入；不会改动实际上课明细。",
+	}
+
+
+@frappe.whitelist()
+def import_training_records(record_file_url: str, company: str, plan_token: str, identity_map: str = "", confirm_import: int = 0):
+	_confirm_separate_import(company, confirm_import)
+	preview = _preview_records(record_file_url, company)
+	if plan_token != preview["plan_token"]:
+		frappe.throw(_("文件或现有计划课程已变化，请重新预览后再导入。"))
+	if preview["records"]["error_count"]:
+		frappe.throw(_("登记表仍有结构或数据错误，不能导入。"))
+	identities = _identity_selection(identity_map, preview)
+	program_by_key = preview["_program_by_key"]
+	course_matches = {item["event_key"]: item for item in preview["course_matches"]}
+	plan_counts = Counter()
+	event_counts = Counter()
+	result_count = 0
+	previous_import_flag = getattr(frappe.flags, "in_import", False)
+	frappe.flags.in_import = True
+	try:
+		for event in preview["_records"]["events"]:
+			course_match = course_matches[event["source_key"]]
+			if course_match["status"] == "temporary":
+				auto_row = _actual_course_plan_row(event)
+				program, outcome = _upsert_program(company, record_file_url, preview["record_file"]["sha256"], auto_row)
+				plan_counts[outcome] += 1
+				program_by_key[auto_row["source_key"]] = program
+				course_match.update({
+					"status": "matched", "plan_key": auto_row["source_key"], "plan_classification": "临时",
+					"basis": "登记表未找到已建课程，自动创建临时课程",
+				})
+			_event_name_value, outcome, has_result = _insert_event_and_result(
+				company, record_file_url, preview["record_file"]["sha256"], event, identities, program_by_key, course_match,
+			)
+			event_counts[outcome] += 1
+			result_count += int(outcome == "created" and has_result)
+		frappe.db.commit()
+	except Exception:
+		frappe.db.rollback()
+		raise
+	finally:
+		frappe.flags.in_import = previous_import_flag
+	return {
+		"company": company,
+		"temporary_programs_created": plan_counts["created"], "temporary_programs_updated": plan_counts["updated"],
+		"events_created": event_counts["created"], "events_existing": event_counts["existing"],
+		"results_created_as_draft": result_count, "participant_records": len(preview["_records"]["rows"]),
+		"course_match_summary": preview["course_match_summary"],
+		"message": "实际上课明细已独立导入并匹配现有课程；未找到课程的记录已自动创建临时课程。培训结果保留为草稿。",
+	}
+
+
 @frappe.whitelist()
 def import_training_workbooks(
 	plan_file_url: str,
@@ -456,9 +669,10 @@ def import_training_workbooks(
 ):
 	require_hrms_capability("training_submit", legacy_roles=("HR Manager",))
 	_company(company)
+	frappe.throw(_("计划表与登记表已改为独立提交，请从培训计划页分别导入。"))
 	if not int(confirm_import or 0):
 		frappe.throw(_("请先预览并明确确认导入。"))
-	preview = _preview(plan_file_url, record_file_url, company)
+	preview = {}
 	if plan_token != preview["plan_token"]:
 		frappe.throw(_("文件或预览结果已变化，请重新预览后再导入。"))
 	if preview["plan"]["error_count"] or preview["records"]["error_count"]:
@@ -468,14 +682,15 @@ def import_training_workbooks(
 	plan_counts = Counter()
 	event_counts = Counter()
 	result_count = 0
-	program_by_content = defaultdict(list)
+	program_by_key = {}
+	course_matches = {item["event_key"]: item for item in preview["course_matches"]}
 	previous_import_flag = getattr(frappe.flags, "in_import", False)
 	frappe.flags.in_import = True
 	try:
 		for row in preview["_plan"]["rows"]:
 			doc, outcome = _upsert_program(company, plan_file_url, preview["plan_file"]["sha256"], row)
 			plan_counts[outcome] += 1
-			program_by_content[row["content"]].append(doc.name)
+			program_by_key[row["source_key"]] = doc
 		for event in preview["_records"]["events"]:
 			_event_name_value, outcome, has_result = _insert_event_and_result(
 				company,
@@ -483,7 +698,8 @@ def import_training_workbooks(
 				preview["record_file"]["sha256"],
 				event,
 				identities,
-				program_by_content,
+				program_by_key,
+				course_matches[event["source_key"]],
 			)
 			event_counts[outcome] += 1
 			result_count += int(outcome == "created" and has_result)
@@ -503,5 +719,6 @@ def import_training_workbooks(
 		"events_existing": event_counts["existing"],
 		"results_created_as_draft": result_count,
 		"participant_records": len(preview["_records"]["rows"]),
+		"course_match_summary": preview["course_match_summary"],
 		"message": _("培训计划和实际培训记录已导入。培训结果保留为草稿，复核并提交后才沉淀员工技能。"),
 	}

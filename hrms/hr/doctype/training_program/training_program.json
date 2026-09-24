@@ -15,6 +15,7 @@
   "owner_department",
   "plan_period",
   "source_plan_section",
+  "source_content",
   "source_department",
   "source_classification",
   "source_training_type",
@@ -102,6 +103,12 @@
    "fieldname": "source_plan_section",
    "fieldtype": "Section Break",
    "label": "教育训练计划原表字段"
+  },
+  {
+   "fieldname": "source_content",
+   "fieldtype": "Data",
+   "label": "来源培训内容",
+   "read_only": 1
   },
   {
    "fieldname": "source_department",

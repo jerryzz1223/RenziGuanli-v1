@@ -11,6 +11,7 @@ import json
 import re
 from collections import OrderedDict
 from datetime import date, datetime
+from difflib import SequenceMatcher
 from io import BytesIO
 
 from openpyxl import load_workbook
@@ -51,6 +52,144 @@ def workbook_digest(content):
 def stable_key(prefix, payload):
 	encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 	return f"{prefix}-{hashlib.sha256(encoded.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _match_text(value):
+	return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text(value).lower())
+
+
+def _department_key(value):
+	value = _match_text(value)
+	for suffix in ("部门", "课", "组", "室"):
+		if value.endswith(suffix):
+			value = value[: -len(suffix)]
+	return value
+
+
+def _course_variants(value, department=""):
+	raw = text(value)
+	parts = [raw]
+	parts.extend(re.findall(r"[（(]([^）)]+)[）)]", raw))
+	parts.extend(re.split(r"[（()）]", raw))
+	department_key = _department_key(department)
+	variants = []
+	for part in parts:
+		candidate = _match_text(part)
+		if department_key:
+			candidate = candidate.replace(department_key, "")
+		if candidate and candidate not in variants:
+			variants.append(candidate)
+	return variants or [""]
+
+
+def _planned_months(value):
+	value = text(value)
+	months = set()
+	for first, second in re.findall(r"(?<!\d)(\d{1,2})(?:\s*[-~至]\s*(\d{1,2}))?\s*月", value):
+		for item in (first, second):
+			if item and 1 <= int(item) <= 12:
+				months.add(int(item))
+	return months
+
+
+def _course_similarity(plan_row, event):
+	plan_variants = _course_variants(plan_row.get("content"), plan_row.get("department"))
+	event_variants = _course_variants(event.get("content"), event.get("owner_department"))
+	exact = any(left == right for left in plan_variants for right in event_variants if left and right)
+	containment = any(
+		min(len(left), len(right)) >= 4 and (left in right or right in left)
+		for left in plan_variants
+		for right in event_variants
+	)
+	ratio = max((SequenceMatcher(None, left, right).ratio() for left in plan_variants for right in event_variants), default=0)
+	if exact:
+		content_score = 70
+	elif containment:
+		content_score = 60
+	elif ratio >= 0.78:
+		content_score = 45 + ratio * 20
+	else:
+		content_score = 0
+	return exact, containment, ratio, content_score
+
+
+def match_training_events(plan_rows, events):
+	"""Match actual events to planned courses without silently forcing weak matches."""
+	results = []
+	for event in events:
+		event_months = {datetime.fromisoformat(value).month for value in event.get("actual_dates", [])}
+		candidates = []
+		for plan_row in plan_rows:
+			exact, containment, ratio, score = _course_similarity(plan_row, event)
+			if not score:
+				continue
+			basis = ["课程名称"]
+			department_match = bool(
+				_department_key(plan_row.get("department"))
+				and _department_key(plan_row.get("department")) == _department_key(event.get("owner_department"))
+			)
+			if department_match:
+				score += 15
+				basis.append("归属部门")
+			plan_months = _planned_months(plan_row.get("planned_month"))
+			if plan_months and event_months.intersection(plan_months):
+				score += 10
+				basis.append("计划月份")
+			elif not plan_months:
+				score += 3
+			if text(plan_row.get("internal_external")) == text(event.get("internal_external")):
+				score += 3
+				basis.append("培训方式")
+			if plan_row.get("course_hours") is not None and event.get("hours") is not None and abs(plan_row["course_hours"] - event["hours"]) < 0.01:
+				score += 2
+				basis.append("课时")
+			candidates.append(
+				{
+					"plan_key": plan_row["source_key"],
+					"content": plan_row["content"],
+					"department": plan_row["department"],
+					"planned_month": plan_row["planned_month"],
+					"classification": plan_row["classification"],
+					"score": round(min(score, 100), 1),
+					"basis": "、".join(basis),
+					"exact": exact,
+					"containment": containment,
+					"similarity": round(ratio, 4),
+				}
+			)
+		candidates.sort(key=lambda item: (-item["score"], item["plan_key"]))
+		best = candidates[0] if candidates else None
+		second_score = candidates[1]["score"] if len(candidates) > 1 else 0
+		margin = (best["score"] - second_score) if best else 0
+		exact_candidates = [item for item in candidates if item["exact"]]
+		automatic = bool(
+			best
+			and (
+				(len(exact_candidates) == 1 and best["exact"])
+				or (best["score"] >= 86 and margin >= 8)
+			)
+		)
+		if automatic:
+			status = "matched"
+		elif best and best["score"] >= 72:
+			status = "review"
+		else:
+			status = "temporary"
+		results.append(
+			{
+				"event_key": event["source_key"],
+				"event_content": event["content"],
+				"owner_department": event["owner_department"],
+				"actual_dates": event.get("actual_dates", []),
+				"status": status,
+				"plan_key": best["plan_key"] if automatic else "",
+				"plan_classification": best["classification"] if automatic else "",
+				"score": best["score"] if best else 0,
+				"basis": best["basis"] if automatic else ("待人工确认" if status == "review" else "未匹配计划"),
+				"candidates": [{key: value for key, value in item.items() if key not in ("exact", "containment", "similarity")} for item in candidates[:5]],
+			}
+		)
+	return results
 
 
 def _workbook(content):
@@ -119,11 +258,24 @@ def _merged_top_labels(sheet, start_column, end_column):
 	return labels
 
 
+def _plan_sheet(workbook):
+	"""Select the annual plan by its business headers, not a fixed tab name."""
+	required = {"部门", "分类", "培训类型", "培训内容", "内/外", "预计上课时间(月份)"}
+	ordered_names = ([PLAN_SHEET] if PLAN_SHEET in workbook.sheetnames else []) + [
+		name for name in workbook.sheetnames if name != PLAN_SHEET
+	]
+	for sheet_name in ordered_names:
+		sheet = workbook[sheet_name]
+		for row_number in range(1, min(sheet.max_row, 10) + 1):
+			values = {compact(sheet.cell(row_number, column).value) for column in range(1, min(sheet.max_column, 40) + 1)}
+			if required.issubset(values):
+				return sheet, row_number
+	raise ValueError("未找到包含部门、分类、培训类型、培训内容和预计上课月份的计划工作表")
+
+
 def parse_plan_workbook(content):
 	workbook = _workbook(content)
-	if PLAN_SHEET not in workbook.sheetnames:
-		raise ValueError(f"缺少工作表：{PLAN_SHEET}")
-	sheet = workbook[PLAN_SHEET]
+	sheet, header_row = _plan_sheet(workbook)
 	required = {
 		2: "部门",
 		3: "分类",
@@ -132,16 +284,16 @@ def parse_plan_workbook(content):
 		6: "内/外",
 		12: "预计上课时间(月份)",
 	}
-	missing = [label for column, label in required.items() if compact(sheet.cell(3, column).value) != compact(label)]
+	missing = [label for column, label in required.items() if compact(sheet.cell(header_row, column).value) != compact(label)]
 	if missing:
 		raise ValueError("计划总表表头不匹配：" + "、".join(missing))
 
-	title = text(sheet.cell(2, 2).value)
+	title = text(sheet.cell(max(1, header_row - 1), 2).value)
 	year_match = re.search(r"(20\d{2})", title)
 	plan_year = int(year_match.group(1)) if year_match else 2026
 	audience_labels = _merged_top_labels(sheet, 16, 33)
 	rows = []
-	for row_number in range(5, sheet.max_row + 1):
+	for row_number in range(header_row + 2, sheet.max_row + 1):
 		content_name = text(sheet.cell(row_number, 5).value)
 		if not content_name:
 			continue
@@ -183,7 +335,7 @@ def parse_plan_workbook(content):
 			if not value
 		]
 		rows.append(row)
-	return {"sheet_name": sheet.title, "plan_year": plan_year, "rows": rows}
+	return {"sheet_name": sheet.title, "header_row": header_row, "plan_year": plan_year, "rows": rows}
 
 
 def _find_record_header(sheet):

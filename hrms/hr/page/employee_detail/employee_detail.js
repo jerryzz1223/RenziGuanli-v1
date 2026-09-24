@@ -30,7 +30,9 @@ class EmployeeDetailPage {
 		this.expanded_related = {};
 		this.apple_tree_summary = null;
 		this.apple_tree_request_id = 0;
-		this.tabs = ["概览", "在职信息", "个人信息", "联系信息", "工资社保", "合同信息", "材料附件", "背景调查"];
+		this.trainingSearch = "";
+		this.trainingType = "";
+		this.tabs = ["概览", "在职信息", "个人信息", "联系信息", "培训记录", "工资社保", "合同信息", "材料附件", "背景调查"];
 		this.section_alias = {
 			在职信息: "在职信息",
 			个人信息: "个人信息",
@@ -109,6 +111,8 @@ class EmployeeDetailPage {
 			this.last_loaded_at = 0;
 			this.active_tab = "概览";
 			this.expanded_related = {};
+			this.trainingSearch = "";
+			this.trainingType = "";
 			this.apple_tree_summary = null;
 		}
 
@@ -559,6 +563,25 @@ class EmployeeDetailPage {
 				.hrms-employee-detail-relationship-person small { color: var(--hrms-muted); }
 				.hrms-employee-detail-relationship-label { flex: 0 0 auto; max-width: 112px; color: #52657a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 				.hrms-employee-detail-relationship-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #eef1f4; }
+				.hrms-employee-training-summary { width: 100%; border: 1px solid var(--hrms-border); background: #fff; text-align: left; color: inherit; }
+				.hrms-employee-training-summary:hover { border-color: #93c5fd; background: #fbfdff; }
+				.hrms-employee-training-summary__heading { display: flex; justify-content: space-between; align-items: center; }
+				.hrms-employee-training-summary__metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+				.hrms-employee-training-summary__metrics div { display: grid; gap: 2px; }
+				.hrms-employee-training-summary__metrics strong { font-size: 17px; }
+				.hrms-employee-training-summary__metrics span, .hrms-employee-training-summary small { color: var(--hrms-muted); font-size: 11px; }
+				.hrms-employee-training-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+				.hrms-employee-training-code { padding: 5px 9px; border-radius: 4px; background: #f3f5f7; color: #52657a; }
+				.hrms-employee-training-toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) 180px auto auto auto; gap: 8px; align-items: center; margin-bottom: 12px; }
+				.hrms-employee-training-table-wrap { overflow: auto; border: 1px solid var(--hrms-border); border-radius: 6px; }
+				.hrms-employee-training-table { min-width: 1040px; margin: 0; }
+				.hrms-employee-training-table thead th { position: sticky; top: 0; z-index: 1; padding: 10px 12px; border: 0; background: #f4f7fb; color: #52657a; font-weight: 600; white-space: nowrap; }
+				.hrms-employee-training-table tbody td { padding: 11px 12px; border-top: 1px solid #eef1f4; vertical-align: top; }
+				.hrms-employee-training-table td > strong, .hrms-employee-training-table td > small { display: block; }
+				.hrms-employee-training-table td > small { margin-top: 3px; color: var(--hrms-muted); font-size: 11px; }
+				.hrms-employee-training-status { display: inline-flex; padding: 3px 7px; border-radius: 12px; font-size: 11px; white-space: nowrap; }
+				.hrms-employee-training-status.is-confirmed { background: #e9f8ef; color: #16794b; }
+				.hrms-employee-training-status.is-pending { background: #fff4dd; color: #9a6700; }
 				.hrms-employee-detail-related {
 					margin-top: 14px;
 					border: 1px solid #eef1f4;
@@ -868,6 +891,8 @@ class EmployeeDetailPage {
 						justify-content: flex-start;
 						overflow-x: auto;
 					}
+					.hrms-employee-training-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+					.hrms-employee-training-toolbar { grid-template-columns: 1fr; }
 				}
 			</style>
 		`;
@@ -960,6 +985,9 @@ class EmployeeDetailPage {
 		if (this.active_tab === "材料附件") {
 			return this.render_material_attachments();
 		}
+		if (this.active_tab === "培训记录") {
+			return this.render_training_history();
+		}
 		return this.render_section_tab(this.active_tab);
 	}
 
@@ -995,7 +1023,7 @@ class EmployeeDetailPage {
 				</div>
 				<div class="hrms-employee-detail-side-panel">
 					${this.render_side_card("本月考勤", [["打卡天数/应出勤/天", "0/0"], ["请假", "0小时"], ["迟到", "0次"], ["加班", "0小时"]])}
-					${this.render_side_card("培训学习", [])}
+					${this.render_training_summary_card()}
 					${this.render_side_card("绩效考核", [])}
 					${this.render_employee_relationship_card()}
 				</div>
@@ -1022,6 +1050,89 @@ class EmployeeDetailPage {
 				}
 			</div>
 		`;
+	}
+
+	render_training_summary_card() {
+		const summary = this.detail?.training_history?.summary || {};
+		const count = Number(summary.record_count || 0);
+		return `
+			<button type="button" class="hrms-employee-detail-side-card hrms-employee-training-summary" data-action="open-training-history">
+				<div class="hrms-employee-training-summary__heading"><h4>${__("培训学习")}</h4><span>→</span></div>
+				${count ? `<div class="hrms-employee-training-summary__metrics">
+					<div><strong>${count}</strong><span>${__("参训记录")}</span></div>
+					<div><strong>${Number(summary.course_count || 0)}</strong><span>${__("课程")}</span></div>
+					<div><strong>${this.format_training_number(summary.study_hours)}</strong><span>${__("学时")}</span></div>
+				</div><small>${__("最近培训")}：${frappe.utils.escape_html(this.format_training_date(summary.latest_date))}</small>` : `<div class="hrms-employee-detail-empty">${__("暂无培训记录")}</div>`}
+			</button>
+		`;
+	}
+
+	training_records() {
+		const records = this.detail?.training_history?.records || [];
+		const search = String(this.trainingSearch || "").trim().toLowerCase();
+		return records.filter((record) => {
+			if (this.trainingType && String(record.course_type || "") !== this.trainingType) return false;
+			if (!search) return true;
+			return [record.course, record.course_type, record.owner_department, record.trainer, record.location, record.actual_dates]
+				.some((value) => String(value || "").toLowerCase().includes(search));
+		});
+	}
+
+	render_training_history() {
+		const history = this.detail?.training_history || {};
+		const summary = history.summary || {};
+		const records = this.training_records();
+		const types = [...new Set((history.records || []).map((record) => String(record.course_type || "").trim()).filter(Boolean))].sort();
+		return `
+			<div class="hrms-employee-detail-section hrms-employee-detail-section-card hrms-employee-training-history">
+				<div class="hrms-employee-detail-section__header">
+					<div><h3>${__("培训记录")}</h3><div class="text-muted">${__("数据来自教育训练登记表，并按公司工号绑定当前员工。")}</div></div>
+					<span class="hrms-employee-training-code">${__("公司工号")}：${frappe.utils.escape_html(history.employee_code || __("未设置"))}</span>
+				</div>
+				<div class="hrms-employee-training-kpis">
+					${this.render_kpi("参训记录", Number(summary.record_count || 0))}
+					${this.render_kpi("课程数", Number(summary.course_count || 0))}
+					${this.render_kpi("累计学时", this.format_training_number(summary.study_hours))}
+					${this.render_kpi("最近培训", this.format_training_date(summary.latest_date))}
+				</div>
+				<div class="hrms-employee-training-toolbar">
+					<input class="form-control input-sm" data-training-search value="${frappe.utils.escape_html(this.trainingSearch)}" placeholder="${__("搜索课程、讲师、部门或地点")}">
+					<select class="form-control input-sm" data-training-type><option value="">${__("全部课程类型")}</option>${types.map((type) => `<option value="${frappe.utils.escape_html(type)}" ${this.trainingType === type ? "selected" : ""}>${frappe.utils.escape_html(type)}</option>`).join("")}</select>
+					<button type="button" class="btn btn-default btn-sm" data-action="apply-training-filter">${__("查询")}</button>
+					<button type="button" class="btn btn-link btn-sm" data-action="clear-training-filter">${__("清除")}</button>
+					<span class="text-muted">${__("显示 {0} 条", [records.length])}</span>
+				</div>
+				<div class="hrms-employee-training-table-wrap">
+					<table class="table hrms-employee-training-table">
+						<thead><tr><th>${__("上课日期")}</th><th>${__("培训课程")}</th><th>${__("课程类型")}</th><th>${__("归属部门")}</th><th>${__("授课人 / 地点")}</th><th>${__("课时 / 学时")}</th><th>${__("记录状态")}</th></tr></thead>
+						<tbody>${records.length ? records.map((record) => this.render_training_row(record)).join("") : `<tr><td colspan="7"><div class="hrms-employee-detail-empty">${__("没有符合条件的培训记录")}</div></td></tr>`}</tbody>
+					</table>
+				</div>
+			</div>
+		`;
+	}
+
+	render_training_row(record) {
+		const score = record.score !== null && record.score !== undefined ? `${__("成绩")}：${this.format_training_number(record.score)}` : (record.grade ? `${__("成绩")}：${record.grade}` : "");
+		return `<tr>
+			<td><strong>${frappe.utils.escape_html(this.format_training_date(record.training_date))}</strong>${record.actual_dates ? `<small>${frappe.utils.escape_html(record.actual_dates)}</small>` : ""}</td>
+			<td><strong>${frappe.utils.escape_html(record.course || __("未命名课程"))}</strong><small>${frappe.utils.escape_html([record.training_mode, record.target].filter(Boolean).join(" · "))}</small></td>
+			<td>${frappe.utils.escape_html(record.course_type || "—")}</td>
+			<td>${frappe.utils.escape_html(record.owner_department || "—")}</td>
+			<td>${frappe.utils.escape_html([record.trainer, record.location].filter(Boolean).join(" / ") || "—")}</td>
+			<td>${this.format_training_number(record.hours)} / ${this.format_training_number(record.study_hours)}</td>
+			<td><span class="hrms-employee-training-status ${record.review_status === "已确认" ? "is-confirmed" : "is-pending"}">${frappe.utils.escape_html(record.review_status || __("待复核"))}</span>${score ? `<small>${frappe.utils.escape_html(score)}</small>` : ""}${record.needs_retraining ? `<small class="text-danger">${__("需要补训")}</small>` : ""}</td>
+		</tr>`;
+	}
+
+	format_training_date(value) {
+		if (!value) return "—";
+		return String(value).slice(0, 10);
+	}
+
+	format_training_number(value) {
+		const number = Number(value || 0);
+		return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 	}
 
 	render_employee_relationship_card() {
@@ -1337,6 +1448,34 @@ class EmployeeDetailPage {
 		this.wrapper.querySelectorAll("[data-tab]").forEach((button) => {
 			button.addEventListener("click", () => {
 				this.active_tab = button.dataset.tab;
+				this.render();
+			});
+		});
+		this.wrapper.querySelectorAll("[data-action='open-training-history']").forEach((button) => {
+			button.addEventListener("click", () => {
+				this.active_tab = "培训记录";
+				this.render();
+			});
+		});
+		this.wrapper.querySelectorAll("[data-action='apply-training-filter']").forEach((button) => {
+			button.addEventListener("click", () => {
+				this.trainingSearch = this.wrapper.querySelector("[data-training-search]")?.value || "";
+				this.trainingType = this.wrapper.querySelector("[data-training-type]")?.value || "";
+				this.render();
+			});
+		});
+		this.wrapper.querySelectorAll("[data-action='clear-training-filter']").forEach((button) => {
+			button.addEventListener("click", () => {
+				this.trainingSearch = "";
+				this.trainingType = "";
+				this.render();
+			});
+		});
+		this.wrapper.querySelectorAll("[data-training-search]").forEach((input) => {
+			input.addEventListener("keydown", (event) => {
+				if (event.key !== "Enter") return;
+				this.trainingSearch = input.value || "";
+				this.trainingType = this.wrapper.querySelector("[data-training-type]")?.value || "";
 				this.render();
 			});
 		});

@@ -41,6 +41,86 @@ def load_module():
 
 
 class DingTalkRosterAttachmentTests(unittest.TestCase):
+	def test_roster_select_fields_prefer_human_label_over_internal_code(self):
+		module = load_module()
+		fields = [
+			{
+				"fieldCode": "sys03-highestEdu",
+				"fieldValueList": [{"label": "大专", "value": "3"}],
+			}
+		]
+
+		self.assertEqual(module._roster_field_value(fields, "sys03-highestEdu"), "大专")
+
+	def test_employee_select_values_are_normalised_to_hrms_options(self):
+		module = load_module()
+		select = types.SimpleNamespace(fieldtype="Select")
+
+		self.assertEqual(module._normalise_dingtalk_employee_value("gender", "男", select), "Male")
+		self.assertEqual(module._normalise_dingtalk_employee_value("custom_marital_status_text", "未婚", select), "未")
+		self.assertEqual(module._normalise_dingtalk_employee_value("custom_education_level", "初中及以下", select), "初中")
+		self.assertEqual(module._normalise_dingtalk_employee_value("employment_type", "全职", select), "Full-time")
+		self.assertIsNone(module._normalise_dingtalk_employee_value("emergency_phone_number", "0", select))
+
+	def test_actual_department_overrides_multi_membership_department(self):
+		module = load_module()
+
+		self.assertEqual(
+			module.DINGTALK_EMPLOYEE_FIELD_MAP["97ba8623-e5bf-4af2-9f05-a392063ce646"],
+			("department",),
+		)
+
+	def test_existing_employee_import_only_fills_blank_fields(self):
+		module = load_module()
+
+		fillable, preserved = module._dingtalk_existing_employee_import_plan(
+			{
+				"company": "永新",
+				"status": "Active",
+				"department": "品保课",
+				"designation": "作业员",
+				"relation": "配偶",
+			},
+			{"department": "连续课", "designation": "作业员", "relation": ""},
+		)
+
+		self.assertEqual(fillable, {"relation": "配偶"})
+		self.assertEqual(preserved, ["department"])
+
+	def test_comparison_ignores_phone_format_and_protects_employee_code(self):
+		module = load_module()
+		meta = {
+			"cell_number": types.SimpleNamespace(label="手机号码", fieldtype="Data", options=""),
+			"department": types.SimpleNamespace(label="部门", fieldtype="Link", options="Department"),
+			"custom_employee_code": types.SimpleNamespace(label="工号", fieldtype="Data", options=""),
+		}
+
+		differences = module._dingtalk_employee_field_differences(
+			{"cell_number": "+86-18287355486", "department": "品保课", "custom_employee_code": "9999"},
+			{"cell_number": "18287355486", "department": "连续课", "custom_employee_code": "260506"},
+			meta_fields=meta,
+		)
+
+		self.assertEqual([item["fieldname"] for item in differences], ["department"])
+
+	def test_unchanged_employee_fields_do_not_enter_delta(self):
+		module = load_module()
+
+		self.assertEqual(
+			module._changed_dingtalk_employee_fields(
+				{"company": "永新", "status": "Active", "gender": "Male", "custom_education_level": "大专"},
+				{"company": "永新", "status": "Active", "gender": "Male", "custom_education_level": "大专"},
+			),
+			[],
+		)
+		self.assertEqual(
+			module._changed_dingtalk_employee_fields(
+				{"company": "永新", "gender": "Female"},
+				{"company": "永新", "gender": "Male"},
+			),
+			["gender"],
+		)
+
 	def test_directory_endpoints_are_rate_limited_and_qps_errors_are_detected(self):
 		module = load_module()
 

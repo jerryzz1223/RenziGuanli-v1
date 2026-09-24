@@ -169,8 +169,8 @@
 		{
 			label: "培训学习",
 			icon: "learning",
-			route: "/desk/training-program",
-			keys: ["training-program", "training-event", "training-result", "training-feedback", "employee-skill-map"],
+			route: "/desk/training-learning-center",
+			keys: ["training-learning-center", "training-program", "training-event", "training-result", "training-feedback", "employee-skill-map"],
 		},
 		{
 			label: "绩效",
@@ -238,7 +238,7 @@
 		"薪酬": "payroll-input-center",
 		"审批": "workflow",
 		"公告": "announcement-directory",
-		"培训学习": "training-program",
+		"培训学习": "training-learning-center",
 		"绩效": "performance",
 		"更多": "attendance-import-center",
 		"HR Setup": "hrms-workbench",

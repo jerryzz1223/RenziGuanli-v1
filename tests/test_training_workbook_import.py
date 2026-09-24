@@ -49,6 +49,22 @@ class TrainingWorkbookImportTest(unittest.TestCase):
 		self.assertEqual(row["remarks"], "原表备注")
 		self.assertTrue(row["source_key"].startswith("TRAIN-PLAN-"))
 
+	def test_plan_sheet_is_detected_by_headers_when_title_has_copy_suffix(self):
+		workbook = Workbook()
+		sheet = workbook.active
+		sheet.title = "2026年计划总表 (2)"
+		sheet["B2"] = "2026年度教育训练工作表（内培+外培）"
+		headers = ["部门", "分类", "培训类型", "培训内容", "内/外", "课时", "召集人员", "召集部门", "地点", "主要培训岗位/人员", "预计上课时间（月份）"]
+		for column, label in enumerate(headers, start=2):
+			sheet.cell(3, column).value = label
+		for column, value in enumerate(["工程", "计划", "岗位应知应会", "点镀作业规范", "内", 1, "陆体廷", "工程", "会议室", "直接人员", "1月"], start=2):
+			sheet.cell(5, column).value = value
+
+		result = IMPORTER.parse_plan_workbook(workbook_bytes(workbook))
+		self.assertEqual(result["sheet_name"], "2026年计划总表 (2)")
+		self.assertEqual(result["header_row"], 3)
+		self.assertEqual(len(result["rows"]), 1)
+
 	def test_record_summary_groups_people_into_one_event_and_reads_compact_dates(self):
 		workbook = Workbook()
 		sheet = workbook.active
@@ -108,6 +124,35 @@ class TrainingWorkbookImportTest(unittest.TestCase):
 		rows = IMPORTER.parse_plan_workbook(workbook_bytes(workbook))["rows"]
 		self.assertEqual(len(rows), 2)
 		self.assertNotEqual(rows[0]["source_key"], rows[1]["source_key"])
+
+	def test_actual_course_matches_plan_by_title_department_month_mode_and_hours(self):
+		plans = [
+			{"source_key": "P-1", "content": "12月月会", "department": "药水", "classification": "计划", "planned_month": "次年1月", "internal_external": "内", "course_hours": 1},
+			{"source_key": "P-2", "content": "12月月会", "department": "品保", "classification": "计划", "planned_month": "次年1月", "internal_external": "内", "course_hours": 1},
+		]
+		events = [
+			{"source_key": "E-1", "content": "药水课12月月会", "owner_department": "药水课", "actual_dates": ["2026-01-20"], "internal_external": "内", "hours": 1},
+		]
+		match = IMPORTER.match_training_events(plans, events)[0]
+		self.assertEqual(match["status"], "matched")
+		self.assertEqual(match["plan_key"], "P-1")
+		self.assertIn("归属部门", match["basis"])
+		self.assertIn("计划月份", match["basis"])
+
+	def test_weak_or_ambiguous_course_match_is_not_forced(self):
+		plans = [
+			{"source_key": "P-1", "content": "3月月会（2603月月会）", "department": "生管", "classification": "计划", "planned_month": "", "internal_external": "内", "course_hours": 1},
+			{"source_key": "P-2", "content": "3月月会（2603月月会）", "department": "生管", "classification": "计划", "planned_month": "", "internal_external": "内", "course_hours": 1},
+		]
+		events = [
+			{"source_key": "E-1", "content": "2603月月会", "owner_department": "生管课", "actual_dates": ["2026-04-27"], "internal_external": "内", "hours": 1},
+			{"source_key": "E-2", "content": "临时安全法规宣导", "owner_department": "行政课", "actual_dates": ["2026-05-08"], "internal_external": "内", "hours": 1},
+		]
+		matches = IMPORTER.match_training_events(plans, events)
+		self.assertEqual(matches[0]["status"], "review")
+		self.assertFalse(matches[0]["plan_key"])
+		self.assertEqual(matches[1]["status"], "temporary")
+		self.assertFalse(matches[1]["plan_key"])
 
 
 if __name__ == "__main__":

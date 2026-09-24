@@ -3990,6 +3990,97 @@ def _get_employee_detail_sections(doc, department_display=""):
 	return sections
 
 
+def _get_employee_training_history(doc):
+	"""Return imported education records for the employee's company code."""
+	employee_code = str(doc.get("custom_employee_code") or "").strip()
+	company = doc.get("company")
+	if not employee_code or not company:
+		return {
+			"employee_code": employee_code,
+			"records": [],
+			"summary": {"record_count": 0, "course_count": 0, "study_hours": 0, "latest_date": None},
+		}
+
+	rows = frappe.db.sql(
+		"""
+			select
+				employee.parent as training_result,
+				result.docstatus as result_docstatus,
+				event.name as training_event,
+				event.event_name,
+				event.course,
+				event.start_time,
+				event.source_actual_dates,
+				event.source_course_type,
+				event.training_category,
+				event.training_mode,
+				event.source_owner_department,
+				event.trainer_name,
+				event.location,
+				event.source_target,
+				employee.hours,
+				employee.source_study_hours,
+				employee.score,
+				employee.grade,
+				employee.assessment_result,
+				employee.needs_retraining,
+				employee.comments,
+				employee.source_month,
+				employee.source_row
+			from `tabTraining Result Employee` employee
+			inner join `tabTraining Result` result on result.name = employee.parent
+			inner join `tabTraining Event` event on event.name = result.training_event
+			where employee.employee_code = %(employee_code)s
+				and event.company = %(company)s
+				and result.docstatus < 2
+				and event.docstatus < 2
+			order by event.start_time desc, employee.source_row desc
+			limit 500
+		""",
+		{"employee_code": employee_code, "company": company},
+		as_dict=True,
+	)
+	records = []
+	for row in rows:
+		records.append(
+			{
+				"training_result": row.training_result,
+				"training_event": row.training_event,
+				"course": row.course or row.event_name,
+				"training_date": row.start_time,
+				"actual_dates": row.source_actual_dates,
+				"course_type": row.source_course_type or row.training_category,
+				"training_mode": row.training_mode,
+				"owner_department": row.source_owner_department,
+				"trainer": row.trainer_name,
+				"location": row.location,
+				"target": row.source_target,
+				"hours": flt(row.hours),
+				"study_hours": flt(row.source_study_hours),
+				"score": row.score,
+				"grade": row.grade,
+				"assessment_result": row.assessment_result,
+				"needs_retraining": cint(row.needs_retraining),
+				"comments": row.comments,
+				"source_month": row.source_month,
+				"source_row": row.source_row,
+				"review_status": "已确认" if cint(row.result_docstatus) == 1 else "待复核",
+			}
+		)
+
+	courses = {row["course"] for row in records if row.get("course")}
+	return {
+		"employee_code": employee_code,
+		"records": records,
+		"summary": {
+			"record_count": len(records),
+			"course_count": len(courses),
+			"study_hours": sum(flt(row.get("study_hours")) for row in records),
+			"latest_date": records[0].get("training_date") if records else None,
+		},
+	}
+
+
 def _get_employee_child_items(doc, child_fieldname, field_map, limit=5):
 	items = []
 	for row in list(doc.get(child_fieldname) or [])[:limit]:
@@ -4697,6 +4788,7 @@ def get_employee_detail(employee: str):
 			else None,
 		},
 		"growth_records": _get_employee_growth_timeline(doc, employment_history),
+		"training_history": _get_employee_training_history(doc),
 		"sections": _get_employee_detail_sections(doc, department_display),
 		"standing_pay_summary": _get_employee_standing_pay_summary(doc),
 		"photo_history": _get_employee_photo_history(doc),

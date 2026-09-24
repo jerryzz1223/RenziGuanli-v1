@@ -4283,17 +4283,19 @@ class AttendanceImportCenter {
 						<button class="btn btn-default btn-sm" data-action="dingtalk-test-connection">${this.escape(__("测试连接"))}</button>
 						<button class="btn btn-default btn-sm" data-action="dingtalk-directory">${this.escape(__("同步组织和员工"))}</button>
 						<button class="btn btn-default btn-sm" data-action="dingtalk-preentry">${this.escape(__("同步扫码入职"))}</button>
-						<button class="btn btn-default btn-sm" data-action="dingtalk-full-roster">${this.escape(__("首次全量档案同步"))}</button>
+						<button class="btn btn-default btn-sm" data-action="dingtalk-full-roster">${this.escape(__("全量档案只读比对"))}</button>
+						<button class="btn btn-default btn-sm" data-action="dingtalk-employee-comparisons">${this.escape(__("人工对比已有员工"))}</button>
+						<button class="btn btn-default btn-sm" data-action="dingtalk-existing-attachments">${this.escape(__("补齐已有员工附件"))}</button>
 						<button class="btn btn-default btn-sm" data-action="dingtalk-manual-sync">${this.escape(__("手动拉取指定日期"))}</button>
 						<button class="btn btn-default btn-sm" data-action="open-sync-logs">${this.escape(__("同步记录"))}</button>
 					</div>
 				</div>
-				<div class="alert alert-info">${this.escape(__("钉钉扫码入职提交后，系统可拉取待入职人员并保留原始记录；首次全量档案同步会拉取在职和待入职员工的全部花名册字段及附件元数据。只有公司工号完全匹配时才自动绑定员工档案，其余记录进入待匹配，不按姓名或手机号猜测合并。"))}</div>
+				<div class="alert alert-info">${this.escape(__("“同步扫码入职”只处理钉钉待入职新员工，并在审批后写入员工档案；“全量档案只读比对”只保留在职员工的字段和附件快照，不进入新员工审批，也禁止写入员工主档。所有身份匹配只使用公司工号，不按姓名或手机号猜测合并。"))}</div>
 				<div class="hrms-dingtalk-sync-progress" data-dingtalk-progress hidden></div>
 				<div class="hrms-attendance-quick-grid" data-dingtalk-status><div class="text-muted">${this.escape(__("正在读取钉钉同步状态..."))}</div></div>
 				<div class="hrms-attendance-import-panel mt-3">
 					<h4>${this.escape(__("使用顺序"))}</h4>
-					<p>${this.escape(__("1. 打开连接设置并测试连接 → 2. 同步组织和员工 → 3. 首次点击“首次全量档案同步” → 4. 在员工导入审批中核对字段和附件 → 5. 扫码入职需要时点击“同步扫码入职” → 6. 需要补拉时点击“手动拉取指定日期”。"))}</p>
+					<p>${this.escape(__("新员工流程：同步扫码入职 → 在员工花名册打开钉钉导入审批 → 核对后导入。全量档案只读比对仅用于核查钉钉与系统差异，不得用于批量覆盖现有员工。"))}</p>
 					<div>
 						<button class="btn btn-default btn-sm" data-action="open-mappings">${this.escape(__("查看员工映射"))}</button>
 						<button class="btn btn-default btn-sm" data-action="open-logs">${this.escape(__("刷新同步状态"))}</button>
@@ -4309,6 +4311,8 @@ class AttendanceImportCenter {
 		this.body().querySelector("[data-action='dingtalk-test-connection']").addEventListener("click", () => this.test_dingtalk_connection());
 		this.body().querySelector("[data-action='dingtalk-preentry']").addEventListener("click", () => this.sync_dingtalk_preentries());
 		this.body().querySelector("[data-action='dingtalk-full-roster']").addEventListener("click", () => this.sync_dingtalk_full_roster());
+		this.body().querySelector("[data-action='dingtalk-employee-comparisons']").addEventListener("click", () => this.open_dingtalk_employee_comparisons());
+		this.body().querySelector("[data-action='dingtalk-existing-attachments']").addEventListener("click", () => this.sync_existing_dingtalk_attachments());
 		this.body().querySelector("[data-action='dingtalk-manual-sync']").addEventListener("click", () => this.sync_dingtalk_attendance_for_date());
 		this.body().querySelector("[data-action='dingtalk-directory']").addEventListener("click", () => this.sync_dingtalk_directory());
 		this.body().querySelector("[data-action='open-mappings']").addEventListener("click", () => frappe.set_route("List", "HRMS DingTalk User Map"));
@@ -4316,6 +4320,121 @@ class AttendanceImportCenter {
 		this.body().querySelectorAll("[data-action='open-sync-logs']").forEach((button) => button.addEventListener("click", () => this.set_view("sync-logs")));
 		this.body().querySelector("[data-action='open-raw']").addEventListener("click", () => frappe.set_route("List", "HRMS DingTalk Raw Record"));
 		this.load_dingtalk_status();
+	}
+
+	open_dingtalk_employee_comparisons() {
+		if (!this.ensure_company()) return;
+		const dialog = new frappe.ui.Dialog({
+			title: __("钉钉与已有员工人工对比"),
+			size: "extra-large",
+			fields: [{ fieldtype: "HTML", fieldname: "comparison_html" }],
+			primary_action_label: __("刷新对比"),
+			primary_action: () => loadComparisons(),
+		});
+		const wrapper = dialog.fields_dict.comparison_html.$wrapper[0];
+		const escape = (value) => this.escape(value ?? "");
+
+		const applySelected = (card, row) => {
+			const selected = Array.from(card.querySelectorAll("[data-comparison-field]:checked")).map((input) => input.dataset.comparisonField);
+			if (!selected.length) {
+				frappe.msgprint(__("请先勾选要采用钉钉值的字段。"));
+				return;
+			}
+			frappe.prompt(
+				[{ fieldname: "reason", fieldtype: "Small Text", label: __("修改原因"), reqd: 1 }],
+				(values) => frappe.call({
+					method: "hrms.api.dingtalk_integration.apply_dingtalk_employee_comparison",
+					args: { import_name: row.name, fieldnames_json: JSON.stringify(selected), reason: values.reason },
+					freeze: true,
+					freeze_message: __("正在保存人工比对结果…"),
+				}).then((response) => {
+					const result = response.message || {};
+					frappe.show_alert({
+						message: __("已修改 {0} 个字段，仍有 {1} 个差异待确认。", [(result.updated_fields || []).length, result.remaining_difference_count || 0]),
+						indicator: result.remaining_difference_count ? "orange" : "green",
+					});
+					loadComparisons();
+				}),
+				__("保存人工比对"),
+				__("应用选中字段"),
+			);
+		};
+
+		const render = (rows) => {
+			if (!rows.length) {
+				wrapper.innerHTML = `<div class="alert alert-success">${escape(__("当前已匹配员工没有待人工确认的字段差异。"))}</div>`;
+				return;
+			}
+			wrapper.innerHTML = `
+				<div class="alert alert-info">${escape(__("共 {0} 名已按公司工号精确匹配的员工存在差异。勾选某一行表示采用钉钉值；未勾选字段不会修改。", [rows.length]))}</div>
+				${rows.map((row) => `
+					<div class="dingtalk-employee-comparison-card" data-comparison-import="${escape(row.name)}" style="border:1px solid var(--border-color);border-radius:8px;padding:12px;margin-bottom:12px;">
+						<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;">
+							<strong>${escape(row.employee_name)} (${escape(row.employee_code)})</strong>
+							<button class="btn btn-default btn-xs" data-open-employee="${escape(row.employee)}">${escape(__("打开员工档案"))}</button>
+						</div>
+						<div class="table-responsive"><table class="table table-bordered table-sm">
+							<thead><tr><th style="width:64px;">${escape(__("采用"))}</th><th>${escape(__("字段"))}</th><th>${escape(__("系统现值"))}</th><th>${escape(__("钉钉值"))}</th></tr></thead>
+							<tbody>${row.differences.map((diff) => `<tr>
+								<td><input type="checkbox" data-comparison-field="${escape(diff.fieldname)}"></td>
+								<td><strong>${escape(diff.label)}</strong><br><small class="text-muted">${escape(diff.fieldname)}</small></td>
+								<td>${escape(diff.system_value || __("未填写"))}</td>
+								<td>${escape(diff.dingtalk_value || __("未填写"))}</td>
+							</tr>`).join("")}</tbody>
+						</table></div>
+						<div style="display:flex;justify-content:flex-end;"><button class="btn btn-primary btn-sm" data-apply-comparison>${escape(__("应用选中的钉钉值"))}</button></div>
+					</div>
+				`).join("")}`;
+			wrapper.querySelectorAll("[data-open-employee]").forEach((button) => button.addEventListener("click", () => frappe.set_route("Form", "Employee", button.dataset.openEmployee)));
+			wrapper.querySelectorAll("[data-comparison-import]").forEach((card) => {
+				const row = rows.find((item) => item.name === card.dataset.comparisonImport);
+				card.querySelector("[data-apply-comparison]")?.addEventListener("click", () => applySelected(card, row));
+			});
+		};
+
+		const loadComparisons = () => {
+			wrapper.innerHTML = `<div class="text-muted">${escape(__("正在重新计算系统与钉钉差异…"))}</div>`;
+			frappe.call({
+				method: "hrms.api.dingtalk_integration.list_dingtalk_employee_comparisons",
+				args: { company: this.company, page_length: 500 },
+			}).then((response) => render(response.message || []));
+		};
+
+		dialog.show();
+		loadComparisons();
+	}
+
+	sync_existing_dingtalk_attachments() {
+		if (!this.ensure_company()) return;
+		frappe.call({
+			method: "hrms.api.dingtalk_integration.preview_existing_dingtalk_employee_attachments",
+			args: { company: this.company },
+			freeze: true,
+			freeze_message: __("正在比对已有员工附件…"),
+		}).then((response) => {
+			const result = response.message || {};
+			if (!result.attachment_count) {
+				frappe.show_alert({ message: __("已有员工的钉钉附件已齐全。"), indicator: "green" });
+				return;
+			}
+			frappe.confirm(
+				__("将为 {0} 名已有员工补齐 {1} 个缺失附件。此操作不会修改员工字段，是否继续？", [result.employee_count || 0, result.attachment_count || 0]),
+				() => frappe.call({
+					method: "hrms.api.dingtalk_integration.queue_existing_dingtalk_employee_attachments",
+					args: { company: this.company },
+					freeze: true,
+					freeze_message: __("正在提交附件后台任务…"),
+				}).then((queueResponse) => {
+					const queued = queueResponse.message || {};
+					frappe.show_alert({
+						message: queued.queued
+							? __("已提交 {0} 名员工、{1} 个附件的后台任务。", [queued.employee_count || 0, queued.attachment_count || 0])
+							: __("没有需要补齐的附件。"),
+						indicator: queued.queued ? "green" : "blue",
+					});
+				}),
+			);
+		});
 	}
 
 	open_dingtalk_configuration() {
@@ -4392,14 +4511,14 @@ class AttendanceImportCenter {
 			method: "hrms.api.dingtalk_integration.sync_all_employee_rosters_from_dingtalk",
 			args: { company: this.company },
 			freeze: true,
-			freeze_message: __("正在拉取钉钉全部员工档案和附件元数据..."),
+			freeze_message: __("正在只读比对钉钉全部员工档案和附件元数据..."),
 			callback: (response) => {
 				const result = response.message || {};
 				const attachmentMessage = result.attachment_count
 					? __("附件元数据 {0} 项；下载能力以钉钉返回的地址为准。", [result.attachment_count])
 					: __("未返回附件。请检查钉钉 HRM 花名册字段权限。");
 				frappe.show_alert({
-					message: __("全量档案同步完成：员工 {0}，待审批 {1}，待匹配 {2}，失败 {3}。{4}", [result.employee_count || 0, result.pending_approval || 0, result.pending_match || 0, result.failed || 0, attachmentMessage]),
+					message: __("全量档案只读比对完成：员工 {0}，发现差异 {1}，待匹配 {2}，失败 {3}。不会写入员工主档。{4}", [result.employee_count || 0, result.pending_approval || 0, result.pending_match || 0, result.failed || 0, attachmentMessage]),
 					indicator: result.failed ? "orange" : "green",
 				});
 				this.load_dingtalk_status();
