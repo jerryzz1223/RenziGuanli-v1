@@ -14,6 +14,7 @@ for (const marker of [
 	"event.company = %(company)s",
 	'"training_history": _get_employee_training_history(doc)',
 	'"review_status": "已确认" if cint(row.result_docstatus) == 1 else "待复核"',
+	"effective_hours = flt(row.source_study_hours) or flt(row.hours)",
 ]) assert(api.includes(marker), `培训记录接口缺少：${marker}`);
 
 for (const marker of [

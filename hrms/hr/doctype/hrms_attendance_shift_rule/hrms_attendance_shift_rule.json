@@ -8,7 +8,7 @@
  "field_order": [
   "enabled", "company", "rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "effective_from", "shift_type", "shift_sync_status", "shift_sync_message",
   "time_section", "basic_time", "weekday_overtime_time", "weekend_overtime_time", "overtime_begin_time", "overnight", "meal_deduction_rule", "special_workday_time",
-  "calculation_section", "basic_hours", "weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule", "extended_overtime_mode", "weekend_overtime_mode", "holiday_overtime_mode",
+  "calculation_section", "basic_hours", "weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule", "extended_overtime_mode", "overtime_approval_time_mode", "overtime_approval_reapply_minutes", "weekend_overtime_mode", "holiday_overtime_mode",
   "allowance_section", "small_night_rule", "large_night_rule", "remarks", "suggested_positions", "punch_in_range", "punch_out_range",
   "source_section", "manual_override", "source_version", "source_file", "source_sheet", "source_row", "source_checksum", "source_payload_json"
  ],
@@ -39,6 +39,8 @@
   {"default": "加班单", "fieldname": "weekday_overtime_mode", "fieldtype": "Select", "label": "平日加班来源", "options": "不提交加班单\n加班单\n无"},
   {"fieldname": "extended_shift_rule", "fieldtype": "Small Text", "label": "延班规则"},
   {"fieldname": "extended_overtime_mode", "fieldtype": "Select", "label": "固定加班后续来源", "options": "\n加班单\n不提交加班单\n无", "description": "仅用于说明固定加班时段结束后的申请要求；空白表示原表未明确，待复核"},
+  {"default": "有审批时段则校验", "fieldname": "overtime_approval_time_mode", "fieldtype": "Select", "label": "加班审批时间校验", "options": "仅确认已匹配审批\n有审批时段则校验\n必须覆盖实际下班", "description": "有审批时段则校验：能解析到审批起止时间时核对实际下班；旧审批只有单号而没有时间时仍视为已匹配。"},
+  {"default": "30", "fieldname": "overtime_approval_reapply_minutes", "fieldtype": "Int", "label": "审批结束后再次申请阈值（分钟）", "description": "例如填写30：审批结束后0-29分钟不提示，第30分钟起视为后续时间未被原审批覆盖。"},
   {"fieldname": "weekend_overtime_mode", "fieldtype": "Select", "label": "周末加班来源", "options": "\n不提交加班单\n加班单\n无"},
   {"fieldname": "holiday_overtime_mode", "fieldtype": "Select", "label": "节日加班来源", "options": "\n不提交加班单\n加班单\n无"},
   {"fieldname": "allowance_section", "fieldtype": "Section Break", "label": "津贴及其他规则"},

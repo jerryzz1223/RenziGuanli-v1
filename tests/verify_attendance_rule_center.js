@@ -29,6 +29,8 @@ for (const marker of [
 	'data-edit-selected-rule',
 	'special_workday_time_fixed',
 	'extended_overtime_mode',
+	'overtime_approval_time_mode',
+	'overtime_approval_reapply_minutes',
 	'系统班次联动',
 	'联动计划',
 ]) requireMarker(page, marker, `Complete rule centre is missing: ${marker}`);
@@ -60,7 +62,7 @@ for (const marker of [
 	'_require_processing_manager()',
 ]) requireMarker(api, marker, `Complete rule centre API is missing: ${marker}`);
 
-for (const field of ["shift_group", "shift_variant", "special_workday_time", "extended_overtime_mode", "manual_override"]) {
+for (const field of ["shift_group", "shift_variant", "special_workday_time", "extended_overtime_mode", "overtime_approval_time_mode", "overtime_approval_reapply_minutes", "manual_override"]) {
 	requireMarker(shiftRuleSchema, `"fieldname": "${field}"`, `Rule schema is missing ${field}`);
 	requireMarker(api, field, `Rule import/API does not map ${field}`);
 }

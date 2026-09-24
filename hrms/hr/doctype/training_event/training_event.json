@@ -16,8 +16,12 @@
   "type",
   "level",
   "company",
+  "owner_department",
   "training_category",
   "training_mode",
+  "course_hours",
+  "delivery_method",
+  "target_audience",
   "assessment_required",
   "passing_score",
   "retraining_due_on",
@@ -122,6 +126,12 @@
    "options": "Company"
   },
   {
+   "fieldname": "owner_department",
+   "fieldtype": "Link",
+   "label": "课程归属部门",
+   "options": "Department"
+  },
+  {
    "fieldname": "training_category",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -133,6 +143,21 @@
    "fieldtype": "Select",
    "label": "培训方式",
    "options": "内部\n外部\n线上\n自主学习\n混合"
+  },
+  {
+   "fieldname": "course_hours",
+   "fieldtype": "Float",
+   "label": "课时"
+  },
+  {
+   "fieldname": "delivery_method",
+   "fieldtype": "Data",
+   "label": "授课 / 课件方式"
+  },
+  {
+   "fieldname": "target_audience",
+   "fieldtype": "Small Text",
+   "label": "培训对象 / 岗位"
   },
   {
    "default": "0",

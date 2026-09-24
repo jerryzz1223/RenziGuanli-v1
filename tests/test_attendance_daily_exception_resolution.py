@@ -186,8 +186,28 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 			"实际部门": "工程课", "班次": "休息", "上班时间": "09:00", "下班时间": "12:00",
 			"实际出勤（小时）": 0, "休息日加班（小时）": 0,
 			"source_file": "A.xlsx", "source_sheet": "每日统计", "source_row": index,
-		} for index, day in enumerate(("2026-07-04", "2026-07-11", "2026-07-25"), 10)]
+		} for index, day in enumerate(("2026-07-06", "2026-07-13", "2026-07-20"), 10)]
 		row = m.process_attendance_draft_rows(sources, attendance_month="2026-07")["processed_rows"][0]
+		# Keep this endpoint test about preserving already persisted historic cards.
+		# Current policy no longer creates a punch exception on a genuine rest day,
+		# so model the legacy cards explicitly instead of asking the new processor to
+		# regenerate a rule that has intentionally been retired.
+		legacy_lines = [
+			{**detail, "restday_clocked_without_overtime": True, "exception_codes": [RESTDAY_CODE]}
+			for detail in row["proposed_value"]["attendance_details"]
+		]
+		legacy_events = [{
+			"attendance_date": line["attendance_date"], "source_row": line["source_row"],
+			"source_file": line.get("source_file") or "", "source_sheet": line.get("source_sheet") or "",
+			"code": RESTDAY_CODE,
+		} for line in legacy_lines]
+		for values in (row["processed_value"], row["proposed_value"]):
+			values["exception_lines"] = json.loads(json.dumps(legacy_lines, ensure_ascii=False))
+			values["exception_events"] = json.loads(json.dumps(legacy_events, ensure_ascii=False))
+		row["exception_codes"] = [RESTDAY_CODE]
+		row["exception_message"] = "historic rest-day review cards"
+		row["review_status"] = "待审核"
+		row["eligible_for_downstream"] = False
 		# A historic month has a reviewed total and sibling data which differ from
 		# today's processor. Saving one card must not silently upgrade that month.
 		row["proposed_value"]["workday_overtime_hours"] = 123
@@ -206,11 +226,11 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 		)
 		with patch.multiple(m, **patches), patch.object(m.frappe, "get_doc", lambda doctype, name: doc if name == "R" else batch, create=True), patch.object(m.frappe.db, "commit", lambda: None, create=True):
 			before = m._serialize_record(doc.as_dict())
-			result = m.update_attendance_draft_daily_row("C", "2026-07", "R", 10, {"休息日加班（小时）": 3}, reason="补录", source_file="A.xlsx", source_sheet="每日统计", attendance_date="2026-07-04")
+			result = m.update_attendance_draft_daily_row("C", "2026-07", "R", 10, {"休息日加班（小时）": 3}, reason="补录", source_file="A.xlsx", source_sheet="每日统计", attendance_date="2026-07-06")
 			reopened = m._serialize_record(doc.as_dict())
-			self.assertEqual([line["attendance_date"] for line in result["daily_exception_lines"]], ["2026-07-04", "2026-07-11", "2026-07-25"])
+			self.assertEqual([line["attendance_date"] for line in result["daily_exception_lines"]], ["2026-07-06", "2026-07-13", "2026-07-20"])
 			self.assertEqual(result["daily_exception_lines"][0]["review_status"], "已处理异常")
-			self.assertEqual([line["attendance_date"] for line in result["daily_pending_exception_lines"]], ["2026-07-11", "2026-07-25"])
+			self.assertEqual([line["attendance_date"] for line in result["daily_pending_exception_lines"]], ["2026-07-13", "2026-07-20"])
 			self.assertEqual(reopened["daily_exception_lines"], result["daily_exception_lines"])
 			self.assertEqual(reopened["review_status"], "待审核")
 			values = m._effective_result_values(reopened)
@@ -220,15 +240,15 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 			self.assertEqual(reopened["review_history"][-1]["new_value"], {"休息日加班（小时）": 3})
 			self.assertEqual(len(reopened["review_history"]), 1)
 			# Saving another card keeps the remaining one and both explicit edits.
-			result2 = m.update_attendance_draft_daily_row("C", "2026-07", "R", 12, {"休息日加班（小时）": 2}, reason="补录", source_file="A.xlsx", source_sheet="每日统计", attendance_date="2026-07-25")
-			self.assertEqual([line["attendance_date"] for line in result2["daily_exception_lines"]], ["2026-07-04", "2026-07-11", "2026-07-25"])
-			self.assertEqual([line["attendance_date"] for line in result2["daily_pending_exception_lines"]], ["2026-07-11"])
+			result2 = m.update_attendance_draft_daily_row("C", "2026-07", "R", 12, {"休息日加班（小时）": 2}, reason="补录", source_file="A.xlsx", source_sheet="每日统计", attendance_date="2026-07-20")
+			self.assertEqual([line["attendance_date"] for line in result2["daily_exception_lines"]], ["2026-07-06", "2026-07-13", "2026-07-20"])
+			self.assertEqual([line["attendance_date"] for line in result2["daily_pending_exception_lines"]], ["2026-07-13"])
 			self.assertEqual(m._effective_result_values(result2)["restday_overtime_hours"], 5)
 			self.assertEqual(len(result2["review_history"]), 2)
 			# A decision-only card also must not run a month-wide recalculation.
 			with patch.object(m, "process_attendance_draft_rows", side_effect=AssertionError("unexpected month rebuild")):
-				result3 = m.review_attendance_draft_daily_exception("C", "2026-07", "R", 11, RESTDAY_CODE, reason="核对不计加班", source_file="A.xlsx", source_sheet="每日统计", attendance_date="2026-07-11")
-			pending_result3 = next(line for line in result3["daily_pending_exception_lines"] if line["attendance_date"] == "2026-07-11")
+				result3 = m.review_attendance_draft_daily_exception("C", "2026-07", "R", 11, RESTDAY_CODE, reason="核对不计加班", source_file="A.xlsx", source_sheet="每日统计", attendance_date="2026-07-13")
+			pending_result3 = next(line for line in result3["daily_pending_exception_lines"] if line["attendance_date"] == "2026-07-13")
 			self.assertEqual(pending_result3["exception_codes"], [CLOCK_IN_CODE])
 			self.assertEqual(m._effective_result_values(result3)["restday_overtime_hours"], 5)
 			self.assertEqual(m._effective_result_values(result3)["workday_overtime_hours"], 123)

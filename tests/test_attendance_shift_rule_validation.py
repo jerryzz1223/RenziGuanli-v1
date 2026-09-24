@@ -39,6 +39,7 @@ class AttendanceShiftRuleValidationTest(unittest.TestCase):
 			"weekend_overtime_mode": "不提交加班单", "holiday_overtime_mode": "", "basic_time": "20:00-04:30",
 			"weekday_overtime_time": "04:30-08:00", "weekend_overtime_time": "", "overtime_begin_time": "08:00",
 			"extended_overtime_mode": "加班单", "special_workday_time": "17:00-18:00",
+			"overtime_approval_time_mode": "有审批时段则校验", "overtime_approval_reapply_minutes": 30,
 			"punch_in_range": "18:00-20:29", "punch_out_range": "20:30-次日10:00",
 			"small_night_rule": "上班时间>=8小时，且下班时间在04:30-07:59之间",
 			"large_night_rule": "上班时间>=11.5小时，且下班时间等于或晚于08:00",
@@ -74,6 +75,10 @@ class AttendanceShiftRuleValidationTest(unittest.TestCase):
 			self.make_rule(extended_overtime_mode="随意文字").validate()
 		with self.assertRaisesRegex(RuntimeError, "后续免申请"):
 			self.make_rule(extended_overtime_mode="不提交加班单", weekday_overtime_mode="加班单").validate()
+		with self.assertRaisesRegex(RuntimeError, "审批时间校验方式"):
+			self.make_rule(overtime_approval_time_mode="随意文字").validate()
+		with self.assertRaisesRegex(RuntimeError, "不能小于"):
+			self.make_rule(overtime_approval_reapply_minutes=-1).validate()
 
 
 if __name__ == "__main__":

@@ -7,6 +7,12 @@
 	display: none !important;
 }
 
+.hrms-training-plan-page .page-actions .custom-btn-group,
+.hrms-training-plan-page .page-actions .page-icon-group,
+.hrms-training-plan-page .page-actions .menu-btn-group {
+	display: none !important;
+}
+
 .hrms-training-learning-workspace {
 	margin: 0 0 24px;
 	color: #263246;
@@ -187,7 +193,6 @@
 .hrms-training-events .hrms-training-empty { grid-column: 1 / -1; }
 
 .hrms-training-plan-panel { margin-top: 14px; }
-.hrms-training-plan-note { margin-top: 10px; color: #748197; font-size: 12px; line-height: 1.6; }
 .hrms-training-plan-tools { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 16px 0 10px; }
 .hrms-training-plan-tools > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .hrms-training-plan-tools .btn { border-color: #e1e6ee; background: #f7f9fc; color: #5e6b7f; }
@@ -201,7 +206,7 @@
 .hrms-training-person-filter input { width: 160px; }
 .hrms-training-result-count { margin-left: auto; color: #778499; font-size: 12px; }
 .hrms-training-plan-table { height: clamp(620px, 68vh, 920px); max-height: none; border: 1px solid #e8edf3; border-radius: 11px; }
-.hrms-training-plan-table table { min-width: 2050px; margin-bottom: 0; }
+.hrms-training-plan-table table { min-width: 1750px; margin-bottom: 0; }
 .hrms-training-plan-table thead th { position: sticky; top: 0; z-index: 1; background: #f7f9fc; color: #6c798c; font-size: 11px; white-space: nowrap; }
 .hrms-training-sort { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 650; }
 .hrms-training-sort span { color: #a1acbb; font-size: 12px; }
@@ -212,12 +217,12 @@
 .hrms-training-plan-table .sticky-course { position: sticky; left: 92px; z-index: 2; width: 280px; min-width: 280px; background: #fff; box-shadow: 8px 0 12px -12px #697386; }
 .hrms-training-plan-table thead .sticky-status, .hrms-training-plan-table thead .sticky-course { z-index: 4; background: #f7f9fc; }
 .hrms-training-plan-table tbody tr:hover .sticky-status, .hrms-training-plan-table tbody tr:hover .sticky-course { background: #f8fbff; }
+.hrms-training-course-link { display: block; max-width: 100%; padding: 0; border: 0; background: transparent; color: #263246; font: inherit; font-weight: 650; text-align: left; }
+.hrms-training-course-link:hover, .hrms-training-course-link:focus-visible { color: #2b64b4; text-decoration: underline; }
 .hrms-training-plan-table .target-cell { min-width: 260px; max-width: 360px; white-space: normal; }
 .hrms-training-plan-table .actual-cell { min-width: 190px; }
-.hrms-training-plan-table .match-cell { min-width: 170px; }
 .hrms-training-plan-table td strong, .hrms-training-plan-table td small { display: block; }
 .hrms-training-plan-table td small { margin-top: 4px; color: #7b8799; line-height: 1.4; }
-.hrms-training-plan-table td:last-child .btn { margin-top: 7px; }
 .hrms-training-plan-status { display: inline-flex; padding: 4px 9px; border-radius: 999px; background: #f0f2f5; color: #59667a; font-size: 11px; white-space: nowrap; }
 .hrms-training-plan-status.status-已实施 { background: #e8f7ee; color: #25764d; }
 .hrms-training-plan-status.status-待实施 { background: #edf4ff; color: #2b64b4; }
@@ -253,6 +258,31 @@
 .hrms-training-detail-title p { margin: 0 0 3px; color: #8090a8; font-size: 10px; font-weight: 700; letter-spacing: .1em; }
 .hrms-training-detail-title h2 { margin: 0; color: #27354a; font-size: 18px; }
 .hrms-training-detail-title > span { color: #78859a; font-size: 12px; }
+.hrms-training-detail-actions { display: flex; align-items: center; gap: 10px; }
+.hrms-training-detail-actions > span { color: #78859a; font-size: 12px; }
+.hrms-training-roster-editor { border: 1px solid #9dbcf5; box-shadow: 0 8px 24px rgba(46, 91, 172, .08); }
+.hrms-training-roster-summary { display: flex; gap: 12px; align-items: baseline; padding: 12px 14px; margin-bottom: 12px; background: #f3f7ff; border-radius: 8px; }
+.hrms-training-roster-summary span { color: #66758b; font-size: 12px; }
+.hrms-training-employee-search { display: grid; grid-template-columns: minmax(260px, 1fr) auto; gap: 8px; margin-bottom: 8px; }
+.hrms-training-employee-results { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.hrms-training-employee-result { display: grid; grid-template-columns: auto auto; gap: 2px 8px; min-width: 210px; padding: 8px 10px; text-align: left; background: #fff; border: 1px solid #d8e1ef; border-radius: 8px; }
+.hrms-training-employee-result:hover { border-color: #5b8def; background: #f7faff; }
+.hrms-training-employee-result small { grid-column: 1 / -1; color: #8290a4; }
+.hrms-training-roster-table { max-height: 430px; border: 1px solid #e1e7f0; border-radius: 8px; }
+.hrms-training-roster-table table { min-width: 1180px; margin: 0; }
+.hrms-training-roster-table th { white-space: nowrap; background: #f6f8fb; }
+.hrms-training-roster-table td { vertical-align: middle; }
+.hrms-training-roster-table .check-cell { text-align: center; }
+.hrms-training-roster-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 14px; }
+.hrms-training-schedule-roster { padding: 4px 0 10px; }
+.hrms-training-schedule-roster-tools { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.hrms-training-schedule-roster-tools > div { display: flex; gap: 8px; }
+.hrms-training-schedule-roster-tools > span { color: #66758b; font-size: 12px; }
+.hrms-training-schedule-roster .hrms-training-roster-table { max-height: 280px; }
+.hrms-training-schedule-roster .hrms-training-roster-table table { min-width: 780px; }
+.hrms-training-roster-import-issues { display: grid; gap: 3px; margin: 8px 0 12px; padding: 10px 12px; border: 1px solid #f0cf86; border-radius: 8px; background: #fff9eb; color: #7d5a13; font-size: 12px; }
+.hrms-training-roster-import-issues strong { margin-bottom: 2px; }
+.hrms-training-archive-label { margin-left: auto; color: #16855b; font-weight: 600; }
 .hrms-training-detail-fields, .hrms-training-execution-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .hrms-training-detail-field { min-width: 0; padding: 12px 13px; border-radius: 10px; background: #f7f9fc; }
 .hrms-training-detail-field.wide { grid-column: span 2; }
@@ -347,12 +377,17 @@
 .hrms-training-match-complete p { margin: 4px 0 0; color: #668073; }
 
 .hrms-training-plan-hero { margin-bottom: 12px; padding: 18px 24px; }
-.hrms-training-plan-source-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
-.hrms-training-plan-source-strip > div { min-width: 0; padding: 11px 14px; border: 1px solid #e5eaf1; border-radius: 11px; background: #fafbfd; }
-.hrms-training-plan-source-strip span, .hrms-training-plan-source-strip strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hrms-training-plan-source-strip span { margin-bottom: 4px; color: #8290a4; font-size: 10px; font-weight: 700; letter-spacing: .05em; }
-.hrms-training-plan-source-strip strong { color: #344258; font-size: 12px; }
 .hrms-training-plan-panel { padding: 18px 20px; }
+.hrms-training-hero-actions { flex-wrap: wrap; }
+.hrms-training-row-actions { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.hrms-training-workflow-guide { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; padding: 13px 15px; border: 1px solid #dce7f7; border-radius: 12px; background: #f5f8fd; }
+.hrms-training-workflow-guide > b { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px; background: #e5eefc; color: #3972cf; font-size: 13px; }
+.hrms-training-workflow-guide strong, .hrms-training-workflow-guide span { display: block; }
+.hrms-training-workflow-guide strong { color: #2d3a50; font-size: 14px; }
+.hrms-training-workflow-guide span { margin-top: 3px; color: #748197; font-size: 12px; line-height: 1.5; }
+.hrms-training-event-summary { display: grid; gap: 4px; margin: 10px 0 4px; padding: 12px 14px; border-left: 3px solid #4b82d8; border-radius: 8px; background: #f6f8fb; }
+.hrms-training-event-summary strong { color: #29364c; }
+.hrms-training-event-summary span, .hrms-training-event-summary small { color: #69778c; }
 
 .hrms-training-home { display: grid; gap: 14px; padding-bottom: 28px; color: #263246; }
 .hrms-training-home-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px 28px; border: 1px solid #dce5f2; border-radius: 16px; background: linear-gradient(117deg, #edf4ff 0%, #fff 65%); }
@@ -412,7 +447,7 @@
 	.hrms-training-detail-metrics > div { border-right: 0; border-bottom: 1px solid #e7ecf3; }
 	.hrms-training-detail-layout { grid-template-columns: 1fr; }
 	.hrms-training-detail-fields, .hrms-training-execution-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-	.hrms-training-plan-source-strip, .hrms-training-home-metrics, .hrms-training-home-event-list { grid-template-columns: 1fr; }
+	.hrms-training-home-metrics, .hrms-training-home-event-list { grid-template-columns: 1fr; }
 	.hrms-training-home-hero { align-items: flex-start; flex-direction: column; padding: 19px; }
 	.hrms-training-home-hero > div:last-child, .hrms-training-home-hero .btn { width: 100%; }
 }

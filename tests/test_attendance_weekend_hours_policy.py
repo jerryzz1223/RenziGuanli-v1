@@ -96,7 +96,7 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 		source = {
 			"姓名": "测试员工", "工号": "E001", "日期": "2026-09-19", "日期类型": "周末排班",
 			"班次": "白班 08:00-17:00", "标准工时": 8, "实际出勤": 0,
-			"旷工": 1, "旷工(小时)": 8, "source_row": 3,
+			"上班时间": "08:00", "旷工": 1, "旷工(小时)": 8, "source_row": 3,
 		}
 		row = processor.process_attendance_draft_rows(
 			[source], attendance_month="2026-09", scheduling_policies=[{
@@ -108,6 +108,7 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 		self.assertEqual(row["processed_value"]["standard_hours"], 8)
 		self.assertEqual(row["processed_value"]["absence_hours"], 8)
 		self.assertIn("ABSENCE_MARKED", row["exception_codes"])
+		self.assertIn("CLOCK_OUT_MISSING", row["exception_codes"])
 		self.assertEqual(
 			row["processed_value"]["attendance_details"][0]["scheduling_policy"]["name"],
 			"POLICY-001",
@@ -143,9 +144,44 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 				self.assertEqual("CLOCK_OUT_MISSING" not in row["exception_codes"], exempt)
 				self.assertEqual("CLOCK_IN_MISSING" not in row["exception_codes"], exempt)
 
-	def test_weekend_excluded_leave_cannot_exempt_missing_punch(self):
+	def test_weekend_single_punch_is_audit_only_not_a_missing_punch_exception(self):
 		row = self.process(**{"日期": "2026-09-20", "病假(小时)": 8, "上班时间": "08:00"})
-		self.assertIn("CLOCK_OUT_MISSING", row["exception_codes"])
+		self.assertNotIn("CLOCK_OUT_MISSING", row["exception_codes"])
+		self.assertEqual(row["processed_value"]["attendance_details"][0]["clock_in"], "08:00")
+
+	def test_explicit_weekday_restday_punches_never_create_attendance_exceptions(self):
+		row = self.process(**{
+			"日期": "2026-09-18", "日期类型": "休息日", "实际出勤": 2,
+			"上班时间": "05:00", "下班时间": "23:00",
+			"上班缺卡": 1, "下班缺卡": 1, "迟到次数": 1, "早退次数": 1,
+			"旷工": 1, "旷工(小时)": 8, "休息日加班（小时）": 2.5,
+		})
+		values = row["processed_value"]
+		detail = values["attendance_details"][0]
+
+		self.assertEqual(row["exception_codes"], [])
+		self.assertEqual(row["review_status"], "无需审核")
+		self.assertTrue(row["eligible_for_downstream"])
+		self.assertEqual(values["standard_hours"], 0)
+		self.assertEqual(values["absence_hours"], 0)
+		self.assertEqual(values["restday_overtime_hours"], 2.5)
+		self.assertEqual(detail["clock_in"], "05:00")
+		self.assertEqual(detail["clock_out"], "23:00")
+		self.assertEqual(detail["overtime_approval_status"], "休息日打卡免申请")
+		self.assertTrue(detail["weekend_restday_mode"])
+		self.assertTrue(detail["source_numbers"]["clock_in_missing_count"])
+		self.assertTrue(detail["source_numbers"]["clock_out_missing_count"])
+		self.assertEqual(detail["source_numbers"]["absence_hours"], 8)
+
+	def test_weekday_rest_shift_is_the_same_genuine_restday_policy(self):
+		row = self.process(**{
+			"日期": "2026-09-18", "日期类型": "", "班次": "休息",
+			"上班时间": "08:00", "实际出勤": 0, "下班缺卡": 1,
+		})
+		detail = row["processed_value"]["attendance_details"][0]
+		self.assertEqual(row["exception_codes"], [])
+		self.assertTrue(detail["genuine_restday_mode"])
+		self.assertEqual(detail["overtime_approval_status"], "休息日打卡免申请")
 
 	def test_difference_is_per_day_and_overtime_is_separate(self):
 		for actual, leave, overtime, difference in ((6, 2, 3, 0), (7, 2, 0, 1), (8.01, 0, 0, 0.01), (6, 1, 3, -1)):

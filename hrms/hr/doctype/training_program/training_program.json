@@ -14,6 +14,10 @@
   "company",
   "owner_department",
   "plan_period",
+  "planned_month",
+  "planned_hours",
+  "planned_location",
+  "target_audience",
   "source_plan_section",
   "source_content",
   "source_department",
@@ -98,6 +102,26 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "计划期间"
+  },
+  {
+   "fieldname": "planned_month",
+   "fieldtype": "Data",
+   "label": "计划月份"
+  },
+  {
+   "fieldname": "planned_hours",
+   "fieldtype": "Float",
+   "label": "计划课时"
+  },
+  {
+   "fieldname": "planned_location",
+   "fieldtype": "Data",
+   "label": "计划地点"
+  },
+  {
+   "fieldname": "target_audience",
+   "fieldtype": "Small Text",
+   "label": "培训对象 / 岗位"
   },
   {
    "fieldname": "source_plan_section",

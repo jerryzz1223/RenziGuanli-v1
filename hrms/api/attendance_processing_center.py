@@ -871,6 +871,8 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 			"weekday_overtime_mode": weekday_mode,
 			"extended_shift_rule": extended_text,
 			"extended_overtime_mode": extended_mode,
+			"overtime_approval_time_mode": "有审批时段则校验",
+			"overtime_approval_reapply_minutes": 30,
 			"weekend_overtime_mode": _schedule_cell_text(values[13]),
 			"holiday_overtime_mode": _schedule_cell_text(values[14]),
 			"small_night_rule": _schedule_cell_text(values[15]),
@@ -957,6 +959,7 @@ def _attendance_shift_rule_bundle(company: str) -> dict[str, Any]:
 			"name", "enabled", "rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "basic_time",
 			"weekday_overtime_time", "weekend_overtime_time", "overtime_begin_time", "basic_hours",
 			"weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule", "extended_overtime_mode", "special_workday_time",
+			"overtime_approval_time_mode", "overtime_approval_reapply_minutes",
 			"weekend_overtime_mode", "holiday_overtime_mode", "overnight", "meal_deduction_rule",
 			"small_night_rule", "large_night_rule", "remarks", "suggested_positions", "punch_in_range",
 			"punch_out_range", "effective_from", "source_version", "source_file", "source_sheet",
@@ -991,6 +994,8 @@ def _attendance_shift_rule_bundle(company: str) -> dict[str, Any]:
 			"holiday_overtime_mode": row.get("holiday_overtime_mode") or "",
 			"extended_shift_rule": row.get("extended_shift_rule") or "",
 			"extended_overtime_mode": row.get("extended_overtime_mode") or "",
+			"overtime_approval_time_mode": row.get("overtime_approval_time_mode") or "有审批时段则校验",
+			"overtime_approval_reapply_minutes": cint(row.get("overtime_approval_reapply_minutes") or 30),
 			"special_workday_time": row.get("special_workday_time") or "",
 			"overnight": bool(cint(row.get("overnight"))),
 			"meal_deduction_rule": row.get("meal_deduction_rule") or "",
@@ -3819,8 +3824,9 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 	shift_bundle = _attendance_shift_rule_bundle(company)
 	scheduling_policies = _attendance_scheduling_policies(company)
 	# Older processor versions discarded every first-day-of-next-month row from
-	# the retained per-employee JSON. Re-read the immutable workbook so a real
-	# rest-day punch on that boundary can re-enter the dated exception queue.
+	# the retained per-employee JSON. Re-read the immutable workbook so overnight
+	# punch reassignment and the complete source audit can still use that boundary
+	# evidence. A genuine rest-day punch itself no longer enters the exception queue.
 	workbook_rows_by_employee: dict[str, list[dict[str, Any]]] = defaultdict(list)
 	if getattr(batch, "source_file", ""):
 		try:
@@ -5501,6 +5507,8 @@ def _builtin_shift_rule_items() -> list[dict[str, Any]]:
 			"weekday_overtime_end": clock(end),
 			"special_workday_time": rule.get("special_workday_time") or "",
 			"extended_overtime_mode": rule.get("extended_overtime_mode") or "",
+			"overtime_approval_time_mode": rule.get("overtime_approval_time_mode") or "有审批时段则校验",
+			"overtime_approval_reapply_minutes": int(rule.get("overtime_approval_reapply_minutes") or 30),
 			"weekend_overtime_mode": "不提交加班单" if rule.get("restday_auto") else "按来源/审批",
 			"small_night_rule": condition(rule.get("small_night_condition")),
 			"large_night_rule": condition(rule.get("large_night_condition")),
@@ -5639,7 +5647,7 @@ def import_attendance_shift_rules(
 	write_fields = (
 		"rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "basic_time", "weekday_overtime_time",
 		"weekend_overtime_time", "overtime_begin_time", "overnight", "meal_deduction_rule", "basic_hours",
-		"weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule", "extended_overtime_mode", "special_workday_time", "weekend_overtime_mode",
+		"weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule", "extended_overtime_mode", "special_workday_time", "overtime_approval_time_mode", "overtime_approval_reapply_minutes", "weekend_overtime_mode",
 		"holiday_overtime_mode", "small_night_rule", "large_night_rule", "remarks", "suggested_positions",
 		"punch_in_range", "punch_out_range", "source_version", "source_file", "source_sheet", "source_row",
 		"source_checksum", "source_payload_json",
@@ -5768,7 +5776,7 @@ def upsert_attendance_shift_rule(company: str, rule: str | dict):
 		"enabled", "rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "effective_from", "shift_type", "basic_time",
 		"weekday_overtime_time", "weekend_overtime_time", "overtime_begin_time", "overnight",
 		"meal_deduction_rule", "basic_hours", "weekday_overtime_hours", "weekday_overtime_mode",
-		"extended_shift_rule", "extended_overtime_mode", "special_workday_time", "weekend_overtime_mode", "holiday_overtime_mode", "small_night_rule",
+		"extended_shift_rule", "extended_overtime_mode", "special_workday_time", "overtime_approval_time_mode", "overtime_approval_reapply_minutes", "weekend_overtime_mode", "holiday_overtime_mode", "small_night_rule",
 		"large_night_rule", "remarks", "suggested_positions", "punch_in_range", "punch_out_range",
 	)
 	for field in write_fields:

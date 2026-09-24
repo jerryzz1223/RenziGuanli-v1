@@ -13,6 +13,11 @@
   "status",
   "attendance",
   "is_mandatory",
+  "draft_hours",
+  "draft_score",
+  "draft_grade",
+  "draft_needs_retraining",
+  "draft_comments",
   "source_row"
  ],
  "fields": [
@@ -74,6 +79,32 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Is Mandatory"
+  },
+  {
+   "fieldname": "draft_hours",
+   "fieldtype": "Data",
+   "label": "预填学时"
+  },
+  {
+   "fieldname": "draft_score",
+   "fieldtype": "Data",
+   "label": "预填成绩"
+  },
+  {
+   "fieldname": "draft_grade",
+   "fieldtype": "Data",
+   "label": "预填等级/结果"
+  },
+  {
+   "default": "0",
+   "fieldname": "draft_needs_retraining",
+   "fieldtype": "Check",
+   "label": "预填需要补训"
+  },
+  {
+   "fieldname": "draft_comments",
+   "fieldtype": "Small Text",
+   "label": "预填备注"
   },
   {
    "fieldname": "source_row",

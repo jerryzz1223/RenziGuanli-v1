@@ -2400,16 +2400,10 @@ class AttendanceImportCenter {
 			this.load_processing_exceptions();
 		});
 		body.querySelectorAll("[data-exception-employee-code-filter], [data-exception-employee-name-filter]").forEach((input) => {
-			input.addEventListener("input", () => {
-				window.clearTimeout(this.exception_search_timer);
-				this.exception_search_timer = window.setTimeout(applyExceptionQuery, 300);
-			});
-			input.addEventListener("change", applyExceptionQuery);
 			input.addEventListener("keydown", (event) => {
-				if (event.key === "Enter") {
-					window.clearTimeout(this.exception_search_timer);
-					applyExceptionQuery();
-				}
+				if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+				event.preventDefault();
+				applyExceptionQuery();
 			});
 		});
 		body.querySelectorAll("[data-exception-department-filter], [data-exception-source-filter], [data-exception-code-filter], [data-exception-processing-status-filter]").forEach((select) => select.addEventListener("change", applyExceptionQuery));
@@ -2658,6 +2652,7 @@ class AttendanceImportCenter {
 				["休息扣除", selected.meal_deduction_rule], ["平日特殊工时时段", selected.special_workday_time],
 				["平日加班时段", selected.weekday_overtime_time], ["平日固定加班", selected.weekday_overtime_hours == null ? "" : selected.weekday_overtime_hours + " 小时"],
 				["平日加班是否需申请", selected.weekday_overtime_mode], ["固定加班后续是否需申请", selected.extended_overtime_mode],
+				["加班审批时间校验", selected.overtime_approval_time_mode], ["审批结束后再次申请阈值", `${selected.overtime_approval_reapply_minutes ?? 30} 分钟`],
 				["后续延班原文", selected.extended_shift_rule], ["周末加班时段（来源记录）", selected.weekend_overtime_time],
 				["周末加班是否需申请", selected.weekend_overtime_mode], ["节日加班来源（待核算联动）", selected.holiday_overtime_mode],
 				["班后开始加班", selected.overtime_begin_time], ["小夜班", selected.small_night_rule],
@@ -2920,6 +2915,8 @@ class AttendanceImportCenter {
 				{ fieldname: "weekday_overtime_hours", fieldtype: "Float", label: __("平日自动加班小时"), default: existing.weekday_overtime_hours || 0 },
 				{ fieldname: "weekday_overtime_mode", fieldtype: "Select", label: __("平日固定加班是否需申请"), options: "不提交加班单\n加班单\n无", default: existing.weekday_overtime_mode || "加班单" },
 				{ fieldname: "extended_overtime_mode", fieldtype: "Select", label: __("固定加班后续是否需申请"), options: "\n加班单\n不提交加班单\n无", default: extendedMode, description: __("空白表示原排班表未明确，保存前请核对；此项与特殊工时时段分别填写。") },
+				{ fieldname: "overtime_approval_time_mode", fieldtype: "Select", label: __("加班审批时间校验"), options: "仅确认已匹配审批\n有审批时段则校验\n必须覆盖实际下班", default: existing.overtime_approval_time_mode || "有审批时段则校验", description: __("建议使用“有审批时段则校验”：审批内容能解析到起止时间时核对后续打卡；旧单只有单号时仍保留匹配结果。") },
+				{ fieldname: "overtime_approval_reapply_minutes", fieldtype: "Int", label: __("审批结束后再次申请阈值（分钟）"), default: existing.overtime_approval_reapply_minutes ?? 30, description: __("填写30表示审批结束后0-29分钟不提示，第30分钟起判断为后续时间未覆盖。") },
 				{ fieldname: "weekend_overtime_mode", fieldtype: "Select", label: __("周末加班是否需申请"), options: "\n不提交加班单\n加班单\n无", default: existing.weekend_overtime_mode || "" },
 				{ fieldname: "holiday_overtime_mode", fieldtype: "Select", label: __("节日加班来源（待核算联动）"), options: "\n不提交加班单\n加班单\n无", default: existing.holiday_overtime_mode || "", description: __("目前保存源表要求用于核对；节日实际计薪仍以有效审批及现有节日考勤来源为准。") },
 				{ fieldtype: "Section Break", label: __("津贴与取卡") },

@@ -8,7 +8,7 @@ from collections import defaultdict
 
 import frappe
 from frappe.model.document import Document
-from frappe.utils import add_days, cint, nowdate
+from frappe.utils import add_days, cint, flt, nowdate
 
 from hrms.access_control import require_hrms_capability
 from hrms.hr.training_importer import match_training_events, parse_dates, text
@@ -35,6 +35,10 @@ class TrainingProgram(Document):
 	# end: auto-generated types
 
 	pass
+
+
+def _optional_float(value):
+	return None if value in (None, "") else flt(value)
 
 
 def _dashboard_company(company: str | None = None):
@@ -76,8 +80,9 @@ def _training_plan_sources(company):
 		filters={"company": company},
 		fields=[
 			"name", "training_program", "status", "approval_status", "owner_department", "plan_period",
+			"planned_month", "planned_hours", "planned_location", "target_audience",
 			"source_import_key", "source_content", "source_department", "source_classification",
-			"source_training_type", "source_course_hours", "source_planned_month", "training_mode",
+			"source_training_type", "source_course_hours", "source_planned_month", "training_category", "training_mode",
 			"trainer_name", "source_convener_department", "source_location", "source_target",
 			"source_actual_dates", "source_audience_matrix", "source_file", "source_sheet", "source_row",
 			"source_imported_by", "source_imported_on",
@@ -94,11 +99,11 @@ def _training_plan_sources(company):
 			{
 				"source_key": row.source_import_key,
 				"content": row.source_content,
-				"department": row.source_department,
+				"department": row.source_department or row.owner_department,
 				"classification": row.source_classification or "计划",
-				"training_type": row.source_training_type,
-				"course_hours": row.source_course_hours,
-				"planned_month": row.source_planned_month,
+				"training_type": row.source_training_type or row.training_category,
+				"course_hours": row.source_course_hours or row.planned_hours,
+				"planned_month": row.source_planned_month or row.planned_month,
 				"internal_external": "外" if row.training_mode == "外部" else "内",
 			}
 		)
@@ -112,8 +117,9 @@ def _training_event_sources(company):
 		filters={"company": company, "docstatus": ["<", 2]},
 		fields=[
 			"name", "event_name", "event_status", "training_program", "course", "start_time", "location",
+			"owner_department", "course_hours", "delivery_method", "target_audience",
 			"source_import_key", "source_owner_department", "source_course_type", "source_course_hours",
-			"source_actual_dates", "training_mode", "plan_match_status", "plan_match_basis", "plan_match_score",
+			"source_actual_dates", "training_category", "training_mode", "plan_match_status", "plan_match_basis", "plan_match_score",
 			"trainer_name", "source_courseware", "source_target", "source_file", "source_sheet", "source_rows",
 			"source_imported_by", "source_imported_on",
 		],
@@ -130,9 +136,9 @@ def _training_event_sources(company):
 			{
 				"source_key": row.source_import_key,
 				"content": row.course or row.event_name,
-				"owner_department": row.source_owner_department,
-				"course_type": row.source_course_type,
-				"hours": row.source_course_hours,
+				"owner_department": row.source_owner_department or row.owner_department,
+				"course_type": row.source_course_type or row.training_category,
+				"hours": row.source_course_hours or row.course_hours,
 				"actual_dates": [item.isoformat() for item in dates],
 				"internal_external": "外" if row.training_mode == "外部" else "内",
 			}
@@ -254,12 +260,12 @@ def get_training_plan_management(company: str | None = None):
 		rows.append(
 			{
 				"key": f"program:{program.name}", "kind": "plan", "status": status,
-				"course": _program_source_content(program), "department": program.source_department,
-				"planned_month": program.source_planned_month, "classification": classification,
-				"training_type": program.source_training_type, "training_mode": program.training_mode,
-				"course_hours": program.source_course_hours, "convener": program.trainer_name,
-				"convener_department": program.source_convener_department, "location": program.source_location,
-				"target": program.source_target, "source_row": program.source_row,
+				"course": _program_source_content(program), "department": program.source_department or program.owner_department,
+				"planned_month": program.source_planned_month or program.planned_month, "classification": classification,
+				"training_type": program.source_training_type or program.training_category, "training_mode": program.training_mode,
+				"course_hours": program.source_course_hours or program.planned_hours, "convener": program.trainer_name,
+				"convener_department": program.source_convener_department, "location": program.source_location or program.planned_location,
+				"target": program.source_target or program.target_audience, "source_row": program.source_row,
 				"program": program.name, "event": "", "event_count": len(linked),
 				"participant_count": sum(participant_counts.get(item.name, 0) for item in linked),
 				"actual_dates": "；".join(filter(None, (item.source_actual_dates for item in linked))),
@@ -276,12 +282,12 @@ def get_training_plan_management(company: str | None = None):
 		rows.append(
 			{
 				"key": f"event:{event.name}", "kind": "actual", "status": status,
-				"course": event.course or event.event_name, "department": event.source_owner_department,
+				"course": event.course or event.event_name, "department": event.source_owner_department or event.owner_department,
 				"planned_month": "", "classification": "实际发生", "program": "", "event": event.name,
-				"training_type": event.source_course_type, "training_mode": event.training_mode,
-				"course_hours": event.source_course_hours, "convener": event.trainer_name,
-				"convener_department": event.source_owner_department, "location": event.location,
-				"target": event.source_target, "source_row": event.source_rows,
+				"training_type": event.source_course_type or event.training_category, "training_mode": event.training_mode,
+				"course_hours": event.source_course_hours or event.course_hours, "convener": event.trainer_name,
+				"convener_department": event.source_owner_department or event.owner_department, "location": event.location,
+				"target": event.source_target or event.target_audience, "source_row": event.source_rows,
 				"event_count": 1, "participant_count": participant_counts.get(event.name, 0),
 				"actual_dates": event.source_actual_dates, "actual_courses": event.course or event.event_name,
 				"match_basis": event.plan_match_basis or match.get("basis", ""),
@@ -330,8 +336,9 @@ def _event_details(event_names):
 		"Training Event",
 		filters={"name": ["in", event_names], "docstatus": ["<", 2]},
 		fields=[
-			"name", "event_name", "event_status", "training_program", "course", "company", "training_category",
+			"name", "event_name", "event_status", "docstatus", "training_program", "course", "company", "training_category",
 			"training_mode", "type", "trainer_name", "location", "start_time", "end_time",
+			"owner_department", "course_hours", "delivery_method", "target_audience",
 			"source_owner_department", "source_course_type", "source_courseware", "source_course_hours",
 			"source_target", "source_actual_dates", "plan_match_status", "plan_match_basis", "plan_match_score",
 			"source_file", "source_sheet", "source_rows", "source_imported_by", "source_imported_on",
@@ -342,7 +349,10 @@ def _event_details(event_names):
 	participants = frappe.get_all(
 		"Training Event Employee",
 		filters={"parent": ["in", event_names], "parenttype": "Training Event"},
-		fields=["parent", "employee_code", "employee_name", "department", "status", "attendance", "source_row"],
+		fields=[
+			"parent", "employee_code", "employee_name", "department", "status", "attendance",
+			"draft_hours", "draft_score", "draft_grade", "draft_needs_retraining", "draft_comments", "source_row",
+		],
 		order_by="parent asc, idx asc",
 		limit_page_length=0,
 	)
@@ -353,13 +363,14 @@ def _event_details(event_names):
 		limit_page_length=0,
 	)
 	result_event = {row.name: row.training_event for row in result_names}
+	submitted_result_events = {row.training_event for row in result_names if row.docstatus == 1}
 	result_rows = []
 	if result_event:
 		result_rows = frappe.get_all(
 			"Training Result Employee",
 			filters={"parent": ["in", list(result_event)]},
 			fields=[
-				"parent", "employee_code", "employee_name", "department", "score", "assessment_result",
+				"parent", "employee_code", "employee_name", "department", "hours", "score", "grade", "assessment_result",
 				"needs_retraining", "source_study_hours", "comments", "source_row",
 			],
 			limit_page_length=0,
@@ -367,23 +378,41 @@ def _event_details(event_names):
 	result_by_event_employee = {
 		(result_event.get(row.parent), row.employee_code or row.employee_name): row for row in result_rows
 	}
+	participant_keys = set()
 	participants_by_event = defaultdict(list)
 	for row in participants:
 		result = result_by_event_employee.get((row.parent, row.employee_code or row.employee_name))
+		participant_keys.add((row.parent, row.employee_code or row.employee_name))
 		participants_by_event[row.parent].append(
 			{
 				"employee_code": row.employee_code, "employee_name": row.employee_name, "department": row.department,
 				"status": row.status, "attendance": row.attendance, "source_row": row.source_row,
-				"score": result.score if result else None,
+				"score": result.score if result else _optional_float(row.draft_score),
+				"grade": result.grade if result else row.draft_grade,
 				"assessment_result": result.assessment_result if result else "",
-				"needs_retraining": result.needs_retraining if result else 0,
-				"study_hours": result.source_study_hours if result else None,
-				"comments": result.comments if result else "",
+				"needs_retraining": result.needs_retraining if result else row.draft_needs_retraining,
+				"study_hours": (result.hours or result.source_study_hours) if result else _optional_float(row.draft_hours),
+				"comments": result.comments if result else row.draft_comments,
+			}
+		)
+	for row in result_rows:
+		event_name = result_event.get(row.parent)
+		key = (event_name, row.employee_code or row.employee_name)
+		if not event_name or key in participant_keys:
+			continue
+		participants_by_event[event_name].append(
+			{
+				"employee_code": row.employee_code, "employee_name": row.employee_name, "department": row.department,
+				"status": "Completed", "attendance": "Absent" if row.assessment_result == "Absent" else "Present",
+				"source_row": row.source_row, "score": row.score, "assessment_result": row.assessment_result,
+				"needs_retraining": row.needs_retraining, "study_hours": row.hours or row.source_study_hours,
+				"comments": row.comments,
 			}
 		)
 	for event in events:
 		event["participants"] = participants_by_event.get(event.name, [])
 		event["participant_count"] = len(event["participants"])
+		event["has_submitted_result"] = event.name in submitted_result_events
 	return events
 
 
@@ -406,17 +435,16 @@ def get_training_plan_detail(kind: str, name: str, company: str | None = None):
 		status = "临时课程" if classification == "临时" else ("已实施" if events else "待实施")
 		return {
 			"kind": "plan", "name": program.name, "title": _program_source_content(program), "status": status,
-			"company": company, "department": program.source_department, "classification": classification,
-			"training_type": program.source_training_type, "training_mode": program.training_mode,
-			"course_hours": program.source_course_hours, "convener": program.trainer_name,
-			"convener_department": program.source_convener_department, "location": program.source_location,
-			"target": program.source_target, "planned_month": program.source_planned_month,
+			"company": company, "department": program.source_department or program.owner_department, "classification": classification,
+			"training_type": program.source_training_type or program.training_category, "training_mode": program.training_mode,
+			"course_hours": program.source_course_hours or program.planned_hours, "convener": program.trainer_name,
+			"convener_department": program.source_convener_department, "location": program.source_location or program.planned_location,
+			"target": program.source_target or program.target_audience, "planned_month": program.source_planned_month or program.planned_month,
 			"source_actual_dates": program.source_actual_dates, "audience_matrix": _json_list(program.source_audience_matrix),
 			"events": events, "event_count": len(events),
 			"participant_count": sum(row.participant_count for row in events),
 			"source": {
-				"file": program.source_file, "sheet": program.source_sheet, "row": program.source_row,
-				"imported_by": program.source_imported_by, "imported_on": program.source_imported_on,
+				"created_by": program.owner, "created_on": program.creation,
 			},
 		}
 	if kind == "actual":
@@ -435,16 +463,15 @@ def get_training_plan_detail(kind: str, name: str, company: str | None = None):
 		return {
 			"kind": "actual", "name": event.name, "title": event.course or event.event_name,
 			"status": event.plan_match_status or "临时新增", "company": company,
-			"department": event.source_owner_department, "classification": "实际发生",
-			"training_type": event.source_course_type, "training_mode": event.training_mode,
-			"course_hours": event.source_course_hours, "convener": event.trainer_name,
-			"convener_department": event.source_owner_department, "location": event.location,
-			"target": event.source_target, "planned_month": "", "audience_matrix": [],
+			"department": event.source_owner_department or event.owner_department, "classification": "实际发生",
+			"training_type": event.source_course_type or event.training_category, "training_mode": event.training_mode,
+			"course_hours": event.source_course_hours or event.course_hours, "convener": event.trainer_name,
+			"convener_department": event.source_owner_department or event.owner_department, "location": event.location,
+			"target": event.source_target or event.target_audience, "planned_month": "", "audience_matrix": [],
 			"events": events, "event_count": 1, "participant_count": detail.participant_count,
 			"matched_program": program, "match_basis": event.plan_match_basis, "match_score": event.plan_match_score,
 			"source": {
-				"file": event.source_file, "sheet": event.source_sheet, "row": event.source_rows,
-				"imported_by": event.source_imported_by, "imported_on": event.source_imported_on,
+				"created_by": event.owner, "created_on": event.creation,
 			},
 		}
 	frappe.throw("未识别的培训详情类型。")

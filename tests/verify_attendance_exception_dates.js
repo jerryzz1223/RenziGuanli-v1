@@ -218,8 +218,16 @@ assert.match(source, /department: this\.exception_department_filter/);
 assert.match(source, /exception_code: this\.exception_code_filter/);
 assert.match(source, /available_departments/);
 assert.match(source, /exception_department_options/);
-assert.match(source, /addEventListener\("input"/);
-assert.match(source, /setTimeout\(applyExceptionQuery, 300\)/);
+const exceptionSearchBinding = source.slice(
+	source.indexOf('body.querySelectorAll("[data-exception-employee-code-filter]'),
+	source.indexOf('body.querySelectorAll("[data-exception-department-filter]', source.indexOf('body.querySelectorAll("[data-exception-employee-code-filter]')),
+);
+assert.match(exceptionSearchBinding, /addEventListener\("keydown"/);
+assert.match(exceptionSearchBinding, /event\.key !== "Enter" \|\| event\.isComposing \|\| event\.keyCode === 229/);
+assert.match(exceptionSearchBinding, /event\.preventDefault\(\)/);
+assert.doesNotMatch(exceptionSearchBinding, /addEventListener\("input"/);
+assert.doesNotMatch(exceptionSearchBinding, /addEventListener\("change"/);
+assert.doesNotMatch(exceptionSearchBinding, /setTimeout\(applyExceptionQuery/);
 assert.match(css, /\.hrms-attendance-exception-table-wrap\s*\{[\s\S]*?max-height:[\s\S]*?overflow: auto/);
 assert.match(css, /\.hrms-attendance-exception-table-wrap\s*\{[\s\S]*?min-height:\s*min\(68vh,\s*760px\)/);
 assert.match(css, /\.hrms-attendance-exception-table-wrap\s*\{[\s\S]*?max-height:\s*calc\(100vh\s*-\s*96px\)/);

@@ -135,6 +135,26 @@ class DingTalkAttendanceFactTests(unittest.TestCase):
 		self.assertIn("加班[OT-1]:COMPLETED/agree", row["关联审批单"])
 		self.assertIn("请假[LEAVE-1]:RUNNING", row["关联审批单"])
 
+	def test_overtime_approval_form_times_are_preserved_in_linked_content(self):
+		body = {
+			"form_component_values": [
+				{"name": "加班开始时间", "value": "2026-09-20 17:00"},
+				{"name": "加班结束时间", "value": "2026-09-20 18:00"},
+			]
+		}
+		self.assertEqual(
+			self.module._approval_time_content(body),
+			"2026-09-20 17:00到2026-09-20 18:00",
+		)
+		self.module._approval_evidence = lambda *_args: [{
+			"approval_no": "OT-TIME-1", "approval_type": "加班",
+			"approval_status": "COMPLETED", "approval_result": "agree",
+			"approval_content": "2026-09-20 17:00到2026-09-20 18:00",
+		}]
+		row = self.draft(out_actual="2026-09-20 18:29:00")
+		self.assertIn("2026-09-20 17:00到2026-09-20 18:00", row["关联审批单"])
+		self.assertEqual(row["关联审批明细"][0]["approval_content"], "2026-09-20 17:00到2026-09-20 18:00")
+
 	def test_resync_diff_separates_created_changed_removed_and_unchanged(self):
 		previous = [
 			{"employee_code": "YX-001", "shift_name": "白班", "actual_in_time": "08:00"},

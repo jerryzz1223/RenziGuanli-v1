@@ -37,6 +37,11 @@ class HRMSAttendanceShiftRule(Document):
 				frappe.throw(_("加班来源只能选择“不提交加班单、加班单或无”。"))
 		if (getattr(self, "extended_overtime_mode", "") or "") not in allowed_modes:
 			frappe.throw(_("固定加班后续来源只能选择“不提交加班单、加班单或无”。"))
+		approval_time_modes = {"仅确认已匹配审批", "有审批时段则校验", "必须覆盖实际下班"}
+		if (getattr(self, "overtime_approval_time_mode", "") or "有审批时段则校验") not in approval_time_modes:
+			frappe.throw(_("加班审批时间校验方式无效。"))
+		if int(getattr(self, "overtime_approval_reapply_minutes", 30) or 0) < 0:
+			frappe.throw(_("审批结束后再次申请阈值不能小于 0 分钟。"))
 		if self.weekday_overtime_mode == "不提交加班单" and (self.weekday_overtime_hours or 0) <= 0:
 			frappe.throw(_("平日免提交加班单时，必须填写大于 0 的自动加班小时。"))
 		if self.weekday_overtime_mode == "无" and (self.weekday_overtime_hours or 0) > 0:

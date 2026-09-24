@@ -62,6 +62,7 @@ class TrainingResult(Document):
 
 	def sync_passed_training_to_skill_map(self):
 		"""Keep the existing employee skill map as the employee training history."""
+		training_date = frappe.db.get_value("Training Event", self.training_event, "start_time")
 		for row in self.employees:
 			if row.assessment_result != "Pass" or not row.employee:
 				continue
@@ -73,7 +74,10 @@ class TrainingResult(Document):
 				skill_map.insert(ignore_permissions=True)
 			if any(item.training == self.training_event for item in skill_map.trainings):
 				continue
-			skill_map.append("trainings", {"training": self.training_event})
+			skill_map.append(
+				"trainings",
+				{"training": self.training_event, "training_date": training_date.date() if training_date else None},
+			)
 			skill_map.save(ignore_permissions=True)
 
 

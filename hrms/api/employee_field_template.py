@@ -4015,9 +4015,11 @@ def _get_employee_training_history(doc):
 				event.training_category,
 				event.training_mode,
 				event.source_owner_department,
+				event.owner_department,
 				event.trainer_name,
 				event.location,
 				event.source_target,
+				event.target_audience,
 				employee.hours,
 				employee.source_study_hours,
 				employee.score,
@@ -4042,6 +4044,7 @@ def _get_employee_training_history(doc):
 	)
 	records = []
 	for row in rows:
+		effective_hours = flt(row.source_study_hours) or flt(row.hours)
 		records.append(
 			{
 				"training_result": row.training_result,
@@ -4051,12 +4054,12 @@ def _get_employee_training_history(doc):
 				"actual_dates": row.source_actual_dates,
 				"course_type": row.source_course_type or row.training_category,
 				"training_mode": row.training_mode,
-				"owner_department": row.source_owner_department,
+				"owner_department": row.source_owner_department or row.owner_department,
 				"trainer": row.trainer_name,
 				"location": row.location,
-				"target": row.source_target,
+				"target": row.source_target or row.target_audience,
 				"hours": flt(row.hours),
-				"study_hours": flt(row.source_study_hours),
+				"study_hours": effective_hours,
 				"score": row.score,
 				"grade": row.grade,
 				"assessment_result": row.assessment_result,

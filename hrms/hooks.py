@@ -40,7 +40,7 @@ app_include_js = [
 app_include_css = [
 	"hrms.bundle.css",
 	"/assets/hrms/css/hrms_top_nav.css?v=20260918-sidebar-layout-v2",
-	"/assets/hrms/css/hrms_training_learning.css?v=20260924-training-filter-stable-v6",
+	"/assets/hrms/css/hrms_training_learning.css?v=20260924-training-workflow-v11",
 	"/assets/hrms/css/hrms_entry.css?v=20260912-intranet-entry-v1",
 	"/assets/hrms/css/hrms_loading.css?v=20260909-black-loader",
 	"/assets/hrms/css/hrms_employee_registration.css?v=20260915a",

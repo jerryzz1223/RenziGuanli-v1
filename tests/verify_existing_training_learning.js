@@ -6,6 +6,7 @@ const root = path.resolve(__dirname, "..");
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), "utf8");
 const program = JSON.parse(read("hrms", "hr", "doctype", "training_program", "training_program.json"));
 const event = JSON.parse(read("hrms", "hr", "doctype", "training_event", "training_event.json"));
+const eventEmployee = JSON.parse(read("hrms", "hr", "doctype", "training_event_employee", "training_event_employee.json"));
 const resultEmployee = JSON.parse(read("hrms", "hr", "doctype", "training_result_employee", "training_result_employee.json"));
 const feedback = JSON.parse(read("hrms", "hr", "doctype", "training_feedback", "training_feedback.json"));
 const programList = read("hrms", "hr", "doctype", "training_program", "training_program_list.js");
@@ -13,15 +14,38 @@ const trainingHome = read("hrms", "hr", "page", "training_learning_center", "tra
 const trainingHomePage = JSON.parse(read("hrms", "hr", "page", "training_learning_center", "training_learning_center.json"));
 const programController = read("hrms", "hr", "doctype", "training_program", "training_program.py");
 const trainingImport = read("hrms", "api", "training_import.py");
+const trainingWorkflow = read("hrms", "api", "training_learning.py");
 const resultController = read("hrms", "hr", "doctype", "training_result", "training_result.py");
 const feedbackController = read("hrms", "hr", "doctype", "training_feedback", "training_feedback.py");
 const trainingCss = read("hrms", "public", "css", "hrms_training_learning.css");
 const nav = read("hrms", "public", "js", "hrms_top_nav.js");
 const sidebar = read("hrms", "public", "js", "hrms_home_redirect_v6.js");
 
+const departmentMatcherSource = programList.slice(
+	programList.indexOf("function department_matches_filter"),
+	programList.indexOf("function plan_table_rows"),
+);
+const departmentMatchesFilter = new Function(`${departmentMatcherSource}\nreturn department_matches_filter;`)();
+assert(departmentMatchesFilter("工程课", "工程"), "部门筛选应匹配课别后缀差异。");
+assert(departmentMatchesFilter("环安", "环安课"), "部门筛选应统一课别后缀。");
+assert(departmentMatchesFilter("总办公室", "总办"), "部门筛选应匹配截短名称。");
+assert(departmentMatchesFilter("品 保 课", "品保"), "部门筛选应忽略空白差异。");
+assert(!departmentMatchesFilter("品保课", "品管"), "部门筛选不得误合并不同课别。");
+assert(!departmentMatchesFilter("总经理室", "总办"), "部门筛选不得猜测组织别名。");
+assert(!departmentMatchesFilter("人资行政课", "行政"), "部门筛选不得因为局部包含误合并部门。");
+
+const personInputHandler = programList.slice(programList.indexOf("workspace.oninput"), programList.indexOf("workspace.onkeydown"));
+const personEnterHandler = programList.slice(programList.indexOf("workspace.onkeydown"), programList.indexOf("workspace.onchange"));
+assert(personInputHandler.includes("planTableState.personInput = event.target.value"), "输入人名时应只保存未提交文字。");
+assert(!personInputHandler.includes("planTableState.person = event.target.value"), "输入人名时不得立即搜索。");
+for (const marker of ['event.key !== "Enter"', "event.isComposing", "event.preventDefault()", "planTableState.person = event.target.value", 'refreshPlanPanel("[data-training-person-search]")']) assert(personEnterHandler.includes(marker), `人名搜索回车行为缺少：${marker}`);
+
 for (const field of ["approval_status", "owner_department", "plan_period", "training_category", "training_mode", "is_mandatory", "objective"]) assert(program.fields.some((item) => item.fieldname === field), "培训计划缺少字段：" + field);
+for (const field of ["planned_month", "planned_hours", "planned_location", "target_audience"]) assert(program.fields.some((item) => item.fieldname === field), "手工建课缺少字段：" + field);
 for (const field of ["source_file", "source_sheet", "source_row", "source_import_key", "source_content", "source_department", "source_classification", "source_training_type", "source_course_hours", "source_target", "source_audience_matrix"]) assert(program.fields.some((item) => item.fieldname === field), "培训计划缺少来源字段：" + field);
 for (const field of ["training_category", "training_mode", "assessment_required", "passing_score", "retraining_due_on", "qualification_gate"]) assert(event.fields.some((item) => item.fieldname === field), "培训活动缺少字段：" + field);
+for (const field of ["owner_department", "course_hours", "delivery_method", "target_audience"]) assert(event.fields.some((item) => item.fieldname === field), "手工上课缺少字段：" + field);
+for (const field of ["draft_hours", "draft_score", "draft_grade", "draft_needs_retraining", "draft_comments"]) assert(eventEmployee.fields.some((item) => item.fieldname === field), "上课安排人员缺少预填字段：" + field);
 for (const field of ["source_file", "source_sheet", "source_rows", "source_import_key", "source_actual_dates", "source_course_type", "source_courseware", "source_course_hours", "source_target", "plan_match_status", "plan_match_basis", "plan_match_score"]) assert(event.fields.some((item) => item.fieldname === field), "培训活动缺少来源字段：" + field);
 for (const field of ["score", "assessment_result", "needs_retraining"]) assert(resultEmployee.fields.some((item) => item.fieldname === field));
 for (const field of ["employee_code", "source_row", "source_month", "source_employee_name", "source_department", "source_study_hours"]) assert(resultEmployee.fields.some((item) => item.fieldname === field));
@@ -29,11 +53,20 @@ assert(feedback.fields.some((item) => item.fieldname === "satisfaction_score"));
 for (const marker of ["set_assessment_outcomes", "event_status = \"Completed\"", "sync_passed_training_to_skill_map", "assessment_result == \"Pass\""]) assert(resultController.includes(marker));
 assert(feedbackController.includes("满意度评分必须介于 1 到 5 分之间"));
 for (const marker of ["get_training_plan_detail", "get_training_plan_management", "reconcile_training_plan_matches", "set_training_event_plan_match", "计划课程 / 实际上课分开导入", "两张表可分开提交", "计划与实际上课对照", "临时新增", "data-training-plan-filter", "data-training-plan-search", "data-training-person-search", "请选择部门", "输入人员姓名", "data-training-column-filter", "data-training-sort", "data-training-open-detail", "data-training-participant-search", "计划与课程信息", "实际上课记录", "参训员工明细", "员工公司工号匹配", "data-training-match-filter", "data-training-match-search", "preview_training_plan", "preview_training_records", "import_training_plan", "import_training_records", "公司工号", "清除已选文件", "重新选择登记表", "employment_period", "date_of_joining", "请先完成剩余 {0} 组员工公司工号匹配", ".prop(\"disabled\", Boolean(sourceErrors || pending))"]) assert(programList.includes(marker));
+for (const marker of ["创建信息", "创建人", "创建时间", ".hrms-training-detail-hero small", ".hrms-training-detail-help"]) assert(programList.includes(marker), `培训详情精简展示缺少：${marker}`);
+for (const marker of ['"created_by": program.owner', '"created_on": program.creation', '"created_by": event.owner', '"created_on": event.creation']) assert(programController.includes(marker), `培训详情审计字段缺少：${marker}`);
 for (const marker of ["def preview_training_plan", "def preview_training_records", "def import_training_plan", "def import_training_records", "_actual_course_plan_row", "自动创建临时课程"]) assert(trainingImport.includes(marker));
+for (const marker of ["def create_training_course", "def create_training_activity", "def get_training_activity_roster", "def save_training_activity_roster", "def record_training_completion", "def find_training_employees", "def download_training_roster_template", "def preview_training_roster_import", "ROSTER_TEMPLATE_HEADERS", "unique_name", "custom_employee_code", "result.submit()"] ) assert(trainingWorkflow.includes(marker), `培训手工闭环缺少：${marker}`);
+for (const marker of ["创建课程", "安排上课", "参训员工与成绩", "保存草稿", "确认完成并写入员工档案", "find_training_employees", "save_training_activity_roster", "record_training_completion", "preview_training_roster_import", "download_training_roster_template", "data-schedule-search", "data-schedule-import", "data-schedule-template", "输入公司工号或姓名", "下载基础模板", "导入参训名单", "data-training-action=\"detail-schedule\"", "data-training-edit-roster", "输入公司工号", "备注（选填）"]) assert(programList.includes(marker), `培训页面闭环缺少：${marker}`);
+for (const removedNative of ["participant_fields", "data-training-schedule-row", "data-training-complete-row", 'data-training-action="complete"', 'data-training-action="refresh"', 'fieldtype: "Table"', 'fieldtype: "Text Editor", fieldname: "introduction"']) assert(!programList.includes(removedNative), `培训页面不应继续显示或使用：${removedNative}`);
 for (const marker of ["培训学习主页", "培训闭环", "培训待办", "近期培训活动", "get_training_learning_dashboard", "include_plan_management: 0", "查看培训计划", "training-program", "training-event", "training-result", "training-feedback", "employee-skill-map"]) assert(trainingHome.includes(marker));
 for (const marker of ["make_attachments_public: false", "disable_file_browser: true", "allow_web_link: false", "allow_toggle_private: false"]) assert(programList.includes(marker));
 for (const marker of ["get_training_learning_dashboard", "get_training_plan_management", "get_training_plan_detail", "_event_details", "reconcile_training_plan_matches", "set_training_event_plan_match", "_attendance_summary", "needs_retraining", "retraining_due_on"]) assert(programController.includes(marker));
-for (const marker of [".hrms-training-learning-workspace", ".hrms-training-plan-table", ".hrms-training-person-filter", ".hrms-training-plan-status", ".hrms-training-detail-page", ".hrms-training-participant-table", ".hrms-training-home", ".hrms-training-plan-source-strip", "@media (max-width: 767px)"]) assert(trainingCss.includes(marker));
+for (const marker of [".hrms-training-learning-workspace", ".hrms-training-plan-table", ".hrms-training-person-filter", ".hrms-training-plan-status", ".hrms-training-detail-page", ".hrms-training-participant-table", ".hrms-training-home", ".hrms-training-plan-page .page-actions .custom-btn-group", ".hrms-training-plan-page .page-actions .page-icon-group", ".hrms-training-plan-page .page-actions .menu-btn-group", "@media (max-width: 767px)"]) assert(trainingCss.includes(marker));
+for (const removedMarker of ["hrms-training-plan-source-strip", "hrms-training-plan-note", "计划表作为应开课程基准", "已入库数据可直接查看"]) assert(!programList.includes(removedMarker), `培训计划页不应继续显示：${removedMarker}`);
+assert(programList.includes('class="hrms-training-course-link" data-training-open-detail='), "课程名称应直接打开详情。");
+assert(programList.includes('colspan="13"'), "去除列表办理列后空状态应覆盖 13 列。");
+for (const removedColumn of ['<th>${__("匹配依据")}</th>', '<th>${__("操作")}</th>', 'class="match-cell"', '>${__("查看详情")}</button>']) assert(!programList.includes(removedColumn), `培训计划表不应继续显示：${removedColumn}`);
 assert(!programList.includes("data-training-plan-row"), "课程行不得整行点击，避免误触后页面跳动。");
 assert(!programList.includes("scrollIntoView"), "筛选与排序不得自动移动页面位置。");
 assert(!programList.includes('frappe.set_route("Form", "Training Program"'), "计划行不得再跳转原生计划表单。");

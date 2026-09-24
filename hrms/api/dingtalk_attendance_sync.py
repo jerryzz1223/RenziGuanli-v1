@@ -93,6 +93,50 @@ def _payload(value: str | dict | list | None) -> dict | list:
 		return {}
 
 
+def _approval_form_components(value: Any) -> list[dict[str, Any]]:
+	"""Collect DingTalk form components without assuming one API envelope shape."""
+	components = []
+	if isinstance(value, dict):
+		label = _first(value, "name", "label", "title", "component_name", "componentName")
+		component_value = _first(value, "value", "text", "content")
+		if label not in (None, "") and component_value not in (None, ""):
+			components.append({"label": str(label), "value": component_value})
+		for child in value.values():
+			if isinstance(child, (dict, list)):
+				components.extend(_approval_form_components(child))
+	elif isinstance(value, list):
+		for child in value:
+			components.extend(_approval_form_components(child))
+	return components
+
+
+def _approval_component_text(value: Any) -> str:
+	if isinstance(value, (dict, list)):
+		return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+	text = str(value or "").strip()
+	if text.isdigit() and len(text) in {10, 13}:
+		seconds = int(text) / (1000 if len(text) == 13 else 1)
+		try:
+			return datetime.fromtimestamp(seconds, ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")
+		except (OverflowError, OSError, ValueError):
+			pass
+	return text.replace("/", "-").replace("：", ":")
+
+
+def _approval_time_content(body: dict[str, Any]) -> str:
+	"""Return a parser-friendly approved interval from DingTalk form content."""
+	components = _approval_form_components(body)
+	start = next((item for item in components if any(token in item["label"] for token in ("开始时间", "开始日期", "加班开始"))), None)
+	end = next((item for item in components if any(token in item["label"] for token in ("结束时间", "结束日期", "加班结束"))), None)
+	if not start or not end:
+		return ""
+	start_text = _approval_component_text(start["value"])
+	end_text = _approval_component_text(end["value"])
+	if not start_text or not end_text:
+		return ""
+	return f"{start_text}到{end_text}"
+
+
 def _nested_items(payload: Any) -> list[dict[str, Any]]:
 	"""Extract attendance event dictionaries from variant DingTalk response shapes."""
 	items: list[dict[str, Any]] = []
@@ -260,6 +304,7 @@ def _approval_evidence(company: str, user_id: str, business_date: date) -> list[
 				),
 				"approval_status": str(_first(body, "status", "approval_status", "approvalStatus")),
 				"approval_result": str(_first(body, "result", "approval_result", "approvalResult")),
+				"approval_content": _approval_time_content(body),
 			}
 		)
 	return evidence
@@ -333,7 +378,11 @@ def _draft_row(company: str, business_date: date, user_id: str, events: list[dic
 	late_out_minutes = max(int((out_time - scheduled_out).total_seconds() // 60), 0) if scheduled_out and out_time else 0
 	outside_shift_status = _outside_shift_status(early_minutes, late_out_minutes, approvals)
 	approval_summary = "、".join(
-		"{approval_type}[{approval_no}]:{approval_status}/{approval_result}".format(**item).rstrip("/") for item in approvals
+		(
+			"{approval_type}[{approval_no}]:{approval_status}/{approval_result}".format(**item).rstrip("/")
+			+ (f" {item.get('approval_content')}" if item.get("approval_content") else "")
+		)
+		for item in approvals
 	)
 	return {
 		"工号": mapping.employee_code if mapping else _first(first_event, "jobNumber", "job_number", "employeeNo", "employee_code"),
