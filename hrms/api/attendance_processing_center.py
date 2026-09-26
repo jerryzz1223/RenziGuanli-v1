@@ -362,6 +362,7 @@ EXCEPTION_LABELS = {
 	"ABSENCE_MARKED": "旷工标记待核验",
 	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "休息日有打卡未计加班",
 	"RESTDAY_CLOCKED_WITHOUT_APPROVAL": "间接人员周末打卡缺加班单",
+	"RESTDAY_PUNCH_APPROVAL_MISMATCH": "休息日打卡与加班审批不匹配",
 	"HOLIDAY_CLOCKED_WITHOUT_APPROVAL": "节假日打卡缺加班单",
 	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "钉钉加班为0：缺加班申请",
 	"WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED": "钉钉加班为0：已有审批未生效",
@@ -422,6 +423,8 @@ def _review_guidance(exception_codes: list[str], source_type: str) -> list[str]:
 		guidance.append("休息日已有钉钉打卡，但未匹配加班申请且加班工时为 0；请核对主管确认后，在该日期填写实际休息日加班工时，或确认本次打卡不计加班。")
 	if "RESTDAY_CLOCKED_WITHOUT_APPROVAL" in codes:
 		guidance.append("间接人员周末有打卡须提交加班单；请在“修改本日”核对关联审批单。未打卡的周末排班不需要请假，也不计缺勤。")
+	if "RESTDAY_PUNCH_APPROVAL_MISMATCH" in codes:
+		guidance.append("休息日不计算迟到、早退或旷工；请核对上下班卡是否完整，以及实际打卡区间是否与加班审批时段一致。")
 	if "HOLIDAY_CLOCKED_WITHOUT_APPROVAL" in codes:
 		guidance.append("该班次节日加班来源要求加班单；请在“修改本日”核对本日打卡和有效审批。未确认前不自动补算节日加班工时。")
 	if "WORKDAY_OUTSIDE_SHIFT_UNAPPROVED" in codes:
@@ -475,6 +478,11 @@ def _review_options(exception_codes: list[str], source_type: str) -> list[dict[s
 			{"label": "确认打卡不计加班", "review_status": "已通过", "reason": "已核对休息日打卡，本次不计入休息日加班。"},
 			{"label": "等待主管确认或补充加班依据", "review_status": "待审核", "reason": "等待主管确认或补充加班依据后，再填写休息日加班工时。"},
 			{"label": "确认不应计入下游", "review_status": "已驳回", "reason": "已核对该休息日打卡不应计入本月下游计算。"},
+		])
+	if "RESTDAY_PUNCH_APPROVAL_MISMATCH" in codes:
+		options.extend([
+			{"label": "等待更正打卡或补充审批", "review_status": "待审核", "reason": "休息日打卡不完整或与加班审批时段不一致，等待更正后重新校验。"},
+			{"label": "已人工核对打卡与审批", "review_status": "已通过", "reason": "已人工核对休息日实际打卡与加班审批，确认当前考勤数据。"},
 		])
 	if {"EMPLOYEE_DEPARTMENT_MISMATCH", "EMPLOYEE_DEPARTMENT_CONFLICT", "DEPARTMENT_CONFLICT"} & codes:
 		options.extend([
@@ -5766,7 +5774,7 @@ def upsert_attendance_scheduling_policy(company: str, policy: str | dict):
 	doc.enabled = cint(policy.get("enabled", 1))
 	doc.save(ignore_permissions=True)
 	frappe.db.commit()
-	return {"name": doc.name, "notice": _("排班治理规则已保存并用于后续班次分配校验。")}
+	return {"name": doc.name, "notice": _("考勤口径已保存；后续考勤判断将使用该口径，不会创建或覆盖钉钉排班。")}
 
 
 def _builtin_shift_rule_items() -> list[dict[str, Any]]:
@@ -5844,13 +5852,14 @@ def get_complete_attendance_rules(company: str):
 		"builtin_shift_rules": _builtin_shift_rule_items(),
 		"policy_rules": policy_rules,
 		"system_boundaries": [
+			{"name": "钉钉事实来源", "logic": "员工每日班次、计划上下班时间、实际打卡、工时及异常标记均以钉钉每日统计为准", "impact": "HRMS不重复排班、不按打卡时间改写源结果，只整理、关联、汇总和提示冲突"},
 			{"name": "员工身份匹配", "logic": "公司工号为主键；姓名、部门用于冲突核对", "impact": "冲突进入异常处理，不自动合并员工"},
 			{"name": "班次匹配", "logic": "先按钉钉考勤组+班次别名精确匹配，未命中时再用班次关键词；食堂21:00-次日00:00使用已确认的独立兼容规则", "impact": "避免 CCD、品保等专用班次被通用生产班次覆盖；食堂凌晨班保留钉钉时数且不报缺审批异常"},
-			{"name": "钉钉加班主数据", "logic": "工作日加班直接采用钉钉每日明细数值；审批内容不再追加小时数", "impact": "避免重复计算或把钉钉已确认时长清零"},
+			{"name": "钉钉考勤结果", "logic": "加班、夜班、迟到、早退、缺卡和旷工标记直接采用钉钉每日明细数值", "impact": "审批、打卡和本地班次规则只用于解释与报错，不追加、清零或改写源结果"},
 			{"name": "班后异常识别", "logic": "仅当钉钉工作日加班为 0 且存在明显班后打卡时，按考勤组、班次和审批情况分类", "impact": "缺申请、审批未生效、免审批计算异常分别进入人工处理"},
 			{"name": "人工修改留痕", "logic": "人工修改必须填写原因，不覆盖原始导入值", "impact": "保留修改前后值、处理人、时间和完整历史"},
-			{"name": "周末与调班边界", "logic": "普通周六日按排班治理规则处理；明确标为工作日、调班或补班的日期仍按工作日", "impact": "普通周末不制造标准工时、请假、旷工或工时差异，实际打卡转入休息日加班核对"},
-			{"name": "周末未排班中班夜班", "logic": "仅周末休息日、适用岗位且有打卡证据时，根据首末卡扣实际重叠休息时段；单侧卡待复核，无卡不报夜班异常", "impact": "净满8小时且不早于22:00记小夜；净满10.5小时且不早于次日01:00记大夜，优先大夜且不重复"},
+			{"name": "周末与调班边界", "logic": "普通周六日按考勤口径处理；明确标为工作日、调班或补班的日期仍按工作日", "impact": "普通周末不制造标准工时、请假、旷工、迟到或早退；有打卡也不要求加班申请"},
+			{"name": "历史数据兼容", "logic": "只有旧导入记录完全缺少加班、夜班或异常字段时，才允许使用旧版兼容判断", "impact": "新版钉钉每日统计中明确的空值或 0 也是有效源结果，系统不补算"},
 		],
 	}
 

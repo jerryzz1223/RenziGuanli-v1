@@ -149,7 +149,7 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 		self.assertNotIn("CLOCK_OUT_MISSING", row["exception_codes"])
 		self.assertEqual(row["processed_value"]["attendance_details"][0]["clock_in"], "08:00")
 
-	def test_explicit_weekday_restday_punches_never_create_attendance_exceptions(self):
+	def test_explicit_weekday_restday_missing_marks_remain_exceptions(self):
 		row = self.process(**{
 			"日期": "2026-09-18", "日期类型": "休息日", "实际出勤": 2,
 			"上班时间": "05:00", "下班时间": "23:00",
@@ -159,7 +159,7 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 		values = row["processed_value"]
 		detail = values["attendance_details"][0]
 
-		self.assertEqual(row["exception_codes"], [])
+		self.assertEqual(row["exception_codes"], ["CLOCK_IN_MISSING", "CLOCK_OUT_MISSING"])
 		self.assertEqual(row["review_status"], "无需审核")
 		self.assertTrue(row["eligible_for_downstream"])
 		self.assertEqual(values["standard_hours"], 0)
@@ -173,15 +173,81 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 		self.assertTrue(detail["source_numbers"]["clock_out_missing_count"])
 		self.assertEqual(detail["source_numbers"]["absence_hours"], 8)
 
-	def test_weekday_rest_shift_is_the_same_genuine_restday_policy(self):
+	def test_weekday_rest_shift_keeps_explicit_missing_mark(self):
 		row = self.process(**{
 			"日期": "2026-09-18", "日期类型": "", "班次": "休息",
 			"上班时间": "08:00", "实际出勤": 0, "下班缺卡": 1,
 		})
 		detail = row["processed_value"]["attendance_details"][0]
-		self.assertEqual(row["exception_codes"], [])
+		self.assertEqual(row["exception_codes"], ["CLOCK_OUT_MISSING"])
 		self.assertTrue(detail["genuine_restday_mode"])
 		self.assertEqual(detail["overtime_approval_status"], "休息日打卡免申请")
+
+	def test_unused_rest_shift_does_not_emit_explicit_missing_mark_without_attendance_evidence(self):
+		row = self.process(**{
+			"日期": "2026-09-18", "日期类型": "休息日", "班次": "休息",
+			"上班时间": "", "下班时间": "", "实际出勤": 0, "下班缺卡": 1,
+		})
+		self.assertNotIn("CLOCK_OUT_MISSING", row["exception_codes"])
+		self.assertTrue(row["processed_value"]["attendance_details"][0]["genuine_restday_mode"])
+
+	def test_scheduled_restday_without_punch_keeps_explicit_missing_mark(self):
+		row = self.process(**{
+			"日期": "2026-09-20", "日期类型": "周末休息日",
+			"班次": "生产夜班 20:00-次日04:30", "上班时间": "", "下班时间": "",
+			"下班缺卡": 1,
+		})
+		self.assertIn("CLOCK_OUT_MISSING", row["exception_codes"])
+
+	def test_production_night_restday_keeps_explicit_clock_out_missing_mark(self):
+		row = self.process(**{
+			"姓名": "张勤勤", "工号": "4150", "日期": "2026-08-23",
+			"日期类型": "周末休息日", "班次": "生产夜班 20:00-次日04:30",
+			"标准工时": 0, "上班时间": "19:48", "下班时间": "",
+			"下班缺卡": 1, "下班未打卡次数": 1, "source_row": 213,
+		})
+		detail = row["processed_value"]["attendance_details"][0]
+		self.assertTrue(detail["genuine_restday_mode"])
+		self.assertEqual(detail["clock_out_missing"], 1)
+		self.assertIn("CLOCK_OUT_MISSING", row["exception_codes"])
+
+	def test_restday_punch_and_approval_alignment_matrix(self):
+		base = {
+			"姓名": "赵剑峰", "工号": "87", "日期": "2026-08-02",
+			"日期类型": "周末休息日", "班次": "休息", "标准工时": 0,
+			"实际出勤（小时）": 0, "休息日加班（小时）": 0,
+			"关联审批单": "加班08-02 08:00到08-02 20:00 10小时",
+			"source_file": "daily.xlsx", "source_sheet": "每日统计", "source_row": 4997,
+		}
+		cases = (
+			("single_punch", {"上班时间": "20:15", "下班时间": ""}, True, "缺少下班卡"),
+			("aligned_pair", {"上班时间": "07:50", "下班时间": "20:05"}, False, ""),
+			("late_start", {"上班时间": "09:00", "下班时间": "20:00"}, True, "晚于审批开始时间"),
+			("early_end", {"上班时间": "08:00", "下班时间": "19:00"}, True, "早于审批结束时间"),
+			("no_punch", {"上班时间": "", "下班时间": ""}, False, ""),
+		)
+		for name, changes, expected, reason in cases:
+			with self.subTest(name=name):
+				row = processor.process_attendance_draft_rows(
+					[{**base, **changes}], attendance_month="2026-08",
+				)["processed_rows"][0]
+				detail = row["processed_value"]["attendance_details"][0]
+				self.assertEqual("RESTDAY_PUNCH_APPROVAL_MISMATCH" in row["exception_codes"], expected)
+				self.assertEqual(detail["restday_punch_approval_mismatch"], expected)
+				self.assertIn(reason, detail["restday_punch_approval_mismatch_reason"])
+				self.assertFalse({"LATE_MARKED", "EARLY_MARKED", "ABSENCE_MARKED"} & set(row["exception_codes"]))
+
+		without_approval = processor.process_attendance_draft_rows(
+			[{**base, "关联审批单": "", "上班时间": "20:15", "下班时间": ""}],
+			attendance_month="2026-08",
+		)["processed_rows"][0]
+		self.assertNotIn("RESTDAY_PUNCH_APPROVAL_MISMATCH", without_approval["exception_codes"])
+
+		cross_day = processor.process_attendance_draft_rows([{
+			**base, "关联审批单": "加班08-01 18:00到08-02 20:00 4小时",
+			"上班时间": "07:50", "下班时间": "20:00",
+		}], attendance_month="2026-08")["processed_rows"][0]
+		self.assertNotIn("RESTDAY_PUNCH_APPROVAL_MISMATCH", cross_day["exception_codes"])
 
 	def test_difference_is_per_day_and_overtime_is_separate(self):
 		for actual, leave, overtime, difference in ((6, 2, 3, 0), (7, 2, 0, 1), (8.01, 0, 0, 0.01), (6, 1, 3, -1)):

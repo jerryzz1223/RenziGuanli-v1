@@ -1,10 +1,10 @@
-"""Pure processor for the DingTalk daily attendance-detail export.
+"""Organize and validate the DingTalk daily attendance-detail export.
 
-The public result is one ``processed_rows`` dataset: one employee per row.  It
-only infers special hours when an explicit shift rule declares the interval; it
-never copies the manually adjusted sample summary. Raw rows remain in
-``original_value`` / ``source_rows`` so a shared review queue can audit every
-exception without silently losing source data.
+DingTalk owns daily schedules, punches, calculated hours and attendance marks.
+This processor preserves those source results, aggregates them by company
+employee code, and reports missing, conflicting or unmatchable evidence. Local
+rules may explain an anomaly, but must not silently add, clear or replace a
+DingTalk result.
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 38
+ATTENDANCE_POLICY_VERSION = 41
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
 DEFAULT_CALENDAR_WEEKEND_MODE = "休息日加班口径"
 
@@ -397,11 +397,12 @@ EXCEPTION_MESSAGES = {
 	"CLOCK_OUT_MISSING": "钉钉明确存在下班未打卡记录；人员照常进入终稿，红苹果由忘打卡来源核算。",
 	"CLOCK_IN_OUTSIDE_PICK_RANGE": "上班打卡不在该班次允许的可取卡时段内，请人工核对班次或打卡。",
 	"CLOCK_OUT_OUTSIDE_PICK_RANGE": "下班打卡不在该班次允许的可取卡时段内，请人工核对班次或打卡。",
-	"LATE_MARKED": "上班打卡晚于计划上班时间；30分钟以内只标记迟到，超过30分钟时整段迟到时长计入事假，原始打卡和迟到次数仍保留审计。",
-	"EARLY_MARKED": "钉钉明确标记早退；工作日无请假证据时按实际早退时长计旷工工时。",
+	"LATE_MARKED": "钉钉明确标记迟到；系统保留源次数并提示复核，不根据打卡时间追加次数或改写请假时长。",
+	"EARLY_MARKED": "钉钉明确标记早退；系统保留源次数并提示复核，不根据打卡时间追加次数或改写旷工时长。",
 	"ABSENCE_MARKED": "工作日无出勤且无可抵扣请假，已按未出勤工时计入旷工并进入薪资三倍扣款。",
 	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "休息日存在打卡时间，但未匹配加班申请且休息日加班工时为 0；请人工确认是否补录休息日加班工时。",
 	"RESTDAY_CLOCKED_WITHOUT_APPROVAL": "所属考勤组的休息日规则要求加班申请，当天有打卡但未匹配有效申请；请核对该日期的加班单。未打卡不按缺勤或请假处理。",
+	"RESTDAY_PUNCH_APPROVAL_MISMATCH": "休息日存在加班审批，但上下班打卡不完整或打卡区间与审批时段不匹配；不按迟到、早退或旷工处理，请人工核对。",
 	"HOLIDAY_CLOCKED_WITHOUT_APPROVAL": "所属考勤组的节日加班来源要求加班单，节假日已有打卡但未匹配有效申请；请核对该日期的审批单。",
 	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "工作日钉钉加班为 0，但存在明显班后打卡；所属考勤组或班次要求加班申请，当天未找到有效加班单。",
 	"WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED": "工作日钉钉加班为 0，但存在明显班后打卡且关联了加班审批；请核对审批日期、打卡和钉钉规则是否匹配。",
@@ -443,6 +444,7 @@ NON_BLOCKING_ATTENDANCE_EVENT_CODES = frozenset({
 	"LATE_MARKED",
 	"EARLY_MARKED",
 	"ABSENCE_MARKED",
+	"RESTDAY_PUNCH_APPROVAL_MISMATCH",
 	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED",
 	"WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED",
 	"WORKDAY_OVERTIME_DINGTALK_ANOMALY",
@@ -461,6 +463,7 @@ ATTENDANCE_DETAIL_EXCEPTION_FIELDS = (
 	("ABSENCE_MARKED", "absence_marker_count"),
 	("RESTDAY_CLOCKED_WITHOUT_OVERTIME", "restday_clocked_without_overtime"),
 	("RESTDAY_CLOCKED_WITHOUT_APPROVAL", "restday_clocked_without_approval"),
+	("RESTDAY_PUNCH_APPROVAL_MISMATCH", "restday_punch_approval_mismatch"),
 	("HOLIDAY_CLOCKED_WITHOUT_APPROVAL", "holiday_clocked_without_approval"),
 	("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", "workday_outside_shift_unapproved"),
 	("WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED", "workday_overtime_approval_not_applied"),
@@ -770,6 +773,41 @@ def _overtime_approval_coverage(
 		"approved_end_minutes": latest_end,
 		"post_approval_minutes": post_end_minutes,
 	}
+
+
+def _restday_punch_approval_check(
+	row: Mapping[str, Any], approval_coverage: Mapping[str, Any], *, tolerance_minutes: int = 30,
+) -> dict[str, Any]:
+	"""Check rest-day punch completeness and alignment without creating lateness or absence."""
+	if not approval_coverage.get("has_valid_approval") or not _has_clock_punch(row):
+		return {"mismatch": False, "reason": ""}
+	in_text = _text(_value(row, ("上班时间", "上班打卡", "上班打卡时间", "clock_in")))
+	out_text = _text(_value(row, ("下班时间", "下班打卡", "下班打卡时间", "clock_out")))
+	actual_in = _clock_minutes(in_text)
+	actual_out = _clock_minutes(out_text)
+	if actual_in is None or actual_out is None:
+		missing_side = "上班卡" if actual_in is None else "下班卡"
+		return {"mismatch": True, "reason": f"休息日加班打卡不完整：缺少{missing_side}"}
+	if "次日" in out_text or actual_out <= actual_in:
+		actual_out += 24 * 60
+	intervals = approval_coverage.get("intervals") or []
+	if not intervals:
+		return {"mismatch": False, "reason": ""}
+	approved_start = min(int(item["start_minutes"]) for item in intervals)
+	approved_end = max(int(item["end_minutes"]) for item in intervals)
+	tolerance = max(int(tolerance_minutes), 0)
+	if not any(actual_in < int(item["end_minutes"]) and actual_out > int(item["start_minutes"]) for item in intervals):
+		return {"mismatch": True, "reason": "休息日实际打卡区间不在审批时段内"}
+	# A cross-day approval may start before this attendance date or end after it.
+	# Only compare the boundary that belongs to the current date; otherwise a
+	# legitimate continuation would look like a late arrival or early departure.
+	if approved_start >= 0 and actual_in > approved_start + tolerance:
+		return {"mismatch": True, "reason": f"休息日上班打卡晚于审批开始时间超过{tolerance}分钟"}
+	if approved_end <= 24 * 60 and actual_out < approved_end - tolerance:
+		return {"mismatch": True, "reason": f"休息日下班打卡早于审批结束时间超过{tolerance}分钟"}
+	if approved_end <= 24 * 60 and actual_out > approved_end + tolerance:
+		return {"mismatch": True, "reason": f"休息日下班打卡晚于审批结束时间超过{tolerance}分钟"}
+	return {"mismatch": False, "reason": ""}
 
 
 def _workday_overtime_time_match(
@@ -1792,7 +1830,7 @@ def _aggregate_employee_rows(
 		row_numbers = {fieldname: Decimal("0") for fieldname in NUMERIC_FIELDS}
 		for fieldname, aliases in NUMERIC_FIELDS.items():
 			value, exists = _field_value(row, aliases)
-			if fieldname == "deep_night_shifts" and exists:
+			if fieldname == "deep_night_shifts" and _has_field(row, aliases):
 				source_deep_night_present = True
 			if not exists or _is_blank(value):
 				continue
@@ -1831,6 +1869,10 @@ def _aggregate_employee_rows(
 		group_approval_rule = _schedule_group_approval_rule(row, shift_rules)
 		approval_rule = group_approval_rule or matched_shift_rule
 		shift_facts = _shift_time_facts(row, matched_shift_rule)
+		source_night_counts_present = bool(
+			_has_field(row, NUMERIC_FIELDS["small_night_shifts"])
+			or _has_field(row, NUMERIC_FIELDS["large_night_shifts"])
+		)
 		if matched_shift_rule and (matched_shift_rule.get("small_night_condition") or matched_shift_rule.get("large_night_condition")):
 			configured_night_rule_used = True
 		configured_small_night, configured_large_night = _configured_night_allowances(row, matched_shift_rule)
@@ -1840,9 +1882,12 @@ def _aggregate_employee_rows(
 			if unscheduled_middle_night["net_hours"] is None:
 				unscheduled_middle_night_review_required = True
 			else:
-				unscheduled_middle_night_used = True
-				row_numbers["small_night_shifts"] = Decimal(int(unscheduled_middle_night["small"]))
-				row_numbers["large_night_shifts"] = Decimal(int(unscheduled_middle_night["large"]))
+				unscheduled_middle_night_used = bool(
+					unscheduled_middle_night["small"] or unscheduled_middle_night["large"]
+				)
+				if not source_night_counts_present:
+					row_numbers["small_night_shifts"] = Decimal(int(unscheduled_middle_night["small"]))
+					row_numbers["large_night_shifts"] = Decimal(int(unscheduled_middle_night["large"]))
 		if unscheduled_middle_night_review_required and genuine_restday:
 			# Punches on a genuine rest day are audit facts only. A missing
 			# middle/night-shift identity is not an attendance exception.
@@ -1850,19 +1895,21 @@ def _aggregate_employee_rows(
 		if unscheduled_middle_night_review_required:
 			_add_code(codes, "UNSCHEDULED_MIDDLE_NIGHT_REVIEW")
 			exception_events.append(_exception_event("UNSCHEDULED_MIDDLE_NIGHT_REVIEW", parsed_date, row_number))
-		if configured_large_night:
-			# The HRMS rule is authoritative once the punch facts satisfy a large-
-			# night condition.  Clear a source-exported small-night count so one
-			# attendance day cannot receive both allowances.
-			row_numbers["small_night_shifts"] = Decimal("0")
-			row_numbers["large_night_shifts"] = Decimal("1")
-		elif configured_small_night:
-			row_numbers["small_night_shifts"] = Decimal("1")
-			row_numbers["large_night_shifts"] = Decimal("0")
+		# A compatibility calculation is allowed only when the export contains no
+		# night-count fields at all. Explicit source values, including zero, win.
+		if not source_night_counts_present:
+			if configured_large_night:
+				row_numbers["small_night_shifts"] = Decimal("0")
+				row_numbers["large_night_shifts"] = Decimal("1")
+			elif configured_small_night:
+				row_numbers["small_night_shifts"] = Decimal("1")
+				row_numbers["large_night_shifts"] = Decimal("0")
 		schedule_overtime_mode = _schedule_overtime_mode(row, shift_rules)
 		extended_overtime_mode = _text(approval_rule.get("extended_overtime_mode")) if approval_rule else ""
 		schedule_restday_overtime_mode = _schedule_restday_overtime_mode(row, shift_rules)
 		schedule_auto_overtime_hours = _schedule_auto_overtime_hours(row, shift_rules)
+		source_workday_overtime_present = _has_field(row, NUMERIC_FIELDS["workday_overtime_hours"])
+		source_restday_overtime_present = _has_field(row, NUMERIC_FIELDS["restday_overtime_hours"])
 		manual_overtime_value, manual_overtime_present = _field_value(
 			row, ("确认计入的加班时长", "confirmed_overtime_hours")
 		)
@@ -1873,18 +1920,29 @@ def _aggregate_employee_rows(
 		elif manual_overtime_hours is not None:
 			manual_overtime_hours = _floor_overtime_half_hour(manual_overtime_hours)
 		raw_workday_overtime_hours = row_numbers["workday_overtime_hours"]
-		eligible_workday_overtime_hours = _floor_overtime_half_hour(raw_workday_overtime_hours)
-		# The source workbook remains unchanged in ``raw_numbers`` and in the dated
-		# audit detail.  Only downstream overtime is normalized to completed
-		# half-hour units.  Apply the same rule to source rest-day/holiday hours.
-		row_numbers["restday_overtime_hours"] = _floor_overtime_half_hour(row_numbers["restday_overtime_hours"])
-		row_numbers["holiday_overtime_hours"] = _floor_overtime_half_hour(row_numbers["holiday_overtime_hours"])
+		# Source overtime is already a DingTalk calculation result. Preserve its
+		# precision; only an explicitly reviewed manual override may replace it.
+		# The schedule fallback exists only for legacy rows whose export omitted the
+		# source field entirely; an explicit blank or zero remains authoritative.
+		eligible_workday_overtime_hours = (
+			raw_workday_overtime_hours
+			if source_workday_overtime_present
+			else Decimal(schedule_auto_overtime_hours or 0)
+		)
 		approval_coverage = _overtime_approval_coverage(
 			row, parsed_date, shift_facts.get("raw_actual_out_minutes"), matched_shift_rule,
 		)
 		has_overtime_approval = approval_coverage["has_valid_approval"]
-		if genuine_restday and has_overtime_approval:
-			approval_coverage = {**approval_coverage, "covered": True, "status": "休息日不校验审批时段"}
+		restday_punch_approval_check = _restday_punch_approval_check(row, approval_coverage)
+		row_restday_punch_approval_mismatch = bool(
+			genuine_restday and restday_punch_approval_check["mismatch"]
+		)
+		if row_restday_punch_approval_mismatch:
+			approval_coverage = {
+				**approval_coverage,
+				"covered": False,
+				"status": "休息日打卡与审批不匹配",
+			}
 		approval_covers_overtime = approval_coverage["covered"]
 		workday_overtime_time_match = _workday_overtime_time_match(
 			shift_facts, raw_workday_overtime_hours, approval_coverage,
@@ -1928,27 +1986,42 @@ def _aggregate_employee_rows(
 		row_numbers["workday_overtime_hours"] = confirmed_workday_overtime_hours
 		is_deep_night_shift = (
 			row_numbers["deep_night_shifts"] > 0
-			if source_deep_night_present and _field_value(row, NUMERIC_FIELDS["deep_night_shifts"])[1]
+			if source_deep_night_present and _has_field(row, NUMERIC_FIELDS["deep_night_shifts"])
 			else is_scheduled_deep_night_shift
 		)
 		row_standard_hours = row_numbers["standard_hours"]
 		row_actual_attendance_hours = row_numbers["actual_attendance_hours"]
 		row_clock_in_missing = row_numbers["clock_in_missing_count"]
 		row_clock_out_missing = row_numbers["clock_out_missing_count"]
-		single_punch_missing_field = _single_punch_missing_field(row)
-		if single_punch_missing_field == "clock_in_missing":
-			row_clock_in_missing = max(row_clock_in_missing, Decimal("1"))
-			row_numbers["clock_in_missing_count"] = row_clock_in_missing
-		elif single_punch_missing_field == "clock_out_missing":
-			row_clock_out_missing = max(row_clock_out_missing, Decimal("1"))
-			row_numbers["clock_out_missing_count"] = row_clock_out_missing
+		source_clock_in_missing_marked = bool(
+			_has_field(row, NUMERIC_FIELDS["clock_in_missing_count"])
+			and row_clock_in_missing > 0
+		)
+		source_clock_out_missing_marked = bool(
+			_has_field(row, NUMERIC_FIELDS["clock_out_missing_count"])
+			and row_clock_out_missing > 0
+		)
+		source_missing_markers_present = bool(
+			_has_field(row, NUMERIC_FIELDS["clock_in_missing_count"])
+			or _has_field(row, NUMERIC_FIELDS["clock_out_missing_count"])
+		)
+		restday_missing_punch_evidence = bool(
+			_has_clock_punch(row)
+			or (
+				_value(row, IDENTITY_FIELDS["shift"])
+				and re.sub(r"\s+", "", _value(row, IDENTITY_FIELDS["shift"]))
+				not in {"休息", "排休", "周休", "未排班"}
+			)
+		)
+		if not source_missing_markers_present:
+			single_punch_missing_field = _single_punch_missing_field(row)
+			if single_punch_missing_field == "clock_in_missing":
+				row_clock_in_missing = max(row_clock_in_missing, Decimal("1"))
+				row_numbers["clock_in_missing_count"] = row_clock_in_missing
+			elif single_punch_missing_field == "clock_out_missing":
+				row_clock_out_missing = max(row_clock_out_missing, Decimal("1"))
+				row_numbers["clock_out_missing_count"] = row_clock_out_missing
 		weekend_restday_non_overtime_pair = _is_weekend_restday_non_overtime_pair(row, parsed_date)
-		if weekend_restday_non_overtime_pair:
-			# Keep the exported values in source_numbers, while preventing the
-			# lunch-window pair from entering processed attendance or overtime.
-			row_numbers["actual_attendance_hours"] = Decimal("0")
-			row_numbers["restday_overtime_hours"] = Decimal("0")
-			row_actual_attendance_hours = Decimal("0")
 		policy = daily_hours_policy(
 			row_numbers,
 			parsed_date,
@@ -1989,7 +2062,15 @@ def _aggregate_employee_rows(
 				)
 			# Reconciliation remains visible for audit, but it no longer controls the
 			# confirmed value.  The confirmed value is the source value above.
-		raw_late_minutes = int(shift_facts.get("late_minutes") or 0) if is_attendance_workday else 0
+		# Punch times explain a DingTalk late mark; they do not create one when the
+		# export contains the late-count field. Legacy rows without that field keep
+		# the compatibility calculation until they are reimported.
+		source_late_count = row_numbers["late_count"]
+		source_late_count_present = _has_field(row, NUMERIC_FIELDS["late_count"])
+		raw_late_minutes = (
+			int(shift_facts.get("late_minutes") or 0)
+			if is_attendance_workday and (source_late_count > 0 or not source_late_count_present) else 0
+		)
 		approved_clock_in_leave_hours = _morning_leave_approval_hours(
 			row,
 			parsed_date,
@@ -2002,13 +2083,10 @@ def _aggregate_employee_rows(
 			row_standard_hours,
 			row_actual_attendance_hours,
 		)
-		late_personal_leave_hours = _late_hours(late_minutes)
+		late_personal_leave_hours = (
+			_late_hours(late_minutes) if not source_late_count_present else Decimal("0")
+		)
 		if late_minutes:
-			# Ordinary source rows add the derived late duration to their leave.  A
-			# reviewed override is the displayed final total (already including late),
-			# so retain it without adding the same late duration a second time.  The
-			# late duration itself remains the minimum that can flow downstream once
-			# the 30-minute boundary has been exceeded.
 			if late_personal_leave_hours:
 				if row.get("_personal_leave_includes_late"):
 					row_numbers["personal_leave_hours"] = max(
@@ -2017,8 +2095,7 @@ def _aggregate_employee_rows(
 				else:
 					row_numbers["personal_leave_hours"] += late_personal_leave_hours
 			attendance_notes.append(
-				f"{parsed_date or _text(date_value)}迟到{late_minutes}分钟"
-				+ ("（半小时以内）" if late_minutes <= 30 else "（超过半小时）")
+				f"{parsed_date or _text(date_value)}钉钉标记迟到，打卡较计划晚{late_minutes}分钟"
 			)
 		policy = daily_hours_policy(
 			row_numbers,
@@ -2033,9 +2110,6 @@ def _aggregate_employee_rows(
 		row_clock_in_missing = row_numbers["clock_in_missing_count"]
 		row_clock_out_missing = row_numbers["clock_out_missing_count"]
 		row_late_count = row_numbers["late_count"]
-		if raw_late_minutes > 0 and approved_clock_in_leave_hours > 0 and late_minutes <= 0:
-			row_late_count = Decimal("0")
-			row_numbers["late_count"] = row_late_count
 		row_early_count = row_numbers["early_count"]
 		early_approval_covered = bool(
 			row_early_count > 0
@@ -2047,16 +2121,11 @@ def _aggregate_employee_rows(
 				shift_facts.get("raw_actual_out_minutes"),
 			)
 		)
-		if early_approval_covered:
-			row_early_count = Decimal("0")
-			row_numbers["early_count"] = row_early_count
 		row_absence_marker_count = row_numbers["absence_marker_count"]
 		row_absence_hours = row_numbers["absence_hours"]
-		# Only schedule rows whose weekend column says “不提交加班单” may generate
-		# rest-day overtime from actual hours.  中班 is deliberately excluded: its
-		# weekday amount is automatic, but its weekend column still says “加班单”.
 		if (
-			not weekend_restday_non_overtime_pair
+			not source_restday_overtime_present
+			and not weekend_restday_non_overtime_pair
 			and schedule_restday_overtime_mode == "schedule_auto"
 			and policy["genuine_restday_mode"]
 			and row_numbers["restday_overtime_hours"] <= 0
@@ -2096,15 +2165,11 @@ def _aggregate_employee_rows(
 			or _schedule_overtime_rule(restday_policy_row, shift_rules)
 			if restday_policy_row and schedule_restday_overtime_mode != "schedule_review" else None
 		)
-		indirect_restday_approval_required = bool(
-			policy["genuine_restday_mode"] and is_calendar_weekend(parsed_date)
-			and restday_rule_row and restday_rule
-			and _text(restday_rule.get("weekend_overtime_mode")) == "加班单"
-		)
-		row_restday_clock_without_approval = bool(
-			indirect_restday_approval_required and _has_clock_punch(row)
-			and not has_overtime_approval
-		)
+		# A genuine rest day never requires an overtime application in HRMS.
+		# DingTalk's exported rest-day overtime is the result; punches and any
+		# linked approval remain audit evidence only.
+		indirect_restday_approval_required = False
+		row_restday_clock_without_approval = False
 		holiday_approval_required = bool(
 			"节假日" in _text(date_type)
 			and approval_rule
@@ -2120,7 +2185,7 @@ def _aggregate_employee_rows(
 			holiday_approval_required and _has_clock_punch(row)
 			and not has_overtime_approval
 		)
-		if row_late_count <= 0 and late_minutes > 0:
+		if not source_late_count_present and row_late_count <= 0 and late_minutes > 0:
 			row_late_count = Decimal("1")
 		row_numbers["late_count"] = row_late_count
 		outside_shift_overtime_minutes = max(
@@ -2184,13 +2249,9 @@ def _aggregate_employee_rows(
 			if row_absence_marker_count > 0 and _is_scheduled_workday(row_standard_hours) and not _has_leave_evidence(row, row_leave_hours)
 			else Decimal("0")
 		)
-		early_absence_hours = _early_departure_hours(
-			row,
-			standard_hours=row_standard_hours,
-			actual_hours=row_actual_attendance_hours,
-			leave_hours=row_leave_hours,
-			early_count=row_early_count,
-		)
+		# Early departure is a source marker only. It must not manufacture absence
+		# hours; explicit DingTalk absence data follows the separate absence policy.
+		early_absence_hours = Decimal("0")
 		if row_absence_hours <= 0:
 			row_absence_hours = max(marker_absence_hours, early_absence_hours)
 		row_numbers["absence_hours"] = row_absence_hours
@@ -2211,11 +2272,21 @@ def _aggregate_employee_rows(
 			if fieldname in {"late_count", "early_count"} and not _is_scheduled_workday(row_standard_hours):
 				continue
 			totals[fieldname] += number
-		if exception_policy.get("missing_punch", True) and not policy["genuine_restday_mode"]:
-			if row_clock_in_missing > 0:
+		if exception_policy.get("missing_punch", True):
+			# A genuine rest day suppresses only a missing punch inferred from a
+			# one-sided clock or an unused rest schedule. An explicit DingTalk marker
+			# remains an attendance fact when a punch or working shift proves that the
+			# employee actually had attendance to complete on that rest-day date.
+			if row_clock_in_missing > 0 and (
+				not policy["genuine_restday_mode"]
+				or (source_clock_in_missing_marked and restday_missing_punch_evidence)
+			):
 				_add_code(codes, "CLOCK_IN_MISSING")
 				exception_events.append(_exception_event("CLOCK_IN_MISSING", parsed_date, row_number, row_clock_in_missing))
-			if row_clock_out_missing > 0:
+			if row_clock_out_missing > 0 and (
+				not policy["genuine_restday_mode"]
+				or (source_clock_out_missing_marked and restday_missing_punch_evidence)
+			):
 				_add_code(codes, "CLOCK_OUT_MISSING")
 				exception_events.append(_exception_event("CLOCK_OUT_MISSING", parsed_date, row_number, row_clock_out_missing))
 		if exception_policy.get("late", True) and row_late_count > 0:
@@ -2233,6 +2304,9 @@ def _aggregate_employee_rows(
 		if row_restday_clock_without_approval:
 			_add_code(codes, "RESTDAY_CLOCKED_WITHOUT_APPROVAL")
 			exception_events.append(_exception_event("RESTDAY_CLOCKED_WITHOUT_APPROVAL", parsed_date, row_number))
+		if row_restday_punch_approval_mismatch:
+			_add_code(codes, "RESTDAY_PUNCH_APPROVAL_MISMATCH")
+			exception_events.append(_exception_event("RESTDAY_PUNCH_APPROVAL_MISMATCH", parsed_date, row_number))
 		if row_holiday_clock_without_approval:
 			_add_code(codes, "HOLIDAY_CLOCKED_WITHOUT_APPROVAL")
 			exception_events.append(_exception_event("HOLIDAY_CLOCKED_WITHOUT_APPROVAL", parsed_date, row_number))
@@ -2282,6 +2356,8 @@ def _aggregate_employee_rows(
 			"indirect_restday_rule_name": _text(restday_rule.get("name")) if restday_rule else "",
 			"indirect_restday_rule_weekend_mode": _text(restday_rule.get("weekend_overtime_mode")) if restday_rule else "",
 			"restday_clocked_without_approval": row_restday_clock_without_approval,
+			"restday_punch_approval_mismatch": row_restday_punch_approval_mismatch,
+			"restday_punch_approval_mismatch_reason": restday_punch_approval_check["reason"],
 			"holiday_approval_required": holiday_approval_required,
 			"holiday_clocked_without_approval": row_holiday_clock_without_approval,
 			"scheduling_policy": {
@@ -2666,6 +2742,11 @@ def _field_value(row, aliases):
 			if not _is_blank(row[alias]):
 				return row[alias], True
 	return first_present, first_present is not None
+
+
+def _has_field(row, aliases):
+	"""Return whether the export contains a column, including an empty source cell."""
+	return any(alias in row for alias in aliases)
 
 
 def _value(row, aliases):

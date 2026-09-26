@@ -63,7 +63,6 @@ for (const marker of [
 	"导入批次",
 	"考勤修改记录",
 	"规则设置",
-	"排班管理",
 	"字段映射",
 	"部门映射",
 	"list_department_mappings",
@@ -71,11 +70,10 @@ for (const marker of [
 	"新增部门映射",
 	"钉钉原部门",
 	"花名册目标部门",
-	"处理规则",
+	"考勤规则",
 	"load_complete_attendance_rules",
-	"完整考勤规则中心",
+	"钉钉负责每日排班",
 	"编辑完整规则",
-	"导入不按处理月份分批",
 	"系统处理边界（只读）",
 	"考勤初稿",
 	"苹果树",
@@ -471,12 +469,18 @@ if (!homeRedirectJs.includes('label: "日考勤", route: "/desk/attendance-impor
 if (!homeRedirectJs.includes('label: "日考勤审核", route: "/desk/attendance-import-center/daily-review"')) {
 	throw new Error("The global attendance sidebar must provide the daily-review route.");
 }
+if (!homeRedirectJs.includes('label: "考勤规则", route: "/desk/attendance-import-center/processing-rules"')) {
+	throw new Error("The global attendance sidebar must provide the consolidated attendance-rule route.");
+}
+if (homeRedirectJs.includes('label: "排班管理"')) {
+	throw new Error("The global attendance sidebar must not expose duplicate schedule maintenance.");
+}
 
 for (const marker of ["flex: 0 0 220px", "min-width: 220px", "white-space: nowrap", "text-overflow: ellipsis"]) {
 	mustInclude(topNavCss, marker, `Attendance sidebar header layout is missing ${marker}.`);
 }
 
-mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260918-sidebar-layout-v2", "The sidebar stylesheet cache key must change with its layout.");
+mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260926-native-list-chrome-v1", "The sidebar stylesheet cache key must change with its layout.");
 
 if (attendancePageJs.includes('this.wrapper.querySelector("[data-company]").addEventListener("change"')) {
 	throw new Error("Attendance company must be controlled by the global company selector, not a local editable field.");
@@ -652,7 +656,6 @@ for (const marker of [
 	"attendance-import-center/manual-adjustments",
 	"attendance-import-center/field-mapping",
 	"attendance-import-center/department-mapping",
-	"attendance-import-center/schedule-management",
 	"attendance-import-center/processing-rules",
 	"考勤处理",
 	"数据台账",
@@ -664,7 +667,7 @@ for (const marker of [
 const attendanceModuleStart = shellJs.indexOf('label: "考勤"');
 const payrollModuleStart = shellJs.indexOf('label: "薪酬"', attendanceModuleStart);
 const attendanceModule = shellJs.slice(attendanceModuleStart, payrollModuleStart);
-for (const hiddenMarker of ["钉钉打卡对接", "统计首页", "打卡记录", "请假记录", "外出记录", "出差记录", "加班记录", "7S", "KPI"]) {
+for (const hiddenMarker of ["排班管理", "钉钉打卡对接", "统计首页", "打卡记录", "请假记录", "外出记录", "出差记录", "加班记录", "7S", "KPI"]) {
 	if (attendanceModule.includes(hiddenMarker)) {
 		throw new Error(`Unified attendance sidebar must hide legacy marker: ${hiddenMarker}`);
 	}

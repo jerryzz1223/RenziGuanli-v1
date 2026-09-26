@@ -117,10 +117,9 @@ class AttendanceImportCenter {
 			{
 				title: "规则设置",
 				items: [
-					{ key: "schedule-management", label: "排班管理" },
 					{ key: "field-mapping", label: "字段映射" },
 					{ key: "department-mapping", label: "部门映射" },
-					{ key: "processing-rules", label: "处理规则" },
+					{ key: "processing-rules", label: "考勤规则" },
 				],
 			},
 		];
@@ -140,8 +139,9 @@ class AttendanceImportCenter {
 			"field-rules": "field-mapping",
 			"rules": "processing-rules",
 			"groups": "processing-rules",
-			"schedule": "schedule-management",
-			"shift-rules": "schedule-management",
+			"schedule": "processing-rules",
+			"shift-rules": "processing-rules",
+			"schedule-management": "processing-rules",
 			"settings": "processing-rules",
 			"clock-settings": "processing-rules",
 			"dingtalk": "dingtalk",
@@ -395,7 +395,7 @@ class AttendanceImportCenter {
 
 	render_header() {
 		const isDingtalk = this.active_view === "dingtalk";
-		const isCompanyRuleView = this.active_view === "schedule-management";
+		const isCompanyRuleView = this.active_view === "processing-rules";
 		return `
 			<div class="hrms-attendance-import-head">
 				<div>
@@ -410,7 +410,7 @@ class AttendanceImportCenter {
 	}
 
 	render_kpi_grid() {
-		if (["dingtalk", "schedule-management"].includes(this.active_view)) return "";
+		if (["dingtalk", "processing-rules"].includes(this.active_view)) return "";
 		const batch = this.processing_batch || {};
 		const slots = batch.slots || [];
 		const confirmed = slots.filter((slot) => slot.status === "已确认").length;
@@ -632,7 +632,6 @@ class AttendanceImportCenter {
 		if (this.active_view === "monthly-final") return this.load_monthly_final();
 		if (this.active_view === "import-batches") return this.load_processing_ledger("batches");
 		if (this.active_view === "manual-adjustments") return this.load_processing_ledger("adjustments");
-		if (this.active_view === "schedule-management") return this.load_attendance_shift_rules();
 		if (this.active_view === "processing-rules") return this.load_complete_attendance_rules();
 		if (["field-mapping", "department-mapping"].includes(this.active_view)) return this.load_processing_configuration();
 		return this.load_monthly_final();
@@ -1331,8 +1330,9 @@ class AttendanceImportCenter {
 		const fields = [
 			["CLOCK_IN_MISSING", "clock_in_missing"], ["CLOCK_OUT_MISSING", "clock_out_missing"],
 			["LATE_MARKED", "late_count"], ["EARLY_MARKED", "early_count"], ["ABSENCE_MARKED", "absence_marker_count"],
-			["RESTDAY_CLOCKED_WITHOUT_OVERTIME", "restday_clocked_without_overtime"],
-			["RESTDAY_CLOCKED_WITHOUT_APPROVAL", "restday_clocked_without_approval"],
+				["RESTDAY_CLOCKED_WITHOUT_OVERTIME", "restday_clocked_without_overtime"],
+				["RESTDAY_CLOCKED_WITHOUT_APPROVAL", "restday_clocked_without_approval"],
+				["RESTDAY_PUNCH_APPROVAL_MISMATCH", "restday_punch_approval_mismatch"],
 			["WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", "workday_outside_shift_unapproved"],
 			["WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED", "workday_overtime_approval_not_applied"],
 			["WORKDAY_OVERTIME_DINGTALK_ANOMALY", "workday_overtime_dingtalk_anomaly"],
@@ -1375,6 +1375,7 @@ class AttendanceImportCenter {
 			EARLY_MARKED: __("早退（钉钉标记）"), ABSENCE_MARKED: __("旷工（钉钉标记）"),
 				RESTDAY_CLOCKED_WITHOUT_OVERTIME: __("休息日有打卡未计加班"),
 				RESTDAY_CLOCKED_WITHOUT_APPROVAL: __("间接人员周末打卡缺加班单"),
+				RESTDAY_PUNCH_APPROVAL_MISMATCH: __("休息日打卡与加班审批不匹配"),
 				WORKDAY_OUTSIDE_SHIFT_UNAPPROVED: __("钉钉加班为0：缺加班单"),
 				WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED: __("钉钉加班为0：审批未生效"),
 				WORKDAY_OVERTIME_DINGTALK_ANOMALY: __("钉钉加班为0：免审批计算异常"),
@@ -1385,11 +1386,12 @@ class AttendanceImportCenter {
 			const originalFlags = (line.exception_codes || []).map(sourceExceptionLabel).join("、") || __("待人工确认");
 			const resolved = line.resolved || line.review_status === "已处理异常";
 			const flags = resolved ? __("已处理（原异常：{0}）", [originalFlags]) : originalFlags;
-			const restdayWithoutOvertime = (line.exception_codes || []).includes("RESTDAY_CLOCKED_WITHOUT_OVERTIME");
-			const restdayWithoutApproval = (line.exception_codes || []).includes("RESTDAY_CLOCKED_WITHOUT_APPROVAL");
+				const restdayWithoutOvertime = (line.exception_codes || []).includes("RESTDAY_CLOCKED_WITHOUT_OVERTIME");
+				const restdayWithoutApproval = (line.exception_codes || []).includes("RESTDAY_CLOCKED_WITHOUT_APPROVAL");
+				const restdayPunchMismatch = (line.exception_codes || []).includes("RESTDAY_PUNCH_APPROVAL_MISMATCH");
 			const locator = `data-attendance-source-row="${this.escape(line.source_row || "")}" data-attendance-source-file="${this.escape(line.source_file || "")}" data-attendance-source-sheet="${this.escape(line.source_sheet || "")}" data-attendance-date="${this.escape(line.attendance_date || "")}" data-attendance-clock-in="${this.escape(line.clock_in || "")}" data-attendance-clock-out="${this.escape(line.clock_out || "")}"`;
 			const action = includeAction && recordId && !line.resolved && line.review_status !== "已处理异常" ? `<br>
-				<button class="btn ${restdayWithoutOvertime || restdayWithoutApproval ? "btn-primary" : "btn-default"} btn-xs" data-edit-attendance-daily-row="${this.escape(recordId)}" ${locator} data-restday-overtime-correction="${restdayWithoutOvertime ? "1" : ""}">${this.escape(__(restdayWithoutOvertime ? "填写休息日加班时长" : restdayWithoutApproval ? "补充/核对加班单" : "修改本日"))}</button>
+					<button class="btn ${restdayWithoutOvertime || restdayWithoutApproval || restdayPunchMismatch ? "btn-primary" : "btn-default"} btn-xs" data-edit-attendance-daily-row="${this.escape(recordId)}" ${locator} data-restday-overtime-correction="${restdayWithoutOvertime ? "1" : ""}">${this.escape(__(restdayWithoutOvertime ? "填写休息日加班时长" : restdayWithoutApproval ? "补充/核对加班单" : restdayPunchMismatch ? "核对打卡与审批" : "修改本日"))}</button>
 				${restdayWithoutOvertime ? `<button class="btn btn-default btn-xs" data-edit-attendance-daily-row="${this.escape(recordId)}" ${locator}>${this.escape(__("修改本日"))}</button>` : ""}
 				${restdayWithoutOvertime ? `<button class="btn btn-default btn-xs" data-confirm-attendance-daily-no-overtime="${this.escape(recordId)}" ${locator}>${this.escape(__("确认本日不计加班"))}</button>` : ""}
 			` : "";
@@ -1404,7 +1406,9 @@ class AttendanceImportCenter {
 					? `<br><strong>${this.escape(`处理后校验：${balanceText}，与标准 ${hours(line.standard_hours)} 已一致`)}</strong>`
 					: `<br><strong>${this.escape(`输入不成立：${balanceText}，与标准 ${hours(line.standard_hours)} 不符；${difference < 0 ? "不足" : "超出"} ${hours(Math.abs(difference))}`)}</strong>`
 				: "";
-			const weekendRule = line.restday_clocked_without_approval
+				const weekendRule = line.restday_punch_approval_mismatch
+					? line.restday_punch_approval_mismatch_reason || "休息日打卡与加班审批不匹配"
+					: line.restday_clocked_without_approval
 				? `间接人员周末打卡须加班单；依据班次：${line.indirect_restday_rule_shift || "待核对"}（${line.indirect_restday_rule_date || "日期待核对"}）`
 				: line.is_weekend ? "周末，只核对时长" : line.date_type || "日期类型未提供";
 			const facts = `<br><small>${this.escape(`班次：${line.shift || "--"}；计划：${line.scheduled_start || "待复核"} → ${line.scheduled_end || "待复核"}；${weekendRule}`)}<br>${this.escape(`实际打卡：${line.clock_in || "--"} → ${line.clock_out || "--"}；班次外原始时长：${hours(line.raw_outside_shift_hours)}；${line.overtime_approval_status || "无申请"}；确认计入：${hours(line.confirmed_overtime_hours)}`)}<br>${this.escape(`标准工时：${hours(line.standard_hours)}；导出实际出勤：${hours(line.actual_attendance_hours)}`)}<br>${this.escape(`有效请假：${leaveText}${excludedText ? `；周末不计入：${excludedText}` : ""}`)}<br>${this.escape(`加班：平日 ${hours(line.workday_overtime_hours)} / 休息日 ${hours(line.restday_overtime_hours)} / 节假日 ${hours(line.holiday_overtime_hours)}`)}${line.attendance_note ? `<br><strong>${this.escape(line.attendance_note)}</strong>` : ""}<br>${this.escape(`审批：${line.approval || line.overtime_approval || "--"}；来源：${line.source_file || "--"} / ${line.source_sheet || "--"} 第 ${line.source_row || "--"} 行`)}</small>`;
@@ -1578,7 +1582,7 @@ class AttendanceImportCenter {
 		if (!Array.isArray(events) || !events.length) return "--";
 		const labels = {
 			ATTENDANCE_HOURS_MISMATCH: "工时合计与标准工时不符",
-			CLOCK_IN_MISSING: "上班缺卡", CLOCK_OUT_MISSING: "下班缺卡", LATE_MARKED: "迟到", EARLY_MARKED: "早退", ABSENCE_MARKED: "旷工标记", RESTDAY_CLOCKED_WITHOUT_OVERTIME: "休息日有打卡未计加班", RESTDAY_CLOCKED_WITHOUT_APPROVAL: "间接人员周末打卡缺加班单", SHIFT_MISSING: "班次缺失",
+				CLOCK_IN_MISSING: "上班缺卡", CLOCK_OUT_MISSING: "下班缺卡", LATE_MARKED: "迟到", EARLY_MARKED: "早退", ABSENCE_MARKED: "旷工标记", RESTDAY_CLOCKED_WITHOUT_OVERTIME: "休息日有打卡未计加班", RESTDAY_CLOCKED_WITHOUT_APPROVAL: "间接人员周末打卡缺加班单", RESTDAY_PUNCH_APPROVAL_MISMATCH: "休息日打卡与加班审批不匹配", SHIFT_MISSING: "班次缺失",
 		};
 		return events.map((event) => `${event.attendance_date || "--"} ${labels[event.code] || event.code}${event.count ? `×${event.count}` : ""}`).join("；");
 	}
@@ -2035,7 +2039,7 @@ class AttendanceImportCenter {
 
 	show_processing_record_dialog(record) {
 		const dailyLines = record.source_type === "attendance_draft" ? this.attendance_exception_lines(record) : [];
-		if (dailyLines.some((line) => (line.exception_codes || []).some((code) => ["RESTDAY_CLOCKED_WITHOUT_OVERTIME", "RESTDAY_CLOCKED_WITHOUT_APPROVAL"].includes(code)))) {
+		if (dailyLines.some((line) => (line.exception_codes || []).some((code) => ["RESTDAY_CLOCKED_WITHOUT_OVERTIME", "RESTDAY_CLOCKED_WITHOUT_APPROVAL", "RESTDAY_PUNCH_APPROVAL_MISMATCH"].includes(code)))) {
 			const dailyDialog = new frappe.ui.Dialog({
 				title: __("按日期处理：{0} {1}", [record.employee_code || "", record.employee_name || ""]),
 				fields: [{
@@ -2289,7 +2293,8 @@ class AttendanceImportCenter {
 			["CLOCK_IN_MISSING", "上班缺卡"], ["CLOCK_OUT_MISSING", "下班缺卡"], ["LATE_MARKED", "迟到"],
 			["EARLY_MARKED", "早退"], ["ABSENCE_MARKED", "旷工"], ["ATTENDANCE_HOURS_MISMATCH", "工时不一致"],
 			["RESTDAY_CLOCKED_WITHOUT_OVERTIME", "休息日有打卡未计加班"],
-			["RESTDAY_CLOCKED_WITHOUT_APPROVAL", "间接人员周末打卡缺加班单"],
+				["RESTDAY_CLOCKED_WITHOUT_APPROVAL", "间接人员周末打卡缺加班单"],
+				["RESTDAY_PUNCH_APPROVAL_MISMATCH", "休息日打卡与加班审批不匹配"],
 			["WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", "钉钉加班为0：缺加班单"],
 			["WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED", "钉钉加班为0：审批未生效"],
 			["WORKDAY_OVERTIME_DINGTALK_ANOMALY", "钉钉加班为0：免审批计算异常"],
@@ -2558,7 +2563,7 @@ class AttendanceImportCenter {
 
 	load_processing_configuration() {
 		if (this.active_view === "department-mapping") return this.load_department_mappings();
-		const labels = { "field-mapping": "字段映射", "department-mapping": "部门映射", "processing-rules": "处理规则" };
+		const labels = { "field-mapping": "字段映射", "department-mapping": "部门映射", "processing-rules": "考勤规则" };
 		const body = this.body();
 		const title = labels[this.active_view];
 		body.innerHTML = this.render_processing_configuration(title, [], true);
@@ -2594,27 +2599,20 @@ class AttendanceImportCenter {
 		const policies = data.scheduling_policies || [];
 		const boundaries = data.system_boundaries || [];
 		const fallbackNotice = data.using_builtin_fallback
-			? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("尚未发布公司规则"))}</strong><span>${this.escape(__("当前仅使用内置兼容规则。正式启用前须完整导入并逐项复核。"))}</span></div>`
+			? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("当前使用内置兼容规则"))}</strong><span>${this.escape(__("钉钉日常排班无需在本系统重复导入。只有公司特殊班次的异常识别发生变化时，才需由系统管理员发布结构化规则。"))}</span></div>`
 			: "";
-		const policyCard = (row) => `<div class="hrms-attendance-rule-card"><div><strong>${this.escape(row.policy_name || "--")}</strong><small>${this.escape(row.enabled ? __("已启用") : __("未启用"))}</small></div><p>${this.escape(__("{0}；每日上限 {1} 小时；周末口径：{2}", [row.scope_type || "--", row.max_daily_hours ?? "--", row.calendar_weekend_mode || "--"]))}</p><button class="btn btn-default btn-xs" data-edit-scheduling-policy="${this.escape(row.name || "")}">${this.escape(__("编辑约束"))}</button></div>`;
-		return `<div class="hrms-attendance-section hrms-attendance-rule-center"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("考勤匹配与异常分类"))}</h3><small>${this.escape(__("钉钉工作日加班为最终来源；考勤组和班次规则只用于识别与分类异常。"))}</small></div><div class="hrms-attendance-list-actions"><button class="btn btn-default btn-sm" data-import-shift-rules>${this.escape(__(shiftRules.length ? "重新导入排班表" : "首次导入排班表"))}</button>${shiftRules.length ? ` <button class="btn btn-primary btn-sm" data-add-shift-rule>${this.escape(__("新增班次规则"))}</button>` : ""}</div></div>
+		const policyCard = (row) => `<div class="hrms-attendance-rule-card"><div><strong>${this.escape(row.policy_name || "--")}</strong><small>${this.escape(row.enabled ? __("已启用") : __("未启用"))}</small></div><p>${this.escape(__("{0}；{1} 至 {2}；周末口径：{3}", [row.scope_type || "--", row.effective_from || "--", row.effective_to || __("长期"), row.calendar_weekend_mode || "--"]))}</p><button class="btn btn-default btn-xs" data-edit-scheduling-policy="${this.escape(row.name || "")}">${this.escape(__("编辑口径"))}</button></div>`;
+		return `<div class="hrms-attendance-section hrms-attendance-rule-center"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("考勤规则"))}</h3><small>${this.escape(__("钉钉负责每日排班、打卡和原始考勤结果；本系统不重复排班或重算源值，只做整理、关联、汇总和异常提示。"))}</small></div></div>
 		${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}${fallbackNotice}
-		<div class="hrms-attendance-kpi-grid hrms-attendance-rule-kpis"><div class="hrms-attendance-kpi"><strong>${this.escape(shiftRules.length)}</strong><span>${this.escape(__("公司班次规则"))}</span><small>${this.escape(__("启用 {0} 条", [shiftRules.filter((row) => row.enabled).length]))}</small></div><div class="hrms-attendance-kpi"><strong>${this.escape(data.shift_rule_version || "--")}</strong><span>${this.escape(__("当前规则版本"))}</span><small>${this.escape(__("结果保留版本快照"))}</small></div><div class="hrms-attendance-kpi"><strong>${this.escape(__("公司级"))}</strong><span>${this.escape(__("规则适用范围"))}</span><small>${this.escape(__("导入不按处理月份分批；生效日仅用于版本边界"))}</small></div></div>
-		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("一、排班治理规则"))}</h4><small>${this.escape(__("约束可排日期、每日工时、一日多班、改班和未排班打卡；员工范围只使用公司工号。"))}</small></div><button class="btn btn-primary btn-sm" data-add-scheduling-policy>${this.escape(__("新增排班治理规则"))}</button></div><div class="hrms-attendance-rule-cards">${loading ? `<div class="text-muted">${this.escape(__("正在读取排班治理规则..."))}</div>` : policies.length ? policies.map(policyCard).join("") : `<div class="text-muted">${this.escape(__("暂无排班治理规则；正式启用前应完成配置并复核。"))}</div>`}</div></section>
-		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("二、班次匹配与异常分类规则"))}</h4><small>${this.escape(__("用于确定是否需要审批、明显班后时段和异常类型；不重新计算钉钉已给出的工作日加班。"))}</small></div></div><div class="hrms-attendance-rule-browser" data-rule-browser>${loading ? this.escape(__("正在读取班别...")) : ""}</div></section>
+		<div class="hrms-attendance-kpi-grid hrms-attendance-rule-kpis"><div class="hrms-attendance-kpi"><strong>${this.escape(__("钉钉"))}</strong><span>${this.escape(__("事实来源"))}</span><small>${this.escape(__("班次、计划时间、打卡和考勤结果"))}</small></div><div class="hrms-attendance-kpi"><strong>${this.escape(data.shift_rule_version || "--")}</strong><span>${this.escape(__("检查规则版本"))}</span><small>${this.escape(__("只用于异常分类和留痕"))}</small></div><div class="hrms-attendance-kpi"><strong>${this.escape(policies.filter((row) => row.enabled).length)}</strong><span>${this.escape(__("生效考勤口径"))}</span><small>${this.escape(__("不复制钉钉日常排班"))}</small></div></div>
+		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("一、周末与日历口径"))}</h4><small>${this.escape(__("只补充普通周末的系统处理方式。休息日不产生迟到、早退、旷工和标准工时；调班、补班仍按钉钉的工作日结果。"))}</small></div><button class="btn btn-primary btn-sm" data-add-scheduling-policy>${this.escape(__("新增考勤口径"))}</button></div><div class="hrms-attendance-rule-cards">${loading ? `<div class="text-muted">${this.escape(__("正在读取考勤口径..."))}</div>` : policies.length ? policies.map(policyCard).join("") : `<div class="text-muted">${this.escape(__("暂无公司考勤口径；系统使用安全默认值，不要为了复制钉钉排班而新建规则。"))}</div>`}</div></section>
+		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("二、特殊班次异常识别"))}</h4><small>${this.escape(__("仅用于发现缺值、冲突或无法关联的数据；不创建员工排班，不覆盖钉钉已给出的加班、迟到、早退和夜班结果。"))}</small></div></div><div class="hrms-attendance-rule-browser" data-rule-browser>${loading ? this.escape(__("正在读取班别...")) : ""}</div></section>
 		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("三、系统处理边界（只读）"))}</h4><small>${this.escape(__("这些边界保护来源、审批、人工复核与历史版本，不能由备注文字绕过。"))}</small></div></div><div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr><th>${this.escape(__("边界"))}</th><th>${this.escape(__("判断逻辑"))}</th><th>${this.escape(__("影响"))}</th></tr></thead><tbody>${boundaries.length ? boundaries.map((row) => `<tr><td><strong>${this.escape(row.name)}</strong></td><td>${this.escape(row.logic)}</td><td>${this.escape(row.impact)}</td></tr>`).join("") : `<tr><td colspan="3" class="text-muted">${this.escape(__("正在读取系统边界..."))}</td></tr>`}</tbody></table></div></section></div>`;
 	}
 
 	bind_complete_attendance_rule_events(data = {}) {
 		const body = this.body();
-		body.querySelector("[data-import-shift-rules]")?.addEventListener("click", () => this.open_shift_rule_uploader());
-		body.querySelector("[data-add-shift-rule]")?.addEventListener("click", () => {
-			if (data.using_builtin_fallback) {
-				frappe.msgprint(__("请先预览并导入完整排班表，再新增或修改公司规则；直接新增首条规则会使其他内置规则失效。"));
-				return;
-			}
-			this.open_shift_rule_dialog();
-		});
+		// Daily schedules and source attendance results are maintained in DingTalk.
 		body.querySelector("[data-add-scheduling-policy]")?.addEventListener("click", () => this.open_scheduling_policy_dialog());
 		body.querySelectorAll("[data-edit-scheduling-policy]").forEach((button) => button.addEventListener("click", () => {
 			this.open_scheduling_policy_dialog((data.scheduling_policies || []).find((row) => row.name === button.dataset.editSchedulingPolicy) || {});
@@ -2655,7 +2653,7 @@ class AttendanceImportCenter {
 			return '<div class="hrms-attendance-rule-field"><span>' + this.escape(__(label)) + '</span><strong>' + this.escape(value === 0 ? "0" : value || "--") + '</strong>' + sourceNote + '</div>';
 		};
 		if (!this.attendance_rule_group) {
-			browser.innerHTML = '<div class="hrms-attendance-rule-browser-head"><h4>' + this.escape(__("选择班别")) + '</h4><small>' + this.escape(__(usingBuiltin ? "当前为内置兼容规则；首次导入排班表后可编辑。" : "公司规则已导入，可进入班次详情编辑。")) + '</small></div>'
+			browser.innerHTML = '<div class="hrms-attendance-rule-browser-head"><h4>' + this.escape(__("选择班别")) + '</h4><small>' + this.escape(__(usingBuiltin ? "当前为系统内置检查规则，不需要重复导入钉钉排班。" : "已发布公司特殊班次检查规则，可进入详情复核。")) + '</small></div>'
 				+ '<div class="hrms-attendance-rule-tiles">' + [...groups].map(([group, items]) =>
 					'<button type="button" class="hrms-attendance-rule-tile" data-select-rule-group="' + this.escape(group) + '"><strong>' + this.escape(group) + '</strong><span>' + this.escape(__("{0} 个班次", [items.length])) + '</span></button>'
 				).join("") + '</div>';
@@ -2690,7 +2688,7 @@ class AttendanceImportCenter {
 				["备注", selected.remarks, "remarks"], ["来源文件", selected.source_file],
 			];
 			browser.innerHTML = '<div class="hrms-attendance-rule-browser-head"><button type="button" class="btn btn-default btn-sm" data-rule-back="variants">' + this.escape(__("返回班次")) + '</button><div><h4>' + this.escape(this.attendance_rule_group + " / " + variantOf(selected)) + '</h4><small>' + this.escape(selected.rule_name || "") + '</small></div>'
-				+ (usingBuiltin ? '<button type="button" class="btn btn-default btn-sm" data-import-from-detail>' + this.escape(__("首次导入排班表后编辑")) + '</button>'
+				+ (usingBuiltin ? '<span class="text-muted">' + this.escape(__("内置检查规则（只读）")) + '</span>'
 					: '<button type="button" class="btn btn-primary btn-sm" data-edit-selected-rule>' + this.escape(__("编辑规则")) + '</button>') + '</div>'
 				+ mappingWarning + '<div class="hrms-attendance-rule-detail-grid">' + details.map(([label, value, sourceField]) => field(label, value, sourceField)).join("") + '</div>';
 		}
@@ -2709,7 +2707,6 @@ class AttendanceImportCenter {
 			this.render_attendance_rule_browser(data);
 		});
 		browser.querySelector("[data-edit-selected-rule]")?.addEventListener("click", () => this.open_shift_rule_dialog(selected));
-		browser.querySelector("[data-import-from-detail]")?.addEventListener("click", () => this.open_shift_rule_uploader());
 	}
 
 	load_attendance_shift_rules() {
@@ -2816,10 +2813,9 @@ class AttendanceImportCenter {
 
 	open_scheduling_policy_dialog(existing = {}) {
 		const dialog = new frappe.ui.Dialog({
-			title: existing.name ? __("编辑排班治理规则") : __("新增排班治理规则"),
-			size: "extra-large",
+			title: existing.name ? __("编辑考勤口径") : __("新增考勤口径"),
 			fields: [
-				{ fieldname: "policy_name", fieldtype: "Data", label: __("排班规则名称"), reqd: 1, default: existing.policy_name || "" },
+				{ fieldname: "policy_name", fieldtype: "Data", label: __("考勤口径名称"), reqd: 1, default: existing.policy_name || "" },
 				{ fieldname: "enabled", fieldtype: "Check", label: __("启用"), default: existing.enabled ?? 1 },
 				{ fieldname: "priority", fieldtype: "Int", label: __("优先级"), default: existing.priority ?? 100, description: __("员工范围优先于部门，部门优先于全公司；同范围再按优先级选择。") },
 				{ fieldtype: "Section Break", label: __("适用范围与周期") },
@@ -2827,35 +2823,14 @@ class AttendanceImportCenter {
 				{ fieldname: "scope_values", fieldtype: "Small Text", label: __("适用对象"), default: existing.scope_values || "", depends_on: "eval:doc.scope_type!='全公司'", mandatory_depends_on: "eval:doc.scope_type!='全公司'", description: __("部门填写部门名称；员工只填写公司工号。多项用 | 分隔。") },
 				{ fieldname: "effective_from", fieldtype: "Date", label: __("生效开始日"), reqd: 1, default: existing.effective_from || frappe.datetime.get_today() },
 				{ fieldname: "effective_to", fieldtype: "Date", label: __("生效结束日"), default: existing.effective_to || "" },
-				{ fieldtype: "Section Break", label: __("排班合规性") },
-				{ fieldname: "allow_workday", fieldtype: "Check", label: __("工作日可排班"), default: existing.allow_workday ?? 1 },
-				{ fieldname: "max_workday_hours", fieldtype: "Float", label: __("工作日排班上限（小时）"), default: existing.max_workday_hours ?? 24 },
-				{ fieldname: "allow_restday", fieldtype: "Check", label: __("休息日可排班"), default: existing.allow_restday ?? 1 },
-				{ fieldname: "max_restday_hours", fieldtype: "Float", label: __("休息日排班上限（小时）"), default: existing.max_restday_hours ?? 24 },
-				{ fieldname: "allow_holiday", fieldtype: "Check", label: __("节假日可排班"), default: existing.allow_holiday ?? 1 },
-				{ fieldname: "max_holiday_hours", fieldtype: "Float", label: __("节假日排班上限（小时）"), default: existing.max_holiday_hours ?? 24 },
-				{ fieldname: "max_daily_hours", fieldtype: "Float", label: __("每日累计排班上限（小时）"), default: existing.max_daily_hours ?? 24 },
+				{ fieldtype: "Section Break", label: __("补充判断口径") },
 				{ fieldname: "calendar_weekend_mode", fieldtype: "Select", label: __("普通周六日考勤口径"), options: "休息日加班口径\n按工作日考勤", reqd: 1, default: existing.calendar_weekend_mode || "休息日加班口径", description: __("休息日加班口径会排除普通周末的标准工时、请假、旷工、迟到和早退，只核对打卡及加班；工作日、调班、补班仍按工作日。") },
-				{ fieldtype: "Section Break", label: __("一天多班与连班") },
-				{ fieldname: "allow_multiple_shifts", fieldtype: "Check", label: __("允许一天多班次"), default: existing.allow_multiple_shifts || 0 },
-				{ fieldname: "merge_consecutive_shifts", fieldtype: "Check", label: __("连续班次合并取卡"), default: existing.merge_consecutive_shifts || 0, depends_on: "allow_multiple_shifts" },
-				{ fieldname: "consecutive_gap_minutes", fieldtype: "Int", label: __("连班最大间隔（分钟）"), default: existing.consecutive_gap_minutes || 0, depends_on: "merge_consecutive_shifts" },
-				{ fieldtype: "Section Break", label: __("排班修改与未排班打卡") },
-				{ fieldname: "past_change_months", fieldtype: "Int", label: __("可修改过去月数"), default: existing.past_change_months ?? 6 },
-				{ fieldname: "future_change_days", fieldtype: "Int", label: __("可修改未来天数"), default: existing.future_change_days ?? 365 },
-				{ fieldname: "allow_change_after_checkin", fieldtype: "Check", label: __("已有打卡后允许改班"), default: existing.allow_change_after_checkin ?? 1 },
-				{ fieldname: "allow_expired_unscheduled_change", fieldtype: "Check", label: __("逾期未排班允许补排"), default: existing.allow_expired_unscheduled_change ?? 1 },
-				{ fieldname: "unscheduled_punch_mode", fieldtype: "Select", label: __("未排班打卡方式"), options: "不允许打卡\n选择班次打卡\n直接打卡\n选择班次打卡或直接打卡", default: existing.unscheduled_punch_mode || "选择班次打卡或直接打卡" },
 				{ fieldname: "remarks", fieldtype: "Small Text", label: __("备注"), default: existing.remarks || "" },
 			],
-			primary_action_label: __("保存规则"),
+			primary_action_label: __("保存口径"),
 			primary_action: (values) => {
 				if (values.effective_to && values.effective_to < values.effective_from) {
 					frappe.msgprint(__("生效结束日不能早于生效开始日。"));
-					return;
-				}
-				if (values.merge_consecutive_shifts && !values.allow_multiple_shifts) {
-					frappe.msgprint(__("开启连班合并前，必须先允许一天多班次。"));
 					return;
 				}
 				this.call_processing_api("upsert_attendance_scheduling_policy", {
@@ -2863,10 +2838,10 @@ class AttendanceImportCenter {
 					policy: { ...existing, ...values },
 				}, {
 					freeze: true,
-					freeze_message: __("正在保存排班治理规则..."),
+					freeze_message: __("正在保存考勤口径..."),
 					on_success: (data) => {
 						dialog.hide();
-						frappe.show_alert({ message: data.notice || __("排班治理规则已保存。"), indicator: "green" });
+						frappe.show_alert({ message: data.notice || __("考勤口径已保存。"), indicator: "green" });
 						this.refresh_attendance_rule_view();
 					},
 					on_error: (message) => frappe.msgprint(message),

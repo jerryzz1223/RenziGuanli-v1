@@ -19,9 +19,9 @@ for (const marker of [
 	'if (this.active_view === "processing-rules") return this.load_complete_attendance_rules()',
 	'load_complete_attendance_rules()',
 	'get_complete_attendance_rules',
-	'完整考勤规则中心',
-	'一、排班治理规则',
-	'二、班次计算规则',
+	'考勤规则',
+	'一、周末与日历口径',
+	'二、特殊班次异常识别',
 	'三、系统处理边界（只读）',
 	'选择班别',
 	'返回班别',
@@ -37,10 +37,10 @@ for (const marker of [
 
 const ruleCentreRender = page.split('render_complete_attendance_rules(data = {}, loading = false, error = "") {')[1]?.split('\n\tbind_complete_attendance_rule_events(')[0];
 if (!ruleCentreRender) throw new Error("Complete rule centre render function is missing");
-for (const marker of ['scheduling_policies', 'system_boundaries', 'data-add-scheduling-policy', '导入不按处理月份分批']) {
+for (const marker of ['scheduling_policies', 'system_boundaries', 'data-add-scheduling-policy', '钉钉负责每日排班']) {
 	requireMarker(ruleCentreRender, marker, `Complete rule centre is missing governed activation marker: ${marker}`);
 }
-for (const forbidden of ['data-recheck-rules', '按当前规则校验本月', 'this.attendance_month', 'format_attendance_month']) {
+for (const forbidden of ['data-recheck-rules', '按当前规则校验本月', 'this.attendance_month', 'format_attendance_month', 'data-import-shift-rules']) {
 	if (ruleCentreRender.includes(forbidden)) throw new Error(`Company rule centre must not depend on processing month: ${forbidden}`);
 }
 

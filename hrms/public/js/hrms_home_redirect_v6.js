@@ -551,10 +551,9 @@
 					type: "section",
 					label: "规则设置",
 					children: [
-						{ label: "排班管理", route: "/desk/attendance-import-center/schedule-management", slug: "attendance-import-center/schedule-management" },
 						{ label: "字段映射", route: "/desk/attendance-import-center/field-mapping", slug: "attendance-import-center/field-mapping" },
 						{ label: "部门映射", route: "/desk/attendance-import-center/department-mapping", slug: "attendance-import-center/department-mapping" },
-						{ label: "处理规则", route: "/desk/attendance-import-center/processing-rules", slug: "attendance-import-center/processing-rules" },
+						{ label: "考勤规则", route: "/desk/attendance-import-center/processing-rules", slug: "attendance-import-center/processing-rules" },
 					],
 				},
 			],

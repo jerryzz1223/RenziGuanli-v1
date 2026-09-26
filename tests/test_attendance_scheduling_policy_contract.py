@@ -67,8 +67,11 @@ class SchedulingPolicyContractTest(unittest.TestCase):
 		page_source = PAGE_JS.read_text(encoding="utf-8")
 		for marker in ("list_attendance_scheduling_policies", "upsert_attendance_scheduling_policy", '"scheduling_policies"'):
 			self.assertIn(marker, api_source)
-		for marker in ("一、排班治理规则", "open_scheduling_policy_dialog", "data-edit-scheduling-policy", "未排班打卡方式"):
+		for marker in ("一、周末与日历口径", "open_scheduling_policy_dialog", "data-edit-scheduling-policy", "普通周六日考勤口径"):
 			self.assertIn(marker, page_source)
+		for removed_editor_field in ("工作日排班上限（小时）", "连续班次合并取卡", "未排班打卡方式"):
+			dialog = page_source.split("open_scheduling_policy_dialog(existing = {}) {")[1].split("\n\tsplit_schedule_ranges(")[0]
+			self.assertNotIn(removed_editor_field, dialog)
 
 
 if __name__ == "__main__":
