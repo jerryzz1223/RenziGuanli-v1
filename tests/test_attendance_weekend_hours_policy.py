@@ -231,6 +231,20 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 		self.assertIsNone(replacement)
 		self.assertIn("月度工时人工调整", reason)
 
+	def test_recheck_with_workbook_source_reapplies_saved_daily_correction(self):
+		module = load_processing_center()
+		row = self.process(**{"实际出勤": 7, "事假(小时)": 2})
+		row["confirmed_value"] = {**row["proposed_value"], "_daily_row_overrides": {"3": {"实际出勤": 6}}}
+		workbook_rows = [{**row["original_value"]["rows"][0], "实际出勤": 7}]
+		replacement, reason = module._attendance_policy_replacement(
+			row, attendance_month="2026-09", employee_directory=None, exception_policy=None,
+			source_rows_override=workbook_rows,
+		)
+		self.assertEqual(reason, "")
+		self.assertEqual(replacement["proposed_value"]["actual_attendance_hours"], 6)
+		self.assertNotIn("ATTENDANCE_HOURS_MISMATCH", replacement["exception_codes"])
+		self.assertEqual(workbook_rows[0]["实际出勤"], 7)
+
 	def test_recheck_preview_apply_audit_idempotency_and_stale_token_in_memory(self):
 		api = load_processing_center()
 		row = self.process(**{"实际出勤": 7})

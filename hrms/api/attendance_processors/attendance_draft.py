@@ -71,7 +71,7 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 33
+ATTENDANCE_POLICY_VERSION = 34
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
 DEFAULT_CALENDAR_WEEKEND_MODE = "休息日加班口径"
 
@@ -1290,7 +1290,9 @@ def flatten_dingtalk_headers(top_row: Sequence[Any], second_row: Sequence[Any]) 
 	headers = []
 	seen: Counter[str] = Counter()
 	for top, second in zip(top_row, second_row):
-		parent, child = _text(top), _text(second)
+		# DingTalk wraps long labels inside a single Excel cell.  The visual
+		# line break is not part of the field name used by the policy mapper.
+		parent, child = (re.sub(r"\s*[\r\n]+\s*", "", _text(value)) for value in (top, second))
 		if parent == "请假" and child:
 			header = f"请假/{child}"
 		elif parent and child and parent != child:
@@ -1303,6 +1305,19 @@ def flatten_dingtalk_headers(top_row: Sequence[Any], second_row: Sequence[Any]) 
 		else:
 			headers.append("")
 	return headers
+
+
+def _normalize_wrapped_daily_row_headers(row: Mapping[str, Any]) -> dict[str, Any]:
+	"""Recognize wrapped labels in rows retained before header normalization."""
+	normalized = dict(row)
+	for header, value in row.items():
+		if not isinstance(header, str) or not any(mark in header for mark in ("\r", "\n")):
+			continue
+		canonical = re.sub(r"\s*[\r\n]+\s*", "", header)
+		if canonical not in normalized or _is_blank(normalized[canonical]):
+			normalized[canonical] = value
+		del normalized[header]
+	return normalized
 
 
 def dingtalk_daily_header_location(sheet: Any, *, max_header_row: int = 12) -> dict[str, Any] | None:
@@ -1445,7 +1460,7 @@ def process_attendance_draft_rows(
 	"""Aggregate a DingTalk daily-detail export into one employee dataset."""
 	if not _MONTH_RE.fullmatch(_text(attendance_month)):
 		raise ValueError("attendance_month must use YYYY-MM")
-	input_rows = [dict(row) for row in raw_rows]
+	input_rows = [_normalize_wrapped_daily_row_headers(row) for row in raw_rows]
 	cross_day_punch_reassignments = _reassign_restday_0800_to_previous_overnight(input_rows, shift_rules)
 	structure = precheck_attendance_draft_structure(_ordered_headers(input_rows))
 	employee_index = _build_employee_index(employee_directory)

@@ -63,6 +63,42 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(rows[0]["工号"], "E-001")
 		self.assertEqual(rows[0]["请假/事假(小时)"], 0)
 
+	def test_daily_statistics_wrapped_overtime_header_keeps_source_hours(self):
+		sheet = _FakeWorksheet("每日统计", [
+			("姓名", "工号", "日期", "实际部门", "班次", "标准工时", "实际出勤（小时）", "工作日加班\n（小时）"),
+			("", "", "", "", "", "", "", ""),
+			("张三", "E-001", "2026-08-03", "工程课", "间接长白班 08:00-17:00", 8, 8, 2),
+		])
+		rows = processor.rows_from_dingtalk_daily_sheet(sheet, source_file="daily.xlsx")
+		self.assertEqual(rows[0]["工作日加班（小时）"], 2)
+		self.assertNotIn("工作日加班\n（小时）", rows[0])
+		self.assertEqual(processor.flatten_dingtalk_headers(("工作日加班\r\n（小时）",), ("",)), ["工作日加班（小时）"])
+
+		# A retained batch can still contain the old, unnormalized JSON key.
+		old_row = {**rows[0], "工作日加班\n（小时）": 2}
+		del old_row["工作日加班（小时）"]
+		result = processor.process_attendance_draft_rows([old_row], attendance_month="2026-08")
+		detail = result["processed_rows"][0]["processed_value"]["attendance_details"][0]
+		self.assertEqual(detail["raw_workday_overtime_hours"], 2)
+		self.assertEqual(old_row["工作日加班\n（小时）"], 2)
+
+		# An employee's canonical manual correction takes precedence over old source.
+		corrected = {**old_row, "工作日加班（小时）": 0}
+		corrected_result = processor.process_attendance_draft_rows([corrected], attendance_month="2026-08")
+		corrected_detail = corrected_result["processed_rows"][0]["processed_value"]["attendance_details"][0]
+		self.assertEqual(corrected_detail["raw_workday_overtime_hours"], 0)
+
+		# Matching source hours clear the outside-shift exception without an
+		# approval; a blank/zero source never gets overtime from punches alone.
+		punched = {**old_row, "上班时间": "08:00", "下班时间": "20:00", "关联审批单": ""}
+		matched = processor.process_attendance_draft_rows([punched], attendance_month="2026-08")["processed_rows"][0]
+		self.assertNotIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", matched["exception_codes"])
+		missing = processor.process_attendance_draft_rows(
+			[{**punched, "工作日加班\n（小时）": 0}], attendance_month="2026-08",
+		)["processed_rows"][0]
+		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", missing["exception_codes"])
+		self.assertEqual(missing["processed_value"]["workday_overtime_hours"], 0)
+
 	def test_structure_and_single_employee_result_contract(self):
 		rows = [
 			{

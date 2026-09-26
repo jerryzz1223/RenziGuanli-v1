@@ -33,6 +33,9 @@ class RosterSummaryLoadingTests(unittest.TestCase):
             'EMPLOYEE_DOCTYPE': 'Employee',
             'EMPLOYEE_ROSTER_STATUS_CARDS': ast.literal_eval(cards),
             '_build_employee_roster_filters': lambda filters: dict(filters),
+            # The source function now enforces the normal personnel-view gate.
+            # This isolated fixture exercises the authorised aggregation path.
+            'has_hrms_capability': lambda capability: capability == 'personnel_view',
             'frappe': SimpleNamespace(
                 get_list=get_list,
                 utils=SimpleNamespace(

@@ -251,7 +251,11 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertIn('def bulk_update_processing_records(', center_source)
 		self.assertIn('show_bulk_processing_dialog', page_source)
 		self.assertIn('bulk_update_processing_records', page_source)
-		self.assertIn('批量确认当前数据（通过）', page_source)
+		# Apple-tree exceptions must be handled per record.  A page-wide "approve"
+		# action would allow unresolved identity or source conflicts into downstream
+		# payroll calculations.
+		self.assertIn('待处理异常保留在表中，不计入下游汇总。', page_source)
+		self.assertIn('data-edit-processing-source="apple_tree"', page_source)
 		self.assertIn('"review_status": "待审核"', center_source)
 		self.assertNotIn('bulk_resolve_apple_tree_employees', center_source)
 		self.assertNotIn('批量重新匹配工号', page_source)

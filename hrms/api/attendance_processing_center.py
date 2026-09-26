@@ -2276,10 +2276,15 @@ def _attendance_draft_queue_rollup(exception_codes: list[str], requested_status:
 	return requested_status
 
 
-def _effective_daily_source_rows(row: dict[str, Any]) -> list[dict[str, Any]]:
+def _effective_daily_source_rows(
+	row: dict[str, Any], source_rows_override: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
 	"""Return the source rows with approved in-system corrections overlaid."""
 	original = row.get("original_value") or {}
-	source_rows = original.get("rows") if isinstance(original, dict) else []
+	if source_rows_override is not None:
+		source_rows = source_rows_override
+	else:
+		source_rows = original.get("rows") if isinstance(original, dict) else []
 	if not isinstance(source_rows, list):
 		return []
 	values = _effective_result_values(row)
@@ -3751,7 +3756,7 @@ def _attendance_policy_replacement(
 	} & set(ATTENDANCE_NUMERIC_FIELDS)
 	if monthly_edits:
 		return None, "该员工已有月度工时人工调整，请逐日核对，避免覆盖已确认数值。"
-	source_rows = list(source_rows_override) if source_rows_override is not None else _effective_daily_source_rows(record)
+	source_rows = _effective_daily_source_rows(record, source_rows_override)
 	if not source_rows:
 		return None, "缺少留存的每日来源数据，请重新上传考勤来源。"
 	rebuilt = process_attendance_draft_rows(
