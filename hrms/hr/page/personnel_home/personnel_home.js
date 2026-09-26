@@ -1,6 +1,11 @@
 frappe.pages["personnel-home"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({ parent: wrapper, title: __("人事首页"), single_column: true });
-	new PersonnelHome(page).show();
+	wrapper.personnel_home = new PersonnelHome(page);
+	wrapper.personnel_home.show();
+};
+
+frappe.pages["personnel-home"].on_page_show = function (wrapper) {
+	wrapper.personnel_home?.show();
 };
 
 const PROVINCE_LABELS = {
@@ -17,19 +22,37 @@ class PersonnelHome {
 		this.wrapper = page.main[0];
 		this.members = {};
 		this.selectedProvince = "";
+		this.data = null;
+		this.last_loaded_at = 0;
+		this.load_promise = null;
+		this.cache_ttl = 30_000;
 	}
 
-	show() {
+	show(force = false) {
 		this.page.set_title(__("人事首页"));
-		this.wrapper.innerHTML = '<section class="personnel-home personnel-home--state">正在加载人事数据…</section>';
-		frappe.call("hrms.hr.page.personnel_home.personnel_home.get_data")
-			.then((response) => this.render(response.message || {}))
-			.catch(() => this.render_error());
+		if (!force && this.data && Date.now() - this.last_loaded_at < this.cache_ttl) {
+			this.render(this.data);
+			return Promise.resolve(this.data);
+		}
+		if (this.load_promise) return this.load_promise;
+		if (!this.data) this.wrapper.innerHTML = '<section class="personnel-home personnel-home--state">正在加载人事数据…</section>';
+		this.load_promise = frappe.call("hrms.hr.page.personnel_home.personnel_home.get_data")
+			.then((response) => {
+				this.data = response.message || {};
+				this.last_loaded_at = Date.now();
+				this.render(this.data);
+				return this.data;
+			})
+			.catch(() => this.render_error())
+			.finally(() => {
+				this.load_promise = null;
+			});
+		return this.load_promise;
 	}
 
 	render_error() {
 		this.wrapper.innerHTML = '<section class="personnel-home personnel-home--state"><p>人事首页数据暂时无法读取。</p><button class="btn btn-default" data-personnel-refresh>重新加载</button></section>';
-		this.wrapper.querySelector("[data-personnel-refresh]")?.addEventListener("click", () => this.show());
+		this.wrapper.querySelector("[data-personnel-refresh]")?.addEventListener("click", () => this.show(true));
 	}
 
 		render(data) {
@@ -239,7 +262,7 @@ class PersonnelHome {
 	}
 
 	bind() {
-		this.wrapper.querySelectorAll("[data-personnel-refresh]").forEach((button) => button.addEventListener("click", () => this.show()));
+		this.wrapper.querySelectorAll("[data-personnel-refresh]").forEach((button) => button.addEventListener("click", () => this.show(true)));
 		this.wrapper.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", () => frappe.set_route(...JSON.parse(button.dataset.route))));
 	}
 

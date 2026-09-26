@@ -266,8 +266,15 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 			result = dict(row)
 			result["record_id"] = result.pop("name", result.get("record_id", ""))
 			return result
+		def get_all(*_args, **kwargs):
+			filters = kwargs.get("filters") or {}
+			name_filter = filters.get("name")
+			if isinstance(name_filter, list) and name_filter[:1] == ["in"]:
+				requested = set(name_filter[1])
+				return [row for row in rows if row["name"] in requested]
+			return rows
 		with patch.multiple(m, _require_processing_manager=lambda: None, _require_company=lambda value: value,
-			_latest_batch=lambda *args: SimpleNamespace(name="B"), _serialize_record=serialize), patch.object(m.frappe, "get_all", return_value=rows):
+			_latest_batch=lambda *args: SimpleNamespace(name="B"), _serialize_record=serialize), patch.object(m.frappe, "get_all", side_effect=get_all):
 			result = m.list_processing_exceptions("C", "2026-07", page_length=20, focus_record_id="R24")
 			self.assertEqual(result["page_start"], 20)
 			self.assertIn("R24", [row["record_id"] for row in result["review_rows"]])
@@ -360,6 +367,16 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 			result = self.module._serialize_record(record, "rules-v1", hydrate_daily_details=False)
 		self.assertEqual(result["daily_exception_lines"][0]["attendance_date"], "2026-07-03")
 		self.assertNotIn("standard_hours", result["daily_exception_lines"][0])
+
+	def test_lightweight_queue_without_persisted_lines_does_not_replay_source(self):
+		record = {
+			"name": "R", "company": "C", "source_type": "attendance_draft",
+			"proposed_value_json": "{}", "confirmed_value_json": "",
+			"exception_codes": json.dumps(["LATE_MARKED"]), "department": "", "exception_message": "",
+		}
+		with patch.object(self.module, "_restore_daily_exception_lines_from_source", side_effect=AssertionError("unexpected detail replay")):
+			result = self.module._serialize_record(record, "rules-v1", hydrate_daily_details=False)
+		self.assertEqual(result["daily_exception_lines"], [])
 
 	def test_exception_snapshot_page_reads_only_requested_twenty_records(self):
 		m = self.module

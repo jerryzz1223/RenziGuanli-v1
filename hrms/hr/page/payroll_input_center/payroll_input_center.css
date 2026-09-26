@@ -719,6 +719,73 @@
 	margin: 0 0 10px;
 }
 
+.hrms-payroll-participation-bulk {
+	align-items: center;
+	background: #f4faf7;
+	border: 1px solid #d7ebe1;
+	border-radius: 6px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin: 0 0 10px;
+	padding: 8px 10px;
+}
+
+.hrms-payroll-participation-bulk label {
+	align-items: center;
+	display: inline-flex;
+	gap: 6px;
+	margin: 0;
+}
+
+.hrms-payroll-participation-bulk small {
+	color: var(--text-muted, #6b7280);
+}
+
+.hrms-payroll-preflight-actions {
+	display: grid;
+	gap: 10px;
+}
+
+.hrms-payroll-preflight-actions section {
+	align-items: center;
+	background: #fff8f2;
+	border: 1px solid #f0d7c1;
+	border-radius: 6px;
+	display: flex;
+	gap: 14px;
+	justify-content: space-between;
+	padding: 10px 12px;
+}
+
+.hrms-payroll-preflight-actions ul {
+	color: var(--text-muted, #6b7280);
+	margin: 5px 0 0;
+	padding-left: 18px;
+}
+
+.hrms-payroll-preflight-actions .btn {
+	flex: 0 0 auto;
+}
+
+.hrms-payroll-pending-filter {
+	align-items: center;
+	background: #eef7ff;
+	border: 1px solid #cfe3f6;
+	border-radius: 6px;
+	color: #24577a;
+	display: flex;
+	gap: 10px;
+	justify-content: space-between;
+	margin: 0 0 10px;
+	padding: 8px 10px;
+}
+
+.hrms-payroll-pending-filter .btn-link {
+	flex: 0 0 auto;
+	padding: 0;
+}
+
 .hrms-payroll-lock-panel {
 	align-items: start;
 	background: #fff;

@@ -361,6 +361,8 @@ EXCEPTION_LABELS = {
 	"EARLY_MARKED": "早退（钉钉标记）",
 	"ABSENCE_MARKED": "旷工标记待核验",
 	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "休息日有打卡未计加班",
+	"RESTDAY_CLOCKED_WITHOUT_APPROVAL": "间接人员周末打卡缺加班单",
+	"HOLIDAY_CLOCKED_WITHOUT_APPROVAL": "节假日打卡缺加班单",
 	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "班次外时段无加班申请",
 	"SHIFT_SCHEDULE_REVIEW_REQUIRED": "班次计划起止待复核",
 	"UNSCHEDULED_MIDDLE_NIGHT_REVIEW": "未排班中班夜班待复核",
@@ -416,6 +418,10 @@ def _review_guidance(exception_codes: list[str], source_type: str) -> list[str]:
 		guidance.append("旷工字段在该来源中没有小时单位；先核对排班、有效请假及主管确认，再决定是否形成薪资缺勤工时。")
 	if "RESTDAY_CLOCKED_WITHOUT_OVERTIME" in codes:
 		guidance.append("休息日已有钉钉打卡，但未匹配加班申请且加班工时为 0；请核对主管确认后，在该日期填写实际休息日加班工时，或确认本次打卡不计加班。")
+	if "RESTDAY_CLOCKED_WITHOUT_APPROVAL" in codes:
+		guidance.append("间接人员周末有打卡须提交加班单；请在“修改本日”核对关联审批单。未打卡的周末排班不需要请假，也不计缺勤。")
+	if "HOLIDAY_CLOCKED_WITHOUT_APPROVAL" in codes:
+		guidance.append("该班次节日加班来源要求加班单；请在“修改本日”核对本日打卡和有效审批。未确认前不自动补算节日加班工时。")
 	if "WORKDAY_OUTSIDE_SHIFT_UNAPPROVED" in codes:
 		guidance.append("班次外原始时长已留痕并标记“无申请”；如需计入后续，请在“修改本日”同时填写确认计入的加班时长和原因。")
 	if "SHIFT_SCHEDULE_REVIEW_REQUIRED" in codes:
@@ -709,7 +715,8 @@ def _schedule_special_note_warnings(items: list[dict[str, Any]], special_notes: 
 		return warnings
 	note_segment = _schedule_time_segments(food_night_note["text"])[-1]
 	for item in items:
-		if "烧饭阿姨" not in _schedule_cell_text(item.get("rule_name")) or "夜班" not in _schedule_cell_text(item.get("rule_name")):
+		item_name = _schedule_cell_text(item.get("rule_name"))
+		if not any(label in item_name for label in ("烧饭阿姨", "食堂")) or "夜班" not in item_name:
 			continue
 		main_segments = _schedule_time_segments(item.get("weekday_overtime_time"))
 		if main_segments and main_segments[-1] != note_segment:
@@ -724,6 +731,42 @@ def _schedule_special_note_warnings(items: list[dict[str, Any]], special_notes: 
 				),
 			})
 	return warnings
+
+
+def _schedule_apply_confirmed_source_values(items: list[dict[str, Any]], special_notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	"""Apply confirmed corrections without changing the workbook audit payload.
+
+	Only the exact known source conflicts are resolved here. A changed source
+	value or unrelated班别 must continue through ordinary validation/review.
+	"""
+	resolutions = []
+	for item in items:
+		if (item.get("rule_name") == "CCD人员白班" and flt(item.get("weekday_overtime_hours")) == 2.5
+			and re.search(r"自动生成\s*3\s*(?:小时|时)", item.get("remarks") or "")):
+			resolutions.append({
+				"source_row": item.get("source_row"), "fieldname": "weekday_overtime_hours",
+				"message": "CCD 白班平日固定加班按已确认的数值栏 2.5 小时；备注 3 小时仅保留为来源记录",
+			})
+		if item.get("rule_name") == "CCD人员白班" and item.get("meal_deduction_rule") == "12:00-12:00扣1H\n17:00-17:30扣0.5H":
+			item["meal_deduction_rule"] = "12:00-13:00扣1H\n17:00-17:30扣0.5H"
+			resolutions.append({
+				"source_row": item.get("source_row"), "fieldname": "meal_deduction_rule",
+				"message": "CCD 白班休息按已确认的 12:00-13:00 扣 1H；Excel 原文保留在来源记录",
+			})
+	food_note = next((note for note in special_notes if note.get("source_row") == 26 and "夜班11H出勤" in _schedule_cell_text(note.get("text"))), None)
+	segments = _schedule_time_segments(food_note.get("text")) if food_note else []
+	if len(segments) >= 3 and segments[-1] == {"start_minutes": 21 * 60, "end_minutes": 24 * 60}:
+		for item in items:
+			if item.get("rule_name") != "食堂夜班" or re.sub(r"\s+", "", item.get("weekday_overtime_time") or "") != "21:30-24:00":
+				continue
+			item["weekday_overtime_time"] = "21:00-24:00"
+			item["workday_end_minutes"] = _schedule_time_end_minutes(item["weekday_overtime_time"])
+			resolutions.append({
+				"source_row": item.get("source_row"), "related_source_row": 26,
+				"fieldname": "weekday_overtime_time",
+				"message": "食堂夜班平日加班时段按已确认的第 26 行特别说明采用 21:00-24:00；主表原文保留在来源记录",
+			})
+	return resolutions
 
 
 def _schedule_clock_text(minutes: int) -> str:
@@ -790,6 +833,83 @@ def _sync_schedule_shift_type(company: str, item: dict[str, Any], linked_shift_t
 	return plan
 
 
+# Zero-based indices keep the Excel source column explicit.  Derived options
+# (approval modes and parsed night conditions) are never substituted for the
+# original cell in source_payload_json.
+SCHEDULE_SOURCE_COLUMNS = {
+	"sequence": ("B", 1), "shift_group": ("C", 2), "shift_variant": ("D", 3),
+	"basic_time": ("E", 4), "weekday_overtime_time": ("F", 5),
+	"weekend_overtime_time": ("G", 6), "overtime_begin_time": ("H", 7),
+	"overnight": ("I", 8), "meal_deduction_rule": ("J", 9),
+	"basic_hours": ("K", 10), "weekday_overtime_hours": ("L", 11),
+	"extended_shift_rule": ("M", 12), "weekend_overtime_mode": ("N", 13),
+	"holiday_overtime_mode": ("O", 14), "small_night_rule": ("P", 15),
+	"large_night_rule": ("Q", 16), "remarks": ("R", 17),
+	"suggested_positions": ("S", 18), "punch_in_range": ("T", 19),
+	"punch_out_range": ("U", 20),
+}
+
+
+SCHEDULE_SOURCE_FIELD_USAGE = {
+	"sequence": ("顺序", "用于规则排序"),
+	"shift_group": ("班别", "用于班次匹配"),
+	"shift_variant": ("班次", "用于班次匹配"),
+	"basic_time": ("基本工时上下班时间", "参与计划时段和打卡判断"),
+	"weekday_overtime_time": ("平日加班时段", "参与固定加班结束时点判断"),
+	"weekend_overtime_time": ("周末加班时段", "仅保存来源；当前源表此列为空"),
+	"overtime_begin_time": ("班后开始加班", "仅保存来源；不单独决定工时"),
+	"overnight": ("是否隔夜", "仅保存来源；跨日按时间段解析"),
+	"meal_deduction_rule": ("休息扣除", "可解析时参与夜班净时长判断"),
+	"basic_hours": ("基本工时", "用于规则与排班联动；每日标准工时仍核对考勤来源"),
+	"weekday_overtime_hours": ("平日固定加班", "参与固定加班判断；数值栏优先于备注"),
+	"extended_shift_rule": ("后续延班", "可解析时提取特殊工时时段和后续申请来源"),
+	"weekend_overtime_mode": ("周末加班来源", "参与周末加班申请判断"),
+	"holiday_overtime_mode": ("节日加班来源", "参与节假日打卡缺单判断；不自动生成计薪工时"),
+	"small_night_rule": ("小夜班条件", "可解析时参与夜班次数判断"),
+	"large_night_rule": ("大夜班条件", "可解析时参与夜班次数判断"),
+	"remarks": ("备注", "仅保存来源，不执行文字公式"),
+	"suggested_positions": ("建议岗位", "仅保存来源，不自动匹配员工"),
+	"punch_in_range": ("可取上班卡", "参与取卡范围判断"),
+	"punch_out_range": ("可取下班卡", "参与取卡范围和加班判断"),
+}
+
+
+def _schedule_source_field_mapping() -> list[dict[str, str]]:
+	return [
+		{"fieldname": fieldname, "column": column, "label": SCHEDULE_SOURCE_FIELD_USAGE[fieldname][0],
+		 "application": SCHEDULE_SOURCE_FIELD_USAGE[fieldname][1]}
+		for fieldname, (column, _index) in SCHEDULE_SOURCE_COLUMNS.items()
+	]
+
+
+def _schedule_source_value(values: list[Any], fieldname: str) -> Any:
+	return values[SCHEDULE_SOURCE_COLUMNS[fieldname][1]]
+
+
+def _schedule_validate_source_headers(sheet: Any, header_row: int):
+	"""Reject a shifted template instead of silently mapping the wrong column."""
+	checks = (
+		("sequence", 0, "序号"), ("shift_group", 0, "班别名称"),
+		("basic_time", 0, "基本工时上下班时间"),
+		("weekday_overtime_time", 0, "平日加班起止时间"),
+		("weekend_overtime_time", 0, "周末加班起止时间"),
+		("overtime_begin_time", 0, "班后开始加班时间"),
+		("overnight", 0, "是否隔夜"), ("meal_deduction_rule", 0, "吃饭扣除时间段"),
+		("basic_hours", 1, "基本工时"), ("weekday_overtime_hours", 1, "平日加班"),
+		("extended_shift_rule", 1, "延班"), ("weekend_overtime_mode", 1, "周末加班"),
+		("holiday_overtime_mode", 1, "节日加班"),
+		("small_night_rule", 1, "小夜班"), ("large_night_rule", 1, "大夜班"),
+		("remarks", 0, "备注"), ("suggested_positions", 0, "建议岗位"),
+		("punch_in_range", 1, "上班时间"), ("punch_out_range", 1, "下班时间"),
+	)
+	for fieldname, offset, expected in checks:
+		letter, index = SCHEDULE_SOURCE_COLUMNS[fieldname]
+		actual = _normalized_header(sheet.cell(header_row + offset, index + 1).value)
+		if expected not in actual:
+			frappe.throw(_("排班表 {0}{1} 表头应为“{2}”，实际为“{3}”；请核对模板列位置。")
+				.format(letter, header_row + offset, expected, actual or "空"))
+
+
 def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 	workbook = _load_workbook(file_url)
 	checksum = _file_checksum(file_url)
@@ -803,6 +923,7 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 			break
 	if not header_row:
 		frappe.throw(_("排班表缺少“序号、班别名称、基本工时上下班时间”表头。"))
+	_schedule_validate_source_headers(sheet, header_row)
 	version = ""
 	for row in sheet.iter_rows(min_row=1, max_row=min(header_row, 5), values_only=True):
 		for value in row:
@@ -817,26 +938,27 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 	in_special_notes = False
 	for source_row, values in enumerate(sheet.iter_rows(min_row=header_row + 2, values_only=True), start=header_row + 2):
 		values = list(values) + [None] * max(0, 21 - len(values))
+		cell = lambda fieldname: _schedule_source_value(values, fieldname)
 		row_text = " ".join(_schedule_cell_text(value) for value in values if value not in (None, ""))
-		if "特别说明" in _schedule_cell_text(values[1]):
+		if "特别说明" in _schedule_cell_text(cell("sequence")):
 			in_special_notes = True
 			continue
 		if in_special_notes:
 			if row_text:
 				special_notes.append({"source_row": source_row, "text": row_text})
 			continue
-		if values[2] not in (None, ""):
-			current_group = re.sub(r"\s+", "", _schedule_cell_text(values[2]))
-		shift_name = re.sub(r"\s+", "", _schedule_cell_text(values[3]))
-		basic_time = _schedule_cell_text(values[4])
+		if cell("shift_group") not in (None, ""):
+			current_group = re.sub(r"\s+", "", _schedule_cell_text(cell("shift_group")))
+		shift_name = re.sub(r"\s+", "", _schedule_cell_text(cell("shift_variant")))
+		basic_time = _schedule_cell_text(cell("basic_time"))
 		if not current_group or not basic_time:
 			continue
 		# The source sheet still says 烧饭阿姨; the confirmed live班别 is 食堂.
 		# Preserve the original row in source_payload_json while matching the live name.
 		display_group = "食堂" if current_group in {"烧饭阿姨", "食堂阿姨"} else current_group
-		sequence_value = cint(values[1]) if values[1] not in (None, "") else len(items) + 1
+		sequence_value = cint(cell("sequence")) if cell("sequence") not in (None, "") else len(items) + 1
 		rule_name = display_group if not shift_name or shift_name in display_group else f"{display_group}{shift_name}"
-		extended_text = _schedule_cell_text(values[12]).replace("：", ":")
+		extended_text = _schedule_cell_text(cell("extended_shift_rule")).replace("：", ":")
 		special_match = re.search(r"((?:[01]?\d|2[0-4]):[0-5]\d)\s*[-–—]\s*((?:[01]?\d|2[0-4]):[0-5]\d)\s*特殊工时", extended_text)
 		special_time = f"{special_match.group(1)}-{special_match.group(2)}" if special_match else ""
 		extended_mode = (
@@ -844,11 +966,11 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 			else "加班单" if "加班单" in extended_text
 			else "无" if extended_text.strip() == "无" else ""
 		)
-		weekday_value = values[11]
+		weekday_value = cell("weekday_overtime_hours")
 		weekday_hours = flt(weekday_value) if isinstance(weekday_value, (int, float)) else 0
 		weekday_mode = "不提交加班单" if weekday_hours > 0 else "加班单" if "加班单" in _schedule_cell_text(weekday_value) else "无"
 		match_tokens = _schedule_match_tokens(display_group, shift_name)
-		weekday_time = _schedule_cell_text(values[5])
+		weekday_time = _schedule_cell_text(cell("weekday_overtime_time"))
 		if not match_tokens:
 			issues.append({"source_row": source_row, "message": "班次匹配关键词为空"})
 			continue
@@ -861,26 +983,26 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 			"match_tokens": match_tokens,
 			"basic_time": basic_time,
 			"weekday_overtime_time": weekday_time,
-			"weekend_overtime_time": _schedule_cell_text(values[6]),
-			"overtime_begin_time": _schedule_cell_text(values[7]),
-			"overnight": 1 if "是" in _schedule_cell_text(values[8]) else 0,
-			"meal_deduction_rule": _schedule_cell_text(values[9]),
+			"weekend_overtime_time": _schedule_cell_text(cell("weekend_overtime_time")),
+			"overtime_begin_time": _schedule_cell_text(cell("overtime_begin_time")),
+			"overnight": 1 if "是" in _schedule_cell_text(cell("overnight")) else 0,
+			"meal_deduction_rule": _schedule_cell_text(cell("meal_deduction_rule")),
 			"special_workday_time": special_time,
-			"basic_hours": flt(values[10]),
+			"basic_hours": flt(cell("basic_hours")),
 			"weekday_overtime_hours": weekday_hours,
 			"weekday_overtime_mode": weekday_mode,
 			"extended_shift_rule": extended_text,
 			"extended_overtime_mode": extended_mode,
 			"overtime_approval_time_mode": "有审批时段则校验",
 			"overtime_approval_reapply_minutes": 30,
-			"weekend_overtime_mode": _schedule_cell_text(values[13]),
-			"holiday_overtime_mode": _schedule_cell_text(values[14]),
-			"small_night_rule": _schedule_cell_text(values[15]),
-			"large_night_rule": _schedule_cell_text(values[16]),
-			"remarks": _schedule_cell_text(values[17]),
-			"suggested_positions": _schedule_cell_text(values[18]),
-			"punch_in_range": _schedule_cell_text(values[19]),
-			"punch_out_range": _schedule_cell_text(values[20]),
+			"weekend_overtime_mode": _schedule_cell_text(cell("weekend_overtime_mode")),
+			"holiday_overtime_mode": _schedule_cell_text(cell("holiday_overtime_mode")),
+			"small_night_rule": _schedule_cell_text(cell("small_night_rule")),
+			"large_night_rule": _schedule_cell_text(cell("large_night_rule")),
+			"remarks": _schedule_cell_text(cell("remarks")),
+			"suggested_positions": _schedule_cell_text(cell("suggested_positions")),
+			"punch_in_range": _schedule_cell_text(cell("punch_in_range")),
+			"punch_out_range": _schedule_cell_text(cell("punch_out_range")),
 			"source_version": version,
 			"source_file": file_doc.file_name or file_url,
 			"source_sheet": sheet.title,
@@ -889,15 +1011,8 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 			"source_payload_json": _json([_schedule_cell_text(value) for value in values[:21]]),
 			"workday_end_minutes": _schedule_time_end_minutes(weekday_time),
 		}
-		# Confirmed business resolution (2026-09-23): CCD white shift runs from
-		# 08:00 to 20:00 with one total rest hour.  Paid time is therefore 11
-		# hours: 8 basic + 3 weekday overtime.  The workbook's raw 2.5 value and
-		# malformed meal cell remain untouched in source_payload_json for audit.
-		ccd_white_confirmed = current_group == "CCD人员" and shift_name == "白班"
-		if ccd_white_confirmed:
-			item["weekday_overtime_hours"] = 3
-			item["meal_deduction_rule"] = "总休息1H（业务确认；源表原文保留于来源行JSON）"
-			item["remarks"] = f"{item['remarks']}；系统确认口径：平日加班3H，总休息1H"
+		# Numeric source columns own calculations. CCD white's L19 is 2.5 hours
+		# even though R19 says 3; preserve both originals for audit.
 		if weekday_mode == "不提交加班单" and (weekday_hours <= 0 or item["workday_end_minutes"] is None):
 			issues.append({"source_row": source_row, "message": "免申请平日加班缺少固定小时或结束时间"})
 		for label, fieldname in (("可取上班卡时段", "punch_in_range"), ("可取下班卡时段", "punch_out_range")):
@@ -910,16 +1025,10 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 		segments = _schedule_time_segments(item["basic_time"])
 		if len(segments) > 1:
 			warnings.append({"source_row": source_row, "message": "基本班次包含多个时段；系统 Shift Type 将覆盖首段开始至末段结束，考勤工时仍按本行基本工时计算"})
-		meal_text = item["meal_deduction_rule"].replace("：", ":")
-		meal_segments = _schedule_time_segments(meal_text)
-		declared_deductions = [float(value) for value in re.findall(r"扣(?:除)?\s*(\d+(?:\.\d+)?)\s*H", meal_text, re.IGNORECASE)]
-		if not ccd_white_confirmed and meal_segments and len(meal_segments) == len(declared_deductions):
-			actual_hours = sum(((segment["end_minutes"] - segment["start_minutes"]) % (24 * 60)) / 60 for segment in meal_segments)
-			if abs(actual_hours - sum(declared_deductions)) > 0.01:
-				warnings.append({"source_row": source_row, "message": f"休息时段合计 {actual_hours:g} 小时，但文字声明扣除 {sum(declared_deductions):g} 小时，请复核源表"})
 		remark_hours = re.search(r"自动生成\s*(\d+(?:\.\d+)?)\s*(?:小时|时)", item["remarks"])
-		if not ccd_white_confirmed and remark_hours and weekday_hours > 0 and abs(float(remark_hours.group(1)) - weekday_hours) > 0.01:
-			warnings.append({"source_row": source_row, "message": f"平日加班数值为 {weekday_hours:g} 小时，备注却写 {float(remark_hours.group(1)):g} 小时，请复核源表"})
+		confirmed_ccd_hours = rule_name == "CCD人员白班" and weekday_hours == 2.5 and remark_hours and float(remark_hours.group(1)) == 3
+		if remark_hours and weekday_hours > 0 and abs(float(remark_hours.group(1)) - weekday_hours) > 0.01 and not confirmed_ccd_hours:
+			warnings.append({"source_row": source_row, "message": f"平日加班采用数值栏 {weekday_hours:g} 小时；备注写 {float(remark_hours.group(1)):g} 小时，仅保留为来源记录"})
 		group_token = match_tokens.split("|")[0] if match_tokens else ""
 		group_token = "生产人员" if group_token == "生产" else group_token
 		# “生管仓库”是用于区分生管课内仓库人员的班次名称；
@@ -936,11 +1045,21 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 		if night_meaningful and group_token and not any(name and name in night_text for name in accepted_scope_names):
 			warnings.append({"source_row": source_row, "message": f"夜班津贴文字未提及当前班组“{current_group}”，可能是从其他班次复制后未修改"})
 		items.append(item)
+	resolutions = _schedule_apply_confirmed_source_values(items, special_notes)
+	for item in items:
+		meal_text = item["meal_deduction_rule"].replace("：", ":")
+		meal_segments = _schedule_time_segments(meal_text)
+		declared_deductions = [float(value) for value in re.findall(r"扣(?:除)?\s*(\d+(?:\.\d+)?)\s*H", meal_text, re.IGNORECASE)]
+		if meal_segments and len(meal_segments) == len(declared_deductions):
+			actual_hours = sum(((segment["end_minutes"] - segment["start_minutes"]) % (24 * 60)) / 60 for segment in meal_segments)
+			if abs(actual_hours - sum(declared_deductions)) > 0.01:
+				warnings.append({"source_row": item["source_row"], "message": f"休息时段合计 {actual_hours:g} 小时，但文字声明扣除 {sum(declared_deductions):g} 小时，请复核源表"})
 	warnings.extend(_schedule_special_note_warnings(items, special_notes))
 	return {
 		"items": items,
 		"issues": issues,
 		"warnings": warnings,
+		"source_resolutions": resolutions,
 		"special_notes": special_notes,
 		"source_version": version,
 		"source_file": file_doc.file_name or file_url,
@@ -963,7 +1082,7 @@ def _attendance_shift_rule_bundle(company: str) -> dict[str, Any]:
 			"weekend_overtime_mode", "holiday_overtime_mode", "overnight", "meal_deduction_rule",
 			"small_night_rule", "large_night_rule", "remarks", "suggested_positions", "punch_in_range",
 			"punch_out_range", "effective_from", "source_version", "source_file", "source_sheet",
-			"source_row", "source_checksum", "manual_override", "shift_type", "shift_sync_status", "shift_sync_message", "modified", "modified_by",
+			"source_row", "source_checksum", "source_payload_json", "manual_override", "shift_type", "shift_sync_status", "shift_sync_message", "modified", "modified_by",
 		],
 		order_by="sequence asc, rule_code asc",
 		limit_page_length=500,
@@ -1014,9 +1133,11 @@ def _attendance_shift_rule_bundle(company: str) -> dict[str, Any]:
 	# final deterministic tie-breaker.
 	rules.sort(key=lambda rule: str(rule["rule_code"]))
 	rules.sort(key=lambda rule: str(rule.get("effective_from") or ""), reverse=True)
-	rules.sort(key=lambda rule: (len(rule["tokens"]), sum(len(token) for token in rule["tokens"])), reverse=True)
+	rules.sort(key=lambda rule: (sum(len(token) for token in rule["tokens"]), len(rule["tokens"])), reverse=True)
 	version_rows = active_rows if active_rows else items
-	version_source = [{key: row.get(key) for key in sorted(row) if key not in {"name", "modified", "modified_by"}} for row in version_rows]
+	# Raw source JSON is displayed for audit only. Fetching it must not change an
+	# already-published calculation version when no effective rule has changed.
+	version_source = [{key: row.get(key) for key in sorted(row) if key not in {"name", "modified", "modified_by", "source_payload_json"}} for row in version_rows]
 	version = hashlib.sha256(_json(version_source).encode("utf-8")).hexdigest()[:16] if version_source else f"builtin-{ATTENDANCE_POLICY_VERSION}"
 	# None means the company has never configured schedule rules and may use the
 	# built-in compatibility fallback. An explicit empty list means rules exist
@@ -1914,15 +2035,18 @@ def _persist_processed_rows(batch, result):
 	return result
 
 
-def _result_rows(batch, page_length: int = 5000, employee_code: str = ""):
+def _result_rows(batch, page_length: int = 5000, employee_code: str = "", page_start: int = 0, record_filters: dict[str, Any] | None = None):
 	filters = {"import_batch": batch.name}
 	if employee_code:
 		filters["employee_code"] = employee_code
+	if record_filters:
+		filters.update(record_filters)
 	records = frappe.get_all(
 		PROCESSING_RECORD_DOCTYPE,
 		filters=filters,
 		fields=["name", "company", "attendance_month", "employee_code", "employee_name", "department", "source_type", "processed_value_json", "original_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "reviewer", "reviewed_on", "review_note", "review_history_json", "eligible_for_downstream", "source_file", "source_sheet", "source_row", "source_id", "approval_no"],
 		order_by="employee_code asc, source_row asc",
+		limit_start=max(cint(page_start), 0),
 		limit_page_length=page_length,
 	)
 	shift_rule_version = _attendance_shift_rule_bundle(batch.company)["version"] if batch.source_type == "attendance_draft" else None
@@ -2010,7 +2134,12 @@ def _serialize_record(record, current_shift_rule_version: str | None = None, *, 
 		# marker (for example, 旷工), replay its retained original rows read-only.
 		result["daily_exception_lines"] = values.get("exception_lines") or exception_lines_from_attendance_details(
 			values.get("attendance_details") or [], result["exception_codes"]
-		) or _restore_daily_exception_lines_from_source(result)
+		)
+		# A queue index pass must never replay an employee's retained source rows.
+		# Historic recovery is reserved for the small visible page or the explicit
+		# record-detail endpoint.
+		if hydrate_daily_details and not result["daily_exception_lines"]:
+			result["daily_exception_lines"] = _restore_daily_exception_lines_from_source(result)
 		result["daily_attendance_details"] = values.get("attendance_details") or []
 		# Queue filtering and counts only need the persisted exception projection.
 		# Replaying retained source rows is comparatively expensive, so reserve the
@@ -2036,6 +2165,59 @@ def _serialize_record(record, current_shift_rule_version: str | None = None, *, 
 		]
 		result["daily_exception_lines"].sort(key=lambda line: (str(line.get("attendance_date") or ""), str(line.get("source_row") or "")))
 		result["daily_pending_exception_lines"].sort(key=lambda line: (str(line.get("attendance_date") or ""), str(line.get("source_row") or "")))
+	return result
+
+
+def _exception_queue_payload(record: dict[str, Any]) -> dict[str, Any]:
+	"""Return only fields rendered by the exception table.
+
+	The record-detail endpoint remains the authoritative place for the complete
+	processed/original/proposed/confirmed values and audit history. Sending those
+	duplicate month projections for twenty attendance employees made a single
+	queue response many megabytes even though the table only renders dated alerts.
+	"""
+	result = dict(record)
+	for fieldname in (
+		"original_value", "processed_value", "confirmed_value", "review_history",
+		"result_summary", "daily_attendance_details",
+	):
+		result.pop(fieldname, None)
+	if result.get("source_type") == "attendance_draft":
+		result.pop("proposed_value", None)
+	return result
+
+
+def _processing_result_table_payload(record: dict[str, Any]) -> dict[str, Any]:
+	"""Compact a result row for the paged table; full values load on demand."""
+	result = dict(record)
+	values = _effective_result_values(result)
+	for fieldname in (
+		"original_value", "processed_value", "proposed_value", "confirmed_value",
+		"review_history", "result_summary", "daily_attendance_details",
+		"daily_exception_lines", "daily_pending_exception_lines",
+	):
+		result.pop(fieldname, None)
+	if result.get("source_type") == "attendance_draft":
+		compact_values = {
+			key: value
+			for key, value in values.items()
+			if not isinstance(value, (dict, list)) and not str(key).startswith("_daily_")
+		}
+		compact_values["attendance_details"] = [
+			{"attendance_date": item.get("attendance_date")}
+			for item in values.get("attendance_details", [])
+			if isinstance(item, dict) and item.get("attendance_date")
+		]
+		compact_values["exception_events"] = [
+			{key: item.get(key) for key in ("attendance_date", "code", "count") if item.get(key) not in (None, "")}
+			for item in values.get("exception_events", [])
+			if isinstance(item, dict)
+		]
+		result["proposed_value"] = compact_values
+	elif result.get("source_type") == "apple_tree":
+		result["processed_value"] = values
+	else:
+		result["proposed_value"] = values
 	return result
 
 
@@ -2756,7 +2938,15 @@ def _monthly_final_employee_recognition(company: str, attendance_month: str) -> 
 	it has a business employee code that the source can actually match.
 	"""
 	batch = _latest_batch(company, attendance_month, "attendance_draft")
-	records = _result_rows(batch, 5000) if batch else []
+	# The dashboard only needs identities and inclusion state. Loading the full
+	# result projection here used to parse every employee's retained month JSON
+	# (and could replay historic attendance rules) before the page could paint.
+	records = frappe.get_all(
+		PROCESSING_RECORD_DOCTYPE,
+		filters={"import_batch": batch.name},
+		fields=["employee_code", "employee_name", "eligible_for_downstream"],
+		limit_page_length=0,
+	) if batch else []
 
 	def employee_key(record: dict[str, Any]) -> str:
 		code = str(record.get("employee_code") or "").strip()
@@ -2770,9 +2960,14 @@ def _monthly_final_employee_recognition(company: str, attendance_month: str) -> 
 		if record.get("eligible_for_downstream") and (key := employee_key(record))
 	}
 	roster_people = {
-		str(employee.get("employee_code") or "").strip()
-		for employee in _employee_directory(company)
-		if str(employee.get("employee_code") or "").strip()
+		str(employee.get("custom_employee_code") or "").strip()
+		for employee in frappe.get_all(
+			"Employee",
+			filters={"company": company},
+			fields=["custom_employee_code"],
+			limit_page_length=0,
+		)
+		if str(employee.get("custom_employee_code") or "").strip()
 	}
 	return {
 		"draft_recognized_employee_count": len(draft_people),
@@ -3140,24 +3335,51 @@ def process_source_slot(company: str, attendance_month: str, source_type: str):
 
 
 @frappe.whitelist()
-def list_processing_results(company: str, attendance_month: str, source_type: str, exception_only: int = 0, page_length: int = 5000):
+def list_processing_results(
+	company: str,
+	attendance_month: str,
+	source_type: str,
+	exception_only: int = 0,
+	page_length: int = 25,
+	page_start: int = 0,
+):
 	_require_processing_manager()
 	company, attendance_month, source_type = _require_company(company), _require_month(attendance_month), _require_processing_source_type(source_type)
 	batch = _latest_batch(company, attendance_month, source_type)
 	if not batch:
-		return {"processed_rows": [], "can_confirm": False}
+		return {"processed_rows": [], "total_count": 0, "pending_exception_count": 0, "page_start": 0, "page_length": 25, "can_confirm": False}
 	meta = _processing_meta(batch)
-	rows = _result_rows(batch, min(max(cint(page_length), 1), 5000))
+	page_length = min(max(cint(page_length), 1), 100)
+	page_start = max(cint(page_start), 0)
+	record_filters = {}
 	if cint(exception_only):
-		rows = [row for row in rows if row["exception_codes"] and row["review_status"] == "待审核"]
+		record_filters = {"review_status": "待审核", "exception_codes": ["not in", ["", "[]"]]}
+	count_filters = {"import_batch": batch.name, **record_filters}
+	total_count = frappe.db.count(PROCESSING_RECORD_DOCTYPE, count_filters)
+	pending_exception_count = frappe.db.count(
+		PROCESSING_RECORD_DOCTYPE,
+		{"import_batch": batch.name, "review_status": "待审核"},
+	)
+	rows = _result_rows(
+		batch,
+		page_length,
+		page_start=page_start,
+		record_filters=record_filters,
+	)
+	result_summary = _missed_punch_summary(rows) if source_type == "missing_card" else _apple_tree_summary(rows) if source_type == "apple_tree" else {}
+	table_rows = [_processing_result_table_payload(row) for row in rows]
 	return {
 		"batch": batch.name,
 		"status": batch.status,
-		"processed_rows": rows,
+		"processed_rows": table_rows,
+		"total_count": total_count,
+		"pending_exception_count": pending_exception_count,
+		"page_start": page_start,
+		"page_length": page_length,
 		"processed_result": meta.get("processed_result"),
 		"import_validation": meta.get("monthly_support_precheck") if source_type in MONTHLY_SUPPORT_SOURCE_TYPES else {},
-		"result_summary": _missed_punch_summary(rows) if source_type == "missing_card" else _apple_tree_summary(rows) if source_type == "apple_tree" else {},
-		"can_confirm": bool(rows) or batch.status in {"待处理异常", "待确认"},
+		"result_summary": result_summary,
+		"can_confirm": bool(total_count) or batch.status in {"待处理异常", "待确认"},
 	}
 
 
@@ -3330,6 +3552,8 @@ def update_processing_record(company: str, attendance_month: str, source_type: s
 		frappe.throw(_("无权修改该加工记录。"))
 	if source_type == "attendance_draft" and "ATTENDANCE_HOURS_MISMATCH" in _loads(doc.exception_codes, []):
 		frappe.throw(_("工时合计与标准工时不符，请按异常日期使用“修改本日”更正后重新校验。"))
+	if source_type == "attendance_draft" and review_status == "已通过" and {"RESTDAY_CLOCKED_WITHOUT_APPROVAL", "HOLIDAY_CLOCKED_WITHOUT_APPROVAL"} & set(_loads(doc.exception_codes, [])):
+		frappe.throw(_("周末或节假日打卡尚无规则要求的有效加班单，请按日期使用“修改本日”补充审批，不能直接确认通过。"))
 	proposed = _loads(doc.proposed_value_json, {})
 	confirmed = _loads(doc.confirmed_value_json, None) or dict(proposed)
 	decision_only = field_name == "__review_decision__"
@@ -3831,7 +4055,8 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 	# Older processor versions discarded every first-day-of-next-month row from
 	# the retained per-employee JSON. Re-read the immutable workbook so overnight
 	# punch reassignment and the complete source audit can still use that boundary
-	# evidence. A genuine rest-day punch itself no longer enters the exception queue.
+	# evidence. A genuine rest-day punch enters the approval-review queue only
+	# when its applicable indirect shift rule requires a weekend application.
 	workbook_rows_by_employee: dict[str, list[dict[str, Any]]] = defaultdict(list)
 	if getattr(batch, "source_file", ""):
 		try:
@@ -4207,6 +4432,10 @@ def bulk_update_processing_records(
 		"ATTENDANCE_HOURS_MISMATCH" in _loads(row.exception_codes, []) for row in rows
 	):
 		frappe.throw(_("所选记录包含工时合计与标准工时不符的日期，请先逐日更正，不能批量确认通过。"))
+	if source_type == "attendance_draft" and review_status == "已通过" and any(
+		{"RESTDAY_CLOCKED_WITHOUT_APPROVAL", "HOLIDAY_CLOCKED_WITHOUT_APPROVAL"} & set(_loads(row.exception_codes, [])) for row in rows
+	):
+		frappe.throw(_("所选记录包含周末或节假日打卡缺加班单的日期，请先逐日补充审批，不能批量确认通过。"))
 	if any(row.review_status != "待审核" for row in rows):
 		frappe.throw(_("所选记录已经处理。若需更正，请逐条使用“查看/更正记录”。"))
 
@@ -4557,6 +4786,15 @@ def list_processing_exceptions(
 	# lines. The parent review_status must not hide sibling dates after one date
 	# is saved, and a fixed date remains visible as read-only history.
 	queue_fields = ["name", "company", "import_batch", "attendance_month", "employee_code", "employee_name", "department", "source_type", "original_value_json", "processed_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "reviewer", "reviewed_on", "review_note", "review_history_json", "eligible_for_downstream", "source_file", "source_sheet", "source_row", "source_id", "approval_no"]
+	# Filtering and counts need the current result projection, but not the raw
+	# source rows or review-history JSON. Fetch those large audit fields only for
+	# the visible page below. This keeps the complete audit trail untouched while
+	# avoiding a multi-megabyte first query for every page visit.
+	queue_index_fields = [
+		"name", "company", "import_batch", "attendance_month", "employee_code", "employee_name", "department", "source_type",
+		"exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json",
+		"reviewer", "reviewed_on", "review_note", "eligible_for_downstream", "source_file", "source_sheet", "source_row", "source_id", "approval_no",
+	]
 	exception_code_filter = str(exception_code or "").strip()
 	processing_status_filter = str(processing_status or "").strip()
 	if processing_status_filter not in {"", "pending", "processed"}:
@@ -4593,7 +4831,7 @@ def list_processing_exceptions(
 			elif row.get("source_type") != "attendance_draft" and exception_code_filter:
 				row["exception_codes"] = [exception_code_filter]
 				row["exception_labels"] = [EXCEPTION_LABELS.get(exception_code_filter, exception_code_filter)]
-			page_rows.append(row)
+			page_rows.append(_exception_queue_payload(row))
 		return {"review_rows": page_rows, "snapshot_reused": True, "source_type": source_type, "page_start": page_start, "page_length": page_length}
 	# The exception history is stored inside the retained JSON projection, so a
 	# database filter on exception_codes would hide a fully resolved daily row.
@@ -4602,14 +4840,13 @@ def list_processing_exceptions(
 	all_records = frappe.get_all(
 		PROCESSING_RECORD_DOCTYPE,
 		filters=queue_filters,
-		fields=queue_fields,
+		fields=queue_index_fields,
 		order_by="modified desc",
 		limit_page_length=5000,
 	) if all_batch_names else []
 	# First build a lightweight projection for filtering, sorting and counts.
 	# Only the visible page is hydrated from retained daily source rows below.
 	all_rows = [_serialize_record(row, current_shift_rule_version, hydrate_daily_details=False) for row in all_records]
-	raw_records_by_id = {str(row.get("name") or ""): row for row in all_records}
 	available_departments = sorted({
 		str(row.get("department") or "").strip()
 		for row in all_rows
@@ -4715,10 +4952,22 @@ def list_processing_exceptions(
 		focus_index = next((index for index, row in enumerate(rows) if row.get("record_id") == focus_record_id), None)
 		if focus_index is not None:
 			page_start = (focus_index // page_length) * page_length
-	page_rows = []
-	for row in rows[page_start : page_start + page_length]:
-		raw = raw_records_by_id.get(str(row.get("record_id") or ""))
-		page_rows.append(apply_line_projection(_serialize_record(raw, current_shift_rule_version)) if raw else row)
+	page_index_rows = rows[page_start : page_start + page_length]
+	page_ids = [str(row.get("record_id") or "") for row in page_index_rows if str(row.get("record_id") or "")]
+	stored_page = frappe.get_all(
+		PROCESSING_RECORD_DOCTYPE,
+		filters={"name": ["in", page_ids or ["__none__"]], "import_batch": ["in", batch_names or ["__none__"]]},
+		fields=queue_fields,
+		limit_page_length=page_length,
+	) if page_ids else []
+	page_by_id = {
+		str(row.get("name") or ""): _exception_queue_payload(_serialize_record(row, current_shift_rule_version))
+		for row in stored_page
+	}
+	page_rows = [
+		apply_line_projection(page_by_id.get(str(row.get("record_id") or ""), row))
+		for row in page_index_rows
+	]
 	return {"review_rows": page_rows, "snapshot_record_ids": [row.get("record_id") for row in rows if row.get("record_id")], "available_departments": available_departments, "total_pending_count": total_pending_count, "filtered_pending_count": filtered_pending_count, "total_exception_count": total_exception_count, "filtered_exception_count": filtered_exception_count, "filtered_parent_count": filtered_parent_count, "source_type": source_type, "page_start": page_start, "page_length": page_length}
 
 
@@ -5506,15 +5755,22 @@ def _builtin_shift_rule_items() -> list[dict[str, Any]]:
 			"rule_code": f"BUILTIN-{index:02d}", "rule_name": name,
 			"shift_group": group, "shift_variant": variant,
 			"match_tokens": "|".join(rule["tokens"]), "basic_time": rule.get("basic_time") or "",
+			"basic_hours": rule.get("basic_hours", 8),
 			"meal_deduction_rule": rule.get("meal_deduction_rule") or "",
 			"weekday_overtime_hours": hours,
-			"weekday_overtime_mode": "不提交加班单" if rule.get("workday_auto", True) and hours else "按来源/审批",
+			"weekday_overtime_mode": rule.get("weekday_overtime_mode") or ("不提交加班单" if rule.get("workday_auto", True) and hours else "按来源/审批"),
+			"weekday_overtime_time": rule.get("weekday_overtime_time") or "",
 			"weekday_overtime_end": clock(end),
 			"special_workday_time": rule.get("special_workday_time") or "",
+			"extended_shift_rule": rule.get("extended_shift_rule") or "",
 			"extended_overtime_mode": rule.get("extended_overtime_mode") or "",
 			"overtime_approval_time_mode": rule.get("overtime_approval_time_mode") or "有审批时段则校验",
 			"overtime_approval_reapply_minutes": int(rule.get("overtime_approval_reapply_minutes") or 30),
-			"weekend_overtime_mode": "不提交加班单" if rule.get("restday_auto") else "按来源/审批",
+			"weekend_overtime_mode": rule.get("weekend_overtime_mode") or ("不提交加班单" if rule.get("restday_auto") else "按来源/审批"),
+			"holiday_overtime_mode": rule.get("holiday_overtime_mode") or "",
+			"overtime_begin_time": rule.get("overtime_begin_time") or "",
+			"punch_in_range": rule.get("punch_in_range") or "",
+			"punch_out_range": rule.get("punch_out_range") or "",
 			"small_night_rule": condition(rule.get("small_night_condition")),
 			"large_night_rule": condition(rule.get("large_night_condition")),
 		})
@@ -5534,6 +5790,7 @@ def get_complete_attendance_rules(company: str):
 	return {
 		"scheduling_policies": scheduling_policies,
 		"shift_rules": bundle["items"],
+		"source_column_mapping": _schedule_source_field_mapping(),
 		"shift_rule_version": bundle["version"],
 		"using_builtin_fallback": bundle["rules"] is None,
 		"builtin_shift_rules": _builtin_shift_rule_items(),
@@ -5625,7 +5882,8 @@ def import_attendance_shift_rules(
 	)
 	if cint(preview_only):
 		return {
-			**{key: parsed[key] for key in ("source_version", "source_file", "source_sheet", "source_checksum", "issues", "warnings", "special_notes")},
+			**{key: parsed[key] for key in ("source_version", "source_file", "source_sheet", "source_checksum", "issues", "warnings", "source_resolutions", "special_notes")},
+			"source_column_mapping": _schedule_source_field_mapping(),
 			"items": preview,
 			"existing_count": len(existing),
 			"created_count": sum(1 for item in preview if item["import_action"] == "新增"),
@@ -5638,7 +5896,7 @@ def import_attendance_shift_rules(
 		}
 	if parsed["issues"]:
 		frappe.throw(_("排班表仍有结构问题，请先按预览提示修正后再导入。"))
-	if (cint(options.get("sync_shift_types")) or cint(options.get("create_default_policy"))) and not options.get("source_checksum"):
+	if not options.get("source_checksum"):
 		frappe.throw(_("请先预览排班表，再确认联动计划。"))
 	if options.get("source_checksum") and options.get("source_checksum") != parsed["source_checksum"]:
 		frappe.throw(_("排班表内容在预览后发生变化，请重新上传并预览。"))
@@ -5744,6 +6002,7 @@ def import_attendance_shift_rules(
 		"scheduling_policy_action": policy_action,
 		"rule_version": bundle["version"],
 		"warnings": parsed["warnings"],
+		"source_resolutions": parsed["source_resolutions"],
 		"notice": _(
 			"排班表已导入班次计算规则并建立系统班次及治理规则来源关联；请复核源表提示和治理规则状态，历史考勤仍需预览后再应用。"
 		),
@@ -6968,15 +7227,8 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 	return {"file_url": file.file_url, "file_name": file.file_name}
 
 
-@frappe.whitelist()
-def generate_first_signed_file(company: str, attendance_month: str, snapshot_version: str = ""):
-	"""Generate the first-signature workbook from draft plus missing-card only."""
-	_require_processing_manager()
-	company, attendance_month = _require_company(company), _require_month(attendance_month)
-	state = get_processing_batch(company, attendance_month)
-	daily_workflow = state.get("daily_workflow") or {}
-	if daily_workflow.get("required") and not daily_workflow.get("ready"):
-		return {"blocked": True, "reason": _("请先完成日考勤修改后校验和每日锁定。"), "daily_workflow": daily_workflow}
+def _generate_first_signed_output(company: str, attendance_month: str, state: dict[str, Any]):
+	"""Build or reuse the first-signature output within the current lock action."""
 	readiness = state["first_signed_inputs"]
 	blocked = [item for item in readiness if not item["ready"]]
 	if blocked:
@@ -7004,8 +7256,22 @@ def generate_first_signed_file(company: str, attendance_month: str, snapshot_ver
 		"layout_version": FIRST_SIGNED_LAYOUT_VERSION,
 	}
 	_save_batch_notes(anchor_batch, {"first_signed_outputs": first_signed_outputs})
-	frappe.db.commit()
 	return {"blocked": False, "readiness": readiness, "first_signed_outputs": first_signed_outputs, "snapshot_version": locked_snapshot_version}
+
+
+@frappe.whitelist()
+def generate_first_signed_file(company: str, attendance_month: str, snapshot_version: str = ""):
+	"""Compatibility endpoint; the workbench now generates all three finals together."""
+	_require_processing_manager()
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	state = get_processing_batch(company, attendance_month)
+	daily_workflow = state.get("daily_workflow") or {}
+	if daily_workflow.get("required") and not daily_workflow.get("ready"):
+		return {"blocked": True, "reason": _("请先完成日考勤修改后校验和每日锁定。"), "daily_workflow": daily_workflow}
+	result = _generate_first_signed_output(company, attendance_month, state)
+	if not result.get("blocked"):
+		frappe.db.commit()
+	return result
 
 
 @frappe.whitelist()
@@ -7023,12 +7289,16 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 	batches = _final_snapshot_batches(company, attendance_month)
 	if any(not batch for batch in batches.values()):
 		return {"blocked": True, "reason": _("终稿来源不完整，尚未生成文件。"), "readiness": readiness}
+	first_signed_result = _generate_first_signed_output(company, attendance_month, state)
+	if first_signed_result.get("blocked"):
+		return first_signed_result
 	locked_snapshot_version = _monthly_snapshot_version(batches)
 	config_hash = _attendance_final_excel_config_hash()
 	anchor_batch = batches["attendance_draft"]
 	existing_outputs = _processing_meta(anchor_batch).get("monthly_final_outputs", {})
 	if existing_outputs.get("locked_snapshot_version") == locked_snapshot_version and existing_outputs.get("layout_version") == MONTHLY_FINAL_LAYOUT_VERSION and existing_outputs.get("attendance_final_excel_config_hash") == config_hash and existing_outputs.get("signed_file_url") and existing_outputs.get("finance_file_url"):
-		return {"blocked": False, "readiness": readiness, "final_outputs": existing_outputs, "snapshot_version": locked_snapshot_version}
+		frappe.db.commit()
+		return {"blocked": False, "readiness": readiness, "first_signed_outputs": first_signed_result["first_signed_outputs"], "final_outputs": existing_outputs, "snapshot_version": locked_snapshot_version}
 	rows = _monthly_final_rows(batches)
 	if not rows:
 		return {"blocked": True, "reason": _("没有可进入下游的员工数据，尚未生成终稿。"), "readiness": readiness}
@@ -7050,7 +7320,7 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 	}
 	_save_batch_notes(anchor_batch, {"monthly_final_outputs": final_outputs})
 	frappe.db.commit()
-	return {"blocked": False, "readiness": readiness, "final_outputs": final_outputs, "snapshot_version": locked_snapshot_version}
+	return {"blocked": False, "readiness": readiness, "first_signed_outputs": first_signed_result["first_signed_outputs"], "final_outputs": final_outputs, "snapshot_version": locked_snapshot_version}
 
 
 def get_locked_final_outputs(company: str, attendance_month: str):

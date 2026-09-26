@@ -4408,8 +4408,7 @@ def _attendance_employee_context_map(attendance_rows):
 	}
 
 
-@frappe.whitelist()
-def save_monthly_payroll_participation_decision(
+def _save_monthly_payroll_participation_decision(
 	company: str,
 	payroll_month: str,
 	attendance_lock_version: str,
@@ -4420,6 +4419,8 @@ def save_monthly_payroll_participation_decision(
 	approval_note: str = "",
 	approved: int = 0,
 	termination_inputs_json: str = "",
+	commit: bool = True,
+	invalidate_trial: bool = True,
 ):
 	"""Record an auditable monthly handling decision for one locked-attendance employee."""
 	_require_payroll_master_manager()
@@ -4538,14 +4539,114 @@ def save_monthly_payroll_participation_decision(
 		employee_code=doc.employee_code,
 		employee_name=doc.employee_name,
 	)
-	_invalidate_unconfirmed_payroll_trial(
-		company,
-		payroll_month,
-		attendance_lock_version,
-		reason=_("更新人员范围决策：{0} / {1}").format(attendance.get("employee_code") or attendance.get("employee_name"), decision),
-	)
-	frappe.db.commit()
+	if invalidate_trial:
+		_invalidate_unconfirmed_payroll_trial(
+			company,
+			payroll_month,
+			attendance_lock_version,
+			reason=_("更新人员范围决策：{0} / {1}").format(attendance.get("employee_code") or attendance.get("employee_name"), decision),
+		)
+	if commit:
+		frappe.db.commit()
 	return {"name": doc.name, "decision": decision, "review_status": review_status}
+
+
+@frappe.whitelist()
+def save_monthly_payroll_participation_decision(
+	company: str,
+	payroll_month: str,
+	attendance_lock_version: str,
+	employee: str,
+	decision: str,
+	decision_reason: str = "",
+	settlement_basis: str = "",
+	approval_note: str = "",
+	approved: int = 0,
+	termination_inputs_json: str = "",
+):
+	return _save_monthly_payroll_participation_decision(
+		company=company,
+		payroll_month=payroll_month,
+		attendance_lock_version=attendance_lock_version,
+		employee=employee,
+		decision=decision,
+		decision_reason=decision_reason,
+		settlement_basis=settlement_basis,
+		approval_note=approval_note,
+		approved=approved,
+		termination_inputs_json=termination_inputs_json,
+	)
+
+
+@frappe.whitelist()
+def bulk_save_monthly_payroll_participation_decisions(
+	company: str,
+	payroll_month: str,
+	attendance_lock_version: str,
+	employee_codes: str | list,
+	decision: str,
+	decision_reason: str = "",
+	approval_note: str = "",
+	approved: int = 0,
+):
+	"""Apply one non-termination decision to selected locked-attendance employees."""
+	_require_payroll_master_manager()
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	if isinstance(employee_codes, str):
+		try:
+			employee_codes = json.loads(employee_codes or "[]")
+		except (TypeError, ValueError) as exc:
+			frappe.throw(_("勾选人员无法识别：{0}").format(exc))
+	employee_codes = list(dict.fromkeys(_text(code).strip() for code in (employee_codes or []) if _text(code).strip()))
+	if not employee_codes:
+		frappe.throw(_("请至少勾选一位员工。"))
+	if len(employee_codes) > 500:
+		frappe.throw(_("一次最多批量处理 500 位员工。"))
+	if _text(decision).strip() == "离职结算":
+		frappe.throw(_("离职结算需逐人核对原表输入和结算依据，不能批量套用。"))
+	attendance_rows = frappe.get_all(
+		MONTHLY_ATTENDANCE_DOCTYPE,
+		filters={**_attendance_scope_filters(company, payroll_month, attendance_lock_version), "employee_code": ["in", employee_codes]},
+		fields=["employee", "employee_code"],
+		limit_page_length=1000,
+	)
+	by_code = {}
+	for row in attendance_rows:
+		code = _text(row.get("employee_code")).strip()
+		if code in by_code:
+			frappe.throw(_("工号 {0} 在当前锁定考勤中不唯一，已停止批量处理。").format(code))
+		by_code[code] = row.get("employee")
+	missing_codes = [code for code in employee_codes if code not in by_code]
+	if missing_codes:
+		frappe.throw(_("以下工号不在当前锁定考勤中：{0}").format("、".join(missing_codes[:20])))
+
+	frappe.db.savepoint("payroll_participation_bulk")
+	results = []
+	try:
+		for code in employee_codes:
+			results.append(_save_monthly_payroll_participation_decision(
+				company=company,
+				payroll_month=payroll_month,
+				attendance_lock_version=attendance_lock_version,
+				employee=by_code[code],
+				decision=decision,
+				decision_reason=decision_reason,
+				approval_note=approval_note,
+				approved=approved,
+				commit=False,
+				invalidate_trial=False,
+			))
+		_invalidate_unconfirmed_payroll_trial(
+			company,
+			payroll_month,
+			attendance_lock_version,
+			reason=_("批量更新人员范围决策：{0} 人 / {1}").format(len(results), decision),
+		)
+		frappe.db.commit()
+	except Exception:
+		frappe.db.rollback(save_point="payroll_participation_bulk")
+		raise
+	return {"updated": len(results), "decision": decision, "employee_codes": employee_codes}
 
 
 @frappe.whitelist()
@@ -7424,6 +7525,8 @@ def _validate_salary_step(company, payroll_month, attendance_lock_version=""):
 	coverage = dict(workbench.get("coverage") or {})
 	missing = list(workbench.get("missing_profiles") or [])
 	trial = list(workbench.get("trial_profiles") or [])
+	pending_decisions = []
+	pending_decision_codes = []
 	population_label = "在职员工"
 	if attendance_lock_version:
 		attendance_rows = _workflow_rows(
@@ -7434,7 +7537,7 @@ def _validate_salary_step(company, payroll_month, attendance_lock_version=""):
 		profiles = _active_salary_changes_for_month(company, payroll_month)
 		decisions = _monthly_payroll_participation_decision_map(company, payroll_month, attendance_lock_version)
 		employee_contexts = _attendance_employee_context_map(attendance_rows)
-		missing, trial, pending_decisions, excluded = [], [], [], []
+		missing, trial, excluded = [], [], []
 		population_keys = set()
 		for row in attendance_rows:
 			keys = [str(row.get(field) or "").strip() for field in ("employee", "employee_code", "employee_name")]
@@ -7443,12 +7546,16 @@ def _validate_salary_step(company, payroll_month, attendance_lock_version=""):
 			label = row.get("employee_code") or row.get("employee_name") or row.get("employee")
 			if _participation_decision_blocks_calculation(decision):
 				pending_decisions.append(label)
+				if row.get("employee_code"):
+					pending_decision_codes.append(str(row.get("employee_code")).strip())
 				continue
 			if _participation_decision_excludes(decision):
 				excluded.append(label)
 				continue
 			if not decision and _employee_left_in_payroll_month(employee_contexts.get(row.get("employee")), payroll_month):
 				pending_decisions.append(label)
+				if row.get("employee_code"):
+					pending_decision_codes.append(str(row.get("employee_code")).strip())
 				continue
 			profile = next((profiles.get(key) for key in keys if key and profiles.get(key)), None)
 			if profile and _is_salary_excluded(profile):
@@ -7489,7 +7596,7 @@ def _validate_salary_step(company, payroll_month, attendance_lock_version=""):
 		if row.get("name"):
 			evidence_by_name[row.get("name")] = dict(row)
 	evidence = list(evidence_by_name.values())
-	return _workflow_snapshot(
+	result = _workflow_snapshot(
 		"salary",
 		[
 			{"label": population_label, "value": coverage.get("active_employee_count") or 0},
@@ -7501,6 +7608,15 @@ def _validate_salary_step(company, payroll_month, attendance_lock_version=""):
 		[],
 		evidence,
 	)
+	result["issue_employee_codes"] = {
+		"master": list(dict.fromkeys(code for code in pending_decision_codes if code)),
+		"salary": list(dict.fromkeys(
+			str(row.get("employee_code") or "").strip()
+			for row in [*missing, *trial]
+			if str(row.get("employee_code") or "").strip()
+		)),
+	}
+	return result
 
 
 def _validate_rules_step(company, payroll_month, attendance_lock_version=""):
@@ -7955,6 +8071,31 @@ def _assert_workflow_locked_for_generation(company, payroll_month, attendance_lo
 		blockers.extend(f"{label}：{message}" for message in validation.get("blockers") or [])
 	if blockers:
 		frappe.throw(_("薪资试算前请处理：{0}").format("；".join(blockers)))
+
+
+@frappe.whitelist()
+def get_payroll_generation_preflight(company: str, payroll_month: str, attendance_lock_version: str):
+	"""Return actionable readiness groups without weakening generation enforcement."""
+	company, payroll_month, attendance_lock_version = _require_payroll_scope(company, payroll_month, attendance_lock_version)
+	salary_validation = _validate_salary_step(company, payroll_month, attendance_lock_version)
+	salary_blockers = list(salary_validation.get("blockers") or [])
+	personnel_blockers = [message for message in salary_blockers if "离职或异常员工" in message]
+	salary_blockers = [message for message in salary_blockers if message not in personnel_blockers]
+	checks = [
+		{"key": "master", "label": "人员范围", "route": "employee-salary", "blockers": personnel_blockers, "employee_codes": (salary_validation.get("issue_employee_codes") or {}).get("master") or []},
+		{"key": "salary", "label": "员工定薪", "route": "salary-assignments", "blockers": salary_blockers, "employee_codes": (salary_validation.get("issue_employee_codes") or {}).get("salary") or []},
+		{"key": "rules", "label": "薪资核算规则", "route": "salary-rules", "blockers": list(_validate_rules_step(company, payroll_month, attendance_lock_version).get("blockers") or [])},
+		{"key": "attendance-rules", "label": "考勤计薪规则", "route": "attendance-pay-rules", "blockers": list(_validate_attendance_rule_step(company, payroll_month).get("blockers") or [])},
+		{"key": "sources", "label": "考勤与月度增减项", "route": "variables", "blockers": list(_validate_sources_step(company, payroll_month, attendance_lock_version).get("blockers") or [])},
+	]
+	checks = [check for check in checks if check["blockers"]]
+	return {
+		"ready": not checks,
+		"company": company,
+		"payroll_month": payroll_month,
+		"attendance_lock_version": attendance_lock_version,
+		"checks": checks,
+	}
 
 
 @frappe.whitelist()

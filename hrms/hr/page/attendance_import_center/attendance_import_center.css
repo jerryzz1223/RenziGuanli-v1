@@ -1240,52 +1240,8 @@
 }
 
 .hrms-attendance-final-grid {
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-template-columns: repeat(3, minmax(0, 1fr));
 	padding-top: 0;
-}
-
-.hrms-attendance-first-signed {
-	margin: 0 16px 16px;
-	border: 1px solid var(--border-color, #e5e7eb);
-	border-radius: 8px;
-	background: #fff;
-}
-
-.hrms-attendance-first-signed .hrms-attendance-list-head {
-	margin: 0;
-	padding: 16px;
-	border-bottom: 1px solid var(--border-color, #e5e7eb);
-}
-
-.hrms-attendance-first-signed-readiness {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 12px;
-	padding: 12px 16px;
-}
-
-.hrms-attendance-first-signed-readiness > div {
-	display: grid;
-	gap: 6px;
-	padding: 10px 12px;
-	background: var(--subtle-fg, #f8fafc);
-	border-radius: 6px;
-}
-
-.hrms-attendance-first-signed-readiness em {
-	font-style: normal;
-	color: var(--text-muted, #6b7280);
-}
-
-.hrms-attendance-first-signed-actions {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	padding: 0 16px 16px;
-}
-
-.hrms-attendance-first-signed-actions span {
-	color: var(--text-muted, #6b7280);
 }
 
 .hrms-attendance-monthly-support {

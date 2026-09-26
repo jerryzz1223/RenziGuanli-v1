@@ -373,6 +373,12 @@ get_batch_end = api.find("\n\n@frappe.whitelist()", get_batch_start)
 get_batch_body = api[get_batch_start:] if get_batch_end == -1 else api[get_batch_start:get_batch_end]
 require(get_batch_body, '"employee_recognition": _monthly_final_employee_recognition(company, attendance_month)', "Monthly-final employee recognition must be returned to the page.")
 
+generate_final_start = api.find("def generate_monthly_final_files(")
+generate_final_end = api.find("\n\ndef get_locked_final_outputs", generate_final_start)
+generate_final_body = api[generate_final_start:generate_final_end]
+for marker in ("_generate_first_signed_output", '"first_signed_outputs"', "_save_monthly_signed_confirmation_file", "_save_monthly_finance_confirmation_file"):
+	require(generate_final_body, marker, f"The unified monthly lock must generate all three outputs: {marker}")
+
 # Every callable API must authorize before accessing the batch/record data.
 for method in (
 	"get_processing_batch", "register_source_file", "register_monthly_support_file", "bulk_import_and_process_sources", "precheck_monthly_support_file", "process_monthly_support_file", "confirm_monthly_support_file", "precheck_source_slot", "process_source_slot",

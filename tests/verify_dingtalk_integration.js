@@ -218,6 +218,7 @@ for (const marker of [
 	"DINGTALK_EMPLOYEE_IMPORT_DOCTYPE",
 	"_stage_dingtalk_employee_import",
 	"list_dingtalk_employee_imports",
+	"list_dingtalk_employee_sync_records",
 	"approve_dingtalk_employee_import",
 	"queue_approve_all_dingtalk_employee_imports",
 	"run_queued_dingtalk_employee_imports",
@@ -241,7 +242,7 @@ for (const marker of ["same_source_records", "_latest_dingtalk_employee_roster_s
 }
 
 const employeeImport = read("hrms/hr/doctype/hrms_dingtalk_employee_import/hrms_dingtalk_employee_import.json");
-for (const marker of ["import_status", "mapped_values_json", "approved_by", "approval_note"]) {
+for (const marker of ["import_status", "mapped_values_json", "approved_by", "approval_note", "sync_operation", "sync_completed_at"]) {
 	mustInclude(employeeImport, marker, `DingTalk employee import DocType is missing field: ${marker}`);
 }
 
@@ -251,6 +252,9 @@ for (const marker of [
 	"一键审批并导入全部",
 	"queue_approve_all_dingtalk_employee_imports",
 	'source_type: "preentry,manual_new_employee"',
+	"钉钉同步记录",
+	"open_dingtalk_employee_sync_records",
+	"list_dingtalk_employee_sync_records",
 ]) {
 	mustInclude(employeeList, marker, `DingTalk employee import UI is missing marker: ${marker}`);
 }

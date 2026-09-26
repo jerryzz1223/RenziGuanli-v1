@@ -71,7 +71,7 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 34
+ATTENDANCE_POLICY_VERSION = 38
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
 DEFAULT_CALENDAR_WEEKEND_MODE = "休息日加班口径"
 
@@ -88,6 +88,10 @@ SCHEDULE_OVERTIME_RULES = (
 	{
 		"name": "间接长白班", "tokens": ("间接长白班",), "workday_hours": Decimal("0"),
 		"workday_end_minutes": None, "workday_auto": False, "restday_auto": False,
+		"weekday_overtime_mode": "加班单", "weekend_overtime_mode": "加班单",
+		"holiday_overtime_mode": "加班单",
+		"extended_overtime_mode": "加班单", "extended_shift_rule": "加班单；17:00-18:00特殊工时",
+		"overtime_begin_time": "18:00",
 		"special_workday_time": "17:00-18:00", "basic_time": "08:00-17:00", "meal_deduction_rule": "12:00-13:00扣1H",
 		"small_night_condition": {"minimum_hours": 12, "mode": "不早于", "start_minutes": 22 * 60, "end_minutes": None},
 		"large_night_condition": {"minimum_hours": 14, "mode": "不早于", "start_minutes": 24 * 60, "end_minutes": None},
@@ -95,6 +99,10 @@ SCHEDULE_OVERTIME_RULES = (
 	{
 		"name": "间接人员", "tokens": ("间接人员",), "workday_hours": Decimal("0"),
 		"workday_end_minutes": None, "workday_auto": False, "restday_auto": False,
+		"weekday_overtime_mode": "加班单", "weekend_overtime_mode": "加班单",
+		"holiday_overtime_mode": "加班单",
+		"extended_overtime_mode": "加班单", "extended_shift_rule": "加班单；17:00-18:00特殊工时",
+		"overtime_begin_time": "18:00",
 		"special_workday_time": "17:00-18:00", "basic_time": "08:00-17:00", "meal_deduction_rule": "12:00-13:00扣1H",
 		"small_night_condition": {"minimum_hours": 12, "mode": "不早于", "start_minutes": 22 * 60, "end_minutes": None},
 		"large_night_condition": {"minimum_hours": 14, "mode": "不早于", "start_minutes": 24 * 60, "end_minutes": None},
@@ -105,10 +113,9 @@ SCHEDULE_OVERTIME_RULES = (
 		"small_night_condition": {"minimum_hours": 8, "mode": "区间", "start_minutes": 4 * 60 + 30, "end_minutes": 7 * 60 + 59},
 		"large_night_condition": {"minimum_hours": 11.5, "mode": "不早于", "start_minutes": 8 * 60, "end_minutes": None},
 	},
-	# CCD 白班 08:00-20:00 按业务确认只扣 1 小时休息：11 小时计薪
-	# = 8 小时基本工时 + 3 小时平日加班。源表数值 2.5 与备注 3 冲突，
-	# 原始行仍由导入器保存在 source_payload_json 中供审计。
-	{"name": "CCD人员白班", "tokens": ("CCD人员",), "workday_hours": Decimal("3"), "workday_end_minutes": 20 * 60, "restday_auto": True},
+	# CCD 白班采用排班表 L19 数值栏的 2.5 小时；R19 的 3 小时仅留作来源冲突提示。
+	{"name": "CCD人员白班", "tokens": ("CCD人员",), "workday_hours": Decimal("2.5"), "workday_end_minutes": 20 * 60,
+	 "restday_auto": True, "meal_deduction_rule": "12:00-13:00扣1H\n17:00-17:30扣0.5H"},
 	{
 		"name": "品保10点生产白班", "tokens": ("品保10点生产",), "workday_hours": Decimal("3"),
 		"workday_end_minutes": 22 * 60, "restday_auto": True, "basic_time": "10:00-19:00", "meal_deduction_rule": "11:00-11:30扣0.5H\n17:00-17:30扣0.5H",
@@ -137,6 +144,7 @@ SCHEDULE_OVERTIME_RULES = (
 	{
 		"name": "食堂夜班", "tokens": ("食堂", "夜班"), "workday_hours": Decimal("3"),
 		"workday_end_minutes": 0, "workday_auto": True, "restday_auto": True,
+		"weekday_overtime_time": "21:00-24:00",
 		"basic_time": "08:00-13:00 15:30-18:00", "meal_deduction_rule": "不扣吃饭时间",
 		"small_night_condition": {"minimum_hours": 8, "mode": "不早于", "start_minutes": 24 * 60, "end_minutes": None},
 	},
@@ -145,6 +153,7 @@ SCHEDULE_OVERTIME_RULES = (
 	{
 		"name": "烧饭阿姨夜班", "tokens": ("烧饭阿姨", "夜班"), "workday_hours": Decimal("3"),
 		"workday_end_minutes": 0, "workday_auto": True, "restday_auto": True,
+		"weekday_overtime_time": "21:00-24:00",
 		"basic_time": "08:00-13:00 15:30-18:00", "meal_deduction_rule": "不扣吃饭时间",
 		"small_night_condition": {"minimum_hours": 8, "mode": "不早于", "start_minutes": 24 * 60, "end_minutes": None},
 	},
@@ -155,18 +164,21 @@ SCHEDULE_OVERTIME_RULES = (
 	{
 		"name": "药水分析组", "tokens": ("药水分析组",), "workday_hours": Decimal("0"),
 		"workday_end_minutes": None, "workday_auto": False, "restday_auto": False,
+		"holiday_overtime_mode": "加班单",
 		"special_workday_time": "17:00-18:00", "basic_time": "10:00-20:00", "meal_deduction_rule": "12:00-13:00扣1H\n17:00-18:00扣1H",
 		"small_night_condition": {"minimum_hours": 8, "mode": "不早于", "start_minutes": 22 * 60, "end_minutes": None},
 	},
 	{
 		"name": "生管仓库", "tokens": ("生管仓库",), "workday_hours": Decimal("0"),
 		"workday_end_minutes": None, "workday_auto": False, "restday_auto": False,
+		"holiday_overtime_mode": "加班单",
 		"special_workday_time": "17:00-18:00", "basic_time": "06:30-15:30", "meal_deduction_rule": "12:00-13:00扣1H",
 		"small_night_condition": {"minimum_hours": 9.5, "mode": "不早于", "start_minutes": 17 * 60, "end_minutes": None},
 	},
 	{
 		"name": "中班", "tokens": ("中班",), "workday_hours": Decimal("2.5"),
 		"workday_end_minutes": 60, "restday_auto": False, "basic_time": "13:00-22:00", "meal_deduction_rule": "17:00-18:00扣1H\n23:00-23:30扣0.5H",
+		"holiday_overtime_mode": "加班单",
 		"small_night_condition": {"minimum_hours": 8, "mode": "不早于", "start_minutes": 22 * 60, "end_minutes": None},
 		"large_night_condition": {"minimum_hours": 10.5, "mode": "不早于", "start_minutes": 60, "end_minutes": None},
 	},
@@ -388,6 +400,8 @@ EXCEPTION_MESSAGES = {
 	"EARLY_MARKED": "钉钉明确标记早退；工作日无请假证据时按实际早退时长计旷工工时。",
 	"ABSENCE_MARKED": "工作日无出勤且无可抵扣请假，已按未出勤工时计入旷工并进入薪资三倍扣款。",
 	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "休息日存在打卡时间，但未匹配加班申请且休息日加班工时为 0；请人工确认是否补录休息日加班工时。",
+	"RESTDAY_CLOCKED_WITHOUT_APPROVAL": "间接人员周末休息日有打卡，但未匹配有效加班申请；请核对并补充该日期的加班单。未打卡不按缺勤或请假处理。",
+	"HOLIDAY_CLOCKED_WITHOUT_APPROVAL": "该班次的节日加班来源要求加班单，节假日已有打卡但未匹配有效申请；请核对该日期的审批单。",
 	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "工作日打卡超出钉钉自动识别时段，或所属班次要求提交加班申请，但无有效审批单；原始时长仅供展示审计，未自动计入后续。",
 	"SHIFT_SCHEDULE_REVIEW_REQUIRED": "有打卡或迟到标记，但无法取得完整班次计划起止；已标为待复核，未凭空推算。",
 	"UNSCHEDULED_MIDDLE_NIGHT_REVIEW": "周末未排班中班的适用身份或有效上下班卡尚未确认；夜班次数未按打卡自动改写，请逐日复核。",
@@ -440,6 +454,8 @@ ATTENDANCE_DETAIL_EXCEPTION_FIELDS = (
 	("EARLY_MARKED", "early_count"),
 	("ABSENCE_MARKED", "absence_marker_count"),
 	("RESTDAY_CLOCKED_WITHOUT_OVERTIME", "restday_clocked_without_overtime"),
+	("RESTDAY_CLOCKED_WITHOUT_APPROVAL", "restday_clocked_without_approval"),
+	("HOLIDAY_CLOCKED_WITHOUT_APPROVAL", "holiday_clocked_without_approval"),
 	("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", "workday_outside_shift_unapproved"),
 	("SHIFT_SCHEDULE_REVIEW_REQUIRED", "shift_schedule_review_required"),
 	("UNSCHEDULED_MIDDLE_NIGHT_REVIEW", "unscheduled_middle_night_review_required"),
@@ -780,13 +796,19 @@ def _workday_overtime_time_match(
 def _schedule_overtime_rule(row: Mapping[str, Any], shift_rules: Sequence[Mapping[str, Any]] | None = None) -> Mapping[str, Any] | None:
 	"""Return the configured schedule row matched by the assigned shift."""
 	shift = re.sub(r"\s+", "", _text(_value(row, IDENTITY_FIELDS["shift"]))).casefold()
-	shift_aliases = (shift, shift.replace("烧饭阿姨", "食堂").replace("食堂阿姨", "食堂"))
+	shift_aliases = (
+		shift,
+		shift.replace("烧饭阿姨", "食堂").replace("食堂阿姨", "食堂"),
+		shift.replace("间接长白班", "间接人员"),
+	)
+	attendance_date = _parse_date(_value(row, IDENTITY_FIELDS["attendance_date"]), "")
+	has_effective_rule = False
 	for raw_rule in shift_rules if shift_rules is not None else SCHEDULE_OVERTIME_RULES:
 		rule = dict(raw_rule)
 		effective_from = _parse_date(rule.get("effective_from"), "")
-		attendance_date = _parse_date(_value(row, IDENTITY_FIELDS["attendance_date"]), "")
 		if effective_from and attendance_date and attendance_date < effective_from:
 			continue
+		has_effective_rule = True
 		if rule.get("tokens") and any(all(token.casefold() in candidate for token in rule["tokens"]) for candidate in shift_aliases):
 			rule["workday_hours"] = _decimal(rule.get("workday_hours")) or Decimal("0")
 			rule["workday_auto"] = bool(rule.get("workday_auto", True))
@@ -798,6 +820,11 @@ def _schedule_overtime_rule(row: Mapping[str, Any], shift_rules: Sequence[Mappin
 				rule["workday_auto"] = True
 				rule["restday_auto"] = True
 			return rule
+	# Publishing the first company rules must not erase the historical built-in
+	# calculation before their effective date. An explicitly empty rule list is
+	# different: it means all company rules were disabled.
+	if shift_rules and attendance_date and not has_effective_rule:
+		return _schedule_overtime_rule(row)
 	# The source workbook defines the canteen white/night rows but not DingTalk's
 	# additional late-shift label.  Keep that observed label exempt even when a
 	# company has imported its workbook rules (which otherwise suppress built-ins).
@@ -916,13 +943,18 @@ def _schedule_special_workday_hours(row: Mapping[str, Any], shift_rules: Sequenc
 	shift_bounds = _shift_bounds_minutes(row, _schedule_overtime_rule(row, shift_rules))
 	if not shift_bounds:
 		return Decimal("0"), 0
-	shift_start, _shift_end = shift_bounds
+	shift_start, shift_end = shift_bounds
 	actual_in, actual_out = _actual_bounds_minutes(row, shift_start, _schedule_overtime_rule(row, shift_rules))
 	if actual_in is None or actual_out is None:
 		return Decimal("0"), 0
 	while start <= shift_start:
 		start += 24 * 60
 		end += 24 * 60
+	# The workbook may describe a special window that sits inside a normal
+	# shift. Only its portion after scheduled work can be credited as overtime.
+	start = max(start, shift_end)
+	if end <= start:
+		return Decimal("0"), 0
 	exempt_minutes = max(min(actual_out, end) - max(actual_in, start), 0)
 	credited_minutes = exempt_minutes // 30 * 30
 	return Decimal(credited_minutes) / Decimal("60"), exempt_minutes
@@ -1091,6 +1123,10 @@ def _worked_minutes_after_meal_breaks(
 	for index in range(0, len(clocks) - 1, 2):
 		break_start = int(clocks[index][0]) * 60 + int(clocks[index][1])
 		break_end = int(clocks[index + 1][0]) * 60 + int(clocks[index + 1][1])
+		# An equal-time source entry such as CCD white's 12:00-12:00 is
+		# malformed, not a 24-hour break. Keep the source text for review.
+		if break_end == break_start:
+			continue
 		while break_start < scheduled_start:
 			break_start += 24 * 60
 		while break_end <= break_start:
@@ -1468,8 +1504,8 @@ def process_attendance_draft_rows(
 	# DingTalk monthly exports can include the first day of the following month
 	# so a cross-midnight shift on the last day remains understandable. Keep
 	# those rows as supplemental evidence and exclude them from this month's
-	# totals. A genuine rest-day punch is audit-only and requires no overtime
-	# application, including when the rest day falls at a month boundary.
+	# totals. A genuine rest-day punch is retained for audit; an indirect shift
+	# whose weekend rule says “加班单” also requires approval review.
 	processing_rows: list[dict[str, Any]] = []
 	supplemental_rows: list[dict[str, Any]] = []
 	boundary_review_rows: list[dict[str, Any]] = []
@@ -1551,7 +1587,7 @@ def process_attendance_draft_rows(
 			"supplemental_out_of_month_rows": len(supplemental_rows),
 			"supplemental_out_of_month_dates": supplemental_dates,
 			"boundary_restday_review_rows": len(boundary_review_rows),
-			"notice": "工号为空的来源行不作为员工考勤处理；入职日期晚于考勤月份的人员自动从当月加工结果删除；夜班后排休日被误列为上班卡的08:00单卡归回前一夜班下班卡；真实休息日打卡保留原始审计和已有休息日加班时长，但不要求加班申请，也不产生任何考勤异常。明确标记为工作日、调班或补班的日期仍按工作日处理。",
+			"notice": "工号为空的来源行不作为员工考勤处理；入职日期晚于考勤月份的人员自动从当月加工结果删除；夜班后排休日被误列为上班卡的08:00单卡归回前一夜班下班卡；真实休息日不出勤不产生请假或缺勤；对应排班为间接人员且周末规则要求加班单时，有打卡须匹配有效申请。明确标记为工作日、调班或补班的日期仍按工作日处理。",
 		},
 		"metrics": {
 			"cross_day_punch_reassignments": cross_day_punch_reassignments,
@@ -1601,6 +1637,16 @@ def _aggregate_employee_rows(
 	data_quality_events = []
 	attendance_notes = []
 	employment_scope_counts = Counter()
+	# A weekend rest-day row is usually labelled "休息". Use the latest assigned
+	# shift in that calendar week, not any indirect shift in the month: rotating
+	# employees can move between indirect, production-night and middle shifts.
+	assigned_workday_rows = sorted((
+		(_parse_date(_value(item, IDENTITY_FIELDS["attendance_date"]), attendance_month), item)
+		for item in rows
+		if _value(item, IDENTITY_FIELDS["shift"])
+		and re.sub(r"\s+", "", _value(item, IDENTITY_FIELDS["shift"])) not in {"休息", "排休", "周休", "未排班"}
+		and not _is_rest_day(item)
+	), key=lambda pair: pair[0] or "")
 	for row in rows:
 		event_start = len(exception_events)
 		is_supplemental_boundary_review = bool(row.get("_supplemental_boundary_review"))
@@ -1919,10 +1965,46 @@ def _aggregate_employee_rows(
 			and row_actual_attendance_hours > 0
 		):
 			row_numbers["restday_overtime_hours"] = _floor_overtime_half_hour(row_actual_attendance_hours)
-		# Current policy never asks an employee to explain punches on a genuine
-		# rest day. Keep the legacy marker field for historic projections, but do
-		# not create a new RESTDAY_CLOCKED_WITHOUT_OVERTIME exception.
+		# Keep the legacy marker for historic projections. An indirect employee's
+		# weekend punch instead requires a valid overtime application even when
+		# DingTalk exported rest-day overtime hours; no punch needs no leave.
 		row_restday_clock_without_overtime = False
+		restday_rule_row = row if matched_shift_rule else None
+		if not restday_rule_row and parsed_date and is_calendar_weekend(parsed_date):
+			weekend_date = date.fromisoformat(parsed_date)
+			week_start = weekend_date - timedelta(days=weekend_date.weekday())
+			prior_shifts = [item for day, item in assigned_workday_rows if day and week_start.isoformat() <= day < parsed_date]
+			if prior_shifts:
+				restday_rule_row = prior_shifts[-1]
+			elif weekend_date.day <= 2:
+				# Month-opening weekends have no preceding weekday in this export.
+				# The immediately following Monday is the only bounded fallback.
+				following_monday = (weekend_date + timedelta(days=7 - weekend_date.weekday())).isoformat()
+				restday_rule_row = next((item for day, item in assigned_workday_rows if day == following_monday), None)
+		restday_rule_shift = _value(restday_rule_row, IDENTITY_FIELDS["shift"]) if restday_rule_row else ""
+		restday_rule_date = _parse_date(_value(restday_rule_row, IDENTITY_FIELDS["attendance_date"]), attendance_month) if restday_rule_row else ""
+		restday_rule = _schedule_overtime_rule(
+			{**restday_rule_row, "日期": parsed_date, "attendance_date": parsed_date}, shift_rules,
+		) if restday_rule_row else None
+		indirect_restday_approval_required = bool(
+			policy["genuine_restday_mode"] and is_calendar_weekend(parsed_date)
+			and restday_rule_row and restday_rule
+			and _is_indirect_staff_shift(restday_rule_row)
+			and _text(restday_rule.get("weekend_overtime_mode")) == "加班单"
+		)
+		row_restday_clock_without_approval = bool(
+			indirect_restday_approval_required and _has_clock_punch(row)
+			and not has_overtime_approval
+		)
+		holiday_approval_required = bool(
+			"节假日" in _text(date_type)
+			and matched_shift_rule
+			and _text(matched_shift_rule.get("holiday_overtime_mode")) == "加班单"
+		)
+		row_holiday_clock_without_approval = bool(
+			holiday_approval_required and _has_clock_punch(row)
+			and not has_overtime_approval
+		)
 		if row_late_count <= 0 and late_minutes > 0:
 			row_late_count = Decimal("1")
 		row_numbers["late_count"] = row_late_count
@@ -2028,6 +2110,12 @@ def _aggregate_employee_rows(
 		if exception_policy.get("restday_clock_without_overtime", True) and row_restday_clock_without_overtime:
 			_add_code(codes, "RESTDAY_CLOCKED_WITHOUT_OVERTIME")
 			exception_events.append(_exception_event("RESTDAY_CLOCKED_WITHOUT_OVERTIME", parsed_date, row_number))
+		if row_restday_clock_without_approval:
+			_add_code(codes, "RESTDAY_CLOCKED_WITHOUT_APPROVAL")
+			exception_events.append(_exception_event("RESTDAY_CLOCKED_WITHOUT_APPROVAL", parsed_date, row_number))
+		if row_holiday_clock_without_approval:
+			_add_code(codes, "HOLIDAY_CLOCKED_WITHOUT_APPROVAL")
+			exception_events.append(_exception_event("HOLIDAY_CLOCKED_WITHOUT_APPROVAL", parsed_date, row_number))
 		if workday_outside_shift_unapproved:
 			_add_code(codes, "WORKDAY_OUTSIDE_SHIFT_UNAPPROVED")
 			exception_events.append(_exception_event("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", parsed_date, row_number))
@@ -2057,6 +2145,14 @@ def _aggregate_employee_rows(
 			"genuine_restday_mode": policy["genuine_restday_mode"],
 			"weekend_restday_mode": policy["weekend_restday_mode"],
 			"reconciliation_mode": policy["reconciliation_mode"],
+			"indirect_restday_approval_required": indirect_restday_approval_required,
+			"indirect_restday_rule_shift": restday_rule_shift,
+			"indirect_restday_rule_date": restday_rule_date,
+			"indirect_restday_rule_name": _text(restday_rule.get("name")) if restday_rule else "",
+			"indirect_restday_rule_weekend_mode": _text(restday_rule.get("weekend_overtime_mode")) if restday_rule else "",
+			"restday_clocked_without_approval": row_restday_clock_without_approval,
+			"holiday_approval_required": holiday_approval_required,
+			"holiday_clocked_without_approval": row_holiday_clock_without_approval,
 			"scheduling_policy": {
 				"name": day_governance["name"],
 				"policy_name": day_governance["policy_name"],
@@ -2072,7 +2168,8 @@ def _aggregate_employee_rows(
 			"source_numbers": {field: _display_number(value) for field, value in raw_numbers.items()},
 			"approval": _text(_value(row, IDENTITY_FIELDS["approval"])),
 			"overtime_approval_status": (
-				"人工确认" if manual_overtime_hours is not None
+				"休息日缺加班申请" if row_restday_clock_without_approval
+				else "人工确认" if manual_overtime_hours is not None
 				else "已匹配申请" if approval_covers_overtime
 				else "钉钉平日加班已匹配" if calculated_overtime_covers_outside and calculated_workday_overtime_hours > 0
 				else "平日加班时长与班次外时段不匹配"

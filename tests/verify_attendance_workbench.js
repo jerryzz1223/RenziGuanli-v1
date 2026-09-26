@@ -93,9 +93,8 @@ for (const marker of [
 	"已确认",
 	"processing_slot_status",
 	"const statusControl",
-	"supplemental_out_of_month_rows",
-	"out_of_month_supplement",
-	"跨月补充资料",
+	"识别行数",
+	"员工数量",
 	"source_file",
 	"source_sheet",
 	"source_row",
@@ -404,9 +403,30 @@ const processingSlotStart = attendancePageJs.indexOf("render_processing_slot(slo
 const processingSlotEnd = attendancePageJs.indexOf("\n\topen_slot_uploader", processingSlotStart);
 const processingSlot = attendancePageJs.slice(processingSlotStart, processingSlotEnd);
 mustInclude(processingSlot, "data-slot-exceptions", "A source card with pending exceptions must provide a direct exception-processing action.");
+for (const marker of ["识别行数", "员工数量", "异常"]) {
+	mustInclude(processingSlot, marker, `Attendance source cards must display ${marker}.`);
+}
+for (const marker of ["文件", "月份", "来源总行", "有工号员工行", "员工汇总", "待处理员工", "识别事件", "提交方式", "本次字段映射"]) {
+	if (processingSlot.includes(`__("${marker}")`)) {
+		throw new Error(`Attendance source cards must not display ${marker}.`);
+	}
+}
 if (processingSlot.includes("data-slot-manual")) {
 	throw new Error("Primary attendance source cards must not duplicate the processing-results manual-edit entry.");
 }
+const monthlyFinalStart = attendancePageJs.indexOf("render_monthly_final_markup(");
+const monthlyFinalEnd = attendancePageJs.indexOf("\n\tbind_monthly_final_events", monthlyFinalStart);
+const monthlyFinalMarkup = attendancePageJs.slice(monthlyFinalStart, monthlyFinalEnd);
+mustInclude(monthlyFinalMarkup, "锁定并生成三个版本", "Monthly final must generate all three output versions through one lock action.");
+if (monthlyFinalMarkup.includes("data-generate-first-signed")) {
+	throw new Error("The first-signature output must not render as a separate generation section.");
+}
+const finalCardOrder = ["data-preview-final=\"first_signed\"", "data-preview-final=\"signed\"", "data-preview-final=\"finance\""]
+	.map((marker) => monthlyFinalMarkup.indexOf(marker));
+if (finalCardOrder.some((position) => position < 0) || !(finalCardOrder[0] < finalCardOrder[1] && finalCardOrder[1] < finalCardOrder[2])) {
+	throw new Error("Monthly-final cards must be ordered first signature, second signature, then finance.");
+}
+mustInclude(attendancePageCss, "grid-template-columns: repeat(3, minmax(0, 1fr));", "The three monthly-final outputs must share one row on wide screens.");
 mustInclude(attendancePageJs, "data-monthly-support-manual", "Every monthly support source card must open its manual-edit view.");
 if (processingResults.includes("data-confirm-source") || processingResults.includes("确认本类结果")) {
 	throw new Error("Source confirmation must be performed on the monthly summary cards, not in processing results.");

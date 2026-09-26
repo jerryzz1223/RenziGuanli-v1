@@ -30,6 +30,8 @@ class EmployeeDetailPage {
 		this.expanded_related = {};
 		this.apple_tree_summary = null;
 		this.apple_tree_request_id = 0;
+		this.tab_load_promises = {};
+		this.loaded_tab_groups = new Set(["overview"]);
 		this.trainingSearch = "";
 		this.trainingType = "";
 		this.tabs = ["概览", "在职信息", "个人信息", "联系信息", "培训记录", "工资社保", "合同信息", "材料附件", "背景调查"];
@@ -114,6 +116,8 @@ class EmployeeDetailPage {
 			this.trainingSearch = "";
 			this.trainingType = "";
 			this.apple_tree_summary = null;
+			this.tab_load_promises = {};
+			this.loaded_tab_groups = new Set(["overview"]);
 		}
 
 		// on_page_load and on_page_show can run back-to-back. Reuse the active
@@ -146,7 +150,7 @@ class EmployeeDetailPage {
 
 		const detail_request = frappe.call({
 			method: "hrms.api.employee_field_template.get_employee_detail",
-			args: { employee },
+			args: { employee, scope: "overview" },
 		});
 		const navigation_request = frappe.call({
 			method: "hrms.api.employee_field_template.get_employee_detail_navigation",
@@ -185,6 +189,53 @@ class EmployeeDetailPage {
 			});
 
 		return this.load_promise;
+	}
+
+	tab_group(tab) {
+		if (tab === "概览") return "overview";
+		if (tab === "培训记录") return "training";
+		if (tab === "材料附件") return "materials";
+		return `profile:${tab}`;
+	}
+
+	open_tab(tab) {
+		this.active_tab = tab;
+		const group = this.tab_group(tab);
+		if (this.loaded_tab_groups.has(group)) {
+			this.render();
+			return Promise.resolve();
+		}
+		this.render_tab_loading();
+		if (this.tab_load_promises[group]) return this.tab_load_promises[group];
+		const employee = this.employee;
+		this.tab_load_promises[group] = frappe.call({
+			method: "hrms.api.employee_field_template.get_employee_detail_tab",
+			args: { employee, tab },
+		}).then(({ message }) => {
+			if (employee !== this.employee) return;
+			Object.assign(this.detail, message || {});
+			this.loaded_tab_groups.add(group);
+			if (group === this.tab_group(this.active_tab)) this.render();
+		}).catch(() => {
+			if (employee !== this.employee || group !== this.tab_group(this.active_tab)) return;
+			this.render_tab_error(tab);
+		}).finally(() => {
+			delete this.tab_load_promises[group];
+		});
+		return this.tab_load_promises[group];
+	}
+
+	render_tab_loading() {
+		const body = this.wrapper.querySelector(".hrms-employee-detail-body");
+		if (!body) return;
+		body.innerHTML = `<div class="hrms-employee-detail-section hrms-employee-detail-section-card text-muted">${__("正在读取当前标签页…")}</div>`;
+	}
+
+	render_tab_error(tab) {
+		const body = this.wrapper.querySelector(".hrms-employee-detail-body");
+		if (!body) return;
+		body.innerHTML = `<div class="hrms-employee-detail-section hrms-employee-detail-section-card"><span class="text-muted">${__("当前标签页加载失败。")}</span> <button class="btn btn-default btn-xs" data-retry-tab>${__("重试")}</button></div>`;
+		body.querySelector("[data-retry-tab]")?.addEventListener("click", () => this.open_tab(tab));
 	}
 
 	load_apple_tree_summary(employee, company, detail_request_id) {
@@ -1454,14 +1505,12 @@ class EmployeeDetailPage {
 	bind_events() {
 		this.wrapper.querySelectorAll("[data-tab]").forEach((button) => {
 			button.addEventListener("click", () => {
-				this.active_tab = button.dataset.tab;
-				this.render();
+				this.open_tab(button.dataset.tab);
 			});
 		});
 		this.wrapper.querySelectorAll("[data-action='open-training-history']").forEach((button) => {
 			button.addEventListener("click", () => {
-				this.active_tab = "培训记录";
-				this.render();
+				this.open_tab("培训记录");
 			});
 		});
 		this.wrapper.querySelectorAll("[data-action='apply-training-filter']").forEach((button) => {
@@ -1650,8 +1699,7 @@ class EmployeeDetailPage {
 		});
 		this.wrapper.querySelectorAll("[data-action='contract']").forEach((button) => {
 			button.addEventListener("click", () => {
-				this.active_tab = "合同信息";
-				this.render();
+				this.open_tab("合同信息");
 			});
 		});
 		this.wrapper.querySelectorAll("[data-action='open-apple-tree-detail']").forEach((button) => {

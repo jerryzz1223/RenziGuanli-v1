@@ -13,19 +13,36 @@ class TrainingLearningHome {
 		this.page = page;
 		this.wrapper = page.main[0];
 		this.escape = (value) => frappe.utils.escape_html(String(value ?? ""));
+		this.data = null;
+		this.last_loaded_at = 0;
+		this.load_promise = null;
+		this.cache_ttl = 30_000;
 	}
 
 	company() {
 		return window.hrmsCompanyContext?.getCurrentCompany?.() || frappe.defaults?.get_user_default?.("Company") || "";
 	}
 
-	show() {
+	show(force = false) {
 		this.page.set_title(__("培训学习主页"));
-		this.wrapper.innerHTML = `<section class="hrms-training-home"><div class="hrms-training-home-state">${__("正在读取培训统计与近期安排…")}</div></section>`;
-		frappe.call({
+		if (!force && this.data && Date.now() - this.last_loaded_at < this.cache_ttl) {
+			this.render(this.data);
+			return Promise.resolve(this.data);
+		}
+		if (this.load_promise) return this.load_promise;
+		if (!this.data) this.wrapper.innerHTML = `<section class="hrms-training-home"><div class="hrms-training-home-state">${__("正在读取培训统计与近期安排…")}</div></section>`;
+		this.load_promise = frappe.call({
 			method: "hrms.hr.doctype.training_program.training_program.get_training_learning_dashboard",
 			args: { company: this.company(), include_plan_management: 0 },
-		}).then(({ message }) => this.render(message || {})).catch(() => this.render_error());
+		}).then(({ message }) => {
+			this.data = message || {};
+			this.last_loaded_at = Date.now();
+			this.render(this.data);
+			return this.data;
+		}).catch(() => this.render_error()).finally(() => {
+			this.load_promise = null;
+		});
+		return this.load_promise;
 	}
 
 	render_error() {
@@ -83,7 +100,7 @@ class TrainingLearningHome {
 	}
 
 	bind() {
-		this.wrapper.querySelectorAll("[data-training-home-refresh]").forEach((button) => button.addEventListener("click", () => this.show()));
+		this.wrapper.querySelectorAll("[data-training-home-refresh]").forEach((button) => button.addEventListener("click", () => this.show(true)));
 		this.wrapper.querySelectorAll("[data-training-home-route]").forEach((button) => button.addEventListener("click", () => frappe.set_route("List", this.doctype(button.dataset.trainingHomeRoute))));
 	}
 

@@ -660,6 +660,23 @@ body.hrms-hide-breadcrumbs .page-head .breadcrumb-container {
 	display: none !important;
 }
 
+/* Business lists use the left module navigation and their own actions. Hide
+   Frappe's duplicate view/refresh/menu/filter/sort chrome immediately while
+   the shared shell removes those nodes from the active page. */
+body.hrms-native-list-chrome-clean .page-container.active .page-head .view-switcher,
+body.hrms-native-list-chrome-clean .page-container.active .page-head .page-icon-group,
+body.hrms-native-list-chrome-clean .page-container.active .page-head .menu-btn-group,
+body.hrms-native-list-chrome-clean .page-container.active .filter-section .filter-selector,
+body.hrms-native-list-chrome-clean .page-container.active .filter-section .sort-selector,
+body.hrms-native-list-chrome-clean .page-container.active .list-view .filter-selector,
+body.hrms-native-list-chrome-clean .page-container.active .list-view .sort-selector {
+	display: none !important;
+}
+
+.hrms-parent-return-action {
+	white-space: nowrap;
+}
+
 .hrms-sidebar-section-toggle {
 	cursor: pointer;
 	user-select: none;

@@ -3990,16 +3990,57 @@ def _get_employee_detail_sections(doc, department_display=""):
 	return sections
 
 
+def _empty_employee_training_history(employee_code=""):
+	return {
+		"employee_code": employee_code,
+		"records": [],
+		"summary": {"record_count": 0, "course_count": 0, "study_hours": 0, "latest_date": None},
+	}
+
+
+def _get_employee_training_summary(doc):
+	"""Return the overview metrics without serializing every training row."""
+	employee_code = str(doc.get("custom_employee_code") or "").strip()
+	company = doc.get("company")
+	if not employee_code or not company:
+		return _empty_employee_training_history(employee_code)
+
+	row = frappe.db.sql(
+		"""
+			select
+				count(*) as record_count,
+				count(distinct coalesce(event.course, event.event_name)) as course_count,
+				coalesce(sum(coalesce(nullif(employee.source_study_hours, 0), employee.hours, 0)), 0) as study_hours,
+				max(event.start_time) as latest_date
+			from `tabTraining Result Employee` employee
+			inner join `tabTraining Result` result on result.name = employee.parent
+			inner join `tabTraining Event` event on event.name = result.training_event
+			where employee.employee_code = %(employee_code)s
+				and event.company = %(company)s
+				and result.docstatus < 2
+				and event.docstatus < 2
+		""",
+		{"employee_code": employee_code, "company": company},
+		as_dict=True,
+	)[0]
+	return {
+		"employee_code": employee_code,
+		"records": [],
+		"summary": {
+			"record_count": cint(row.record_count),
+			"course_count": cint(row.course_count),
+			"study_hours": flt(row.study_hours),
+			"latest_date": row.latest_date,
+		},
+	}
+
+
 def _get_employee_training_history(doc):
 	"""Return imported education records for the employee's company code."""
 	employee_code = str(doc.get("custom_employee_code") or "").strip()
 	company = doc.get("company")
 	if not employee_code or not company:
-		return {
-			"employee_code": employee_code,
-			"records": [],
-			"summary": {"record_count": 0, "course_count": 0, "study_hours": 0, "latest_date": None},
-		}
+		return _empty_employee_training_history(employee_code)
 
 	rows = frappe.db.sql(
 		"""
@@ -4399,7 +4440,10 @@ def _get_employee_standing_pay_summary(doc):
 	return {"visible": True, **_build_employee_standing_pay_summary(salary_rows, contribution_rows)}
 
 
-def _get_employee_related_records(doc):
+def _get_employee_related_records(doc, requested_tab=None):
+	"""Return related blocks for one tab, or every tab for legacy callers."""
+	def wants(*tabs):
+		return not requested_tab or requested_tab in tabs
 	reward_punishment_items = _get_employee_doctype_items(
 		"HRMS Employee Reward Punishment",
 		{"employee": doc.name},
@@ -4416,22 +4460,22 @@ def _get_employee_related_records(doc):
 			("状态", "status"),
 		],
 		order_by="occurred_on desc",
-	)
+	) if wants("在职信息") else []
 	transfer_items = _get_employee_doctype_items(
 		"Employee Transfer",
 		{"employee": doc.name},
 		[("异动日期", "transfer_date"), ("状态", "docstatus"), ("新员工编号", "new_employee_id")],
-	)
+	) if wants("在职信息", "背景调查") else []
 	promotion_items = _get_employee_doctype_items(
 		"Employee Promotion",
 		{"employee": doc.name},
 		[("转正/晋升日期", "promotion_date"), ("当前薪资", "current_ctc"), ("调整后薪资", "revised_ctc")],
-	)
+	) if wants("在职信息", "背景调查") else []
 	separation_items = _get_employee_doctype_items(
 		"Employee Separation",
 		{"employee": doc.name},
 		[("离职员工", "employee"), ("离职模板", "employee_separation_template"), ("办理状态", "boarding_status")],
-	)
+	) if wants("背景调查") else []
 	education_items = _get_employee_child_items(
 		doc,
 		"education",
@@ -4443,7 +4487,7 @@ def _get_employee_related_records(doc):
 			("毕业院校", "custom_graduation_school"),
 			("专业科系", "custom_major"),
 		],
-	)
+	) if wants("个人信息") else []
 	contract_items = _get_employee_flat_related_item(
 		doc,
 		[
@@ -4452,8 +4496,8 @@ def _get_employee_related_records(doc):
 			("签订次数", "custom_contract_sign_count"),
 			("结束日期", "contract_end_date"),
 		],
-	)
-	insurance_items = _get_employee_payroll_social_insurance_items(doc)
+	) if wants("合同信息") else []
+	insurance_items = _get_employee_payroll_social_insurance_items(doc) if wants("工资社保") else []
 
 	records = {
 		"在职信息": [
@@ -4566,11 +4610,15 @@ def _get_employee_related_records(doc):
 	}
 
 	for tab, configured_records in _get_configured_detail_block_records(doc).items():
+		if requested_tab and tab != requested_tab:
+			continue
 		existing_labels = {record["label"] for record in records.get(tab, [])}
 		for record in configured_records:
 			if record["label"] not in existing_labels:
 				records.setdefault(tab, []).append(record)
 
+	if requested_tab:
+		return {requested_tab: records.get(requested_tab, [])}
 	return records
 
 
@@ -4748,60 +4796,95 @@ def check_employee_rehire_history(identity_number: str):
 	}
 
 
+def _get_employee_detail_header(doc, department_display, previous_employment, current_employment):
+	return {
+		"name": doc.name,
+		"employee_name": doc.get("employee_name"),
+		"custom_employee_code": doc.get("custom_employee_code"),
+		"company": doc.get("company"),
+		"department": doc.get("department"),
+		"department_display": department_display,
+		"designation": doc.get("designation"),
+		"custom_work_nature": doc.get("custom_work_nature"),
+		"employment_type": doc.get("employment_type"),
+		"status": doc.get("status"),
+		"custom_is_confirmed": doc.get("custom_is_confirmed"),
+		"final_confirmation_date": doc.get("final_confirmation_date"),
+		"date_of_joining": doc.get("date_of_joining"),
+		"gender": doc.get("gender"),
+		"age": doc.get("age"),
+		"cell_number": doc.get("cell_number"),
+		"image": doc.get("image"),
+		"previous_employment": {
+			"name": previous_employment.name,
+			"employee_name": previous_employment.get("employee_name"),
+			"custom_employee_code": previous_employment.get("custom_employee_code"),
+		}
+		if previous_employment
+		else None,
+		"current_employment": {
+			"name": current_employment.name,
+			"employee_name": current_employment.get("employee_name"),
+			"custom_employee_code": current_employment.get("custom_employee_code"),
+		}
+		if current_employment
+		else None,
+	}
+
+
 @frappe.whitelist()
-def get_employee_detail(employee: str):
+def get_employee_detail(employee: str, scope: str = "all"):
 	doc = frappe.get_doc(EMPLOYEE_DOCTYPE, employee)
 	doc.check_permission("read")
 	department_display = _department_display_name(doc.get("department"))
 	employment_history = _get_employee_rehire_history(doc)
 	previous_employment = _get_previous_employment(doc, employment_history)
 	current_employment = _get_current_employment(doc, employment_history)
-	return {
-		"header": {
-			"name": doc.name,
-			"employee_name": doc.get("employee_name"),
-			"custom_employee_code": doc.get("custom_employee_code"),
-			"company": doc.get("company"),
-			"department": doc.get("department"),
-			"department_display": department_display,
-			"designation": doc.get("designation"),
-			"custom_work_nature": doc.get("custom_work_nature"),
-			"employment_type": doc.get("employment_type"),
-			"status": doc.get("status"),
-			"custom_is_confirmed": doc.get("custom_is_confirmed"),
-			"final_confirmation_date": doc.get("final_confirmation_date"),
-			"date_of_joining": doc.get("date_of_joining"),
-			"gender": doc.get("gender"),
-			"age": doc.get("age"),
-			"cell_number": doc.get("cell_number"),
-			"image": doc.get("image"),
-			"previous_employment": {
-				"name": previous_employment.name,
-				"employee_name": previous_employment.get("employee_name"),
-				"custom_employee_code": previous_employment.get("custom_employee_code"),
-			}
-			if previous_employment
-			else None,
-			"current_employment": {
-				"name": current_employment.name,
-				"employee_name": current_employment.get("employee_name"),
-				"custom_employee_code": current_employment.get("custom_employee_code"),
-			}
-			if current_employment
-			else None,
-		},
+	payload = {
+		"header": _get_employee_detail_header(doc, department_display, previous_employment, current_employment),
 		"growth_records": _get_employee_growth_timeline(doc, employment_history),
-		"training_history": _get_employee_training_history(doc),
-		"sections": _get_employee_detail_sections(doc, department_display),
-		"standing_pay_summary": _get_employee_standing_pay_summary(doc),
-		"photo_history": _get_employee_photo_history(doc),
-		"materials": _get_employee_materials(doc),
-		"related_records": _get_employee_related_records(doc),
+		"training_history": _get_employee_training_summary(doc) if scope == "overview" else _get_employee_training_history(doc),
 		"relationship_records": _get_employee_relationship_records(doc),
 		"permissions": {
 			"can_edit_employee_detail": _can_edit_employee_detail(),
 		},
 	}
+	if scope == "overview":
+		return payload
+	payload.update({
+		"sections": _get_employee_detail_sections(doc, department_display),
+		"standing_pay_summary": _get_employee_standing_pay_summary(doc),
+		"photo_history": _get_employee_photo_history(doc),
+		"materials": _get_employee_materials(doc),
+		"related_records": _get_employee_related_records(doc),
+	})
+	return payload
+
+
+@frappe.whitelist()
+def get_employee_detail_tab(employee: str, tab: str):
+	"""Load expensive employee-detail data only when its tab is opened."""
+	doc = frappe.get_doc(EMPLOYEE_DOCTYPE, employee)
+	doc.check_permission("read")
+	tab = str(tab or "").strip()
+	if tab == "培训记录":
+		return {"training_history": _get_employee_training_history(doc)}
+	if tab == "材料附件":
+		return {
+			"photo_history": _get_employee_photo_history(doc),
+			"materials": _get_employee_materials(doc),
+		}
+	department_display = _department_display_name(doc.get("department"))
+	payload = {
+		"sections": [
+			section for section in _get_employee_detail_sections(doc, department_display)
+			if section.get("label") == ("合同保险" if tab == "合同信息" else tab)
+		],
+		"related_records": _get_employee_related_records(doc, requested_tab=tab),
+	}
+	if tab == "工资社保":
+		payload["standing_pay_summary"] = _get_employee_standing_pay_summary(doc)
+	return payload
 
 
 def _can_edit_employee_detail():

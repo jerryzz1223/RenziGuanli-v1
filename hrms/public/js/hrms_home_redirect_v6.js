@@ -1029,6 +1029,63 @@
 		document.body.classList.remove("hrms-hide-breadcrumbs");
 	}
 	window.hrmsApplyContextualBreadcrumbs = apply_contextual_breadcrumbs;
+
+	var NATIVE_LIST_CHROME_SELECTOR = [
+		".page-head .view-switcher",
+		".page-head .page-icon-group",
+		".page-head .menu-btn-group",
+		".filter-section .filter-selector",
+		".filter-section .sort-selector",
+		".list-view .filter-selector",
+		".list-view .sort-selector",
+	].join(", ");
+
+	function is_native_frappe_list(route, page) {
+		return route[0] === "List" || Boolean(page?.querySelector(".frappe-list, .list-view"));
+	}
+
+	function parent_return_target(module, route, slug) {
+		var parent = separation_breadcrumb_parent(route) || BREADCRUMB_PARENT_OVERRIDES[slug];
+		if (!parent && route[0] === "Form") parent = find_sidebar_item(module, slug);
+		return parent?.route ? parent : { label: module.label, route: module.route, slug: route_to_slug(module.route) };
+	}
+
+	function render_parent_return_action(module, route, slug, page) {
+		var existing = page?.querySelector(".hrms-parent-return-action");
+		var module_slug = route_to_slug(module.route);
+		if (!page || slug === module_slug || slug === "hrms-workbench") {
+			existing?.remove();
+			return;
+		}
+		var actions = page.querySelector(".page-head .page-actions");
+		if (!actions) return;
+		var target = parent_return_target(module, route, slug);
+		var button = existing || document.createElement("button");
+		button.type = "button";
+		button.className = "btn btn-default btn-sm hrms-parent-return-action";
+		button.textContent = "← " + __("返回上级");
+		button.title = __("返回{0}", [target.label]);
+		button.setAttribute("aria-label", button.title);
+		button.onclick = function () {
+			navigate_hrms_sidebar(target.route, target.slug || route_to_slug(target.route));
+		};
+		if (!existing) actions.prepend(button);
+	}
+
+	function remove_native_list_chrome() {
+		var route = window.frappe?.get_route?.() || [];
+		var slug = current_route_slug();
+		var module = active_sidebar_module(slug);
+		var page = document.querySelector(".page-container.active") || document.querySelector(".page-container");
+		document.body.classList.toggle("hrms-native-list-chrome-clean", Boolean(module && is_native_frappe_list(route, page)));
+		if (!module || !page) return;
+		render_parent_return_action(module, route, slug, page);
+		if (!is_native_frappe_list(route, page)) return;
+		page.querySelectorAll(NATIVE_LIST_CHROME_SELECTOR).forEach(function (control) {
+			control.remove();
+		});
+	}
+	window.hrmsRemoveNativeListChrome = remove_native_list_chrome;
 	var hrms_breadcrumb_followups = [];
 
 	function schedule_contextual_breadcrumbs() {
@@ -1706,6 +1763,7 @@
 		fix_desk_home_links();
 		apply_hrms_sidebar_shell();
 		apply_contextual_breadcrumbs();
+		remove_native_list_chrome();
 		hide_personnel_social_metadata();
 	}
 
@@ -1744,12 +1802,18 @@
 	}
 
 	var hrms_shell_localization_timer = 0;
+	var hrms_full_localization_done = false;
 
 	function schedule_hrms_localization(delay) {
+		// Added and changed page nodes are localized by the scoped observer below.
+		// Rewalking the complete document after every route was duplicate work and
+		// caused a small but visible pause shortly after the new page appeared.
+		if (hrms_full_localization_done) return;
 		window.clearTimeout(hrms_shell_localization_timer);
 		hrms_shell_localization_timer = window.setTimeout(function () {
 			hide_unneeded_menu_items();
 			localize_dynamic_text();
+			hrms_full_localization_done = true;
 		}, delay == null ? 180 : delay);
 	}
 
@@ -1852,6 +1916,7 @@
 			hide_unneeded_menu_items(node);
 			localize_dynamic_text(node);
 		});
+		run_hrms_shell_step("removing native list controls", remove_native_list_chrome);
 	}
 
 	function schedule_hrms_dynamic_localization(nodes) {
@@ -1892,6 +1957,7 @@
 	prepare_hrms_sidebar_geometry();
 	run_hrms_shell_step("redirecting the Desk home", redirect_to_hrms_home);
 	apply_hrms_ui_rules();
+	hrms_full_localization_done = true;
 	// Desk can load this include before frappe.get_route() is ready. Retry once
 	// after the initial route and page shell have been mounted.
 	schedule_hrms_ui_rules(180);

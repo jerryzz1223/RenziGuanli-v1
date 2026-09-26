@@ -317,6 +317,11 @@
 		});
 		set_roster_action_permission(dingtalk_approve_button, has_capability("dingtalk_employee_import_approve"), "钉钉员工导入审批");
 
+		const dingtalk_records_button = listview.page.add_inner_button(__("钉钉同步记录"), function () {
+			open_dingtalk_employee_sync_records();
+		});
+		set_roster_action_permission(dingtalk_records_button, has_capability("dingtalk_employee_import_approve"), "钉钉员工导入审批");
+
 		const dingtalk_retry_button = listview.page.add_inner_button(__("钉钉附件重试"), function () {
 			open_dingtalk_employee_import_approval(listview, { import_status: "已批准", retry_only: true });
 		});
@@ -341,6 +346,67 @@
 				open_roster_cleanup_dialog(listview);
 			});
 		}
+	}
+
+	function open_dingtalk_employee_sync_records() {
+		const company = frappe.defaults.get_user_default("Company") || "";
+		if (!company) {
+			frappe.msgprint(__("请先设置默认公司，再查看钉钉同步记录。"));
+			return;
+		}
+		const dialog = new frappe.ui.Dialog({
+			title: __("钉钉员工同步记录"),
+			size: "extra-large",
+			fields: [{ fieldtype: "HTML", fieldname: "records_html" }],
+			primary_action_label: __("刷新"),
+			primary_action: () => load_records(),
+		});
+		const escape = (value) => frappe.utils.escape_html(String(value ?? ""));
+		const source_labels = {
+			preentry: "待入职同步",
+			manual_new_employee: "手动新员工同步",
+			employee_roster: "全量花名册比对",
+		};
+
+		function load_records() {
+			const wrapper = dialog.fields_dict.records_html.$wrapper[0];
+			wrapper.innerHTML = `<div class="text-muted">${__("正在加载同步记录…")}</div>`;
+			frappe.call({
+				method: "hrms.api.dingtalk_integration.list_dingtalk_employee_sync_records",
+				args: { company, page_length: 500 },
+			}).then((response) => {
+				const payload = response.message || {};
+				const rows = payload.rows || [];
+				const summary = payload.summary || {};
+				const cards = [
+					["同步新建", summary.created || 0],
+					["补全资料", summary.updated || 0],
+					["附件同步", summary.attachments || 0],
+					["待处理", summary.pending || 0],
+				].map(([label, count]) => `<div style="border:1px solid var(--border-color);border-radius:8px;padding:10px 14px;min-width:120px;"><div class="text-muted">${__(label)}</div><strong style="font-size:20px;">${count}</strong></div>`).join("");
+				const body = rows.length ? rows.map((row) => {
+					const employee_link = row.matched_employee
+						? `<a href="/app/employee-detail/${encodeURIComponent(row.matched_employee)}">${escape(row.employee_name || row.matched_employee)}</a>`
+						: escape(row.employee_name || "-");
+					const operation = row.sync_operation || (row.import_status === "无变更" ? "无变更" : "未导入");
+					return `<tr>
+						<td>${escape(row.sync_completed_at || row.approved_at || row.submitted_at || "-")}</td>
+						<td>${employee_link}</td><td>${escape(row.employee_code || "-")}</td>
+						<td>${escape(operation)}</td><td>${escape(row.import_status || "-")}</td>
+						<td>${escape(row.attachment_status || "-")} ${row.attachment_count ? `(${row.attachment_count})` : ""}</td>
+						<td>${escape(source_labels[row.source_type] || row.source_type || "-")}</td>
+						<td>${escape(row.approved_by || "-")}</td>
+					</tr>`;
+				}).join("") : `<tr><td colspan="8" class="text-muted">${__("暂无钉钉员工同步记录。")}</td></tr>`;
+				wrapper.innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">${cards}</div>
+					<div class="text-muted" style="margin-bottom:10px;">${__("“同步新建”只统计系统明确记录为通过钉钉创建的员工；旧记录不根据姓名或时间猜测。")}</div>
+					<div class="table-responsive"><table class="table table-bordered table-hover">
+					<thead><tr><th>${__("时间")}</th><th>${__("员工")}</th><th>${__("工号")}</th><th>${__("同步操作")}</th><th>${__("处理状态")}</th><th>${__("附件")}</th><th>${__("数据来源")}</th><th>${__("操作人")}</th></tr></thead>
+					<tbody>${body}</tbody></table></div>`;
+			});
+		}
+		dialog.show();
+		load_records();
 	}
 
 	function sync_new_employees_from_dingtalk(listview) {

@@ -41,6 +41,19 @@ def load_module():
 
 
 class DingTalkRosterAttachmentTests(unittest.TestCase):
+	def test_sync_operation_distinguishes_created_updated_and_attachment_only(self):
+		module = load_module()
+
+		self.assertEqual(module._dingtalk_sync_operation({"status": "已创建"}, {"downloaded": 1}), "新建员工")
+		self.assertEqual(
+			module._dingtalk_sync_operation({"status": "已更新", "filled_fields": ["gender"]}, {"downloaded": 1}),
+			"补全资料及附件",
+		)
+		self.assertEqual(
+			module._dingtalk_sync_operation({"status": "已更新", "filled_fields": []}, {"attachments": [{"file_name": "a.jpg"}]}),
+			"同步附件",
+		)
+
 	def test_roster_select_fields_prefer_human_label_over_internal_code(self):
 		module = load_module()
 		fields = [

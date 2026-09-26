@@ -1218,6 +1218,23 @@ def _missing_dingtalk_attachment_count(employee_name, attachments):
 	return missing
 
 
+def _dingtalk_sync_operation(employee_result, attachment_result=None):
+	"""Describe the durable effect of one approved employee sync."""
+	employee_result = employee_result or {}
+	attachment_result = attachment_result or {}
+	if employee_result.get("status") == "已创建":
+		return "新建员工"
+	filled_fields = employee_result.get("filled_fields") or []
+	has_attachments = int(attachment_result.get("downloaded") or 0) > 0
+	if filled_fields and has_attachments:
+		return "补全资料及附件"
+	if filled_fields:
+		return "补全资料"
+	if attachment_result.get("attachments"):
+		return "同步附件"
+	return "补全资料"
+
+
 def _dingtalk_employee_match(values, company):
 	"""Validate the business-key match before staging or applying an import."""
 	employee_code = str(values.get("custom_employee_code") or "").strip()
@@ -1360,6 +1377,8 @@ def _stage_dingtalk_employee_import(user, company, sync_log, raw_record):
 			"attachments_json": _json_dumps(user.get("roster_attachments") or []),
 			"attachment_count": len(user.get("roster_attachments") or []),
 			"attachment_status": "待下载" if user.get("roster_attachments") else "无附件",
+			"sync_operation": None,
+			"sync_completed_at": None,
 			"error_message": match.get("reason") or None,
 			"submitted_at": now_datetime(),
 			"approved_by": None,
@@ -1801,6 +1820,55 @@ def list_dingtalk_employee_imports(
 
 
 @frappe.whitelist()
+def list_dingtalk_employee_sync_records(company: str = "", page_length: int = 500):
+	"""Return an auditable employee-sync history without guessing old record effects."""
+	_require_dingtalk_employee_import_approver()
+	company = _require_sync_company(company)
+	rows = frappe.get_all(
+		DINGTALK_EMPLOYEE_IMPORT_DOCTYPE,
+		filters={"company": company},
+		fields=[
+			"name", "import_status", "employee_code", "employee_name", "department", "designation",
+			"matched_employee", "source_record", "sync_log", "attachment_count", "attachment_status",
+			"sync_operation", "submitted_at", "approved_by", "approved_at", "sync_completed_at", "error_message",
+		],
+		order_by="submitted_at desc, modified desc",
+		limit_page_length=min(max(int(page_length or 500), 1), 1000),
+	)
+	source_names = list({row.source_record for row in rows if row.source_record})
+	source_types = {
+		row.name: row.source_type
+		for row in frappe.get_all(
+			DINGTALK_RAW_RECORD_DOCTYPE,
+			filters={"name": ["in", source_names]},
+			fields=["name", "source_type"],
+		)
+	} if source_names else {}
+	result = []
+	for row in rows:
+		operation = row.sync_operation or ""
+		# Records created before operation tracking remain explicit rather than
+		# being guessed from names, phones, or approximate timestamps.
+		if not operation and row.import_status == "已批准":
+			operation = "历史已导入（类型未标记）"
+		result.append({**row, "sync_operation": operation, "source_type": source_types.get(row.source_record, "")})
+	return {
+		"rows": result,
+		"summary": {
+			"created": sum(1 for row in result if row.get("sync_operation") == "新建员工"),
+			"updated": sum(1 for row in result if row.get("sync_operation") in ("补全资料", "补全资料及附件")),
+			"attachments": sum(
+				1
+				for row in result
+				if row.get("attachment_count")
+				and row.get("attachment_status") in ("已下载", "部分下载")
+			),
+			"pending": sum(1 for row in result if row.get("import_status") in ("待审批", "待匹配", "待人工比对", "冲突")),
+		},
+	}
+
+
+@frappe.whitelist()
 def approve_dingtalk_employee_import(import_name: str, approval_note: str = ""):
 	"""Approve one immutable snapshot, then create/update the Employee master."""
 	_require_dingtalk_employee_import_approver()
@@ -1833,6 +1901,7 @@ def _approve_dingtalk_employee_import(import_name: str, approval_note: str = "",
 		import_doc.save(ignore_permissions=True)
 		frappe.throw(_("审批前校验未通过：{0}").format(import_doc.error_message))
 	attachment_result = _import_dingtalk_attachments(import_doc, result.get("employee"))
+	sync_operation = _dingtalk_sync_operation(result, attachment_result)
 	import_doc.update(
 		{
 			"import_status": "已批准",
@@ -1843,6 +1912,8 @@ def _approve_dingtalk_employee_import(import_name: str, approval_note: str = "",
 			"error_message": None,
 			"attachments_json": _json_dumps(attachment_result.get("attachments") or []),
 			"attachment_status": attachment_result.get("status") or "无附件",
+			"sync_operation": sync_operation,
+			"sync_completed_at": now_datetime(),
 		}
 	)
 	import_doc.save(ignore_permissions=True)
@@ -2249,6 +2320,8 @@ def run_existing_dingtalk_employee_attachment_import(company: str, import_names:
 			result = _import_dingtalk_attachments(import_doc, import_doc.matched_employee)
 			import_doc.attachments_json = _json_dumps(result.get("attachments") or [])
 			import_doc.attachment_status = result.get("status") or "无附件"
+			import_doc.sync_operation = "同步附件"
+			import_doc.sync_completed_at = now_datetime()
 			import_doc.save(ignore_permissions=True)
 			downloaded += int(result.get("downloaded") or 0)
 			updated += 1
@@ -2277,6 +2350,8 @@ def retry_dingtalk_employee_attachments(import_name: str):
 		{
 			"attachments_json": _json_dumps(attachment_result.get("attachments") or []),
 			"attachment_status": attachment_result.get("status") or "无附件",
+			"sync_operation": import_doc.sync_operation or "同步附件",
+			"sync_completed_at": now_datetime(),
 		}
 	)
 	import_doc.save(ignore_permissions=True)

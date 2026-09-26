@@ -220,7 +220,8 @@ for attempt in $(seq 1 30); do
 import json, sys, urllib.request
 request = urllib.request.Request("http://127.0.0.1:8000/api/method/ping", headers={"Host": sys.argv[1]})
 with urllib.request.urlopen(request, timeout=2) as response:
-    assert json.load(response).get("message") == "pong"+' "${SITE_NAME}" >/dev/null 2>&1; then
+    assert json.load(response).get("message") == "pong"
+' "${SITE_NAME}" >/dev/null 2>&1; then
 		echo "Deployment complete: ${SITE_NAME} is responding."
 		compose ps
 		exit 0

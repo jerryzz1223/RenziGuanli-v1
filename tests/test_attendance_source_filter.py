@@ -72,9 +72,11 @@ class AttendanceSourceFilterTest(TestCase):
         self.assertEqual(save.call_args.args[2:4], (self.api.IMPORT_BATCH_DOCTYPE, "new"))
         self.assertEqual(len(json.loads(save.call_args.args[1])["excluded_source_records"]), 2000)
 
-    def test_default_result_request_includes_approvals_after_row_500(self):
+    def test_default_result_request_is_bounded_and_reports_complete_count(self):
         rows = [{"eligible_for_downstream": True, "processed_value": {"苹果类型": "绿苹果", "有效苹果数": 1}} for _ in range(601)]
-        with patch.object(self.api, "_require_processing_manager"), patch.object(self.api, "_require_company", side_effect=lambda v:v), patch.object(self.api, "_require_month", side_effect=lambda v:v), patch.object(self.api, "_require_processing_source_type", side_effect=lambda v:v), patch.object(self.api, "_latest_batch", return_value=SimpleNamespace(name="batch", status="已确认")), patch.object(self.api, "_processing_meta", return_value={}), patch.object(self.api, "_result_rows", side_effect=lambda batch,limit:rows[:limit]):
+        with patch.object(self.api, "_require_processing_manager"), patch.object(self.api, "_require_company", side_effect=lambda v:v), patch.object(self.api, "_require_month", side_effect=lambda v:v), patch.object(self.api, "_require_processing_source_type", side_effect=lambda v:v), patch.object(self.api, "_latest_batch", return_value=SimpleNamespace(name="batch", status="已确认")), patch.object(self.api, "_processing_meta", return_value={}), patch.object(self.api.frappe.db, "count", side_effect=[601, 0]), patch.object(self.api, "_result_rows", side_effect=lambda batch, limit, **kwargs: rows[kwargs.get("page_start", 0):kwargs.get("page_start", 0) + limit]):
             response = self.api.list_processing_results("永新", "2026-08", "apple_tree")
-        self.assertEqual(len(response["processed_rows"]), 601)
-        self.assertEqual(response["result_summary"]["green_apples"], 601)
+        self.assertEqual(len(response["processed_rows"]), 25)
+        self.assertEqual(response["total_count"], 601)
+        self.assertEqual(response["page_length"], 25)
+        self.assertEqual(response["result_summary"]["green_apples"], 25)
