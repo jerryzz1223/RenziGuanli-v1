@@ -26,11 +26,15 @@ for (const marker of [
 	"generate_monthly_attendance_summary",
 	"lock_attendance_month",
 	"import_payroll_data_closure_workbook",
+	"_approve_full_payroll_salary_changes",
+	"_ensure_full_payroll_contributions",
+	"_ensure_full_payroll_termination_decision",
+	"submit_contribution",
+	"review_decision",
 	"create_employee_salary_change",
 	"upsert_payroll_welfare_source_record",
 	"sync_welfare_sources_to_payroll_variables",
 	"import_payroll_variable_workbook",
-	"update_payroll_variable_record",
 	"generate_payroll_input_records",
 	"generate_payroll_settlement_records",
 	"confirm_payroll_settlement_records",
@@ -43,6 +47,7 @@ for (const marker of [
 	"TEST-TRN-004",
 	"base_salary=3500",
 	"RESET TEST-HRMS FULL PAYROLL",
+	'"reused": True',
 	"source_trace_json",
 ]) {
 	requireMarker(seed, marker);
@@ -66,7 +71,7 @@ if (seed.includes('company=\"永新\"') || seed.includes("company='永新'")) {
 	throw new Error("Full payroll seed must not write the real company.");
 }
 
-for (const marker of ["seed-full-payroll", "TEST-HRMS", "2099-03", "手动调薪", "异常类型", "已确认"]) {
+for (const marker of ["seed-full-payroll", "TEST-HRMS", "2099-03", "手动调薪", "异常队列", "已确认"]) {
 	requireMarker(guide, marker);
 }
 

@@ -75,7 +75,7 @@ for (const marker of [
 	"load_complete_attendance_rules",
 	"完整考勤规则中心",
 	"编辑完整规则",
-	"按当前规则校验本月",
+	"导入不按处理月份分批",
 	"系统处理边界（只读）",
 	"考勤初稿",
 	"苹果树",

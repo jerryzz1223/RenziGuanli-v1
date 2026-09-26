@@ -16,7 +16,9 @@ for (const marker of [
 	"只允许使用系统提供的函数",
 	"社保公司手工金额",
 	"公司实际负担",
-	'"expression": "[标准工时] - [基本出勤工时]"',
+	'"expression": "MAX([标准工时] - [基本出勤工时], 0)"',
+	'"expression": "MAX([缺勤工时], 0)"',
+	'"expression": "[调整前周末加班]"',
 ]) requireMarker(engine, marker);
 
 const api = read("hrms/api/payroll_input.py");

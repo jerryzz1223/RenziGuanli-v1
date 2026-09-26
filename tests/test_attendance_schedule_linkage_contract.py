@@ -80,6 +80,8 @@ class AttendanceScheduleLinkageContractTest(unittest.TestCase):
 		):
 			bundle = self.api._attendance_shift_rule_bundle("永新")
 		self.assertEqual([rule["name"] for rule in bundle["rules"]], ["品保10点生产白班", "生产人员白班"])
+		self.assertEqual(bundle["rules"][0]["dingtalk_attendance_groups"], "品保10点班生产白班|品保10点生产白班")
+		self.assertIn("品保10点班生产白班", bundle["rules"][0]["dingtalk_shift_aliases"])
 
 	def test_existing_shift_type_is_preserved_for_review(self):
 		item = {

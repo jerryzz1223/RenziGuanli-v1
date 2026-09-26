@@ -75,9 +75,13 @@ FORMULA_TEMPLATES = [
 	# the amount visible and payable, but do not let it inflate the hourly base
 	# used for absence or overtime calculations.
 	{"output_field": "salary_subtotal", "expression": "[底薪] + [职能津贴]", "category": "固定薪资", "description": "薪资结算表 G=SUM(E:F)；证书及多能工津贴从 2026-05 起不计入全薪"},
-	{"output_field": "missing_hours", "expression": "[标准工时] - [基本出勤工时]", "category": "考勤结算", "description": "缺勤工时 K=I-J"},
-	{"output_field": "adjusted_absence_hours", "expression": "MAX([缺勤工时] - [调整前周末加班], 0)", "category": "考勤结算", "description": "调整后缺勤工时 M=IF(K-L>0,K-L,0)"},
-	{"output_field": "weekend_overtime_hours", "expression": "MAX([调整前周末加班] - [缺勤工时] + [调整后缺勤工时], 0)", "category": "考勤结算", "description": "调整后周末加班 O=L-K+M"},
+	# The locked attendance final has already offset rest arrangements and
+	# deductible leave against overtime. Payroll therefore receives adjusted 1x
+	# hours plus net 2x hours; applying the legacy Excel offset a second time
+	# would understate both absence and payable weekend overtime.
+	{"output_field": "missing_hours", "expression": "MAX([标准工时] - [基本出勤工时], 0)", "category": "考勤结算", "description": "锁定终稿调整后1倍工时与标准工时的差额"},
+	{"output_field": "adjusted_absence_hours", "expression": "MAX([缺勤工时], 0)", "category": "考勤结算", "description": "锁定终稿已完成加班抵扣，缺勤差额不再二次抵扣"},
+	{"output_field": "weekend_overtime_hours", "expression": "[调整前周末加班]", "category": "考勤结算", "description": "该输入承接锁定终稿的净2倍结算工时，不再二次抵扣"},
 	{"output_field": "full_salary_hourly_rate", "expression": "ROUND([薪资小计] / 174, 8)", "category": "考勤结算", "description": "全薪小时单价"},
 	{"output_field": "base_salary_hourly_rate", "expression": "ROUND([底薪] / 174, 8)", "category": "考勤结算", "description": "底薪小时单价"},
 	{"output_field": "absence_deduction_amount", "expression": "ROUND([全薪时薪] * [调整后缺勤工时], 2)", "category": "考勤结算", "description": "缺勤扣款 N=ROUND(H/174*M,2)"},

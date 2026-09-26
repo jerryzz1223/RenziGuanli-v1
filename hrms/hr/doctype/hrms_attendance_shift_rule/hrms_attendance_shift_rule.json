@@ -6,7 +6,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "enabled", "company", "rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "effective_from", "shift_type", "shift_sync_status", "shift_sync_message",
+  "enabled", "company", "rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "dingtalk_attendance_groups", "dingtalk_shift_aliases", "effective_from", "shift_type", "shift_sync_status", "shift_sync_message",
   "time_section", "basic_time", "weekday_overtime_time", "weekend_overtime_time", "overtime_begin_time", "overnight", "meal_deduction_rule", "special_workday_time",
   "calculation_section", "basic_hours", "weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule", "extended_overtime_mode", "overtime_approval_time_mode", "overtime_approval_reapply_minutes", "weekend_overtime_mode", "holiday_overtime_mode",
   "allowance_section", "small_night_rule", "large_night_rule", "remarks", "suggested_positions", "punch_in_range", "punch_out_range",
@@ -21,6 +21,8 @@
   {"fieldname": "shift_variant", "fieldtype": "Data", "label": "班次", "description": "班别下的具体班次，例：白班、夜班"},
   {"default": "0", "fieldname": "sequence", "fieldtype": "Int", "label": "顺序"},
   {"description": "多个关键词用 | 分隔；同一规则的关键词必须全部出现在来源班次中。", "fieldname": "match_tokens", "fieldtype": "Data", "in_list_view": 1, "label": "班次匹配关键词", "reqd": 1},
+  {"description": "钉钉考勤组别名，多个用 | 分隔。与钉钉班次别名成对命中时，优先于通用关键词。", "fieldname": "dingtalk_attendance_groups", "fieldtype": "Small Text", "label": "钉钉考勤组"},
+  {"description": "钉钉班次名或别名，多个用 | 分隔；可忽略后缀的班次时间。", "fieldname": "dingtalk_shift_aliases", "fieldtype": "Small Text", "label": "钉钉班次别名"},
   {"fieldname": "effective_from", "fieldtype": "Date", "label": "生效日期"},
   {"description": "由排班表联动生成或手动绑定的系统班次；班次分配使用此值。", "fieldname": "shift_type", "fieldtype": "Link", "in_list_view": 1, "label": "系统班次", "options": "Shift Type"},
   {"fieldname": "shift_sync_status", "fieldtype": "Select", "label": "班次联动状态", "options": "\n已联动\n待联动\n需复核", "read_only": 1},
@@ -69,7 +71,7 @@
   {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
   {"create": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "HR Manager", "share": 1, "write": 1}
  ],
- "search_fields": "rule_code,rule_name,match_tokens",
+ "search_fields": "rule_code,rule_name,match_tokens,dingtalk_attendance_groups,dingtalk_shift_aliases",
  "sort_field": "sequence",
  "sort_order": "ASC",
  "states": [],

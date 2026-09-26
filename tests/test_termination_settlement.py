@@ -86,7 +86,7 @@ class TerminationSettlementTest(unittest.TestCase):
             with self.subTest(field=field, value=value), self.assertRaises(ValueError):
                 module.calculate_termination_settlement(sample(**{field: value}))
 
-    def test_normal_formula_set_remains_unchanged(self):
+    def test_termination_calculation_does_not_mutate_normal_formula_set(self):
         normal_spec = importlib.util.spec_from_file_location("normal", ROOT / "hrms/payroll/payroll_formula.py")
         normal = importlib.util.module_from_spec(normal_spec)
         normal_spec.loader.exec_module(normal)
@@ -95,8 +95,8 @@ class TerminationSettlementTest(unittest.TestCase):
         module.calculate_termination_settlement(inputs)
         after, _ = normal.evaluate_formula_set(normal.FORMULA_TEMPLATES, inputs)
         self.assertEqual(before, after)
-        self.assertEqual(after["adjusted_absence_hours"], 141)
-        self.assertEqual(after["weekend_overtime_hours"], 0)
+        self.assertEqual(after["adjusted_absence_hours"], 152)
+        self.assertEqual(after["weekend_overtime_hours"], 11)
 
 
 if __name__ == "__main__":

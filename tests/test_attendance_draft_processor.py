@@ -99,6 +99,59 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", missing["exception_codes"])
 		self.assertEqual(missing["processed_value"]["workday_overtime_hours"], 0)
 
+	def test_dingtalk_workday_overtime_is_authoritative_and_zero_rows_are_classified(self):
+		rules = [{
+			"name": "间接长白班", "tokens": ("间接长白班",),
+			"dingtalk_attendance_groups": "间接人员", "dingtalk_shift_aliases": "间接长白班",
+			"basic_time": "08:00-17:00", "special_workday_time": "17:00-18:00",
+			"workday_auto": False, "restday_auto": False,
+		}, {
+			"name": "生产白班", "tokens": ("生产", "白班"),
+			"dingtalk_attendance_groups": "生产人员", "dingtalk_shift_aliases": "生产白班",
+			"basic_time": "08:00-16:30", "workday_auto": True, "restday_auto": True,
+		}]
+		base = {
+			"姓名": "测试员工", "工号": "E-SOURCE", "日期": "2026-08-03", "日期类型": "工作日",
+			"标准工时": 8, "实际出勤（小时）": 8, "上班时间": "08:00", "source_row": 4,
+		}
+		def processed(**overrides):
+			return processor.process_attendance_draft_rows(
+				[{**base, **overrides}], attendance_month="2026-08", shift_rules=rules,
+			)["processed_rows"][0]
+
+		source = processed(**{
+			"考勤组": "间接人员", "班次": "间接长白班 08:00-17:00", "下班时间": "20:30",
+			"工作日加班（小时）": 1, "关联审批单": "加班08-03 18:00到08-03 20:30 2.5小时",
+		})
+		self.assertEqual(source["processed_value"]["workday_overtime_hours"], 1)
+		self.assertEqual(source["processed_value"]["attendance_details"][0]["confirmed_overtime_hours"], 1)
+		overtime_codes = {
+			"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", "WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED",
+			"WORKDAY_OVERTIME_DINGTALK_ANOMALY",
+		}
+		self.assertFalse(overtime_codes & set(source["exception_codes"]))
+
+		missing = processed(**{
+			"考勤组": "间接人员", "班次": "间接长白班 08:00-17:00", "下班时间": "20:00",
+			"工作日加班（小时）": 0, "关联审批单": "",
+		})
+		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", missing["exception_codes"])
+		with_approval = processed(**{
+			"考勤组": "间接人员", "班次": "间接长白班 08:00-17:00", "下班时间": "20:00",
+			"工作日加班（小时）": 0, "关联审批单": "加班08-03 18:00到08-03 20:00 2小时",
+		})
+		self.assertIn("WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED", with_approval["exception_codes"])
+		exempt = processed(**{
+			"考勤组": "生产人员", "班次": "生产白班 08:00-16:30", "下班时间": "20:00",
+			"工作日加班（小时）": 0, "关联审批单": "",
+		})
+		self.assertIn("WORKDAY_OVERTIME_DINGTALK_ANOMALY", exempt["exception_codes"])
+		not_obvious = processed(**{
+			"考勤组": "间接人员", "班次": "间接长白班 08:00-17:00", "下班时间": "18:29",
+			"工作日加班（小时）": 0, "关联审批单": "",
+		})
+		self.assertFalse(overtime_codes & set(not_obvious["exception_codes"]))
+
 	def test_structure_and_single_employee_result_contract(self):
 		rows = [
 			{
@@ -1123,6 +1176,172 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		matched = processor._schedule_overtime_rule({"班次": "烧饭阿姨夜班"}, [rule])
 		self.assertIsNotNone(matched)
 		self.assertEqual(matched["name"], "食堂夜班")
+
+	def test_dingtalk_group_and_shift_pair_precedes_broad_shift_keyword(self):
+		production = {
+			"name": "生产人员夜班", "tokens": ("生产", "夜班"),
+			"dingtalk_attendance_groups": "生产人员", "dingtalk_shift_aliases": "生产夜班",
+			"workday_hours": "3.5", "workday_auto": True,
+		}
+		ccd = {
+			"name": "CCD人员夜班", "tokens": ("CCD人员", "夜班"),
+			"dingtalk_attendance_groups": "CCD人员", "dingtalk_shift_aliases": "生产夜班|CCD人员夜班",
+			"workday_hours": "3.5", "workday_auto": True,
+		}
+		ccd_match = processor._schedule_overtime_rule(
+			{"考勤组": "CCD人员", "班次": "生产夜班 20:00-次日04:30"}, [ccd, production],
+		)
+		production_match = processor._schedule_overtime_rule(
+			{"考勤组": "生产人员", "班次": "生产夜班 20:00-次日04:30"}, [ccd, production],
+		)
+		self.assertEqual(ccd_match["name"], "CCD人员夜班")
+		self.assertEqual(production_match["name"], "生产人员夜班")
+
+	def test_cross_group_shift_uses_group_for_approval_and_shift_for_time(self):
+		rules = [{
+			"name": "生产人员白班", "rule_code": "SHIFT-001", "tokens": ("生产", "白班"),
+			"dingtalk_attendance_groups": "生产人员", "dingtalk_shift_aliases": "生产白班",
+			"workday_auto": True, "restday_auto": True,
+		}, {
+			"name": "间接人员", "rule_code": "SHIFT-006", "tokens": ("间接人员",),
+			"dingtalk_attendance_groups": "间接人员", "dingtalk_shift_aliases": "间接长白班",
+			"workday_auto": False, "restday_auto": False,
+			"weekend_overtime_mode": "加班单", "holiday_overtime_mode": "加班单",
+		}]
+		borrowed_indirect = {"考勤组": "生产人员", "班次": "间接长白班 08:00-17:00"}
+		borrowed_production = {"考勤组": "间接人员", "班次": "生产白班 08:00-16:30"}
+		self.assertEqual(processor._schedule_overtime_rule(borrowed_indirect, rules)["name"], "间接人员")
+		self.assertEqual(processor._schedule_group_approval_rule(borrowed_indirect, rules)["name"], "生产人员白班")
+		self.assertEqual(processor._schedule_overtime_mode(borrowed_indirect, rules), "schedule_auto")
+		self.assertEqual(processor._schedule_restday_overtime_mode(borrowed_indirect, rules), "schedule_auto")
+		self.assertEqual(processor._schedule_overtime_rule(borrowed_production, rules)["name"], "生产人员白班")
+		self.assertEqual(processor._schedule_group_approval_rule(borrowed_production, rules)["name"], "间接人员")
+		self.assertEqual(processor._schedule_overtime_mode(borrowed_production, rules), "overtime_application")
+		self.assertEqual(processor._schedule_restday_overtime_mode(borrowed_production, rules), "overtime_application")
+		processed = processor.process_attendance_draft_rows([{
+			**borrowed_production, "姓名": "张三", "工号": "E-001", "日期": "2026-09-28",
+			"日期类型": "工作日", "标准工时": 8, "实际出勤（小时）": 8,
+			"工作日加班（小时）": 3, "上班时间": "08:00", "下班时间": "20:00",
+			"关联审批单": "",
+		}], attendance_month="2026-09", shift_rules=rules)["processed_rows"][0]
+		self.assertEqual(processed["processed_value"]["attendance_details"][0]["confirmed_overtime_hours"], 0)
+		self.assertIn("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", processed["exception_codes"])
+		production_processed = processor.process_attendance_draft_rows([{
+			**borrowed_indirect, "姓名": "李四", "工号": "E-002", "日期": "2026-09-28",
+			"日期类型": "工作日", "标准工时": 8, "实际出勤（小时）": 8,
+			"工作日加班（小时）": 1, "上班时间": "08:00", "下班时间": "19:00",
+			"关联审批单": "",
+		}], attendance_month="2026-09", shift_rules=rules)["processed_rows"][0]
+		self.assertEqual(production_processed["processed_value"]["attendance_details"][0]["confirmed_overtime_hours"], 1)
+
+	def test_unscheduled_restday_uses_that_days_group_not_prior_shifts_group(self):
+		rules = [{
+			"name": "生产人员白班", "tokens": ("生产", "白班"),
+			"dingtalk_attendance_groups": "生产人员", "dingtalk_shift_aliases": "生产白班",
+			"workday_auto": True, "restday_auto": True, "weekend_overtime_mode": "不提交加班单",
+		}, {
+			"name": "间接人员", "tokens": ("间接人员",),
+			"dingtalk_attendance_groups": "间接人员", "dingtalk_shift_aliases": "间接长白班",
+			"workday_auto": False, "restday_auto": False, "weekend_overtime_mode": "加班单",
+		}]
+		base = {"姓名": "跨组员工", "工号": "E-003", "标准工时": 8, "实际出勤（小时）": 8,
+			"关联审批单": ""}
+		weekday = {**base, "日期": "2026-09-25", "日期类型": "工作日", "班次": "生产白班 08:00-16:30",
+			"考勤组": "生产人员", "上班时间": "08:00", "下班时间": "16:30"}
+		weekend = {**base, "日期": "2026-09-26", "日期类型": "周末休息日", "班次": "休息",
+			"考勤组": "间接人员", "上班时间": "08:00", "下班时间": "17:00"}
+		required = processor.process_attendance_draft_rows(
+			[weekday, weekend], attendance_month="2026-09", shift_rules=rules,
+		)["processed_rows"][0]
+		self.assertIn("RESTDAY_CLOCKED_WITHOUT_APPROVAL", required["exception_codes"])
+		exempt = processor.process_attendance_draft_rows(
+			[{**weekday, "考勤组": "间接人员", "班次": "间接长白班 08:00-17:00"},
+			 {**weekend, "考勤组": "生产人员"}], attendance_month="2026-09", shift_rules=rules,
+		)["processed_rows"][0]
+		self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_APPROVAL", exempt["exception_codes"])
+
+	def test_conflicting_rows_in_one_group_require_review_even_for_exact_shift(self):
+		rules = [{
+			"name": "生产白班", "tokens": ("生产", "白班"),
+			"dingtalk_attendance_groups": "生产人员", "dingtalk_shift_aliases": "生产白班",
+			"workday_auto": True, "restday_auto": True,
+		}, {
+			"name": "生产夜班", "tokens": ("生产", "夜班"),
+			"dingtalk_attendance_groups": "生产人员", "dingtalk_shift_aliases": "生产夜班",
+			"workday_auto": False, "restday_auto": True,
+		}]
+		row = {"考勤组": "生产人员", "班次": "生产白班 08:00-16:30"}
+		self.assertIsNone(processor._schedule_group_approval_rule(row, rules))
+		self.assertEqual(processor._schedule_overtime_mode(row, rules), "schedule_review")
+
+	def test_blank_group_holiday_policy_is_review_not_implicit_exemption(self):
+		rules = [{
+			"name": "生产人员白班", "tokens": ("生产", "白班"),
+			"dingtalk_attendance_groups": "生产人员", "dingtalk_shift_aliases": "生产白班",
+			"workday_auto": True, "restday_auto": True, "holiday_overtime_mode": "",
+		}]
+		row = {
+			"姓名": "假日员工", "工号": "E-004", "考勤组": "生产人员", "班次": "生产白班 08:00-16:30",
+			"日期": "2026-10-01", "日期类型": "节假日", "标准工时": 0,
+			"实际出勤（小时）": 8, "上班时间": "08:00", "下班时间": "16:30",
+			"节假日加班（小时）": 8, "关联审批单": "",
+		}
+		processed = processor.process_attendance_draft_rows(
+			[row], attendance_month="2026-10", shift_rules=rules,
+		)["processed_rows"][0]
+		self.assertIn("ATTENDANCE_POLICY_REVIEW_REQUIRED", processed["exception_codes"])
+		self.assertTrue(processed["processed_value"]["attendance_details"][0]["attendance_policy_review_required"])
+
+	def test_separate_canteen_1530_and_test_shift_never_inherit_similar_names(self):
+		rules = [{
+			"name": "食堂白班", "tokens": ("食堂", "白班"),
+			"dingtalk_attendance_groups": "烧饭阿姨", "dingtalk_shift_aliases": "食堂白班",
+			"workday_auto": True, "restday_auto": True,
+		}, {
+			"name": "药水分析组", "tokens": ("药水分析组",),
+			"dingtalk_attendance_groups": "药水分析组", "dingtalk_shift_aliases": "药水分析组",
+			"workday_auto": False, "restday_auto": False,
+		}]
+		self.assertEqual(processor._schedule_overtime_rule({"考勤组": "烧饭阿姨", "班次": "食堂白班 06:30-15:00"}, rules)["name"], "食堂白班")
+		self.assertIsNone(processor._schedule_overtime_rule({"考勤组": "烧饭阿姨", "班次": "食堂白班1530 06:30-15:30"}, rules))
+		self.assertEqual(processor._schedule_overtime_mode({"考勤组": "烧饭阿姨", "班次": "食堂白班1530 06:30-15:30"}, rules), "schedule_review")
+		self.assertIsNone(processor._schedule_overtime_rule({"考勤组": "药水分析组", "班次": "测试药水分析组 10:00-20:00"}, rules))
+
+	def test_quality_middle_shift_can_reuse_middle_shift_time_rule(self):
+		rules = [{
+			"name": "中班", "tokens": ("中班",),
+			"dingtalk_attendance_groups": "中班", "dingtalk_shift_aliases": "中班|品管中班",
+			"workday_auto": True, "restday_auto": False,
+		}]
+		self.assertEqual(processor._schedule_overtime_rule({
+			"考勤组": "中班", "班次": "品管中班 13:00-22:00",
+		}, rules)["name"], "中班")
+
+	def test_test_shift_rows_are_excluded_from_formal_employee_attendance(self):
+		base = {"姓名": "张三", "工号": "E-001", "日期": "2026-08-03", "标准工时": 8,
+			"实际出勤（小时）": 8, "工作日加班（小时）": 0}
+		result = processor.process_attendance_draft_rows([
+			{**base, "班次": "药水分析组 10:00-20:00"},
+			{**base, "班次": "测试药水分析组 10:00-20:00"},
+			{**base, "考勤组": "测试药水分析组", "班次": "药水分析组 10:00-20:00"},
+		], attendance_month="2026-08")
+		self.assertEqual(result["data_quality"]["excluded_test_attendance_rows"], 2)
+		self.assertEqual(result["processed_rows"][0]["processed_value"]["source_row_count"], 1)
+
+	def test_dingtalk_pair_maps_quality_shift_with_live_extra_character(self):
+		rules = [{
+			"name": "品保10点生产白班", "tokens": ("品保10点生产白班",),
+			"dingtalk_attendance_groups": "品保10点生产白班",
+			"dingtalk_shift_aliases": "品保10点班生产白班|品保10点生产白班",
+			"workday_hours": "3", "workday_auto": True,
+		}, {
+			"name": "生产人员白班", "tokens": ("生产", "白班"),
+			"workday_hours": "3", "workday_auto": True,
+		}]
+		matched = processor._schedule_overtime_rule({
+			"考勤组": "品保10点生产白班", "班次": "品保10点班生产白班 10:00-19:00",
+		}, rules)
+		self.assertEqual(matched["name"], "品保10点生产白班")
 
 	def test_imported_indirect_rule_matches_legacy_shift_and_preserves_pre_effective_history(self):
 		company_rule = {

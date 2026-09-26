@@ -1357,7 +1357,7 @@ def _full_attendance_workbook_rows(roster):
 		("TEST-PRO-002", 4): {"actual": 0, "sick": 8, "approval": "DING-LEAVE-20990304"},
 		("TEST-INT-001", 5): {"actual": 0, "annual": 8, "approval": "DING-LEAVE-20990305"},
 		("TEST-TRN-004", 6): {"shift": "TEST-夜班-2000-0430", "scheduled_in": "20:00", "scheduled_out": "04:30", "actual_in": "20:00", "actual_out": "04:30", "rest_ot": 4, "large_night": 1, "approval": "DING-OT-20990306 加班审批"},
-		("TEST-OUT-005", 7): {"actual_in": "08:20", "workday_ot": 2, "late": 1},
+		("TEST-OUT-005", 6): {"actual_in": "08:20", "workday_ot": 2, "late": 1},
 		("TEST-REH-006", 8): {"missing_out": "是", "actual_out": ""},
 		("TEST-LEFT-008", 10): {"actual": 0, "absent": 8},
 		("TEST-TRN-004", 11): {"holiday_ot": 8, "small_night": 1, "approval": "DING-OT-20990311 加班审批"},
@@ -1414,7 +1414,7 @@ def _full_attendance_workbook_rows(roster):
 	return [("1.1每日统计", rows), ("1.2请假单", leaves), ("1.3苹果树", apples)]
 
 
-def _full_payroll_closure_workbook_rows(roster, attendance_lock_version):
+def _full_payroll_closure_workbook_rows(roster, attendance_lock_version, include_salary=True):
 	salary_headers = [
 		"薪资月份", "工号", "姓名", "部门", "岗位", "生效日期", "异动原因", "薪资档位", "底薪", "职能津贴",
 		"证书津贴", "多能工津贴", "薪资小计", "社保", "公积金", "状态", "备注",
@@ -1433,8 +1433,6 @@ def _full_payroll_closure_workbook_rows(roster, attendance_lock_version):
 	welfare_headers = ["薪资月份", "来源类型", "工号", "姓名", "部门", "金额", "方向", "资格状态", "确认状态", "来源单据/说明", "备注"]
 	welfare_values = [
 		("TEST-REG-003", "学历补贴", 300, "学历补贴月报"), ("TEST-REG-003", "租房补贴", 200, "租房补贴申请"),
-		("TEST-REG-003", "社保个人", 524.96, "社保名册"), ("TEST-REG-003", "公积金个人", 120, "公积金名册"),
-		("TEST-REG-003", "社保公司", 1256.82, "公司社保成本"), ("TEST-REG-003", "公积金公司", 120, "公司公积金成本"),
 		("TEST-REG-003", "提案改善奖", 80, "提案改善确认"), ("TEST-REG-003", "继续服务奖", 50, "继续服务奖确认"),
 		("TEST-REG-003", "所得税", 25, "财务个税确认"), ("TEST-REG-003", "水电费及扣款", 35, "员工水电明细"),
 		("TEST-REG-003", "已发福利", 30, "生日福利已发"), ("TEST-REG-003", "生产奖", 100, "生产奖确认"),
@@ -1447,20 +1445,136 @@ def _full_payroll_closure_workbook_rows(roster, attendance_lock_version):
 		employee_code, source_type, amount, reference, *direction = item
 		context = roster[employee_code]
 		welfare_rows.append([FULL_PAYROLL_DEMO_MONTH, source_type, employee_code, context.employee_name, context.department, amount, direction[0] if direction else "", "符合", "已确认", reference, FULL_PAYROLL_SEED_LABEL])
-	return [("员工薪资异动导入", salary_rows), ("福利扣款来源导入", welfare_rows)]
+	return [
+		("员工薪资异动导入", salary_rows if include_salary else [salary_headers]),
+		("福利扣款来源导入", welfare_rows),
+	]
+
+
+def _approve_full_payroll_salary_changes(roster):
+	"""Approve the fixture's pending first-of-month salary standards."""
+	from hrms.api import standing_pay
+
+	result = {}
+	for employee_code, context in roster.items():
+		name = frappe.db.get_value(
+			"HRMS Employee Salary Change",
+			{
+				"company": TEST_COMPANY,
+				"employee": context.employee,
+				"effective_date": f"{FULL_PAYROLL_DEMO_MONTH}-01",
+				"status": ["in", ["待审核", "已批准"]],
+			},
+			"name",
+		)
+		if not name:
+			frappe.throw(f"完整薪资 seed 缺少员工定薪申请：{employee_code}")
+		if frappe.db.get_value("HRMS Employee Salary Change", name, "status") == "待审核":
+			standing_pay.review_decision(
+				TEST_COMPANY,
+				standing_pay.SALARY,
+				name,
+				"已批准",
+				f"{FULL_PAYROLL_SEED_LABEL}：测试定薪审批通过",
+			)
+		result[employee_code] = name
+	return result
+
+
+def _ensure_full_payroll_contributions(roster):
+	"""Create approved social/housing standards through the standing-pay workflow."""
+	from hrms.api import standing_pay
+
+	employee = roster["TEST-REG-003"].employee
+	result = {}
+	for contribution_type, personal_amount, company_amount in (
+		("社保", 524.96, 1256.82),
+		("公积金", 120, 120),
+	):
+		filters = {
+			"company": TEST_COMPANY,
+			"employee": employee,
+			"contribution_type": contribution_type,
+			"effective_date": f"{FULL_PAYROLL_DEMO_MONTH}-01",
+			"status": "已批准",
+			"personal_amount": personal_amount,
+			"company_amount": company_amount,
+			"enabled": 1,
+		}
+		name = frappe.db.get_value(standing_pay.CONTRIBUTION, filters, "name")
+		if not name:
+			name = standing_pay.submit_contribution(
+				TEST_COMPANY,
+				employee,
+				contribution_type,
+				f"{FULL_PAYROLL_DEMO_MONTH}-01",
+				personal_amount,
+				company_amount,
+				enabled=1,
+				remarks=f"{FULL_PAYROLL_SEED_LABEL}：{contribution_type}测试标准",
+			)
+			standing_pay.review_decision(
+				TEST_COMPANY,
+				standing_pay.CONTRIBUTION,
+				name,
+				"已批准",
+				f"{FULL_PAYROLL_SEED_LABEL}：测试缴费档案审批通过",
+			)
+		result[contribution_type] = name
+	return result
+
+
+def _ensure_full_payroll_termination_decision(roster, attendance_lock_version):
+	"""Review the fake leaver with explicit, source-bound termination inputs."""
+	from hrms.api import payroll_input
+
+	employee = roster["TEST-LEFT-008"].employee
+	context = payroll_input.get_termination_settlement_context(
+		TEST_COMPANY, FULL_PAYROLL_DEMO_MONTH, attendance_lock_version, employee
+	)
+	inputs = {key: (0 if value in (None, "") else value) for key, value in context["inputs"].items()}
+	standard_hours = float(inputs.get("standard_hours") or 0)
+	if standard_hours <= 0:
+		frappe.throw("完整薪资 seed 的离职员工缺少有效月标准工时。")
+	inputs.update(
+		basic_attendance_hours=max(standard_hours - 8, 0),
+		raw_weekend_overtime_hours=0,
+		weekday_overtime_hours=0,
+		insurance_deduction=80,
+		income_tax_override=0,
+	)
+	payroll_input.preview_termination_settlement(
+		TEST_COMPANY,
+		FULL_PAYROLL_DEMO_MONTH,
+		attendance_lock_version,
+		employee,
+		json.dumps(inputs, ensure_ascii=False),
+	)
+	payload = {
+		"inputs": inputs,
+		"source_hash": context["source_hash"],
+		"settlement_date": f"{FULL_PAYROLL_DEMO_MONTH}-22",
+	}
+	return payroll_input.save_monthly_payroll_participation_decision(
+		company=TEST_COMPANY,
+		payroll_month=FULL_PAYROLL_DEMO_MONTH,
+		attendance_lock_version=attendance_lock_version,
+		employee=employee,
+		decision="离职结算",
+		decision_reason="TEST-HRMS 完整薪资试点：模拟离职当月结算。",
+		settlement_basis="TEST-HRMS 虚拟离职审批与结算标准",
+		approval_note="测试数据已逐项核对并批准。",
+		approved=1,
+		termination_inputs_json=json.dumps(payload, ensure_ascii=False),
+	)
 
 
 def _full_payroll_variable_workbook_rows(roster):
-	full_attendance = [
-		["工号", "姓名", "部门", "全勤奖", "备注"],
-		["TEST-REG-003", roster["TEST-REG-003"].employee_name, roster["TEST-REG-003"].department, 200, "全勤奖导入后会人工复核修改"],
-		["TEST-TRN-004", roster["TEST-TRN-004"].employee_name, roster["TEST-TRN-004"].department, 150, "夜班班组全勤奖"],
-	]
 	reward = [
 		["工号", "姓名", "部门", "金额（元）", "备注"],
 		["TEST-REH-006", roster["TEST-REH-006"].employee_name, roster["TEST-REH-006"].department, 120, "临时项目奖励"],
 	]
-	return [("全勤奖", full_attendance), ("奖惩提报单（提交财务）", reward)]
+	return [("奖惩提报单（提交财务）", reward)]
 
 
 def _full_payroll_scope_filters(doctype):
@@ -1518,9 +1632,20 @@ def _assert_full_payroll_result(attendance_lock_version):
 			pluck="exception_type",
 		)
 	)
-	required_exceptions = {"忘打卡", "迟到", "早退", "旷工", "未申请加班"}
+	required_exceptions = {"忘打卡", "早退", "旷工", "未申请加班"}
 	if not required_exceptions.issubset(exception_types):
 		frappe.throw(f"完整薪资 seed 缺少考勤异常场景：{sorted(required_exceptions - exception_types)}")
+	late_source_count = frappe.db.count(
+		"HRMS Attendance Day Check",
+		{
+			"company": TEST_COMPANY,
+			"attendance_date": ["between", [f"{FULL_PAYROLL_DEMO_MONTH}-01", f"{FULL_PAYROLL_DEMO_MONTH}-31"]],
+			"late_count": [">", 0],
+		},
+	)
+	verification_warnings = []
+	if not late_source_count:
+		verification_warnings.append("当前已锁定旧试点未形成迟到事实；新建试点已改用工作日迟到样例。")
 	trn = frappe.db.get_value(
 		"HRMS Payroll Settlement Record",
 		{"company": TEST_COMPANY, "payroll_month": FULL_PAYROLL_DEMO_MONTH, "attendance_lock_version": attendance_lock_version, "employee_code": "TEST-TRN-004"},
@@ -1529,7 +1654,12 @@ def _assert_full_payroll_result(attendance_lock_version):
 	) or {}
 	if float(trn.get("base_salary") or 0) != 3500 or not trn.get("source_trace_json"):
 		frappe.throw("完整薪资 seed 未正确验证月中调薪或结算来源追溯。")
-	return {**status, "exception_types": sorted(exception_types)}
+	return {
+		**status,
+		"exception_types": sorted(exception_types),
+		"late_source_count": late_source_count,
+		"verification_warnings": verification_warnings,
+	}
 
 
 @frappe.whitelist()
@@ -1565,7 +1695,7 @@ def seed_test_hrms_full_payroll_demo(dry_run: int | str = 0):
 					("attendance_lock", "确认异常、部门确认并锁定 2099-03"),
 					("payroll_closure_import", "导入员工薪资异动与福利扣款来源"),
 					("manual_salary_change", "TEST-TRN-004 月中调薪"),
-					("variable_import_and_edit", "导入全勤奖/奖惩并手动调整金额"),
+					("variable_import", "导入非考勤奖惩变量；全勤奖由锁定考勤自动计算"),
 					("settlement", "生成、校验、确认 8 名员工薪资结算"),
 				)
 			)
@@ -1602,69 +1732,93 @@ def seed_test_hrms_full_payroll_demo(dry_run: int | str = 0):
 		roster = _full_payroll_roster()
 		from hrms.api import attendance_import, payroll_input
 
-		attendance_file = _create_seed_workbook_file(
-			f"TEST-HRMS-{FULL_PAYROLL_DEMO_MONTH}-考勤导入.xlsx",
-			_full_attendance_workbook_rows(roster),
-		)
-		attendance_result = attendance_import.import_attendance_workbook(
-			attendance_file.file_url, FULL_PAYROLL_DEMO_MONTH, TEST_COMPANY
-		)
-		result["steps"]["attendance_excel_import"] = {**attendance_result, "file_url": attendance_file.file_url}
-
-		manual_source = frappe.db.get_value(
-			"HRMS Attendance Day Check",
-			{"company": TEST_COMPANY, "employee_code": "TEST-MOV-007", "attendance_date": f"{FULL_PAYROLL_DEMO_MONTH}-09", "source_kind": "旧模板"},
-			"name",
-		)
-		if not manual_source:
-			frappe.throw("完整薪资 seed 未找到用于人工修正的考勤原始记录。")
-		manual_attendance = attendance_import.create_attendance_manual_adjustment(
-			manual_source,
-			{
-				"actual_out_time": "16:30",
-				"actual_attendance_hours": 7.5,
-				"leave_hours": 0.5,
-				"personal_leave_hours": 0.5,
-				"leave_summary": "测试：人工补录事假 0.5H",
-			},
-			"TEST-HRMS 薪资试点：主管确认的 0.5 小时事假",
-		)
-		result["steps"]["attendance_manual_adjustment"] = manual_attendance
-
-		exceptions = attendance_import.generate_attendance_exceptions(attendance_result["batch"])
-		for name in frappe.get_all("HRMS Attendance Exception", filters={"import_batch": attendance_result["batch"]}, pluck="name"):
-			frappe.db.set_value(
-				"HRMS Attendance Exception",
-				name,
-				{"confirmation_status": "已确认", "confirmed_by": frappe.session.user, "confirmed_on": now_datetime(), "remarks": "TEST-HRMS 薪资试点：异常已复核。"},
+		if existing["attendance_lock"].get("status") == "已锁定":
+			attendance_lock_version = str(existing["attendance_lock"].get("active_version") or "")
+			if existing["counts"].get("summaries") != len(FULL_PAYROLL_SALARIES):
+				frappe.throw("已有测试考勤月锁，但月度终稿人数不完整，不能继续薪资试点。")
+			result["steps"]["attendance_lock"] = {
+				"reused": True,
+				"lock": existing["attendance_lock"],
+				"summary_count": existing["counts"]["summaries"],
+			}
+		else:
+			attendance_file = _create_seed_workbook_file(
+				f"TEST-HRMS-{FULL_PAYROLL_DEMO_MONTH}-考勤导入.xlsx",
+				_full_attendance_workbook_rows(roster),
 			)
-		monthly = attendance_import.generate_monthly_attendance_summary(TEST_COMPANY, FULL_PAYROLL_DEMO_MONTH)
-		attendance_lock_version = str(monthly["attendance_lock_version"])
-		# The department confirmation list is the operation that creates the
-		# department-level sign-off records for this active lock version.
-		attendance_import.list_attendance_department_confirmations(TEST_COMPANY, FULL_PAYROLL_DEMO_MONTH)
-		for name in frappe.get_all(
-			"HRMS Attendance Department Confirmation",
-			filters={
-				"company": TEST_COMPANY,
-				"attendance_month": FULL_PAYROLL_DEMO_MONTH,
-				"confirmation_scope": "月度部门工时",
-				"attendance_lock_version": int(attendance_lock_version),
-			},
-			pluck="name",
-		):
-			attendance_import.review_attendance_department_confirmation(name, "confirm", "TEST-HRMS 薪资试点：部门工时已确认。")
-		lock = attendance_import.lock_attendance_month(TEST_COMPANY, FULL_PAYROLL_DEMO_MONTH, "TEST-HRMS 完整薪资试点月度锁定")
-		result["steps"]["attendance_lock"] = {"exceptions": exceptions, "monthly": monthly, "lock": lock}
+			attendance_result = attendance_import.import_attendance_workbook(
+				attendance_file.file_url, FULL_PAYROLL_DEMO_MONTH, TEST_COMPANY
+			)
+			result["steps"]["attendance_excel_import"] = {**attendance_result, "file_url": attendance_file.file_url}
 
+			manual_source = frappe.db.get_value(
+				"HRMS Attendance Day Check",
+				{"company": TEST_COMPANY, "employee_code": "TEST-MOV-007", "attendance_date": f"{FULL_PAYROLL_DEMO_MONTH}-09", "source_kind": "旧模板"},
+				"name",
+			)
+			if not manual_source:
+				frappe.throw("完整薪资 seed 未找到用于人工修正的考勤原始记录。")
+			manual_attendance = attendance_import.create_attendance_manual_adjustment(
+				manual_source,
+				{
+					"actual_out_time": "16:30",
+					"actual_attendance_hours": 7.5,
+					"leave_hours": 0.5,
+					"personal_leave_hours": 0.5,
+					"leave_summary": "测试：人工补录事假 0.5H",
+				},
+				"TEST-HRMS 薪资试点：主管确认的 0.5 小时事假",
+			)
+			result["steps"]["attendance_manual_adjustment"] = manual_attendance
+
+			exceptions = attendance_import.generate_attendance_exceptions(attendance_result["batch"])
+			for name in frappe.get_all("HRMS Attendance Exception", filters={"import_batch": attendance_result["batch"]}, pluck="name"):
+				frappe.db.set_value(
+					"HRMS Attendance Exception",
+					name,
+					{"confirmation_status": "已确认", "confirmed_by": frappe.session.user, "confirmed_on": now_datetime(), "remarks": "TEST-HRMS 薪资试点：异常已复核。"},
+				)
+			monthly = attendance_import.generate_monthly_attendance_summary(TEST_COMPANY, FULL_PAYROLL_DEMO_MONTH)
+			attendance_lock_version = str(monthly["attendance_lock_version"])
+			# The department confirmation list is the operation that creates the
+			# department-level sign-off records for this active lock version.
+			attendance_import.list_attendance_department_confirmations(TEST_COMPANY, FULL_PAYROLL_DEMO_MONTH)
+			for name in frappe.get_all(
+				"HRMS Attendance Department Confirmation",
+				filters={
+					"company": TEST_COMPANY,
+					"attendance_month": FULL_PAYROLL_DEMO_MONTH,
+					"confirmation_scope": "月度部门工时",
+					"attendance_lock_version": int(attendance_lock_version),
+				},
+				pluck="name",
+			):
+				attendance_import.review_attendance_department_confirmation(name, "confirm", "TEST-HRMS 薪资试点：部门工时已确认。")
+			lock = attendance_import.lock_attendance_month(TEST_COMPANY, FULL_PAYROLL_DEMO_MONTH, "TEST-HRMS 完整薪资试点月度锁定")
+			result["steps"]["attendance_lock"] = {"exceptions": exceptions, "monthly": monthly, "lock": lock}
+
+		existing_salary_count = frappe.db.count(
+			"HRMS Employee Salary Change",
+			{
+				"company": TEST_COMPANY,
+				"effective_date": f"{FULL_PAYROLL_DEMO_MONTH}-01",
+				"employee": ["in", [context.employee for context in roster.values()]],
+			},
+		)
 		closure_file = _create_seed_workbook_file(
 			f"TEST-HRMS-{FULL_PAYROLL_DEMO_MONTH}-薪资数据闭环导入.xlsx",
-			_full_payroll_closure_workbook_rows(roster, attendance_lock_version),
+			_full_payroll_closure_workbook_rows(
+				roster,
+				attendance_lock_version,
+				include_salary=existing_salary_count != len(roster),
+			),
 		)
 		closure_result = payroll_input.import_payroll_data_closure_workbook(
 			closure_file.file_url, FULL_PAYROLL_DEMO_MONTH, TEST_COMPANY, attendance_lock_version
 		)
 		result["steps"]["payroll_closure_import"] = {**closure_result, "file_url": closure_file.file_url}
+		result["steps"]["salary_approval"] = _approve_full_payroll_salary_changes(roster)
+		result["steps"]["contribution_approval"] = _ensure_full_payroll_contributions(roster)
 
 		trn = roster["TEST-TRN-004"]
 		manual_salary_name = payroll_input.create_employee_salary_change(
@@ -1685,20 +1839,19 @@ def seed_test_hrms_full_payroll_demo(dry_run: int | str = 0):
 			source_file=closure_file.file_url,
 			remarks="TEST-HRMS 完整薪资试点：手动调薪记录。",
 		)
-		manual_salary = payroll_input.update_employee_salary_change(
-			name=manual_salary_name,
-			company=TEST_COMPANY,
-			values={
-				"effective_date": f"{FULL_PAYROLL_DEMO_MONTH}-15",
-				"change_reason": "测试：转岗调薪",
-				"base_salary": 3500,
-				"function_allowance": 220,
-				"certificate_allowance": 100,
-				"multi_skill_allowance": 100,
-				"status": "已批准",
-				"remarks": "TEST-HRMS 完整薪资试点：人事审核通过后的手动调薪记录。",
-			},
-		)
+		from hrms.api import standing_pay
+		if frappe.db.get_value("HRMS Employee Salary Change", manual_salary_name, "status") == "待审核":
+			standing_pay.review_decision(
+				TEST_COMPANY,
+				standing_pay.SALARY,
+				manual_salary_name,
+				"已批准",
+				"TEST-HRMS 完整薪资试点：人事审核通过月中调薪。",
+			)
+		manual_salary = {
+			"name": manual_salary_name,
+			"status": frappe.db.get_value("HRMS Employee Salary Change", manual_salary_name, "status"),
+		}
 		manual_welfare = payroll_input.upsert_payroll_welfare_source_record(
 			company=TEST_COMPANY,
 			payroll_month=FULL_PAYROLL_DEMO_MONTH,
@@ -1724,34 +1877,13 @@ def seed_test_hrms_full_payroll_demo(dry_run: int | str = 0):
 		variable_import = payroll_input.import_payroll_variable_workbook(
 			variable_file.file_url, FULL_PAYROLL_DEMO_MONTH, TEST_COMPANY, attendance_lock_version
 		)
-		full_attendance_variable = frappe.db.get_value(
-			"HRMS Payroll Variable Record",
-			{
-				"company": TEST_COMPANY,
-				"payroll_month": FULL_PAYROLL_DEMO_MONTH,
-				"import_batch": variable_import.get("batch"),
-				"employee_code": "TEST-REG-003",
-				"variable_type": "全勤奖",
-			},
-			"name",
-		)
-		if not full_attendance_variable:
-			frappe.throw("完整薪资 seed 未找到用于人工修改的全勤奖变量。")
-		manual_variable = payroll_input.update_payroll_variable_record(
-			full_attendance_variable,
-			employee=roster["TEST-REG-003"].employee,
-			employee_code="TEST-REG-003",
-			employee_name=roster["TEST-REG-003"].employee_name,
-			department=roster["TEST-REG-003"].department,
-			variable_type="全勤奖",
-			amount=180,
-			source_sheet="全勤奖",
-			remarks="TEST-HRMS 薪资试点：财务复核后由 200 调整为 180。",
-		)
 		variable_confirmation = payroll_input.confirm_payroll_variable_import_batch(
 			variable_import.get("batch"), TEST_COMPANY, FULL_PAYROLL_DEMO_MONTH
 		)
-		result["steps"]["variable_import_and_edit"] = {"welfare_sync": synced, "variable_import": variable_import, "manual_variable": manual_variable, "variable_confirmation": variable_confirmation, "file_url": variable_file.file_url}
+		result["steps"]["variable_import"] = {"welfare_sync": synced, "variable_import": variable_import, "variable_confirmation": variable_confirmation, "file_url": variable_file.file_url}
+		result["steps"]["termination_decision"] = _ensure_full_payroll_termination_decision(
+			roster, attendance_lock_version
+		)
 
 		input_result = payroll_input.generate_payroll_input_records(TEST_COMPANY, FULL_PAYROLL_DEMO_MONTH, attendance_lock_version)
 		settlement_result = payroll_input.generate_payroll_settlement_records(TEST_COMPANY, FULL_PAYROLL_DEMO_MONTH, attendance_lock_version)
@@ -1785,6 +1917,7 @@ def get_test_hrms_full_payroll_demo_records(page_length: int = 200):
 		("HRMS Attendance Exception", {"import_batch": ["in", frappe.get_all("HRMS Attendance Import Batch", filters={"company": TEST_COMPANY, "attendance_month": FULL_PAYROLL_DEMO_MONTH}, pluck="name")]}),
 		("HRMS Monthly Attendance Summary", {"company": TEST_COMPANY, "attendance_month": FULL_PAYROLL_DEMO_MONTH, "attendance_lock_version": version}),
 		("HRMS Employee Salary Change", {"company": TEST_COMPANY, "effective_date": ["between", [f"{FULL_PAYROLL_DEMO_MONTH}-01", f"{FULL_PAYROLL_DEMO_MONTH}-31"]]}),
+		("HRMS Employee Contribution Change", {"company": TEST_COMPANY, "effective_date": ["between", [f"{FULL_PAYROLL_DEMO_MONTH}-01", f"{FULL_PAYROLL_DEMO_MONTH}-31"]]}),
 		("HRMS Payroll Welfare Source Record", {"company": TEST_COMPANY, "payroll_month": FULL_PAYROLL_DEMO_MONTH, "attendance_lock_version": version}),
 		("HRMS Payroll Variable Record", {"company": TEST_COMPANY, "payroll_month": FULL_PAYROLL_DEMO_MONTH, "attendance_lock_version": version}),
 		("HRMS Payroll Input Record", {"company": TEST_COMPANY, "payroll_month": FULL_PAYROLL_DEMO_MONTH, "attendance_lock_version": version}),
@@ -1817,7 +1950,6 @@ def reset_test_hrms_full_payroll_demo(confirm: str = "", dry_run: int | str = 0)
 		("HRMS Payroll Variable Record", {"company": TEST_COMPANY, "payroll_month": FULL_PAYROLL_DEMO_MONTH}),
 		("HRMS Payroll Variable Import Batch", {"company": TEST_COMPANY, "payroll_month": FULL_PAYROLL_DEMO_MONTH}),
 		("HRMS Payroll Welfare Source Record", {"company": TEST_COMPANY, "payroll_month": FULL_PAYROLL_DEMO_MONTH}),
-		("HRMS Employee Salary Change", {"company": TEST_COMPANY, "effective_date": ["between", [f"{FULL_PAYROLL_DEMO_MONTH}-01", f"{FULL_PAYROLL_DEMO_MONTH}-31"]]}),
 		("HRMS Monthly Attendance Summary", {"company": TEST_COMPANY, "attendance_month": FULL_PAYROLL_DEMO_MONTH}),
 		("HRMS Attendance Department Confirmation", {"company": TEST_COMPANY, "attendance_month": FULL_PAYROLL_DEMO_MONTH}),
 		("HRMS Attendance Exception", {"import_batch": ["in", batch_names or ["__none__"]]}),

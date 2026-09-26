@@ -25,7 +25,9 @@ class PayrollFormulaEngineTest(unittest.TestCase):
 			"function_allowance": 30,
 			"certificate_skill_allowance": 0,
 			"standard_hours": 176,
-			"basic_attendance_hours": 160,
+			# Locked attendance has already offset leave/rest arrangements. These
+			# are the final adjusted 1x and net 2x values, not the raw Excel inputs.
+			"basic_attendance_hours": 168,
 			"raw_weekend_overtime_hours": 8,
 			"weekday_overtime_hours": 12,
 			"holiday_overtime_hours": 0,
@@ -36,8 +38,9 @@ class PayrollFormulaEngineTest(unittest.TestCase):
 			"social_security_personal": 524.96,
 		})
 		self.assertEqual(result["salary_subtotal"], 2800)
-		self.assertEqual(result["missing_hours"], 16)
+		self.assertEqual(result["missing_hours"], 8)
 		self.assertEqual(result["adjusted_absence_hours"], 8)
+		self.assertEqual(result["weekend_overtime_hours"], 8)
 		self.assertEqual(result["night_shift_allowance"], 148)
 		self.assertEqual(result["social_security_company"], 1256.82)
 		self.assertEqual(len(trace), len(FORMULA_TEMPLATES))
@@ -62,6 +65,17 @@ class PayrollFormulaEngineTest(unittest.TestCase):
 		})
 		self.assertEqual(result["adjusted_absence_hours"], 0)
 		self.assertEqual(result["weekday_overtime_pay"], 0)
+
+	def test_locked_final_hours_are_not_offset_a_second_time(self):
+		result, _trace = evaluate_formula_set(FORMULA_TEMPLATES, {
+			"base_salary": 2770,
+			"standard_hours": 176,
+			"basic_attendance_hours": 168,
+			"raw_weekend_overtime_hours": 10,
+		})
+		self.assertEqual(result["missing_hours"], 8)
+		self.assertEqual(result["adjusted_absence_hours"], 8)
+		self.assertEqual(result["weekend_overtime_hours"], 10)
 
 	def test_rejects_unsafe_python(self):
 		with self.assertRaises(FormulaError):

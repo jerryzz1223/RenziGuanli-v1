@@ -37,8 +37,11 @@ for (const marker of [
 
 const ruleCentreRender = page.split('render_complete_attendance_rules(data = {}, loading = false, error = "") {')[1]?.split('\n\tbind_complete_attendance_rule_events(')[0];
 if (!ruleCentreRender) throw new Error("Complete rule centre render function is missing");
-for (const marker of ['scheduling_policies', 'system_boundaries', 'data-add-scheduling-policy', 'data-recheck-rules']) {
+for (const marker of ['scheduling_policies', 'system_boundaries', 'data-add-scheduling-policy', '导入不按处理月份分批']) {
 	requireMarker(ruleCentreRender, marker, `Complete rule centre is missing governed activation marker: ${marker}`);
+}
+for (const forbidden of ['data-recheck-rules', '按当前规则校验本月', 'this.attendance_month', 'format_attendance_month']) {
+	if (ruleCentreRender.includes(forbidden)) throw new Error(`Company rule centre must not depend on processing month: ${forbidden}`);
 }
 
 for (const marker of [
@@ -50,7 +53,7 @@ for (const marker of [
 
 for (const marker of [
 	'def get_complete_attendance_rules(company: str):',
-	'def preview_attendance_shift_match(company: str, shift_name: str, attendance_date: str = ""):',
+	'def preview_attendance_shift_match(company: str, shift_name: str, attendance_date: str = "", attendance_group: str = ""):',
 	'"shift_rules": bundle["items"]',
 	'"builtin_shift_rules": _builtin_shift_rule_items()',
 	'"shift_group": display_group',
@@ -62,7 +65,7 @@ for (const marker of [
 	'_require_processing_manager()',
 ]) requireMarker(api, marker, `Complete rule centre API is missing: ${marker}`);
 
-for (const field of ["shift_group", "shift_variant", "special_workday_time", "extended_overtime_mode", "overtime_approval_time_mode", "overtime_approval_reapply_minutes", "manual_override"]) {
+for (const field of ["shift_group", "shift_variant", "dingtalk_attendance_groups", "dingtalk_shift_aliases", "special_workday_time", "extended_overtime_mode", "overtime_approval_time_mode", "overtime_approval_reapply_minutes", "manual_override"]) {
 	requireMarker(shiftRuleSchema, `"fieldname": "${field}"`, `Rule schema is missing ${field}`);
 	requireMarker(api, field, `Rule import/API does not map ${field}`);
 }

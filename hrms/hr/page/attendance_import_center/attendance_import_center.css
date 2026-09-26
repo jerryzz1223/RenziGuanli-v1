@@ -25,6 +25,19 @@
 	color: var(--text-muted, #6b7280);
 }
 
+.hrms-attendance-exception-line.is-pending {
+	background: #fff1f2;
+	border-left-color: #dc2626;
+}
+
+.hrms-attendance-exception-table tbody tr.is-pending > td {
+	background: #fff7f7;
+}
+
+.hrms-attendance-exception-table tbody tr.is-pending > td:first-child {
+	box-shadow: inset 3px 0 0 #dc2626;
+}
+
 .hrms-attendance-time-range-preview {
 	background: var(--control-bg, #f8fafc);
 	border-radius: 4px;

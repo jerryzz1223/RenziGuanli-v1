@@ -363,7 +363,9 @@ EXCEPTION_LABELS = {
 	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "休息日有打卡未计加班",
 	"RESTDAY_CLOCKED_WITHOUT_APPROVAL": "间接人员周末打卡缺加班单",
 	"HOLIDAY_CLOCKED_WITHOUT_APPROVAL": "节假日打卡缺加班单",
-	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "班次外时段无加班申请",
+	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "钉钉加班为0：缺加班申请",
+	"WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED": "钉钉加班为0：已有审批未生效",
+	"WORKDAY_OVERTIME_DINGTALK_ANOMALY": "钉钉加班为0：免审批计算异常",
 	"SHIFT_SCHEDULE_REVIEW_REQUIRED": "班次计划起止待复核",
 	"UNSCHEDULED_MIDDLE_NIGHT_REVIEW": "未排班中班夜班待复核",
 	"INVALID_NUMERIC_VALUE": "工时或次数格式无效",
@@ -423,7 +425,11 @@ def _review_guidance(exception_codes: list[str], source_type: str) -> list[str]:
 	if "HOLIDAY_CLOCKED_WITHOUT_APPROVAL" in codes:
 		guidance.append("该班次节日加班来源要求加班单；请在“修改本日”核对本日打卡和有效审批。未确认前不自动补算节日加班工时。")
 	if "WORKDAY_OUTSIDE_SHIFT_UNAPPROVED" in codes:
-		guidance.append("班次外原始时长已留痕并标记“无申请”；如需计入后续，请在“修改本日”同时填写确认计入的加班时长和原因。")
+		guidance.append("钉钉工作日加班为 0，但存在明显班后打卡，且该考勤组/班次要求申请；请补充或核对加班单。")
+	if "WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED" in codes:
+		guidance.append("已有加班审批但钉钉工作日加班仍为 0；请核对审批日期、打卡和钉钉考勤规则，不根据审批文字自动追加时长。")
+	if "WORKDAY_OVERTIME_DINGTALK_ANOMALY" in codes:
+		guidance.append("免审批班次存在明显班后打卡，但钉钉工作日加班为 0；请检查钉钉规则，或在“修改本日”人工确认并填写原因。")
 	if "SHIFT_SCHEDULE_REVIEW_REQUIRED" in codes:
 		guidance.append("无法取得完整班次计划起止，不能从打卡或跨日文字凭空推算；请补齐班次后重新校验。")
 	if "UNSCHEDULED_MIDDLE_NIGHT_REVIEW" in codes:
@@ -668,6 +674,32 @@ def _schedule_match_tokens(employee_group: str, shift_name: str) -> str:
 	if shift and shift not in group:
 		return "|".join(part for part in (group, shift) if part)
 	return group or shift
+
+
+_DINGTALK_SCHEDULE_SOURCE_DEFAULTS = {
+	"SHIFT-001": ("生产人员", "生产白班"),
+	"SHIFT-002": ("生产人员", "生产夜班"),
+	"SHIFT-003": ("警卫", "警卫白班"),
+	"SHIFT-004": ("警卫", "警卫夜班"),
+	"SHIFT-005": ("品保10点班生产白班|品保10点生产白班", "品保10点班生产白班|品保10点生产白班"),
+	"SHIFT-006": ("间接人员", "间接长白班|间接人员"),
+	"SHIFT-007": ("中班", "中班|品管中班"),
+	"SHIFT-008": ("药水分析组", "药水分析组"),
+	"SHIFT-009": ("生管课", "生管仓库"),
+	"SHIFT-010": ("清洁阿姨", "清洁阿姨白班"),
+	"SHIFT-011": ("烧饭阿姨|食堂阿姨|食堂", "食堂白班"),
+	"SHIFT-012": ("烧饭阿姨|食堂阿姨|食堂", "食堂夜班"),
+	"SHIFT-013": ("IQC白班", "IQC白班"),
+	"SHIFT-014": ("CCD人员", "生产白班CCD|CCD人员白班"),
+	"SHIFT-015": ("CCD人员", "生产夜班|CCD人员夜班"),
+}
+
+
+def _schedule_dingtalk_source_defaults(rule_code: str, rule_name: str, shift_group: str) -> tuple[str, str]:
+	"""Return explicit DingTalk pair aliases; keyword matching remains the fallback."""
+	return _DINGTALK_SCHEDULE_SOURCE_DEFAULTS.get(
+		rule_code, (shift_group or rule_name, rule_name),
+	)
 
 
 def _schedule_range_is_valid(value: Any) -> bool:
@@ -974,13 +1006,17 @@ def _schedule_rule_import_rows(file_url: str) -> dict[str, Any]:
 		if not match_tokens:
 			issues.append({"source_row": source_row, "message": "班次匹配关键词为空"})
 			continue
+		rule_code = f"SHIFT-{sequence_value:03d}"
+		dingtalk_groups, dingtalk_shifts = _schedule_dingtalk_source_defaults(rule_code, rule_name, display_group)
 		item = {
-			"rule_code": f"SHIFT-{sequence_value:03d}",
+			"rule_code": rule_code,
 			"rule_name": rule_name,
 			"shift_group": display_group,
 			"shift_variant": shift_name or "标准班次",
 			"sequence": sequence_value,
 			"match_tokens": match_tokens,
+			"dingtalk_attendance_groups": dingtalk_groups,
+			"dingtalk_shift_aliases": dingtalk_shifts,
 			"basic_time": basic_time,
 			"weekday_overtime_time": weekday_time,
 			"weekend_overtime_time": _schedule_cell_text(cell("weekend_overtime_time")),
@@ -1075,7 +1111,7 @@ def _attendance_shift_rule_bundle(company: str) -> dict[str, Any]:
 		SHIFT_RULE_DOCTYPE,
 		filters={"company": company},
 		fields=[
-			"name", "enabled", "rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "basic_time",
+			"name", "enabled", "rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "dingtalk_attendance_groups", "dingtalk_shift_aliases", "basic_time",
 			"weekday_overtime_time", "weekend_overtime_time", "overtime_begin_time", "basic_hours",
 			"weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule", "extended_overtime_mode", "special_workday_time",
 			"overtime_approval_time_mode", "overtime_approval_reapply_minutes",
@@ -1088,6 +1124,15 @@ def _attendance_shift_rule_bundle(company: str) -> dict[str, Any]:
 		limit_page_length=500,
 	)
 	items = [dict(row) for row in rows]
+	# Existing imports predate the explicit DingTalk pair fields. Hydrate the
+	# confirmed defaults in memory so a schema migration does not require users
+	# to re-import the workbook merely to restore correct matching.
+	for row in items:
+		default_groups, default_shifts = _schedule_dingtalk_source_defaults(
+			str(row.get("rule_code") or ""), str(row.get("rule_name") or ""), str(row.get("shift_group") or ""),
+		)
+		row["dingtalk_attendance_groups"] = row.get("dingtalk_attendance_groups") or default_groups
+		row["dingtalk_shift_aliases"] = row.get("dingtalk_shift_aliases") or default_shifts
 	active_rows = [row for row in items if cint(row.get("enabled"))]
 	rules = []
 	for row in active_rows:
@@ -1098,6 +1143,8 @@ def _attendance_shift_rule_bundle(company: str) -> dict[str, Any]:
 			"name": row.get("rule_name") or row.get("rule_code"),
 			"rule_code": row.get("rule_code"),
 			"tokens": tokens,
+			"dingtalk_attendance_groups": row.get("dingtalk_attendance_groups") or "",
+			"dingtalk_shift_aliases": row.get("dingtalk_shift_aliases") or "",
 			"effective_from": row.get("effective_from") or "",
 			"workday_hours": str(row.get("weekday_overtime_hours") or 0),
 			"workday_end_minutes": _schedule_time_end_minutes(row.get("weekday_overtime_time")),
@@ -4945,9 +4992,10 @@ def list_processing_exceptions(
 		if sort_field == "review_status":
 			return "待处理" if pending_filter(row) else "已处理"
 		return str(row.get(sort_field) or "")
-	# Keep the helper's RESTDAY_CLOCKED_WITHOUT_OVERTIME priority as the stable
-	# tie-breaker after any user-selected column sort.
+	# User-selected sorting applies within each state. Pending rows always float
+	# above resolved history so descending sorts cannot bury open work.
 	rows.sort(key=lambda row: (queue_sort_value(row).casefold(), _processing_exception_sort_key(row)), reverse=sort_order == "desc")
+	rows.sort(key=lambda row: not pending_filter(row, apply_filters=False))
 	if focus_record_id:
 		focus_index = next((index for index, row in enumerate(rows) if row.get("record_id") == focus_record_id), None)
 		if focus_index is not None:
@@ -5797,9 +5845,10 @@ def get_complete_attendance_rules(company: str):
 		"policy_rules": policy_rules,
 		"system_boundaries": [
 			{"name": "员工身份匹配", "logic": "公司工号为主键；姓名、部门用于冲突核对", "impact": "冲突进入异常处理，不自动合并员工"},
-			{"name": "班次匹配", "logic": "启用规则的全部匹配关键词均需出现在来源班次中", "impact": "决定基本工时、加班、取卡及夜班津贴规则"},
-			{"name": "规则生效与版本", "logic": "按生效日期及匹配精度选择规则；每次有效修改生成新版本", "impact": "历史结果标记为待重新校验，不静默覆盖"},
-			{"name": "人工与审批优先", "logic": "人工确认值、已匹配审批优先于排班自动值", "impact": "保留审核结果及完整修改记录"},
+			{"name": "班次匹配", "logic": "先按钉钉考勤组+班次别名精确匹配，未命中时再用班次关键词；食堂21:00-次日00:00使用已确认的独立兼容规则", "impact": "避免 CCD、品保等专用班次被通用生产班次覆盖；食堂凌晨班保留钉钉时数且不报缺审批异常"},
+			{"name": "钉钉加班主数据", "logic": "工作日加班直接采用钉钉每日明细数值；审批内容不再追加小时数", "impact": "避免重复计算或把钉钉已确认时长清零"},
+			{"name": "班后异常识别", "logic": "仅当钉钉工作日加班为 0 且存在明显班后打卡时，按考勤组、班次和审批情况分类", "impact": "缺申请、审批未生效、免审批计算异常分别进入人工处理"},
+			{"name": "人工修改留痕", "logic": "人工修改必须填写原因，不覆盖原始导入值", "impact": "保留修改前后值、处理人、时间和完整历史"},
 			{"name": "周末与调班边界", "logic": "普通周六日按排班治理规则处理；明确标为工作日、调班或补班的日期仍按工作日", "impact": "普通周末不制造标准工时、请假、旷工或工时差异，实际打卡转入休息日加班核对"},
 			{"name": "周末未排班中班夜班", "logic": "仅周末休息日、适用岗位且有打卡证据时，根据首末卡扣实际重叠休息时段；单侧卡待复核，无卡不报夜班异常", "impact": "净满8小时且不早于22:00记小夜；净满10.5小时且不早于次日01:00记大夜，优先大夜且不重复"},
 		],
@@ -5807,7 +5856,7 @@ def get_complete_attendance_rules(company: str):
 
 
 @frappe.whitelist()
-def preview_attendance_shift_match(company: str, shift_name: str, attendance_date: str = ""):
+def preview_attendance_shift_match(company: str, shift_name: str, attendance_date: str = "", attendance_group: str = ""):
 	"""Read-only check using exactly the matcher used by attendance processing."""
 	_require_processing_manager()
 	company = _require_company(company)
@@ -5817,10 +5866,10 @@ def preview_attendance_shift_match(company: str, shift_name: str, attendance_dat
 	day = getdate(attendance_date) if attendance_date else now_datetime().date()
 	bundle = _attendance_shift_rule_bundle(company)
 	matched = _schedule_overtime_rule(
-		{"班次": shift_name, "日期": day.isoformat()}, bundle["rules"],
+		{"班次": shift_name, "考勤组": str(attendance_group or "").strip(), "日期": day.isoformat()}, bundle["rules"],
 	)
 	return {
-		"shift_name": shift_name, "attendance_date": day.isoformat(),
+		"shift_name": shift_name, "attendance_group": str(attendance_group or "").strip(), "attendance_date": day.isoformat(),
 		"rule_version": bundle["version"],
 		"matched": bool(matched),
 		"rule_name": matched.get("name") if matched else "",
@@ -5908,7 +5957,7 @@ def import_attendance_shift_rules(
 			if fieldname in options and flt(options[fieldname]) <= 0:
 				frappe.throw(_("排班工时上限必须大于 0。"))
 	write_fields = (
-		"rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "basic_time", "weekday_overtime_time",
+		"rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "dingtalk_attendance_groups", "dingtalk_shift_aliases", "basic_time", "weekday_overtime_time",
 		"weekend_overtime_time", "overtime_begin_time", "overnight", "meal_deduction_rule", "basic_hours",
 		"weekday_overtime_hours", "weekday_overtime_mode", "extended_shift_rule", "extended_overtime_mode", "special_workday_time", "overtime_approval_time_mode", "overtime_approval_reapply_minutes", "weekend_overtime_mode",
 		"holiday_overtime_mode", "small_night_rule", "large_night_rule", "remarks", "suggested_positions",
@@ -6037,7 +6086,7 @@ def upsert_attendance_shift_rule(company: str, rule: str | dict):
 	else:
 		doc = frappe.get_doc({"doctype": SHIFT_RULE_DOCTYPE, "company": company})
 	write_fields = (
-		"enabled", "rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "effective_from", "shift_type", "basic_time",
+		"enabled", "rule_code", "rule_name", "shift_group", "shift_variant", "sequence", "match_tokens", "dingtalk_attendance_groups", "dingtalk_shift_aliases", "effective_from", "shift_type", "basic_time",
 		"weekday_overtime_time", "weekend_overtime_time", "overtime_begin_time", "overnight",
 		"meal_deduction_rule", "basic_hours", "weekday_overtime_hours", "weekday_overtime_mode",
 		"extended_shift_rule", "extended_overtime_mode", "special_workday_time", "overtime_approval_time_mode", "overtime_approval_reapply_minutes", "weekend_overtime_mode", "holiday_overtime_mode", "small_night_rule",
