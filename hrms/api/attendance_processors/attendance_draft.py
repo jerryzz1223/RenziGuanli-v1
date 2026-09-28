@@ -72,7 +72,7 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 47
+ATTENDANCE_POLICY_VERSION = 48
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
 RESTDAY_INCIDENTAL_PUNCH_MAX_MINUTES = 120
 DEFAULT_CALENDAR_WEEKEND_MODE = "休息日加班口径"
@@ -746,6 +746,26 @@ def _has_clock_punch(row: Mapping[str, Any]) -> bool:
 		_text(_value(row, ("上班时间", "上班打卡", "上班打卡时间", "clock_in")))
 		or _text(_value(row, ("下班时间", "下班打卡", "下班打卡时间", "clock_out")))
 	)
+
+
+def _has_unmatched_employee_attendance_evidence(row: Mapping[str, Any]) -> bool:
+	"""Keep unmatched people when DingTalk records actual work or an application.
+
+	A planned shift, standard hours, or automatically generated missing-card and
+	absence markers do not prove that an unknown person worked in this month.
+	"""
+	for aliases in (
+		("上班时间", "上班打卡", "上班打卡时间", "clock_in"),
+		("下班时间", "下班打卡", "下班打卡时间", "clock_out"),
+		IDENTITY_FIELDS["approval"],
+	):
+		if _value(row, aliases).strip().casefold() not in {"", "-", "--", "无", "未打卡", "none", "null"}:
+			return True
+	for field in ("actual_attendance_hours", "workday_overtime_hours", "restday_overtime_hours",
+		"holiday_overtime_hours", "special_workday_hours", *LEAVE_FIELDS):
+		if (_decimal(_value(row, NUMERIC_FIELDS[field])) or Decimal("0")) > 0:
+			return True
+	return False
 
 
 def _complete_punch_span_minutes(row: Mapping[str, Any]) -> int | None:
@@ -1943,12 +1963,16 @@ def process_attendance_draft_rows(
 	# exception once per calendar day. Keep their count for audit, but exclude
 	# them from employee aggregation and the employee exception queue.
 	future_joining_rows: list[dict[str, Any]] = []
+	unmatched_blank_rows: list[dict[str, Any]] = []
 	if employee_index is not None:
 		by_code, _by_name = employee_index
 		month_start = date.fromisoformat(f"{attendance_month}-01")
 		next_month_start = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
 		for code in list(groups):
 			employee = by_code.get(code)
+			if employee is None and not any(_has_unmatched_employee_attendance_evidence(row) for row in groups[code]):
+				unmatched_blank_rows.extend(groups.pop(code))
+				continue
 			joined_on = _date_only(employee.get("date_of_joining")) if employee else None
 			if joined_on and joined_on >= next_month_start:
 				future_joining_rows.extend(groups.pop(code))
@@ -1991,22 +2015,25 @@ def process_attendance_draft_rows(
 			"excluded_missing_employee_code_rows": len(missing_code_rows),
 			"excluded_missing_employee_code_accounts": _source_account_summaries(missing_code_rows),
 			"excluded_future_joining_rows": len(future_joining_rows),
+			"excluded_unmatched_blank_rows": len(unmatched_blank_rows),
+			"excluded_unmatched_blank_employee_codes": sorted({_value(row, IDENTITY_FIELDS["employee_code"]) for row in unmatched_blank_rows}),
 			"lifecycle_excluded_blank_shift_rows": lifecycle_excluded_shift_rows,
 			"employment_scope_excluded_rows": employment_scope_excluded_rows,
 			"supplemental_out_of_month_rows": len(supplemental_rows),
 			"supplemental_out_of_month_dates": supplemental_dates,
 			"boundary_restday_review_rows": len(boundary_review_rows),
-			"notice": "工号为空的来源行不作为员工考勤处理；测试药水分析组班次不参与正式计算；入职日期晚于考勤日期的人员不参与该日考勤，整月均在入职前的人员自动从当月加工结果删除；夜班后排休日被误列为上班卡的08:00单卡归回前一夜班下班卡；真实休息日不出勤不产生请假或缺勤；所属考勤组的周末规则要求加班单时，有打卡须匹配有效申请。明确标记为工作日、调班或补班的日期仍按工作日处理。",
+			"notice": "工号为空的来源行不作为员工考勤处理；未匹配花名册且整月无打卡、实际出勤、请假、加班或审批证据的空白占位行不进入员工异常，有证据时保留并核对身份；测试药水分析组班次不参与正式计算；入职日期晚于考勤日期的人员不参与该日考勤，整月均在入职前的人员自动从当月加工结果删除；夜班后排休日被误列为上班卡的08:00单卡归回前一夜班下班卡；真实休息日不出勤不产生请假或缺勤；所属考勤组的周末规则要求加班单时，有打卡须匹配有效申请。明确标记为工作日、调班或补班的日期仍按工作日处理。",
 		},
 		"metrics": {
 			"cross_day_punch_reassignments": cross_day_punch_reassignments,
 			"source_rows": len(input_rows),
-			"eligible_employee_source_rows": len(processing_rows) - len(missing_code_rows) - len(future_joining_rows),
+			"eligible_employee_source_rows": len(processing_rows) - len(missing_code_rows) - len(future_joining_rows) - len(unmatched_blank_rows),
 			"supplemental_out_of_month_rows": len(supplemental_rows),
 			"boundary_restday_review_rows": len(boundary_review_rows),
 			"excluded_missing_employee_code_rows": len(missing_code_rows),
 			"excluded_missing_employee_code_accounts": len(_source_account_summaries(missing_code_rows)),
 			"excluded_future_joining_rows": len(future_joining_rows),
+			"excluded_unmatched_blank_rows": len(unmatched_blank_rows),
 			"processed_rows": len(processed_rows),
 			"exception_rows": exception_rows,
 			"exception_events": exception_events,

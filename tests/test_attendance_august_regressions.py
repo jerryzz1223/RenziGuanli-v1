@@ -96,6 +96,50 @@ class AugustAttendanceRegressionTest(unittest.TestCase):
 		self.assertEqual(result["data_quality"]["excluded_future_joining_rows"], 63)
 		self.assertEqual(result["metrics"]["exception_rows"], 0)
 
+	def test_unmatched_employee_blank_month_is_not_an_employee_exception(self):
+		rows = [
+			_row({"工号": "260905", "姓名": "李卫明", "日期": f"26-08-{day:02d}", "班次": "",
+				"上班时间": "", "下班时间": "", "实际出勤（小时）": 0,
+				"上班缺卡": 1, "下班缺卡": 1, "旷工": 1, "source_row": 1168 + index})
+			for index, day in enumerate((17, 18, 19, 20))
+		]
+		result = processor.process_attendance_draft_rows(rows, attendance_month="2026-08", employee_directory=[
+			{"employee_code": "OTHER", "employee_name": "在册员工"},
+		])
+		self.assertEqual(result["processed_rows"], [])
+		self.assertEqual(result["metrics"]["excluded_unmatched_blank_rows"], 4)
+		self.assertEqual(result["metrics"]["eligible_employee_source_rows"], 0)
+		self.assertEqual(result["data_quality"]["excluded_unmatched_blank_employee_codes"], ["260905"])
+
+	def test_unmatched_employee_with_attendance_evidence_keeps_identity_review(self):
+		evidence_cases = (
+			{"上班时间": "08:01"},
+			{"关联审批单": "事假08-17 08:00到08-17 17:00 8小时"},
+			{"请假/事假(小时)": 8},
+			{"工作日加班（小时）": 1},
+			{"实际出勤（小时）": 1},
+		)
+		for evidence in evidence_cases:
+			with self.subTest(evidence=evidence):
+				row = _row({"工号": "260905", "姓名": "李卫明", "日期": "26-08-17", "班次": "",
+					"上班时间": "", "下班时间": "", "实际出勤（小时）": 0, **evidence})
+				result = processor.process_attendance_draft_rows([row], attendance_month="2026-08", employee_directory=[
+					{"employee_code": "OTHER", "employee_name": "在册员工"},
+				])
+				self.assertEqual(result["metrics"]["excluded_unmatched_blank_rows"], 0)
+				self.assertIn("EMPLOYEE_NOT_FOUND", result["processed_rows"][0]["exception_codes"])
+				self.assertEqual(result["processed_rows"][0]["source_id"], "260905:2026-08")
+
+	def test_unmatched_employee_with_one_punch_keeps_whole_month_for_review(self):
+		rows = [
+			_row({"工号": "260905", "姓名": "李卫明", "日期": "26-08-17", "上班时间": "", "下班时间": "", "实际出勤（小时）": 0}),
+			_row({"工号": "260905", "姓名": "李卫明", "日期": "26-08-18", "上班时间": "08:01", "下班时间": "", "实际出勤（小时）": 0}),
+		]
+		result = processor.process_attendance_draft_rows(rows, attendance_month="2026-08", employee_directory=[])
+		self.assertEqual(result["metrics"]["excluded_unmatched_blank_rows"], 0)
+		self.assertEqual(result["metrics"]["eligible_employee_source_rows"], 2)
+		self.assertIn("EMPLOYEE_NOT_FOUND", result["processed_rows"][0]["exception_codes"])
+
 	def test_weekend_single_punch_detects_the_missing_side(self):
 		base = {
 			"日期": "26-08-09", "日期类型": "周末休息日", "班次": "休息",
