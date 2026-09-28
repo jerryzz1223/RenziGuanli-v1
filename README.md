@@ -125,6 +125,41 @@ These checks do not replace an authenticated browser check or an acceptance run
 against a real Frappe site. Validate role permissions, company-scoped data, and
 business workflows in that environment before deployment.
 
+## x86 Podman Quick Deployment
+
+Run the x86 deployment from the repository root. The deployment script only
+commits files that were explicitly staged, pushes `main`, asks the server to
+pull that commit, performs the backup/migration/build/restart workflow, checks
+the site health endpoint, and verifies the deployed commit.
+
+For an ordinary code-only update:
+
+```sh
+git status --short
+git add path/to/the/files/you/intend/to/deploy
+./scripts/deploy_x86_server.sh "feat: describe this update" --skip-deps
+```
+
+Omit `--skip-deps` when `package.json`, `yarn.lock`, or `pyproject.toml` changed:
+
+```sh
+./scripts/deploy_x86_server.sh "feat: describe dependency update"
+```
+
+If the intended changes are already committed locally, omit the commit message:
+
+```sh
+./scripts/deploy_x86_server.sh --skip-deps
+```
+
+The script never runs `git add -A`. Unstaged work remains local and is not
+included in the deployment commit. A successful run ends with both the Frappe
+health confirmation and `Verified deployed commit: <commit>`.
+
+This entrypoint targets only the AMD64 rootless-Podman server at
+`192.168.1.209`. Keep ARM Docker deployments on their separate deployment
+entrypoint.
+
 ## Learning and Community
 
 1. [Frappe School](https://frappe.school) - Learn Frappe Framework and ERPNext from the various courses by the maintainers or from the community.

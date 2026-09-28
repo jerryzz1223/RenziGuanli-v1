@@ -276,14 +276,15 @@ require(
 	"Confirmed sources with excluded pending records must display as confirmed.",
 )
 
-# Batch upload applies every valid source immediately. Invalid rows remain
-# traceable and excluded from downstream calculation without a separate
-# confirmation step.
+# Batch upload applies every selected valid source immediately. Partial batches
+# are allowed, while missing slots remain blocked by the monthly-final gate.
+# Invalid rows remain traceable and excluded from downstream calculation
+# without a separate confirmation step.
 bulk_start = api.find("def bulk_import_and_process_sources(")
 bulk_end = api.find("\n@frappe.whitelist()", bulk_start + 1)
 bulk_body = api[bulk_start:] if bulk_end == -1 else api[bulk_start:bulk_end]
 for marker in (
-	"_detect_bulk_source_type",
+	"_classify_bulk_source_files",
 	"批量导入未开始",
 	"process_source_slot",
 	"process_monthly_support_file",

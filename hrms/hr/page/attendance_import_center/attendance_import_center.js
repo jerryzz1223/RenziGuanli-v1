@@ -83,9 +83,8 @@ class AttendanceImportCenter {
 			{ key: "full_attendance", label: "全勤奖" },
 			{ key: "special_hours", label: "特殊工时" },
 		];
-		// Keep the uploader gate aligned with the source cards.  Uploading a file
-		// only places it in Frappe's attachment area; the API registration and
-		// processing step begins after every required source has arrived.
+		// Keep the maximum aligned with the six source cards.  A partial selection
+		// may be processed now; the monthly-final gate still requires every source.
 		this.bulk_source_count = this.processing_sources.length + this.monthly_support_sources.length;
 		this.exception_sources = [...this.processing_sources];
 		this.processing_result_sources = [...this.processing_sources, ...this.monthly_support_sources];
@@ -1035,16 +1034,16 @@ class AttendanceImportCenter {
 			size: "large",
 		});
 		const renderUploadDialog = () => {
-			const ready = uploaded.size === this.bulk_source_count;
+			const ready = uploaded.size > 0 && uploaded.size <= this.bulk_source_count;
 			const selectedFiles = [...uploaded.values()];
 			dialog.fields_dict.bulk_upload.$wrapper.html(`
 				<div class="hrms-attendance-bulk-upload">
-					<p>${this.escape(__("请准备当月的六类来源：{0}。", [requiredSources.map((source) => source.label).join("、")]))}</p>
-					<p class="text-muted">${this.escape(__("可一次选择全部文件；若文件选择器一次只能选一个，也可反复点击“选择或补选文件”，已上传的文件会保留在本窗口。"))}</p>
+					<p>${this.escape(__("可选择当月已有的来源文件：{0}。", [requiredSources.map((source) => source.label).join("、")]))}</p>
+					<p class="text-muted">${this.escape(__("支持一次导入 1 至 6 类，也可以后续继续补齐；缺少来源时月度终稿仍会保持阻断。"))}</p>
 					<div class="hrms-attendance-bulk-upload__actions">
 						<button class="btn btn-default btn-sm" type="button" data-bulk-select-files>${this.escape(__("选择或补选文件"))}</button>
 						<button class="btn btn-link btn-sm" type="button" data-bulk-clear-files ${selectedFiles.length ? "" : "disabled"}>${this.escape(__("清空已选"))}</button>
-						<span class="text-muted">${this.escape(__("已上传 {0}/{1} 个", [selectedFiles.length, this.bulk_source_count]))}</span>
+						<span class="text-muted">${this.escape(__("已选择 {0}/{1} 个", [selectedFiles.length, this.bulk_source_count]))}</span>
 					</div>
 					<div class="hrms-attendance-bulk-upload__files">
 						${selectedFiles.length
@@ -1053,7 +1052,7 @@ class AttendanceImportCenter {
 					</div>
 					<div class="hrms-attendance-bulk-upload__submit">
 						<button class="btn btn-primary" type="button" data-bulk-import-submit ${ready ? "" : "disabled"}>${this.escape(__("导入并加工"))}</button>
-						<small class="text-muted">${this.escape(ready ? __("文件已收齐，系统会先识别每个文件的来源，再依次导入和加工。") : __("收齐六个文件后才能开始导入；错误或重复来源不会写入数据。"))}</small>
+						<small class="text-muted">${this.escape(ready ? __("系统会先识别所选文件的来源，再依次导入和加工；错误或重复来源不会写入数据。") : __("请至少选择一个 .xlsx 文件。"))}</small>
 					</div>
 				</div>
 			`);
@@ -1074,7 +1073,7 @@ class AttendanceImportCenter {
 				renderUploadDialog();
 			});
 			dialog.$wrapper.find("[data-bulk-import-submit]").on("click", () => {
-				if (uploaded.size !== this.bulk_source_count) return;
+				if (!uploaded.size || uploaded.size > this.bulk_source_count) return;
 				dialog.hide();
 				this.bulk_import_and_process_sources([...uploaded.values()]);
 			});
@@ -1090,7 +1089,7 @@ class AttendanceImportCenter {
 			files: JSON.stringify(files),
 		}, {
 			freeze: true,
-			freeze_message: __("正在匹配六类考勤文件并依次加工..."),
+			freeze_message: __("正在匹配所选考勤文件并依次加工..."),
 			on_success: (data) => {
 				const items = data.items || [];
 				const exceptions = items.reduce((total, item) => total + Number(item.exception_rows || 0), 0);

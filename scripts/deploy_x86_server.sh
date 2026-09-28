@@ -1,30 +1,40 @@
 #!/usr/bin/env bash
 
-# One-command local-to-x86 rootless-Podman deployment.
-# Usage: ./scripts/deploy_x86_server.sh "feat: describe this update" [--skip-deps]
+# Publish the current main branch and deploy it to the x86 rootless-Podman server.
+# Usage: ./scripts/deploy_x86_server.sh ["feat: describe staged update"] [--skip-deps]
 
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-	cat >&2 <<'EOF'
-Usage: ./scripts/deploy_x86_server.sh "commit message" [--skip-deps]
+usage() {
+	cat <<'EOF'
+Usage: ./scripts/deploy_x86_server.sh ["commit message"] [--skip-deps]
 
-This command stages and commits every current local change, pushes main, then
-deploys the existing rootless-Podman containers on the x86 server.
+With a commit message, this command commits only files that you explicitly
+staged with git add. Without a commit message, it deploys the current committed
+main branch. It never stages working-tree files automatically.
 
 Use --skip-deps only when package.json, yarn.lock and pyproject.toml did not change.
 EOF
-	exit 2
-fi
+}
 
-COMMIT_MESSAGE="$1"
+COMMIT_MESSAGE=""
 INSTALL_DEPS=1
-if [[ "${2:-}" == "--skip-deps" ]]; then
-	INSTALL_DEPS=0
-elif [[ $# -eq 2 ]]; then
-	echo "Unknown option: $2" >&2
-	exit 2
-fi
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--skip-deps) INSTALL_DEPS=0 ;;
+		-h|--help) usage; exit 0 ;;
+		--*) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+		*)
+			if [[ -n "${COMMIT_MESSAGE}" ]]; then
+				echo "Only one commit message may be provided." >&2
+				usage >&2
+				exit 2
+			fi
+			COMMIT_MESSAGE="$1"
+			;;
+	esac
+	shift
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -40,18 +50,38 @@ if [[ "${current_branch}" != "main" ]]; then
 	exit 1
 fi
 
-echo "Checking and publishing the local main branch..."
+echo "Checking the local main branch..."
 git diff --check
-git pull --rebase --autostash origin main
-git add -A
 git diff --cached --check
 
-if ! git diff --cached --quiet; then
-	git commit -m "${COMMIT_MESSAGE}"
-else
-	echo "No new local changes to commit. Existing local commits will still be pushed."
+echo "Refreshing origin/main without changing local files..."
+git fetch origin main
+if ! git merge-base --is-ancestor origin/main HEAD; then
+	echo "Local main is behind or diverged from origin/main." >&2
+	echo "Resolve it with git pull --rebase before deploying; local files were not changed." >&2
+	exit 1
 fi
+
+if [[ -n "${COMMIT_MESSAGE}" ]]; then
+	if git diff --cached --quiet; then
+		echo "No staged changes to commit." >&2
+		echo "Stage only the intended files with git add, or omit the commit message to deploy existing commits." >&2
+		exit 1
+	fi
+	echo "Files selected for this deployment commit:"
+	git diff --cached --name-only
+	git commit -m "${COMMIT_MESSAGE}"
+elif ! git diff --cached --quiet; then
+	echo "Staged changes exist but no commit message was provided." >&2
+	echo "Provide a commit message, or unstage them before deploying existing commits." >&2
+	exit 1
+fi
+
+echo "Publishing main..."
 git push origin main
+PUBLISHED_COMMIT="$(git rev-parse HEAD)"
+PUBLISHED_COMMIT_SHORT="$(git rev-parse --short HEAD)"
+printf -v published_commit_q '%q' "${PUBLISHED_COMMIT}"
 
 printf -v remote_root_q '%q' "${REMOTE_ROOT}"
 printf -v site_name_q '%q' "${SITE_NAME}"
@@ -64,6 +94,12 @@ remote_command+="bash scripts/deploy_podman_x86.sh --pull --site ${site_name_q}"
 if [[ ${INSTALL_DEPS} -eq 0 ]]; then
 	remote_command+=" --skip-deps"
 fi
+remote_command+='; deployed_commit=$(git rev-parse HEAD); '
+remote_command+="if [[ \"\${deployed_commit}\" != ${published_commit_q} ]]; then echo \"Deployed commit mismatch: expected ${PUBLISHED_COMMIT_SHORT}, got \${deployed_commit:0:7}\" >&2; exit 24; fi; "
+remote_command+="echo \"Verified deployed commit: ${PUBLISHED_COMMIT_SHORT}\""
 
-echo "Deploying to ${REMOTE}:${REMOTE_ROOT}..."
+echo "Deploying commit ${PUBLISHED_COMMIT_SHORT} to ${REMOTE}:${REMOTE_ROOT}..."
 ssh -tt "${REMOTE}" "bash -lc $(printf '%q' "${remote_command}")"
+
+echo "x86 deployment succeeded: ${PUBLISHED_COMMIT_SHORT}"
+echo "Open: http://192.168.1.209:8000"

@@ -74,7 +74,11 @@ MONTHLY_SUPPORT_SOURCE_CONFIG = {
 	"housing_allowance": {
 		"label": "住房补贴",
 		"required_headers": ("工号", "姓名", "住房补贴"),
-		"amount_headers": ("住房补贴",),
+		# The main register uses “住房补贴”, while the appended new-hire / leaver
+		# reference table in the real August workbook uses “补贴金额”.  Recognize
+		# the latter as a table boundary without importing it as a second master
+		# list.
+		"amount_headers": ("住房补贴", "补贴金额"),
 		"description": "一次性导入当月住房补贴明细；仅校验工号、姓名和住房补贴金额。",
 		"mode": "monthly_amount",
 		"value_field": "housing_allowance",
@@ -1318,6 +1322,7 @@ def _monthly_amount_header_groups(sheet, config: dict[str, Any]):
 		_normalized_header(value)
 		for value in config.get("amount_headers") or (config["value_header"],)
 	}
+	primary_amount_header = _normalized_header(config["value_header"])
 	matches = []
 	for row_number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
 		headers = [_normalized_header(value) for value in row]
@@ -1332,12 +1337,21 @@ def _monthly_amount_header_groups(sheet, config: dict[str, Any]):
 			"name_indexes": name_indexes,
 			"amount_indexes": amount_indexes,
 			"is_numbered_list": "序号" in headers,
+			"is_primary_amount_header": primary_amount_header in headers,
 		})
 	# A numbered list is the main source of truth.  If a customer provides a
 	# simple one-table template without serial numbers, preserve its first table
 	# rather than rejecting a valid import.
-	main_matches = [match for match in matches if match["is_numbered_list"]]
-	return matches, (main_matches or matches[:1])
+	# Prefer the numbered list that uses this source's canonical amount heading.
+	# An appended reference table may also be numbered, but its alternate amount
+	# heading is only a boundary marker and must not become payroll input.
+	primary_numbered_matches = [
+		match for match in matches
+		if match["is_numbered_list"] and match["is_primary_amount_header"]
+	]
+	numbered_matches = [match for match in matches if match["is_numbered_list"]]
+	primary_matches = [match for match in matches if match["is_primary_amount_header"]]
+	return matches, (primary_numbered_matches or numbered_matches or primary_matches or matches[:1])
 
 
 def _monthly_amount_rows(sheet, batch, config: dict[str, Any]):
@@ -3247,21 +3261,8 @@ def _detect_bulk_source_type(file_url: str, file_name: str = "") -> str:
 	return ""
 
 
-@frappe.whitelist()
-def bulk_import_and_process_sources(company: str, attendance_month: str, files: str | list[dict[str, Any]]):
-	"""Register and apply all six attendance sources in one step.
-
-	The files are fully classified before any batch is written.  That gives HR
-	the convenience of selecting six files together without silently putting a
-	file in the wrong source slot. Invalid rows stay traceable and are excluded
-	from calculation; they do not require a separate approval step.
-	"""
-	_require_processing_manager()
-	company, attendance_month = _require_company(company), _require_month(attendance_month)
-	if isinstance(files, str):
-		files = _loads(files, [])
-	if not isinstance(files, list):
-		frappe.throw(_("请选择六个 .xlsx 考勤来源文件。"))
+def _classify_bulk_source_files(files: list[dict[str, Any]]):
+	"""Classify one partial or complete selection before writing any batch."""
 	classified: dict[str, dict[str, Any]] = {}
 	unmatched = []
 	duplicates = []
@@ -3281,19 +3282,44 @@ def bulk_import_and_process_sources(company: str, attendance_month: str, files: 
 		if source_type in classified:
 			duplicates.append(SOURCE_LABELS[source_type])
 			continue
-		classified[source_type] = {"file_url": file_url, "file_name": file_name or Path(file_url).name}
-	missing = [SOURCE_LABELS[source_type] for source_type in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES if source_type not in classified]
-	if unmatched or duplicates or missing:
+		classified[source_type] = {
+			"file_url": file_url,
+			"file_name": file_name or Path(file_url).name,
+		}
+	return classified, unmatched, duplicates
+
+
+@frappe.whitelist()
+def bulk_import_and_process_sources(company: str, attendance_month: str, files: str | list[dict[str, Any]]):
+	"""Register and apply one or more attendance sources in one step.
+
+	The files are fully classified before any batch is written.  That gives HR
+	the convenience of selecting all sources together or adding the available
+	files in batches without silently putting a file in the wrong source slot.
+	Invalid rows stay traceable and are excluded from calculation; missing source
+	slots continue to block monthly-final submission and locking.
+	"""
+	_require_processing_manager()
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	if isinstance(files, str):
+		files = _loads(files, [])
+	if not isinstance(files, list):
+		frappe.throw(_("请选择一个或多个 .xlsx 考勤来源文件。"))
+	if not files:
+		frappe.throw(_("请至少选择一个 .xlsx 考勤来源文件。"))
+	classified, unmatched, duplicates = _classify_bulk_source_files(files)
+	unselected = [SOURCE_LABELS[source_type] for source_type in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES if source_type not in classified]
+	if unmatched or duplicates:
 		issues = []
 		if unmatched:
 			issues.append(_("无法识别：{0}").format("、".join(unmatched)))
 		if duplicates:
 			issues.append(_("重复来源：{0}").format("、".join(duplicates)))
-		if missing:
-			issues.append(_("缺少来源：{0}").format("、".join(missing)))
 		frappe.throw(_("批量导入未开始。请调整文件后重试：{0}").format("；".join(issues)))
 	items = []
 	for source_type in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES:
+		if source_type not in classified:
+			continue
 		item = classified[source_type]
 		if source_type in SOURCE_TYPES:
 			registered = register_source_file(company, attendance_month, source_type, item["file_url"])
@@ -3312,9 +3338,16 @@ def bulk_import_and_process_sources(company: str, attendance_month: str, files: 
 			"processed_rows": metrics.get("processed_rows", 0),
 			"exception_rows": metrics.get("exception_rows", 0),
 		})
+	complete = not unselected
 	return {
 		"items": items,
-		"notice": _("六类考勤来源已完成匹配、导入并进入当前月度快照。无效记录已自动排除，不需要逐类审批；但锁定终稿前仍须提交月度终稿审批。"),
+		"unselected_sources": unselected,
+		"complete": complete,
+		"notice": (
+			_("六类考勤来源已完成匹配、导入并进入当前月度快照。无效记录已自动排除，不需要逐类审批；但锁定终稿前仍须提交月度终稿审批。")
+			if complete
+			else _("已完成所选 {0} 类来源的匹配、导入和加工。本次未选择：{1}；请以刷新后的月度终稿来源状态为准，未补齐时不能提交审批和锁定。").format(len(items), "、".join(unselected))
+		),
 	}
 
 

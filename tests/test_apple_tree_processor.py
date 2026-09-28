@@ -644,6 +644,65 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 				self.assertTrue(all(str(row["employee_code"]).strip().isdigit() for row in rows))
 				self.assertTrue(all(isinstance(row[center.MONTHLY_SUPPORT_SOURCE_CONFIG[source_type]["value_field"]], (int, float)) for row in rows))
 
+	def test_housing_parser_treats_numbered_alternate_amount_table_as_boundary_only(self):
+		"""A numbered 入离职 table headed 补贴金额 is not a second master list."""
+		if load_workbook is None:
+			self.skipTest("openpyxl is unavailable")
+		from openpyxl import Workbook
+
+		center, _file_manager, _frappe_modules = processing_center_module()
+		workbook = Workbook()
+		sheet = workbook.active
+		sheet.title = "8月住房补贴"
+		sheet.append(["26年8月份住房补贴明细"])
+		sheet.append([])
+		sheet.append(["序号", "工号", "姓名", "单位", "住房补贴", "备注"])
+		sheet.append([1, "1001", "张三", "工程课", 200, "租房"])
+		sheet.append([2, "1002", "李四", "品管课", 0, "本地"])
+		sheet.append([])
+		sheet.append(["8月份入职"])
+		sheet.append(["序号", "入职日期", "工号", "姓名", "部门", "补贴金额"])
+		sheet.append([1, datetime(2026, 8, 4), "1003", "王五", "连续课", 200])
+		batch = SimpleNamespace(source_type="housing_allowance", attendance_month="2026-08", source_file="/private/files/housing.xlsx")
+
+		rows = center._monthly_amount_rows(sheet, batch, center.MONTHLY_SUPPORT_SOURCE_CONFIG["housing_allowance"])
+
+		self.assertEqual([row["employee_code"] for row in rows], ["1001", "1002"])
+		self.assertEqual([row["housing_allowance"] for row in rows], [200, 0])
+
+	def test_bulk_file_classification_accepts_a_partial_unique_selection(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		files = [
+			{"file_url": "/private/files/apple.xlsx", "file_name": "苹果树.xlsx"},
+			{"file_url": "/private/files/missing.xlsx", "file_name": "补卡.xlsx"},
+		]
+		with patch.object(center, "_detect_bulk_source_type", side_effect=["apple_tree", "missing_card"]):
+			classified, unmatched, duplicates = center._classify_bulk_source_files(files)
+
+		self.assertEqual(set(classified), {"apple_tree", "missing_card"})
+		self.assertEqual(unmatched, [])
+		self.assertEqual(duplicates, [])
+
+	def test_bulk_import_processes_a_partial_selection_without_weakening_the_final_gate(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		classified = {
+			"apple_tree": {"file_url": "/private/files/apple.xlsx", "file_name": "苹果树.xlsx"},
+		}
+		with (
+			patch.object(center, "_require_processing_manager"),
+			patch.object(center, "_require_company", return_value="永新"),
+			patch.object(center, "_require_month", return_value="2026-08"),
+			patch.object(center, "_classify_bulk_source_files", return_value=(classified, [], [])),
+			patch.object(center, "register_source_file", return_value={"batch": "BATCH-1"}),
+			patch.object(center, "process_source_slot", return_value={"status": "已确认", "metrics": {"processed_rows": 10, "exception_rows": 0}}),
+		):
+			result = center.bulk_import_and_process_sources("永新", "2026-08", [{"file_url": "/private/files/apple.xlsx"}])
+
+		self.assertEqual([item["source_type"] for item in result["items"]], ["apple_tree"])
+		self.assertFalse(result["complete"])
+		self.assertIn("考勤初稿", result["unselected_sources"])
+		self.assertIn("不能提交审批和锁定", result["notice"])
+
 	def test_special_hours_does_not_block_on_a_historical_department_label(self):
 		if load_workbook is None or not SPECIAL_HOURS_WORKBOOK.exists():
 			self.skipTest("Special-hours sample workbook is unavailable")
