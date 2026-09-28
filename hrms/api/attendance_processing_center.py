@@ -4095,13 +4095,6 @@ def _attendance_policy_replacement(
 ):
 	"""Recheck retained daily facts without overwriting reviewed monthly totals."""
 	current = _effective_result_values(record)
-	if current.get("signed_final_override"):
-		return None, "该员工已有签字终稿人工修订，请逐日核对后处理。"
-	monthly_edits = {
-		entry.get("field_name") for entry in record.get("review_history") or [] if isinstance(entry, dict)
-	} & set(ATTENDANCE_NUMERIC_FIELDS)
-	if monthly_edits:
-		return None, "该员工已有月度工时人工调整，请逐日核对，避免覆盖已确认数值。"
 	source_rows = _effective_daily_source_rows(record, source_rows_override)
 	if not source_rows:
 		return None, "缺少留存的每日来源数据，请重新上传考勤来源。"
@@ -4117,6 +4110,17 @@ def _attendance_policy_replacement(
 		if str(record.get("employee_code") or "").strip() in set(rebuilt["data_quality"].get("excluded_unmatched_blank_employee_codes") or []):
 			return None, UNMATCHED_BLANK_RECHECK_REASON
 		return None, "重新校验后工号无法唯一匹配。"
+	# Manual decisions protect real attendance facts from being overwritten, but
+	# they must not keep a source-empty, unmatched roster placeholder alive.  The
+	# exclusion above is evidence-based and its prior review trail is retained in
+	# the private exclusion audit.
+	if current.get("signed_final_override"):
+		return None, "该员工已有签字终稿人工修订，请逐日核对后处理。"
+	monthly_edits = {
+		entry.get("field_name") for entry in record.get("review_history") or [] if isinstance(entry, dict)
+	} & set(ATTENDANCE_NUMERIC_FIELDS)
+	if monthly_edits:
+		return None, "该员工已有月度工时人工调整，请逐日核对，避免覆盖已确认数值。"
 	decisions = _daily_exception_decisions(current)
 	# A numerical conflict cannot be waived by an old human-review decision.
 	decisions = {key: {code: value for code, value in codes.items() if code != "ATTENDANCE_HOURS_MISMATCH"} for key, codes in decisions.items()}
@@ -4208,9 +4212,6 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 		identity = {key: record.get(key) for key in ("record_id", "employee_code", "employee_name")}
 		if replacement is None:
 			if reason == UNMATCHED_BLANK_RECHECK_REASON:
-				if record.get("review_status") in {"已通过", "已驳回"} or record.get("review_history") or record.get("confirmed_value") is not None:
-					skipped.append({**identity, "reason": "该占位记录已有人工处理，请逐日核对后再排除。"})
-					continue
 				preview.append({**identity, "changes": {"来源记录": {"before": "在加工结果中", "after": "排除空白占位"}}, "exception_dates": [], "hours_mismatch_lines": [], "exception_codes": [], "review_status": "排除占位记录"})
 				exclusions.append(record)
 				continue
@@ -4261,7 +4262,9 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 				{"record_id": record["record_id"], "employee_code": record["employee_code"],
 				 "source_file": record.get("source_file"), "source_sheet": record.get("source_sheet"),
 				 "source_row": record.get("source_row"), "reason": UNMATCHED_BLANK_RECHECK_REASON,
-				 "original_value": record.get("original_value"), "processed_value": record.get("processed_value")}
+				 "original_value": record.get("original_value"), "processed_value": record.get("processed_value"),
+				 "confirmed_value": record.get("confirmed_value"), "review_status": record.get("review_status"),
+				 "review_history": record.get("review_history")}
 				for record in exclusions
 			]})
 			for record in exclusions:

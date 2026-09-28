@@ -404,19 +404,22 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 		api._processing_meta = lambda _batch: {}
 		api._save_batch_notes = Mock()
 		api._export_processed_result = Mock(return_value={})
-		preview = api.recheck_attendance_policy("TEST", "2026-08")
-		self.assertEqual((preview["changed_count"], preview["excluded_count"]), (1, 1))
-		self.assertEqual(deleted, [])
-		original_status = doc.review_status
+		# A prior manual decision is retained in the exclusion audit, but cannot
+		# keep an evidence-free employee placeholder in the exception queue.
 		doc.review_status = "已通过"
-		protected = api.recheck_attendance_policy("TEST", "2026-08")
-		self.assertEqual((protected["excluded_count"], len(protected["skipped"])), (0, 1))
-		doc.review_status = original_status
+		doc.confirmed_value_json = doc.processed_value_json
+		doc.review_history_json = api._json([{"field_name": "actual_attendance_hours", "old_value": 0, "new_value": 0}])
+		preview = api.recheck_attendance_policy("TEST", "2026-08")
+		self.assertEqual((preview["changed_count"], preview["excluded_count"], len(preview["skipped"])), (1, 1, 0))
+		self.assertEqual(deleted, [])
 		with self.assertRaisesRegex(ValueError, "数据已变化"):
 			api.recheck_attendance_policy("TEST", "2026-08", execute=1, preview_token="old")
 		api.recheck_attendance_policy("TEST", "2026-08", execute=1, preview_token=preview["preview_token"])
 		self.assertEqual(deleted, ["record-blank"])
-		self.assertEqual(api._save_exclusion_audit.call_args.args[1]["excluded_previous_records"][0]["employee_code"], "NEW-001")
+		audited = api._save_exclusion_audit.call_args.args[1]["excluded_previous_records"][0]
+		self.assertEqual(audited["employee_code"], "NEW-001")
+		self.assertEqual(audited["review_status"], "已通过")
+		self.assertEqual(audited["review_history"][0]["field_name"], "actual_attendance_hours")
 		api._invalidate_monthly_final_after_source_change.assert_called_once()
 		self.assertEqual(api.recheck_attendance_policy("TEST", "2026-08")["changed_count"], 0)
 
