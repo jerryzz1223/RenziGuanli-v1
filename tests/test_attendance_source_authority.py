@@ -81,7 +81,7 @@ class AttendanceSourceAuthorityTest(unittest.TestCase):
 		self.assertEqual(values["holiday_overtime_hours"], 0.75)
 		self.assertEqual((values["small_night_shifts"], values["large_night_shifts"]), (1, 0))
 
-	def test_weekend_schedule_keeps_dingtalk_overtime_without_late_or_early(self):
+	def test_weekend_overtime_hours_are_authoritative_without_approval(self):
 		row = self.process(**{
 			"工号": "3694", "日期": "2026-08-30", "日期类型": "周末休息日",
 			"上班时间": "07:47", "下班时间": "12:02",
@@ -92,10 +92,57 @@ class AttendanceSourceAuthorityTest(unittest.TestCase):
 		self.assertEqual(values["late_count"], 0)
 		self.assertEqual(values["early_count"], 0)
 		self.assertEqual(values["absence_hours"], 0)
-		self.assertFalse({
-			"LATE_MARKED", "EARLY_MARKED", "ABSENCE_MARKED", "RESTDAY_CLOCKED_WITHOUT_APPROVAL",
-		} & set(row["exception_codes"]))
-		self.assertEqual(values["attendance_details"][0]["overtime_approval_status"], "休息日打卡免申请")
+		self.assertFalse({"LATE_MARKED", "EARLY_MARKED", "ABSENCE_MARKED"} & set(row["exception_codes"]))
+		self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_APPROVAL", row["exception_codes"])
+		self.assertNotIn("RESTDAY_OVERTIME_TIME_MISMATCH", row["exception_codes"])
+		self.assertEqual(values["attendance_details"][0]["overtime_approval_status"], "采用钉钉休息日加班")
+		self.assertTrue(values["attendance_details"][0]["restday_overtime_time_match"]["matched"])
+
+	def test_weekend_zero_overtime_hours_still_follow_the_application_rule(self):
+		row = self.process(**{
+			"日期": "2026-08-30", "日期类型": "周末休息日",
+			"上班时间": "07:47", "下班时间": "12:02",
+			"实际出勤（小时）": 4, "休息日加班（小时）": 0,
+		})
+		self.assertIn("RESTDAY_CLOCKED_WITHOUT_APPROVAL", row["exception_codes"])
+
+	def test_weekend_overtime_hours_with_valid_approval_do_not_raise_missing_approval(self):
+		row = self.process(**{
+			"日期": "2026-08-30", "日期类型": "周末休息日",
+			"上班时间": "07:47", "下班时间": "12:02",
+			"实际出勤（小时）": 4, "休息日加班（小时）": 4,
+			"关联审批单": "加班08-30 08:00到08-30 12:00 4小时 已通过",
+		})
+		self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_APPROVAL", row["exception_codes"])
+		self.assertNotIn("RESTDAY_OVERTIME_TIME_MISMATCH", row["exception_codes"])
+
+	def test_weekend_overtime_time_mismatch_is_audit_only_and_keeps_source_hours(self):
+		row = self.process(**{
+			"日期": "2026-08-30", "日期类型": "周末休息日",
+			"上班时间": "08:00", "下班时间": "12:00",
+			"休息日加班（小时）": 3,
+			"source_file": "daily.xlsx", "source_sheet": "每日统计",
+		})
+		values = row["processed_value"]
+		self.assertEqual(values["restday_overtime_hours"], 3)
+		self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_APPROVAL", row["exception_codes"])
+		self.assertIn("RESTDAY_OVERTIME_TIME_MISMATCH", row["exception_codes"])
+		self.assertTrue(row["eligible_for_downstream"])
+		self.assertEqual(values["attendance_details"][0]["restday_overtime_time_match"]["difference_minutes"], 60)
+
+	def test_weekend_overtime_time_match_uses_the_same_thirty_minute_boundary(self):
+		for clock_out, expected_mismatch in (("11:29", False), ("11:30", True)):
+			with self.subTest(clock_out=clock_out):
+				row = self.process(**{
+					"日期": "2026-08-30", "日期类型": "周末休息日",
+					"上班时间": "07:00", "下班时间": clock_out,
+					"休息日加班（小时）": 4,
+				})
+				self.assertEqual(
+					"RESTDAY_OVERTIME_TIME_MISMATCH" in row["exception_codes"],
+					expected_mismatch,
+				)
+				self.assertEqual(row["processed_value"]["restday_overtime_hours"], 4)
 
 
 if __name__ == "__main__":

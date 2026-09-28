@@ -170,7 +170,6 @@ for (const marker of [
 	"open_monthly_final_editor",
 	"保存修改并重新锁定",
 	"特殊工时 → 手动修改",
-	"来源完备性 / 锁定快照",
 	"住房补贴",
 	"全勤奖",
 	"特殊工时",
@@ -210,9 +209,8 @@ for (const marker of [
 	"page_start: (this.exception_page - 1) * this.exception_page_size",
 	"show_bulk_processing_dialog(this.exception_source_filter)",
 	"hrms-attendance-monthly-support-grid",
-	"来源完备性",
 	"锁定快照",
-	"const ready = sourcesReady;",
+	"const ready = sourcesReady && Boolean(approval.can_lock);",
 	'["已就绪", "已确认"].includes(status)',
 	"exception_codes",
 	"exception_message",
@@ -366,6 +364,11 @@ for (let index = 1; index < monthlyFinalSections.length; index += 1) {
 }
 for (const marker of ["employee_recognition", "初稿识别员工", "花名册员工", "成功识别员工", "hrms-attendance-final-recognition"]) {
 	mustInclude(attendancePageJs, marker, `Monthly final must display employee-recognition statistics: ${marker}`);
+}
+for (const hiddenReadinessMarker of ["hrms-attendance-final-readiness", "来源完备性 / 锁定快照"]) {
+	if (attendancePageJs.includes(hiddenReadinessMarker)) {
+		throw new Error(`Monthly final must display personnel counts without the source-readiness panel: ${hiddenReadinessMarker}`);
+	}
 }
 if (attendancePageJs.includes("data-monthly-support-precheck")) {
 	throw new Error("Monthly support sources must check structure during processing, without a separate precheck button.");

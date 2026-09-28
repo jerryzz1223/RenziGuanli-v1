@@ -28,6 +28,7 @@
 		attendance_import_submit: "考勤导入提交",
 		attendance_exception_edit: "考勤异常修改",
 		attendance_approve: "考勤审批与部门确认",
+		attendance_final_approve: "考勤终稿审批",
 		attendance_final_lock: "考勤终稿锁定",
 		attendance_export: "考勤导出",
 		payroll_view: "薪酬查看",

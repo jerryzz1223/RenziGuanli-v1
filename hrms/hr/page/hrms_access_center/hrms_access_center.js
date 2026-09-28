@@ -41,13 +41,20 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 					fieldtype: "HTML",
 					options: `<div class="alert alert-info">${__("权限逐级包含；提交人和审批人按实际登录账号记入单据及审计记录。")}</div>`,
 				},
+				{
+					fieldname: "attendance_final_approve",
+					fieldtype: "Check",
+					label: __("考勤终稿审批"),
+					default: account.attendance_final_approve ? 1 : 0,
+					description: __("逐账号单独授权。可批准或驳回他人提交的月度考勤终稿；上传/提交人不能审批本人提交的快照。"),
+				},
 			],
 			primary_action_label: __("保存权限"),
 			primary_action() {
 				const values = dialog.get_values() || {};
 				const selected = tier_by_label.get(values.access_tier_label);
 				dialog.disable_primary_action();
-				frappe.call({
+				Promise.resolve(frappe.call({
 					method: "hrms.access_control.set_hrms_user_access_tier",
 					args: {
 						user: account.user,
@@ -55,29 +62,28 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 					},
 					freeze: true,
 					freeze_message: __("正在保存权限..."),
-					callback(response) {
-						if (!response.message?.saved || response.message?.access_tier !== selected) {
-							frappe.msgprint({
-								title: __("保存失败"),
-								message: __("权限保存后校验失败，请刷新后重试。"),
-								indicator: "red",
-							});
-							return;
-						}
-						account.assigned_roles = response.message.roles || [];
-						account.access_tier = response.message.access_tier;
-						account.access_tier_label = response.message.access_tier_label;
-						dialog.hide();
-						frappe.show_alert({
-							message: __("权限已保存为“{0}”", [response.message.access_tier_label]),
-							indicator: "green",
-						});
-						load();
-					},
-					always() {
-						dialog.enable_primary_action();
-					},
-				});
+				})).then((response) => {
+					if (!response.message?.saved || response.message?.access_tier !== selected) {
+						throw new Error(__("权限档位保存后校验失败，请刷新后重试。"));
+					}
+					account.access_tier = response.message.access_tier;
+					account.access_tier_label = response.message.access_tier_label;
+					return Promise.resolve(frappe.call({
+						method: "hrms.access_control.set_hrms_user_attendance_final_approval",
+						args: { user: account.user, enabled: values.attendance_final_approve ? 1 : 0 },
+					}));
+				}).then((response) => {
+					if (!response.message?.saved) throw new Error(__("考勤终稿审批权限保存失败。"));
+					account.assigned_roles = response.message.roles || [];
+					account.attendance_final_approve = Boolean(response.message.attendance_final_approve);
+					dialog.hide();
+					frappe.show_alert({
+						message: __("权限已保存为“{0}”；考勤终稿审批：{1}", [account.access_tier_label, account.attendance_final_approve ? __("允许") : __("不允许")]),
+						indicator: "green",
+					});
+					load();
+				}).catch((error) => frappe.msgprint({ title: __("保存失败"), message: error.message || String(error), indicator: "red" }))
+						.finally(() => dialog.enable_primary_action());
 			},
 		});
 		dialog.show();
@@ -117,6 +123,7 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 		const roles = account.assigned_roles || [];
 		const labels = [account.access_tier_label || __("只读")];
 		if (roles.includes("System Manager")) labels.push(__("系统管理员"));
+		if (account.attendance_final_approve) labels.push(__("考勤终稿审批"));
 		const visible = labels.slice(0, 3).map((role) => `<span class="hrms-access-center__role-chip">${escape(role)}</span>`).join("");
 		const remaining = Math.max(0, labels.length - 3);
 		return `${visible || `<span class="text-muted">${__("未分配角色")}</span>`}${remaining > 0 ? `<span class="hrms-access-center__role-more">+${remaining}</span>` : ""}`;

@@ -72,7 +72,7 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 41
+ATTENDANCE_POLICY_VERSION = 42
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
 DEFAULT_CALENDAR_WEEKEND_MODE = "休息日加班口径"
 
@@ -401,7 +401,8 @@ EXCEPTION_MESSAGES = {
 	"EARLY_MARKED": "钉钉明确标记早退；系统保留源次数并提示复核，不根据打卡时间追加次数或改写旷工时长。",
 	"ABSENCE_MARKED": "工作日无出勤且无可抵扣请假，已按未出勤工时计入旷工并进入薪资三倍扣款。",
 	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "休息日存在打卡时间，但未匹配加班申请且休息日加班工时为 0；请人工确认是否补录休息日加班工时。",
-	"RESTDAY_CLOCKED_WITHOUT_APPROVAL": "所属考勤组的休息日规则要求加班申请，当天有打卡但未匹配有效申请；请核对该日期的加班单。未打卡不按缺勤或请假处理。",
+	"RESTDAY_CLOCKED_WITHOUT_APPROVAL": "休息日加班时长为 0，但当天有打卡且所属考勤组要求加班申请；请核对该日期的加班单。",
+	"RESTDAY_OVERTIME_TIME_MISMATCH": "钉钉休息日加班时长已保留并计入，但与上下班打卡净时长差异达到 30 分钟，或缺少完整打卡；请核对时间。",
 	"RESTDAY_PUNCH_APPROVAL_MISMATCH": "休息日存在加班审批，但上下班打卡不完整或打卡区间与审批时段不匹配；不按迟到、早退或旷工处理，请人工核对。",
 	"HOLIDAY_CLOCKED_WITHOUT_APPROVAL": "所属考勤组的节日加班来源要求加班单，节假日已有打卡但未匹配有效申请；请核对该日期的审批单。",
 	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "工作日钉钉加班为 0，但存在明显班后打卡；所属考勤组或班次要求加班申请，当天未找到有效加班单。",
@@ -444,6 +445,7 @@ NON_BLOCKING_ATTENDANCE_EVENT_CODES = frozenset({
 	"LATE_MARKED",
 	"EARLY_MARKED",
 	"ABSENCE_MARKED",
+	"RESTDAY_OVERTIME_TIME_MISMATCH",
 	"RESTDAY_PUNCH_APPROVAL_MISMATCH",
 	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED",
 	"WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED",
@@ -463,6 +465,7 @@ ATTENDANCE_DETAIL_EXCEPTION_FIELDS = (
 	("ABSENCE_MARKED", "absence_marker_count"),
 	("RESTDAY_CLOCKED_WITHOUT_OVERTIME", "restday_clocked_without_overtime"),
 	("RESTDAY_CLOCKED_WITHOUT_APPROVAL", "restday_clocked_without_approval"),
+	("RESTDAY_OVERTIME_TIME_MISMATCH", "restday_overtime_time_mismatch"),
 	("RESTDAY_PUNCH_APPROVAL_MISMATCH", "restday_punch_approval_mismatch"),
 	("HOLIDAY_CLOCKED_WITHOUT_APPROVAL", "holiday_clocked_without_approval"),
 	("WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", "workday_outside_shift_unapproved"),
@@ -837,6 +840,46 @@ def _workday_overtime_time_match(
 		"source_overtime_minutes": source_minutes,
 		"expected_out_minutes": expected_out,
 		"actual_out_minutes": actual_out,
+	}
+
+
+def _restday_overtime_time_match(
+	row: Mapping[str, Any], raw_hours: Decimal, shift_rule: Mapping[str, Any] | None,
+	*, tolerance_minutes: int = OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES,
+) -> dict[str, Any]:
+	"""Compare DingTalk rest-day overtime with the net punch span.
+
+	A positive DingTalk duration is authoritative and remains payable without an
+	overtime application. This comparison is audit-only: configured meal breaks
+	are deducted, and a residual below the company 30-minute boundary is accepted.
+	"""
+	source_minutes = int(
+		(raw_hours * Decimal("60") + Decimal("0.5")).to_integral_value(rounding=ROUND_FLOOR)
+	) if raw_hours > 0 else 0
+	in_text = _text(_value(row, ("上班时间", "上班打卡", "上班打卡时间", "clock_in")))
+	out_text = _text(_value(row, ("下班时间", "下班打卡", "下班打卡时间", "clock_out")))
+	actual_in, actual_out = _clock_minutes(in_text), _clock_minutes(out_text)
+	complete = actual_in is not None and actual_out is not None
+	if complete and ("次日" in out_text or actual_out <= actual_in):
+		actual_out += 24 * 60
+	net_minutes = None
+	if complete and actual_out > actual_in:
+		net_minutes = (
+			_worked_minutes_after_meal_breaks(actual_in, actual_out, actual_in, shift_rule)
+			if shift_rule else actual_out - actual_in
+		)
+	difference_minutes = abs(net_minutes - source_minutes) if net_minutes is not None else None
+	matched = bool(
+		source_minutes > 0 and difference_minutes is not None
+		and difference_minutes < max(int(tolerance_minutes), 0)
+	)
+	return {
+		"matched": matched,
+		"complete_punches": complete,
+		"source_overtime_minutes": source_minutes,
+		"net_punch_minutes": net_minutes,
+		"difference_minutes": difference_minutes,
+		"tolerance_minutes": max(int(tolerance_minutes), 0),
 	}
 
 
@@ -1920,6 +1963,7 @@ def _aggregate_employee_rows(
 		elif manual_overtime_hours is not None:
 			manual_overtime_hours = _floor_overtime_half_hour(manual_overtime_hours)
 		raw_workday_overtime_hours = row_numbers["workday_overtime_hours"]
+		raw_restday_overtime_hours = row_numbers["restday_overtime_hours"]
 		# Source overtime is already a DingTalk calculation result. Preserve its
 		# precision; only an explicitly reviewed manual override may replace it.
 		# The schedule fallback exists only for legacy rows whose export omitted the
@@ -1935,7 +1979,8 @@ def _aggregate_employee_rows(
 		has_overtime_approval = approval_coverage["has_valid_approval"]
 		restday_punch_approval_check = _restday_punch_approval_check(row, approval_coverage)
 		row_restday_punch_approval_mismatch = bool(
-			genuine_restday and restday_punch_approval_check["mismatch"]
+			genuine_restday and raw_restday_overtime_hours <= 0
+			and restday_punch_approval_check["mismatch"]
 		)
 		if row_restday_punch_approval_mismatch:
 			approval_coverage = {
@@ -2132,9 +2177,9 @@ def _aggregate_employee_rows(
 			and row_actual_attendance_hours > 0
 		):
 			row_numbers["restday_overtime_hours"] = _floor_overtime_half_hour(row_actual_attendance_hours)
-		# Keep the legacy marker for historic projections. An indirect employee's
-		# weekend punch instead requires a valid overtime application even when
-		# DingTalk exported rest-day overtime hours; no punch needs no leave.
+		# Keep the legacy marker disabled for current projections. A positive
+		# DingTalk rest-day duration is the result; zero-duration punch rows follow
+		# the separate approval-rule check below.
 		row_restday_clock_without_overtime = False
 		restday_rule_row = row if matched_shift_rule else None
 		if not restday_rule_row and parsed_date and is_calendar_weekend(parsed_date):
@@ -2165,11 +2210,29 @@ def _aggregate_employee_rows(
 			or _schedule_overtime_rule(restday_policy_row, shift_rules)
 			if restday_policy_row and schedule_restday_overtime_mode != "schedule_review" else None
 		)
-		# A genuine rest day never requires an overtime application in HRMS.
-		# DingTalk's exported rest-day overtime is the result; punches and any
-		# linked approval remain audit evidence only.
-		indirect_restday_approval_required = False
-		row_restday_clock_without_approval = False
+		restday_overtime_time_match = _restday_overtime_time_match(
+			row, row_numbers["restday_overtime_hours"], restday_rule,
+		)
+		restday_overtime_time_mismatch = bool(
+			policy["genuine_restday_mode"]
+			and is_calendar_weekend(parsed_date)
+			and row_numbers["restday_overtime_hours"] > 0
+			and not restday_overtime_time_match["matched"]
+		)
+		# A positive DingTalk rest-day duration is authoritative, just like the
+		# weekday duration. Approval is consulted only when that source result is
+		# zero and punches still indicate a possible application-required shift.
+		indirect_restday_approval_required = bool(
+			policy["genuine_restday_mode"] and is_calendar_weekend(parsed_date)
+			and restday_rule_row and restday_rule
+			and _text(restday_rule.get("weekend_overtime_mode")) == "加班单"
+		)
+		row_restday_clock_without_approval = bool(
+			indirect_restday_approval_required
+			and row_numbers["restday_overtime_hours"] <= 0
+			and _has_clock_punch(row)
+			and not has_overtime_approval
+		)
 		holiday_approval_required = bool(
 			"节假日" in _text(date_type)
 			and approval_rule
@@ -2304,6 +2367,9 @@ def _aggregate_employee_rows(
 		if row_restday_clock_without_approval:
 			_add_code(codes, "RESTDAY_CLOCKED_WITHOUT_APPROVAL")
 			exception_events.append(_exception_event("RESTDAY_CLOCKED_WITHOUT_APPROVAL", parsed_date, row_number))
+		if restday_overtime_time_mismatch:
+			_add_code(codes, "RESTDAY_OVERTIME_TIME_MISMATCH")
+			exception_events.append(_exception_event("RESTDAY_OVERTIME_TIME_MISMATCH", parsed_date, row_number))
 		if row_restday_punch_approval_mismatch:
 			_add_code(codes, "RESTDAY_PUNCH_APPROVAL_MISMATCH")
 			exception_events.append(_exception_event("RESTDAY_PUNCH_APPROVAL_MISMATCH", parsed_date, row_number))
@@ -2356,6 +2422,8 @@ def _aggregate_employee_rows(
 			"indirect_restday_rule_name": _text(restday_rule.get("name")) if restday_rule else "",
 			"indirect_restday_rule_weekend_mode": _text(restday_rule.get("weekend_overtime_mode")) if restday_rule else "",
 			"restday_clocked_without_approval": row_restday_clock_without_approval,
+			"restday_overtime_time_mismatch": restday_overtime_time_mismatch,
+			"restday_overtime_time_match": restday_overtime_time_match,
 			"restday_punch_approval_mismatch": row_restday_punch_approval_mismatch,
 			"restday_punch_approval_mismatch_reason": restday_punch_approval_check["reason"],
 			"holiday_approval_required": holiday_approval_required,
@@ -2376,6 +2444,10 @@ def _aggregate_employee_rows(
 			"approval": _text(_value(row, IDENTITY_FIELDS["approval"])),
 			"overtime_approval_status": (
 				"休息日缺加班申请" if row_restday_clock_without_approval
+				else "采用钉钉休息日加班（时长待核对）" if restday_overtime_time_mismatch
+				else "采用钉钉休息日加班" if (
+					is_calendar_weekend(parsed_date) and row_numbers["restday_overtime_hours"] > 0
+				)
 				else "人工确认" if manual_overtime_hours is not None
 				else "缺少加班申请" if workday_outside_shift_unapproved
 				else "审批未转为钉钉加班时长" if workday_overtime_approval_not_applied

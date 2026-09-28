@@ -385,12 +385,13 @@ for method in (
 	"list_processing_results", "export_processing_result", "get_processing_record", "update_processing_record", "update_special_hours_manual_entry", "review_attendance_draft_daily_exception", "bulk_update_processing_records", "confirm_source_result",
 	"list_processing_exceptions", "list_processing_batches", "list_daily_attendance_records", "reset_attendance_month", "list_manual_adjustments",
 	"get_processing_configuration", "get_complete_attendance_rules", "list_attendance_shift_rules", "import_attendance_shift_rules", "upsert_attendance_shift_rule", "list_department_mappings", "upsert_department_mapping", "generate_monthly_final_files", "get_monthly_final_preview", "update_monthly_final_rows",
+	"submit_monthly_final_for_approval", "review_monthly_final_approval",
 	"list_attendance_scheduling_policies", "upsert_attendance_scheduling_policy",
 ):
 	start = api.find(f"def {method}(")
 	end = api.find("\n@frappe.whitelist()", start + 1)
 	body = api[start:] if end == -1 else api[start:end]
-	if start == -1 or "_require_processing_manager()" not in body:
+	if start == -1 or "_require_processing_manager(" not in body:
 		raise AssertionError(f"{method} must enforce processing-manager permission.")
 
 exceptions_start = api.find("def list_processing_exceptions(")

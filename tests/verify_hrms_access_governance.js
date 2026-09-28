@@ -67,7 +67,8 @@ for (const marker of [
 	"hrms-access-capability-dialog",
 	"response.message?.saved",
 	"权限已保存为",
-	"always()",
+	"Promise.resolve(frappe.call",
+	".finally(() => dialog.enable_primary_action())",
 	"dialog.enable_primary_action()",
 	"提交人和审批人按实际登录账号记入",
 ]) {

@@ -18,6 +18,7 @@ READ_ONLY_ROLE = "HRMS 基础只读"
 READ_TIER_ROLE = "HRMS 只读"
 SUBMIT_ROLE = "HRMS 提交"
 APPROVE_ROLE = "HRMS 审批"
+ATTENDANCE_FINAL_APPROVER_ROLE = "考勤终稿审批"
 EMPLOYEE_SELF_SERVICE_ROLE = "Employee Self Service"
 RETIRED_CAPABILITY_ROLES = ("费用出差提交", "费用出差审批")
 RETIRED_CAPABILITY_KEYS = frozenset(("expense_submit", "expense_approve"))
@@ -101,6 +102,7 @@ CAPABILITY_DEFINITIONS = (
 	_capability("attendance_import_submit", "考勤导入提交", "考勤导入提交", "考勤", "上传并提交考勤、请假、补卡和月度补充来源。", "high", (("HRMS Attendance Import Batch", "read", "create", "write", "import"),)),
 	_capability("attendance_exception_edit", "考勤异常修改", "考勤异常修改", "考勤", "提交考勤异常的人工更正，保留原值和更改审计。", "high", (("HRMS Attendance Processing Record", "read", "write"), ("HRMS Attendance Exception", "read", "write"))),
 	_capability("attendance_approve", "考勤审批与部门确认", "考勤审批", "考勤", "审核异常、部门确认和考勤结果；不包含月度终稿锁定。", "critical", (("HRMS Attendance Exception", "read", "write", "submit"), ("HRMS Attendance Department Confirmation", "read", "write", "submit"))),
+	_capability("attendance_final_approve", "考勤终稿审批", ATTENDANCE_FINAL_APPROVER_ROLE, "考勤", "审批或驳回已提交的月度考勤终稿快照；上传人不能审批本人提交的快照。", "critical", (("HRMS Attendance Import Batch", "read"), ("HRMS Attendance Processing Record", "read"), ("HRMS Attendance Month Lock", "read"))),
 	_capability("attendance_final_lock", "考勤终稿锁定", "考勤终稿锁定", "考勤", "生成、锁定或按要求解锁月度考勤终稿。", "critical", (("HRMS Attendance Month Lock", "read", "create", "write", "submit", "cancel"), ("HRMS Monthly Attendance Summary", "read", "write"))),
 	_capability("attendance_export", "考勤导出", "考勤导出", "考勤", "导出考勤明细、异常和月度终稿。", "high", (("Attendance", "read", "export", "report", "print"), ("HRMS Monthly Attendance Summary", "read", "export", "report"))),
 
@@ -133,8 +135,8 @@ CAPABILITY_BY_KEY = {item["key"]: item for item in CAPABILITY_DEFINITIONS}
 
 # The public permission model has three cumulative levels.  The detailed
 # capability definitions remain an internal compatibility map for existing API
-# guards and old records, but administrators no longer assign forty independent
-# checkboxes to each user.
+# guards and old records.  Administrators choose one tier plus the deliberately
+# independent attendance-final approval checkbox used for separation of duties.
 READ_TIER_CAPABILITY_KEYS = frozenset({
 	"basic_read_only", "personnel_view", "announcement_view", "attendance_view", "payroll_view",
 })
@@ -145,9 +147,12 @@ APPROVAL_ONLY_CAPABILITY_KEYS = frozenset({
 	"attendance_final_lock", "payroll_approval", "payroll_confirm", "payroll_rules",
 	"recruitment_approve", "training_approve", "performance_approve",
 })
+INDEPENDENT_ACCOUNT_CAPABILITY_KEYS = frozenset({"attendance_final_approve"})
+INDEPENDENT_ACCOUNT_ROLES = frozenset({ATTENDANCE_FINAL_APPROVER_ROLE})
 BUSINESS_CAPABILITY_KEYS = frozenset(CAPABILITY_BY_KEY) - {"permission_management"}
 SUBMIT_TIER_CAPABILITY_KEYS = BUSINESS_CAPABILITY_KEYS - APPROVAL_ONLY_CAPABILITY_KEYS
-APPROVE_TIER_CAPABILITY_KEYS = BUSINESS_CAPABILITY_KEYS
+SUBMIT_TIER_CAPABILITY_KEYS -= INDEPENDENT_ACCOUNT_CAPABILITY_KEYS
+APPROVE_TIER_CAPABILITY_KEYS = BUSINESS_CAPABILITY_KEYS - INDEPENDENT_ACCOUNT_CAPABILITY_KEYS
 ACCESS_TIER_DEFINITIONS = (
 	{
 		"key": "read",
@@ -176,6 +181,7 @@ ACCESS_TIER_BY_ROLE = {item["role"]: item for item in ACCESS_TIER_DEFINITIONS}
 GRANULAR_BUSINESS_ROLES = frozenset(
 	item["role"] for item in CAPABILITY_DEFINITIONS
 	if item["key"] not in {"basic_read_only", "permission_management"}
+	and item["role"] not in INDEPENDENT_ACCOUNT_ROLES
 )
 
 
@@ -424,8 +430,17 @@ def get_hrms_capability_catalog():
 			for item in ACCESS_TIER_DEFINITIONS
 		],
 		"managed_roles": [item["role"] for item in ACCESS_TIER_DEFINITIONS],
+		"account_addons": [
+			{
+				"key": "attendance_final_approve",
+				"label": CAPABILITY_BY_KEY["attendance_final_approve"]["label"],
+				"role": ATTENDANCE_FINAL_APPROVER_ROLE,
+				"description": CAPABILITY_BY_KEY["attendance_final_approve"]["description"],
+			}
+		],
 		"design_notes": [
 			"权限只分只读、经办与提交、业务管理员三档，且逐级包含。",
+			"考勤终稿审批是逐账号单独授权；未勾选时，即使是业务管理员也不能批准终稿。",
 			"业务管理员是业务最高档，可管理部门与组织架构；不会因为缺少部门单据权限被拦截。",
 			"账户与权限管理仍只属于系统管理员，不随业务审批档自动授予。",
 			"提交和审批使用登录账号执行，操作人由单据 owner、modified_by 及业务审计字段保留。",
@@ -474,6 +489,39 @@ def set_hrms_user_access_tier(user: str, access_tier: str = "read"):
 
 
 @frappe.whitelist()
+def set_hrms_user_attendance_final_approval(user: str, enabled: int = 0):
+	"""Grant or revoke the independent monthly-attendance-final approval role."""
+	_require_system_manager()
+	if not user or not frappe.db.exists("User", user):
+		frappe.throw(_("账户不存在。"))
+	if user == "Administrator":
+		frappe.throw(_("Administrator 使用固定最高权限，无需单独设置。"))
+
+	target = frappe.get_doc("User", user)
+	roles = [row.role for row in target.roles]
+	roles = [role for role in roles if role != ATTENDANCE_FINAL_APPROVER_ROLE]
+	if int(enabled or 0):
+		roles.append(ATTENDANCE_FINAL_APPROVER_ROLE)
+	target.set("roles", [])
+	for role in dict.fromkeys(roles):
+		target.append("roles", {"role": role})
+	target.user_type = "System User"
+	target.save(ignore_permissions=True)
+	frappe.clear_cache(user=user)
+	saved_roles = [row.role for row in target.roles]
+	granted = ATTENDANCE_FINAL_APPROVER_ROLE in saved_roles
+	if granted != bool(int(enabled or 0)):
+		frappe.throw(_("考勤终稿审批权限保存后校验失败，请刷新后重试。"))
+	return {
+		"user": user,
+		"saved": True,
+		"attendance_final_approve": granted,
+		"roles": saved_roles,
+		"changed_by": frappe.session.user,
+	}
+
+
+@frappe.whitelist()
 def set_hrms_user_capabilities(user: str, capabilities: str | None = None):
 	"""Compatibility endpoint: collapse a stale checkbox payload to one tier."""
 	_require_system_manager()
@@ -484,15 +532,20 @@ def set_hrms_user_capabilities(user: str, capabilities: str | None = None):
 	unknown = selected - set(definitions)
 	if unknown:
 		frappe.throw(_("包含未知的业务权限：{0}").format("、".join(sorted(unknown))))
-	if selected & APPROVAL_ONLY_CAPABILITY_KEYS:
+	attendance_final_approve = "attendance_final_approve" in selected
+	tier_selected = selected - INDEPENDENT_ACCOUNT_CAPABILITY_KEYS
+	if tier_selected & APPROVAL_ONLY_CAPABILITY_KEYS:
 		access_tier = "approve"
-	elif selected & (SUBMIT_TIER_CAPABILITY_KEYS - READ_TIER_CAPABILITY_KEYS):
+	elif tier_selected & (SUBMIT_TIER_CAPABILITY_KEYS - READ_TIER_CAPABILITY_KEYS):
 		access_tier = "submit"
 	else:
 		access_tier = "read"
 	result = set_hrms_user_access_tier(user, access_tier)
+	approval_result = set_hrms_user_attendance_final_approval(user, int(attendance_final_approve))
 	return {
 		**result,
+		"roles": approval_result["roles"],
+		"attendance_final_approve": approval_result["attendance_final_approve"],
 		"capabilities": sorted(selected),
 		"ignored_capabilities": ignored_capabilities,
 		"migrated_to_tier": access_tier,

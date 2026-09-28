@@ -3093,13 +3093,17 @@ class AttendanceImportCenter {
 	}
 
 	render_monthly_final_markup(batch = this.processing_batch, checks = this.get_final_source_checks(batch || {})) {
-		const lockedSnapshot = batch?.locked_snapshot_version || batch?.final_outputs?.locked_snapshot_version || "";
 		const firstSignedOutputs = batch?.first_signed_outputs || {};
 		const sourcesReady = checks.length > 0 && checks.every((check) => check.ready);
 		// `snapshot_ready` is a derived, cached server hint and can be stale after
 		// a source is confirmed.  The six current source checks are the actual
 		// gate, and the server recomputes them again before generating files.
-		const ready = sourcesReady;
+		const approval = batch?.monthly_final_approval || { status: "未提交" };
+		const ready = sourcesReady && Boolean(approval.can_lock);
+		const approvalStatus = approval.status || "未提交";
+		const approvalBlockedSources = approval.blocked_sources || checks.filter((check) => !check.ready).map((check) => check.label);
+		const submitApprovalLabel = approvalStatus === "待审批" ? "已提交月考勤审核" : approvalStatus === "已批准" ? "月考勤审核已通过" : ["已驳回", "已失效"].includes(approvalStatus) ? "重新提交月考勤审核" : "提交月考勤审核";
+		const submitApprovalDisabled = !approval.can_submit;
 		const outputs = batch?.final_outputs || {};
 		const secondSignedFileUrl = outputs.second_signed_file_url || outputs.signed_file_url;
 		const recognition = batch?.employee_recognition || {};
@@ -3108,11 +3112,33 @@ class AttendanceImportCenter {
 			["花名册员工", recognition.roster_employee_count, "已填工号，可参与匹配"],
 			["成功识别员工", recognition.successful_employee_count, "已通过校验，可进入终稿"],
 		];
-		return `<section class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__("月度终稿"))}</h3></div><button class="btn btn-primary btn-sm" data-generate-final ${ready ? "" : "disabled"}>${this.escape(__("锁定并生成三个版本"))}</button></div><section class="hrms-attendance-final-checklist"><div class="hrms-attendance-final-checklist__head"><strong>${this.escape(__("来源完备性 / 锁定快照"))}</strong></div><div class="hrms-attendance-final-recognition">${recognitionCards.map(([label, count]) => `<div><strong>${this.escape(__("{0} 人", [count || 0]))}</strong><span>${this.escape(__(label))}</span></div>`).join("")}</div><div class="hrms-attendance-final-readiness">${checks.map((check) => `<div><strong>${this.escape(__(check.label))}</strong>${this.status_badge(check.status)}<em>${this.escape(lockedSnapshot ? __("锁定快照：{0}", [lockedSnapshot]) : __("生成时锁定"))}</em></div>`).join("")}</div></section><div class="hrms-attendance-final-grid"><article><strong>${this.escape(__("一次签字版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="first_signed" ${firstSignedOutputs.file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button><button class="btn btn-default btn-sm" data-download-final="first_signed" ${firstSignedOutputs.file_url ? "" : "disabled"}>${this.escape(__("下载一次签字版"))}</button></article><article><strong>${this.escape(__("第二次员工签字版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="signed" ${secondSignedFileUrl ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-edit-final="signed" ${secondSignedFileUrl ? "" : "disabled"}>${this.escape(__("网页编辑"))}</button> <button class="btn btn-default btn-sm" data-download-final="signed" ${secondSignedFileUrl ? "" : "disabled"}>${this.escape(__("下载第二次员工签字版"))}</button></article><article><strong>${this.escape(__("财务版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-edit-final="signed" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("网页编辑"))}</button> <button class="btn btn-default btn-sm" data-download-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("下载财务版"))}</button></article></div><div class="hrms-attendance-process-footnote">${this.escape(__(outputs.locked_version ? `当前锁定版本：${outputs.locked_version}` : "尚未生成锁定版本。"))}</div></section>`;
+		const approvalActions = [
+			`<button class="btn btn-default btn-sm" data-hrms-capability="attendance_import_submit" data-submit-final-approval ${submitApprovalDisabled ? "disabled" : ""}>${this.escape(__(submitApprovalLabel))}</button>`,
+			approvalStatus === "待审批" ? `<button class="btn btn-success btn-sm" data-hrms-capability="attendance_final_approve" data-review-final-approval="approve" ${approval.can_approve ? "" : "disabled"}>${this.escape(__("审核通过"))}</button><button class="btn btn-danger btn-sm" data-hrms-capability="attendance_final_approve" data-review-final-approval="reject" ${approval.can_approve ? "" : "disabled"}>${this.escape(__("审核驳回"))}</button>` : "",
+		].join("");
+		const approvalHint = approvalStatus === "待审批"
+			? __("提交人：{0}；等待另一位有“考勤终稿审批”权限的账号审核。", [approval.submitted_by || "--"])
+			: approvalStatus === "已批准"
+				? __("审核人：{0}；只有本次审核通过的同一份月考勤数据可以锁定。", [approval.reviewed_by || "--"])
+				: approvalStatus === "已驳回"
+					? __("审核驳回意见：{0}。修改完成后请重新提交月考勤审核。", [approval.review_note || "未填写"])
+					: approvalStatus === "已失效"
+						? __("月考勤数据已经变化，原审核自动失效，请重新提交审核。")
+						: approvalBlockedSources.length
+							? __("以下来源尚未完备：{0}。完成后即可提交月考勤审核。", [approvalBlockedSources.join("、")])
+							: __("请由上传/经办账号提交月考勤审核，审核通过后才能锁定终稿。")
+		return `<section class="hrms-attendance-section">
+			<div class="hrms-attendance-list-head"><div><h3>${this.escape(__("月度终稿"))}</h3></div><div>${approvalActions}<button class="btn btn-primary btn-sm" data-hrms-capability="attendance_final_lock" data-generate-final ${ready ? "" : "disabled"}>${this.escape(__("锁定并生成三个版本"))}</button></div></div>
+			<div class="hrms-attendance-api-notice"><strong>${this.escape(__("月考勤审核：{0}", [approvalStatus]))}</strong><span>${this.escape(approvalHint)}</span></div>
+			<section class="hrms-attendance-final-checklist"><div class="hrms-attendance-final-recognition">${recognitionCards.map(([label, count]) => `<div><strong>${this.escape(__("{0} 人", [count || 0]))}</strong><span>${this.escape(__(label))}</span></div>`).join("")}</div></section>
+			<div class="hrms-attendance-final-grid"><article><strong>${this.escape(__("一次签字版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="first_signed" ${firstSignedOutputs.file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button><button class="btn btn-default btn-sm" data-download-final="first_signed" ${firstSignedOutputs.file_url ? "" : "disabled"}>${this.escape(__("下载一次签字版"))}</button></article><article><strong>${this.escape(__("第二次员工签字版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="signed" ${secondSignedFileUrl ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-edit-final="signed" ${secondSignedFileUrl ? "" : "disabled"}>${this.escape(__("网页编辑"))}</button> <button class="btn btn-default btn-sm" data-download-final="signed" ${secondSignedFileUrl ? "" : "disabled"}>${this.escape(__("下载第二次员工签字版"))}</button></article><article><strong>${this.escape(__("财务版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-edit-final="signed" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("网页编辑"))}</button> <button class="btn btn-default btn-sm" data-download-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("下载财务版"))}</button></article></div><div class="hrms-attendance-process-footnote">${this.escape(__(outputs.locked_version ? `当前锁定版本：${outputs.locked_version}` : "尚未生成锁定版本。"))}</div>
+		</section>`;
 	}
 
 	bind_monthly_final_events(body) {
 		body.querySelector("[data-generate-final]")?.addEventListener("click", () => this.generate_monthly_final_files());
+		body.querySelector("[data-submit-final-approval]")?.addEventListener("click", () => this.submit_monthly_final_for_approval());
+		body.querySelectorAll("[data-review-final-approval]").forEach((button) => button.addEventListener("click", () => this.review_monthly_final_approval(button.dataset.reviewFinalApproval)));
 		body.querySelectorAll("[data-download-final]").forEach((button) => button.addEventListener("click", () => this.download_final_file(button.dataset.downloadFinal)));
 		body.querySelectorAll("[data-preview-final]").forEach((button) => button.addEventListener("click", () => this.open_monthly_final_preview(button.dataset.previewFinal)));
 		body.querySelectorAll("[data-edit-final]").forEach((button) => button.addEventListener("click", () => this.open_monthly_final_editor(button.dataset.editFinal)));
@@ -3120,6 +3146,35 @@ class AttendanceImportCenter {
 		body.querySelectorAll("[data-monthly-support-results]").forEach((button) => button.addEventListener("click", () => { this.selected_source_type = button.dataset.monthlySupportResults; this.set_view("processing-results"); }));
 		body.querySelectorAll("[data-monthly-support-manual]").forEach((button) => button.addEventListener("click", () => { this.selected_source_type = button.dataset.monthlySupportManual; this.set_view("processing-results"); }));
 		body.querySelector("[data-special-hours-manual]")?.addEventListener("click", () => this.open_special_hours_manual_dialog());
+	}
+
+	submit_monthly_final_for_approval() {
+		frappe.prompt(
+			[{ fieldname: "note", fieldtype: "Small Text", label: __("提交说明"), description: __("可填写本次终稿的核对范围或需审批人注意的事项。") }],
+			(values) => this.call_processing_api("submit_monthly_final_for_approval", {
+				company: this.company, attendance_month: this.attendance_month, note: values.note || "",
+			}, {
+				freeze: true, freeze_message: __("正在提交月度终稿审批..."),
+				on_success: () => { frappe.show_alert({ message: __("已提交审批，需由另一位有审批权限的账号处理。"), indicator: "blue" }); this.load_monthly_final(); },
+				on_error: (message) => frappe.msgprint(message),
+			}),
+			__("提交考勤终稿审批"), __("提交审批"),
+		);
+	}
+
+	review_monthly_final_approval(decision) {
+		const approved = decision === "approve";
+		frappe.prompt(
+			[{ fieldname: "note", fieldtype: "Small Text", label: approved ? __("审批意见") : __("驳回原因"), reqd: approved ? 0 : 1 }],
+			(values) => this.call_processing_api("review_monthly_final_approval", {
+				company: this.company, attendance_month: this.attendance_month, decision, note: values.note || "",
+			}, {
+				freeze: true, freeze_message: approved ? __("正在批准月度终稿...") : __("正在驳回月度终稿..."),
+				on_success: () => { frappe.show_alert({ message: approved ? __("终稿已批准，可以由有锁定权限的账号生成终稿。") : __("终稿已驳回，等待经办账号修改后重新提交。"), indicator: approved ? "green" : "orange" }); this.load_monthly_final(); },
+				on_error: (message) => frappe.msgprint(message),
+			}),
+			approved ? __("批准考勤终稿") : __("驳回考勤终稿"), approved ? __("批准") : __("驳回"),
+		);
 	}
 
 	open_signed_final_reconciliation_uploader() {

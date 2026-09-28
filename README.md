@@ -106,6 +106,25 @@ Use the following credentials to log in:
 	```
 3. You can access the site at `http://hrms.localhost:8080`
 
+## Local Verification
+
+From the repository root, run the lightweight regression checks that do not require
+a running Frappe site:
+
+```sh
+python3 -m unittest tests.test_docker_site_preflight tests.test_hrms_data_statistics tests.test_roster_summary_loading -v
+node --test frontend/tests/*.test.js
+```
+
+The Python checks cover isolated deployment, statistics, and permission-aware
+query contracts. The Node checks cover frontend utility behavior. Install the
+project dependencies declared in `pyproject.toml` before running Excel-related
+tests; they require `openpyxl`.
+
+These checks do not replace an authenticated browser check or an acceptance run
+against a real Frappe site. Validate role permissions, company-scoped data, and
+business workflows in that environment before deployment.
+
 ## Learning and Community
 
 1. [Frappe School](https://frappe.school) - Learn Frappe Framework and ERPNext from the various courses by the maintainers or from the community.
@@ -135,4 +154,3 @@ Please read our [Logo and Trademark Policy](TRADEMARK_POLICY.md).
 		</picture>
 	</a>
 </div>
-

@@ -361,7 +361,8 @@ EXCEPTION_LABELS = {
 	"EARLY_MARKED": "早退（钉钉标记）",
 	"ABSENCE_MARKED": "旷工标记待核验",
 	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "休息日有打卡未计加班",
-	"RESTDAY_CLOCKED_WITHOUT_APPROVAL": "间接人员周末打卡缺加班单",
+	"RESTDAY_CLOCKED_WITHOUT_APPROVAL": "休息日加班为0：有打卡但缺加班单",
+	"RESTDAY_OVERTIME_TIME_MISMATCH": "休息日加班时长与打卡不一致",
 	"RESTDAY_PUNCH_APPROVAL_MISMATCH": "休息日打卡与加班审批不匹配",
 	"HOLIDAY_CLOCKED_WITHOUT_APPROVAL": "节假日打卡缺加班单",
 	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "钉钉加班为0：缺加班申请",
@@ -422,7 +423,9 @@ def _review_guidance(exception_codes: list[str], source_type: str) -> list[str]:
 	if "RESTDAY_CLOCKED_WITHOUT_OVERTIME" in codes:
 		guidance.append("休息日已有钉钉打卡，但未匹配加班申请且加班工时为 0；请核对主管确认后，在该日期填写实际休息日加班工时，或确认本次打卡不计加班。")
 	if "RESTDAY_CLOCKED_WITHOUT_APPROVAL" in codes:
-		guidance.append("间接人员周末有打卡须提交加班单；请在“修改本日”核对关联审批单。未打卡的周末排班不需要请假，也不计缺勤。")
+		guidance.append("本日休息日加班时长为 0，但有打卡且所属规则要求加班单；请在“修改本日”核对关联审批单。")
+	if "RESTDAY_OVERTIME_TIME_MISMATCH" in codes:
+		guidance.append("休息日加班时长已按钉钉结果计入，不需要加班审批；但与上下班打卡净时长差异达到 30 分钟或打卡不完整，请核对打卡及休息扣除。")
 	if "RESTDAY_PUNCH_APPROVAL_MISMATCH" in codes:
 		guidance.append("休息日不计算迟到、早退或旷工；请核对上下班卡是否完整，以及实际打卡区间是否与加班审批时段一致。")
 	if "HOLIDAY_CLOCKED_WITHOUT_APPROVAL" in codes:
@@ -462,6 +465,11 @@ def _review_options(exception_codes: list[str], source_type: str) -> list[dict[s
 			{"label": "补卡审批已通过，确认当前考勤数据", "review_status": "已通过", "reason": "已核对补卡审批通过且已结束，确认当前考勤数据。"},
 			{"label": "确认未打卡（不计入下游）", "review_status": "已驳回", "reason": "已核对无有效补卡审批，确认未打卡，本员工汇总不计入下游。"},
 		])
+	if "RESTDAY_OVERTIME_TIME_MISMATCH" in codes:
+		options.extend([
+			{"label": "等待更正打卡或加班时长", "review_status": "待审核", "reason": "休息日加班时长与打卡净时长不一致，等待更正后重新校验。"},
+			{"label": "已人工核对时长", "review_status": "已通过", "reason": "已人工核对休息日加班时长与打卡，确认保留钉钉加班时长。"},
+		])
 	if "SHIFT_MISSING" in codes:
 		options.extend([
 			{"label": "确认无排班/入离职期间，保留当前数据", "review_status": "已通过", "reason": "已核对为无排班日或入离职期间，确认当前考勤数据。"},
@@ -496,14 +504,19 @@ def _review_options(exception_codes: list[str], source_type: str) -> list[dict[s
 			{"label": "确认不应计入（不计入下游）", "review_status": "已驳回", "reason": "已核对该记录不应计入下游。"},
 		])
 	return options
-def _require_processing_manager():
+def _require_processing_manager(*capability_keys: str):
 	"""Guard every whitelisted read/write path before any ignore_permissions call."""
 	# ``frappe.has_role`` is only exposed on the browser-side Frappe object in
 	# this deployment.  Server methods must resolve roles from the current
 	# session explicitly.
 	roles = set(frappe.get_roles(frappe.session.user))
-	if not ({"System Manager", "HR Manager"} & roles):
-		frappe.throw(_("只有 System Manager 或 HR Manager 可以访问考勤处理中心。"), frappe.PermissionError)
+	if capability_keys:
+		from hrms.access_control import has_hrms_capability
+		if any(has_hrms_capability(key) for key in capability_keys):
+			return
+	elif {"System Manager", "HR Manager"} & roles:
+		return
+	frappe.throw(_("当前账号没有访问或执行该考勤处理操作的权限。"), frappe.PermissionError)
 
 
 def _require_company(company: str) -> str:
@@ -2959,6 +2972,7 @@ def _invalidate_monthly_final_after_source_change(batch, reason: str):
 	anchor = _latest_batch(batch.company, batch.attendance_month, "attendance_draft")
 	if not anchor:
 		return
+	anchor_meta = _processing_meta(anchor)
 	updates = {}
 	if batch.source_type in FIRST_SIGNED_SOURCE_TYPES:
 		updates.update({
@@ -2970,7 +2984,7 @@ def _invalidate_monthly_final_after_source_change(batch, reason: str):
 				"changed_on": now_datetime().isoformat(),
 			},
 		})
-	if _processing_meta(anchor).get("monthly_final_outputs"):
+	if anchor_meta.get("monthly_final_outputs"):
 		updates.update({
 			"monthly_final_outputs": {},
 			"source_data_change": {
@@ -2979,6 +2993,26 @@ def _invalidate_monthly_final_after_source_change(batch, reason: str):
 				"changed_by": frappe.session.user,
 				"changed_on": now_datetime().isoformat(),
 			},
+		})
+	approval = dict(anchor_meta.get("monthly_final_approval") or {})
+	if approval.get("status") in {"待审批", "已批准", "已驳回"}:
+		approval.update({
+			"status": "已失效",
+			"invalidated_by": frappe.session.user,
+			"invalidated_on": now_datetime().isoformat(),
+			"invalidated_reason": reason,
+		})
+		history = list(anchor_meta.get("monthly_final_approval_history") or [])
+		history.append({
+			"action": "审批失效",
+			"snapshot_version": approval.get("snapshot_version", ""),
+			"operator": frappe.session.user,
+			"occurred_on": approval["invalidated_on"],
+			"note": reason,
+		})
+		updates.update({
+			"monthly_final_approval": approval,
+			"monthly_final_approval_history": history,
 		})
 	if updates:
 		_save_batch_notes(anchor, updates)
@@ -3033,7 +3067,7 @@ def _monthly_final_employee_recognition(company: str, attendance_month: str) -> 
 
 @frappe.whitelist()
 def get_processing_batch(company: str, attendance_month: str):
-	_require_processing_manager()
+	_require_processing_manager("attendance_view", "attendance_import_submit", "attendance_final_approve", "attendance_final_lock")
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
 	slots = []
 	for source_type in SOURCE_TYPES:
@@ -3050,6 +3084,7 @@ def get_processing_batch(company: str, attendance_month: str):
 	first_signed_inputs = _first_signed_inputs(company, attendance_month, slots)
 	first_signed_outputs = anchor_meta.get("first_signed_outputs", {})
 	final_outputs = anchor_meta.get("monthly_final_outputs", {})
+	approval = _monthly_final_approval_state(company, attendance_month, anchor_meta, finalization_inputs)
 	return {
 		"batch_id": f"{company}:{attendance_month}",
 		"company": company,
@@ -3061,6 +3096,7 @@ def get_processing_batch(company: str, attendance_month: str):
 		"first_signed_inputs": first_signed_inputs,
 		"first_signed_outputs": first_signed_outputs,
 		"final_outputs": final_outputs,
+		"monthly_final_approval": approval,
 		"signed_final_reconciliation": anchor_meta.get("signed_final_reconciliation", {}),
 		"employee_recognition": _monthly_final_employee_recognition(company, attendance_month),
 		"locked_snapshot_version": final_outputs.get("locked_snapshot_version", ""),
@@ -3248,7 +3284,7 @@ def bulk_import_and_process_sources(company: str, attendance_month: str, files: 
 		})
 	return {
 		"items": items,
-		"notice": _("六类考勤来源已完成匹配、导入并生效。无效记录已自动排除，不需要逐类审批。"),
+		"notice": _("六类考勤来源已完成匹配、导入并进入当前月度快照。无效记录已自动排除，不需要逐类审批；但锁定终稿前仍须提交月度终稿审批。"),
 	}
 
 
@@ -6696,6 +6732,134 @@ def _monthly_snapshot_version(batches: dict[str, Any]) -> str:
 	return hashlib.sha256(_json(material).encode()).hexdigest()[:16]
 
 
+def _approval_snapshot(company: str, attendance_month: str, finalization_inputs=None) -> tuple[str, list[str]]:
+	"""Return the exact source/review snapshot that one approval authorizes."""
+	inputs = finalization_inputs
+	if inputs is None:
+		slots = []
+		for source_type in SOURCE_TYPES:
+			slot = _slot_payload(_latest_batch(company, attendance_month, source_type))
+			if slot:
+				slots.append(slot)
+		inputs = _finalization_inputs(company, attendance_month, slots)
+	blocked = [item["label"] for item in inputs if not item.get("ready")]
+	if blocked:
+		return "", blocked
+	batches = _final_snapshot_batches(company, attendance_month)
+	missing = [SOURCE_LABELS[source_type] for source_type, batch in batches.items() if not batch]
+	if missing:
+		return "", missing
+	return _monthly_snapshot_version(batches), []
+
+
+def _monthly_final_approval_state(company: str, attendance_month: str, anchor_meta=None, finalization_inputs=None) -> dict[str, Any]:
+	anchor = _latest_batch(company, attendance_month, "attendance_draft")
+	meta = anchor_meta if anchor_meta is not None else (_processing_meta(anchor) if anchor else {})
+	approval = dict(meta.get("monthly_final_approval") or {})
+	current_snapshot, blocked_sources = _approval_snapshot(company, attendance_month, finalization_inputs)
+	stored_snapshot = str(approval.get("snapshot_version") or "")
+	status = str(approval.get("status") or "未提交")
+	stale = bool(stored_snapshot and (not current_snapshot or stored_snapshot != current_snapshot))
+	if stale and status in {"待审批", "已批准", "已驳回"}:
+		status = "已失效"
+	from hrms.access_control import has_hrms_capability
+	return {
+		**approval,
+		"status": status,
+		"snapshot_version": stored_snapshot,
+		"current_snapshot_version": current_snapshot,
+		"blocked_sources": blocked_sources,
+		"stale": stale,
+		"approved_for_current_snapshot": bool(status == "已批准" and stored_snapshot and stored_snapshot == current_snapshot),
+		"can_submit": bool(current_snapshot and status in {"未提交", "已驳回", "已失效"} and has_hrms_capability("attendance_import_submit")),
+		"can_approve": bool(status == "待审批" and current_snapshot and stored_snapshot == current_snapshot and approval.get("submitted_by") != frappe.session.user and has_hrms_capability("attendance_final_approve")),
+		"can_lock": bool(status == "已批准" and stored_snapshot == current_snapshot and has_hrms_capability("attendance_final_lock")),
+		"current_user_is_submitter": bool(approval.get("submitted_by") == frappe.session.user),
+	}
+
+
+def _save_monthly_final_approval(anchor, approval: dict[str, Any], event: dict[str, Any]):
+	meta = _processing_meta(anchor)
+	history = list(meta.get("monthly_final_approval_history") or [])
+	history.append(event)
+	_save_batch_notes(anchor, {
+		"monthly_final_approval": approval,
+		"monthly_final_approval_history": history,
+	})
+
+
+@frappe.whitelist()
+def submit_monthly_final_for_approval(company: str, attendance_month: str, note: str = ""):
+	"""Submit the current six-source snapshot; later changes invalidate it."""
+	_require_processing_manager("attendance_import_submit")
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	anchor = _latest_batch(company, attendance_month, "attendance_draft")
+	if not anchor:
+		frappe.throw(_("请先上传并加工考勤初稿。"))
+	snapshot_version, blocked_sources = _approval_snapshot(company, attendance_month)
+	if not snapshot_version:
+		frappe.throw(_("月度终稿来源尚未完备：{0}").format("、".join(blocked_sources)))
+	current = _monthly_final_approval_state(company, attendance_month)
+	if current.get("status") == "待审批" and current.get("snapshot_version") == snapshot_version:
+		frappe.throw(_("当前月度终稿已经提交审批，请等待审批人处理。"))
+	if current.get("approved_for_current_snapshot"):
+		frappe.throw(_("当前月度终稿快照已经审批通过，无需重复提交。"))
+	now = now_datetime().isoformat()
+	approval = {
+		"status": "待审批",
+		"snapshot_version": snapshot_version,
+		"submitted_by": frappe.session.user,
+		"submitted_on": now,
+		"submission_note": str(note or "").strip(),
+		"reviewed_by": "",
+		"reviewed_on": "",
+		"review_note": "",
+	}
+	_save_monthly_final_approval(anchor, approval, {
+		"action": "提交审批", "snapshot_version": snapshot_version,
+		"operator": frappe.session.user, "occurred_on": now, "note": approval["submission_note"],
+	})
+	frappe.db.commit()
+	return _monthly_final_approval_state(company, attendance_month)
+
+
+@frappe.whitelist()
+def review_monthly_final_approval(company: str, attendance_month: str, decision: str, note: str = ""):
+	"""Approve or reject another account's submitted attendance-final snapshot."""
+	_require_processing_manager("attendance_final_approve")
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	decision = str(decision or "").strip()
+	if decision not in {"approve", "reject"}:
+		frappe.throw(_("审批决定只能是批准或驳回。"))
+	anchor = _latest_batch(company, attendance_month, "attendance_draft")
+	if not anchor:
+		frappe.throw(_("尚无可审批的考勤终稿。"))
+	state = _monthly_final_approval_state(company, attendance_month)
+	if state.get("status") != "待审批":
+		frappe.throw(_("当前终稿不是待审批状态，请由上传人重新提交。"))
+	if state.get("submitted_by") == frappe.session.user:
+		frappe.throw(_("上传/提交人不能审批本人提交的考勤终稿，请由另一位有审批权限的账号处理。"), frappe.PermissionError)
+	if state.get("snapshot_version") != state.get("current_snapshot_version"):
+		frappe.throw(_("提交后的来源或处理结果已经变化，请重新提交审批。"))
+	now = now_datetime().isoformat()
+	approval = {
+		key: state.get(key, "")
+		for key in ("snapshot_version", "submitted_by", "submitted_on", "submission_note")
+	}
+	approval.update({
+		"status": "已批准" if decision == "approve" else "已驳回",
+		"reviewed_by": frappe.session.user,
+		"reviewed_on": now,
+		"review_note": str(note or "").strip(),
+	})
+	_save_monthly_final_approval(anchor, approval, {
+		"action": approval["status"], "snapshot_version": approval["snapshot_version"],
+		"operator": frappe.session.user, "occurred_on": now, "note": approval["review_note"],
+	})
+	frappe.db.commit()
+	return _monthly_final_approval_state(company, attendance_month)
+
+
 def _monthly_final_rows(batches: dict[str, Any], employee_code: str = ""):
 	"""Aggregate confirmed processing rows without recalculating their source facts."""
 	rows_by_employee = defaultdict(dict)
@@ -7334,7 +7498,7 @@ def generate_first_signed_file(company: str, attendance_month: str, snapshot_ver
 
 @frappe.whitelist()
 def generate_monthly_final_files(company: str, attendance_month: str, snapshot_version: str = ""):
-	_require_processing_manager()
+	_require_processing_manager("attendance_final_lock")
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
 	state = get_processing_batch(company, attendance_month)
 	daily_workflow = state.get("daily_workflow") or {}
@@ -7347,6 +7511,13 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 	batches = _final_snapshot_batches(company, attendance_month)
 	if any(not batch for batch in batches.values()):
 		return {"blocked": True, "reason": _("终稿来源不完整，尚未生成文件。"), "readiness": readiness}
+	approval = _monthly_final_approval_state(company, attendance_month, finalization_inputs=readiness)
+	if not approval.get("approved_for_current_snapshot"):
+		return {
+			"blocked": True,
+			"reason": _("当前月度终稿快照尚未审批通过，不能锁定生成。"),
+			"approval": approval,
+		}
 	first_signed_result = _generate_first_signed_output(company, attendance_month, state)
 	if first_signed_result.get("blocked"):
 		return first_signed_result
@@ -7372,6 +7543,9 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 		"finance_file_url": finance["file_url"],
 		"finance_file_name": finance["file_name"],
 		"generated_on": now_datetime().isoformat(),
+		"approved_by": approval.get("reviewed_by", ""),
+		"approved_on": approval.get("reviewed_on", ""),
+		"approval_snapshot_version": approval.get("snapshot_version", ""),
 		"employee_count": len(rows),
 		"layout_version": MONTHLY_FINAL_LAYOUT_VERSION,
 		"attendance_final_excel_config_hash": config_hash,
@@ -7568,6 +7742,7 @@ def update_monthly_final_rows(company: str, attendance_month: str, changes: str 
 		"processed_result_refreshed_on": processed_at.isoformat(),
 		"processed_result_refresh_reason": "web_monthly_final_update",
 	})
+	_invalidate_monthly_final_after_source_change(attendance_batch, "web_monthly_final_update")
 	frappe.db.commit()
 	return {
 		"updated_rows": len(changed_codes),

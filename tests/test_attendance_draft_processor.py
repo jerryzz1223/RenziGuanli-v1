@@ -450,7 +450,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertTrue(row["eligible_for_downstream"])
 		self.assertEqual(row["processed_value"]["attendance_details"][0]["overtime_approval_status"], "休息日打卡免申请")
 
-	def test_indirect_staff_weekend_punch_requires_overtime_application_not_leave(self):
+	def test_indirect_staff_weekend_zero_hours_require_application_but_source_hours_do_not(self):
 		weekday = {
 			"姓名": "间接员工", "工号": "3013", "日期": "2026-08-04", "日期类型": "工作日",
 			"实际部门": "总办室", "班次": "间接长白班 08:00-17:00", "标准工时": 8,
@@ -484,7 +484,7 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 
 		approved = processed({**weekend, "关联审批单": "加班申请 OT-0808 已通过"})
 		self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_APPROVAL", approved["exception_codes"])
-		self.assertEqual(approved["processed_value"]["attendance_details"][1]["overtime_approval_status"], "已匹配申请")
+		self.assertEqual(approved["processed_value"]["attendance_details"][1]["overtime_approval_status"], "已匹配审批（未提供可解析时段）")
 		for invalid_approval in ("事假申请 LV-0808 已通过", "加班申请 OT-0808 审批中", "加班申请 OT-0808 已驳回"):
 			with self.subTest(approval=invalid_approval):
 				self.assertIn(
@@ -496,7 +496,8 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertIn("RESTDAY_CLOCKED_WITHOUT_APPROVAL", one_punch["exception_codes"])
 
 		with_hours = processed({**weekend, "休息日加班（小时）": 8})
-		self.assertIn("RESTDAY_CLOCKED_WITHOUT_APPROVAL", with_hours["exception_codes"])
+		self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_APPROVAL", with_hours["exception_codes"])
+		self.assertNotIn("RESTDAY_OVERTIME_TIME_MISMATCH", with_hours["exception_codes"])
 		self.assertEqual(with_hours["processed_value"]["restday_overtime_hours"], 8)
 
 		non_indirect = processor.process_attendance_draft_rows(

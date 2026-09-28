@@ -195,6 +195,33 @@ class AccessControlTests(unittest.TestCase):
 		self.assertFalse(module.has_hrms_capability("roster_import_approve", user="worker@example.com"))
 		module.frappe.get_roles = lambda _user=None: [module.APPROVE_ROLE]
 		self.assertTrue(module.has_hrms_capability("roster_import_submit", user="worker@example.com"))
+		self.assertFalse(module.has_hrms_capability("attendance_final_approve", user="worker@example.com"))
+
+	def test_attendance_final_approval_is_an_independent_per_account_permission(self):
+		user = _UserDoc(["Existing Custom Role", "HRMS 提交"])
+		module = _load_module(user)
+		result = module.set_hrms_user_attendance_final_approval("worker@example.com", 1)
+		self.assertTrue(result["attendance_final_approve"])
+		self.assertEqual(
+			[row.role for row in user.roles],
+			["Existing Custom Role", module.SUBMIT_ROLE, module.ATTENDANCE_FINAL_APPROVER_ROLE],
+		)
+		module.frappe.get_roles = lambda _user=None: [module.ATTENDANCE_FINAL_APPROVER_ROLE]
+		self.assertTrue(module.has_hrms_capability("attendance_final_approve", user="worker@example.com"))
+		self.assertFalse(module.has_hrms_capability("attendance_final_lock", user="worker@example.com"))
+
+	def test_stale_checkbox_payload_preserves_independent_final_approval_without_promoting_tier(self):
+		user = _UserDoc([])
+		module = _load_module(user)
+		result = module.set_hrms_user_capabilities(
+			"worker@example.com", ["attendance_import_submit", "attendance_final_approve"]
+		)
+		self.assertEqual(result["migrated_to_tier"], "submit")
+		self.assertTrue(result["attendance_final_approve"])
+		self.assertEqual(
+			[row.role for row in user.roles],
+			[module.SUBMIT_ROLE, module.ATTENDANCE_FINAL_APPROVER_ROLE],
+		)
 
 	def test_tier_docperms_include_baseline_reads_and_top_tier_organization_management(self):
 		module = _load_module()
@@ -261,7 +288,7 @@ class AccessControlTests(unittest.TestCase):
 		self.assertEqual(len(roles), len(set(roles)))
 		for required in (
 			"roster_import_submit", "roster_import_approve", "employee_create",
-			"employee_create_approve", "attendance_import_submit", "attendance_approve",
+			"employee_create_approve", "attendance_import_submit", "attendance_approve", "attendance_final_approve",
 			"payroll_entry_submit", "payroll_approval", "payroll_confirm",
 		):
 			self.assertIn(required, keys)
