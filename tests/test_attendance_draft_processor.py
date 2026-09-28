@@ -882,6 +882,126 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 			"工作日加班时长已匹配",
 		)
 
+	def test_zero_overtime_secondary_review_excludes_shared_post_shift_break(self):
+		rules = [{
+			"name": "CCD人员白班", "tokens": ("CCD",),
+			"basic_time": "08:00-17:00", "weekday_overtime_time": "17:00-20:00",
+			"meal_deduction_rule": "12:00-13:00扣1H\n17:00-17:30扣0.5H",
+			"extended_shift_rule": "特殊工时",
+			"workday_hours": 2.5, "workday_end_minutes": 20 * 60,
+			"workday_auto": True, "restday_auto": True,
+		}]
+		base = {
+			"姓名": "CCD测试", "工号": "CCD-001", "日期": "26-08-03", "日期类型": "工作日",
+			"实际部门": "CCD", "班次": "生产白班CCD 08:00-17:00", "标准工时": 8,
+			"实际出勤（小时）": 8, "上班时间": "08:00", "工作日加班（小时）": 0,
+			"关联审批单": "", "source_file": "sample.xlsx", "source_row": 3,
+		}
+
+		meal_only = processor.process_attendance_draft_rows([
+			{**base, "下班时间": "17:30"},
+		], attendance_month="2026-08", shift_rules=rules)["processed_rows"][0]
+		meal_detail = meal_only["processed_value"]["attendance_details"][0]
+		self.assertNotIn("WORKDAY_OVERTIME_DINGTALK_ANOMALY", meal_only["exception_codes"])
+		self.assertEqual(meal_detail["post_shift_reconciliation"]["gross_minutes"], 30)
+		self.assertEqual(meal_detail["post_shift_reconciliation"]["meal_break_minutes"], 30)
+		self.assertEqual(meal_detail["post_shift_reconciliation"]["net_overtime_minutes"], 0)
+
+		after_break = processor.process_attendance_draft_rows([
+			{**base, "下班时间": "18:00"},
+		], attendance_month="2026-08", shift_rules=rules)["processed_rows"][0]
+		after_detail = after_break["processed_value"]["attendance_details"][0]
+		self.assertIn("WORKDAY_OVERTIME_DINGTALK_ANOMALY", after_break["exception_codes"])
+		self.assertEqual(after_detail["post_shift_reconciliation"]["net_overtime_minutes"], 30)
+		before_threshold = processor.process_attendance_draft_rows([
+			{**base, "下班时间": "17:59"},
+		], attendance_month="2026-08", shift_rules=rules)["processed_rows"][0]
+		self.assertNotIn("WORKDAY_OVERTIME_DINGTALK_ANOMALY", before_threshold["exception_codes"])
+		self.assertEqual(
+			before_threshold["processed_value"]["attendance_details"][0]["post_shift_reconciliation"]["net_overtime_minutes"], 29,
+		)
+
+		matched = processor.process_attendance_draft_rows([{
+			**base, "下班时间": "20:00", "工作日加班（小时）": 2.5,
+		}], attendance_month="2026-08", shift_rules=rules)["processed_rows"][0]
+		match_detail = matched["processed_value"]["attendance_details"][0]
+		self.assertEqual(match_detail["workday_overtime_hours"], 2.5)
+		self.assertTrue(match_detail["workday_overtime_time_match"]["matched"])
+		self.assertEqual(match_detail["workday_overtime_time_match"]["expected_out"], "")
+		self.assertIsNone(match_detail["workday_overtime_time_match"]["candidate_overtime_minutes"])
+		self.assertNotIn("WORKDAY_OVERTIME_DINGTALK_ANOMALY", matched["exception_codes"])
+
+		ambiguous_rule = [{**rules[0], "meal_deduction_rule": "晚餐扣0.5H"}]
+		ambiguous = processor.process_attendance_draft_rows([
+			{**base, "下班时间": "18:00"},
+		], attendance_month="2026-08", shift_rules=ambiguous_rule)["processed_rows"][0]
+		self.assertNotIn("WORKDAY_OVERTIME_DINGTALK_ANOMALY", ambiguous["exception_codes"])
+		self.assertIn("SHIFT_SCHEDULE_REVIEW_REQUIRED", ambiguous["exception_codes"])
+		self.assertTrue(
+			ambiguous["processed_value"]["attendance_details"][0]["post_shift_reconciliation"]["rule_review_required"],
+		)
+
+	def test_zero_overtime_secondary_review_excludes_wait_before_overtime_window(self):
+		rules = [{
+			"name": "食堂夜班", "tokens": ("食堂", "夜班"),
+			"basic_time": "08:00-13:00 15:30-18:00", "weekday_overtime_time": "21:00-24:00",
+			"meal_deduction_rule": "不扣吃饭时间", "workday_hours": 3,
+			"workday_end_minutes": 0, "workday_auto": True, "restday_auto": True,
+		}]
+		base = {
+			"姓名": "食堂测试", "工号": "C-001", "日期": "26-08-03", "日期类型": "工作日",
+			"实际部门": "食堂", "班次": "食堂夜班 08:00-13:00 15:30-18:00", "标准工时": 8,
+			"实际出勤（小时）": 8, "上班时间": "08:00", "工作日加班（小时）": 0,
+			"关联审批单": "", "source_file": "sample.xlsx", "source_row": 3,
+		}
+		waiting_only = processor.process_attendance_draft_rows([
+			{**base, "下班时间": "21:00"},
+		], attendance_month="2026-08", shift_rules=rules)["processed_rows"][0]
+		waiting_detail = waiting_only["processed_value"]["attendance_details"][0]
+		self.assertNotIn("WORKDAY_OVERTIME_DINGTALK_ANOMALY", waiting_only["exception_codes"])
+		self.assertEqual(waiting_detail["post_shift_reconciliation"]["waiting_minutes"], 180)
+		self.assertEqual(waiting_detail["post_shift_reconciliation"]["net_overtime_minutes"], 0)
+
+		worked = processor.process_attendance_draft_rows([
+			{**base, "下班时间": "21:30"},
+		], attendance_month="2026-08", shift_rules=rules)["processed_rows"][0]
+		self.assertIn("WORKDAY_OVERTIME_DINGTALK_ANOMALY", worked["exception_codes"])
+		self.assertEqual(
+			worked["processed_value"]["attendance_details"][0]["post_shift_reconciliation"]["net_overtime_minutes"], 30,
+		)
+
+	def test_indirect_shift_still_flags_first_half_hour_after_special_work_time(self):
+		row = processor.process_attendance_draft_rows([{
+			"姓名": "逵瑜", "工号": "281", "日期": "26-08-28", "日期类型": "工作日",
+			"实际部门": "生管课", "班次": "间接长白班 08:00-17:00", "标准工时": 8,
+			"实际出勤（小时）": 8, "上班时间": "07:51", "下班时间": "18:30",
+			"工作日加班（小时）": 0, "关联审批单": "", "source_file": "sample.xlsx", "source_row": 5581,
+		}], attendance_month="2026-08")["processed_rows"][0]
+		detail = row["processed_value"]["attendance_details"][0]
+		self.assertIn("WORKDAY_OVERTIME_DINGTALK_ANOMALY", row["exception_codes"])
+		self.assertEqual(detail["post_shift_reconciliation"]["gross_minutes"], 90)
+		self.assertEqual(detail["post_shift_reconciliation"]["special_workday_minutes"], 60)
+		self.assertEqual(detail["post_shift_reconciliation"]["waiting_minutes"], 0)
+		self.assertEqual(detail["post_shift_reconciliation"]["net_overtime_minutes"], 30)
+
+	def test_zero_overtime_secondary_review_requires_dingtalk_planned_end(self):
+		rules = [{
+			"name": "本地兜底班", "tokens": ("本地兜底班",),
+			"basic_time": "08:00-17:00", "meal_deduction_rule": "17:00-17:30扣0.5H",
+			"workday_auto": True, "restday_auto": True,
+		}]
+		row = processor.process_attendance_draft_rows([{
+			"姓名": "计划缺失", "工号": "PLAN-001", "日期": "26-08-03", "日期类型": "工作日",
+			"实际部门": "测试课", "班次": "本地兜底班", "标准工时": 8, "实际出勤（小时）": 8,
+			"上班时间": "08:00", "下班时间": "18:00", "工作日加班（小时）": 0,
+			"关联审批单": "", "source_file": "sample.xlsx", "source_row": 3,
+		}], attendance_month="2026-08", shift_rules=rules)["processed_rows"][0]
+		detail = row["processed_value"]["attendance_details"][0]["post_shift_reconciliation"]
+		self.assertNotIn("WORKDAY_OVERTIME_DINGTALK_ANOMALY", row["exception_codes"])
+		self.assertIn("SHIFT_SCHEDULE_REVIEW_REQUIRED", row["exception_codes"])
+		self.assertTrue(detail["rule_review_required"])
+		self.assertEqual(detail["review_reason"], "钉钉当天计划下班时间缺失")
+
 	def test_automatic_overtime_counts_only_completed_half_hours(self):
 		self.assertEqual(processor._floor_overtime_half_hour(0.49), 0)
 		self.assertEqual(processor._floor_overtime_half_hour(0.5), 0.5)

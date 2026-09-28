@@ -21,8 +21,10 @@ for (const marker of [
 	'get_complete_attendance_rules',
 	'考勤规则',
 	'一、周末与日历口径',
-	'二、特殊班次异常识别',
-	'三、系统处理边界（只读）',
+	'二、工作日加班为0的班后解释',
+	'正式加班前等待段',
+	'系统不复算、不覆盖钉钉加班',
+	'三、异常检测约束清单（只读）',
 	'选择班别',
 	'返回班别',
 	'返回班次',
@@ -96,6 +98,14 @@ instance.render_attendance_rule_browser({ shift_rules: rows });
 for (const variant of ["白班", "夜班"]) requireMarker(browser.innerHTML, variant, "Second level is missing a variant");
 instance.attendance_rule_code = "SHIFT-002";
 instance.render_attendance_rule_browser({ shift_rules: rows });
-for (const marker of ["17:00-18:00", "固定加班后续是否需申请", "data-edit-selected-rule"]) requireMarker(browser.innerHTML, marker, "Detail should expose editable mapped rule fields");
+for (const marker of [
+	"班后休息扣除",
+	"已定义特殊工时",
+	"30分钟边界",
+	"只排除“已有规则解释”的班后时间",
+	"查看完整来源、夜班津贴与审计字段",
+	"固定加班后续是否需申请",
+	"data-edit-selected-rule",
+]) requireMarker(browser.innerHTML, marker, "Detail should expose the minimal secondary-review fields and expandable audit data");
 
 console.log("Complete attendance rule centre contract passed.");

@@ -867,6 +867,40 @@
 	min-height: 64px;
 }
 
+.hrms-attendance-minimal-rule-note {
+	background: var(--blue-50, #eff6ff);
+	border: 1px solid var(--blue-200, #bfdbfe);
+	border-radius: 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-bottom: 12px;
+	padding: 12px 14px;
+}
+
+.hrms-attendance-minimal-rule-note span {
+	color: var(--text-muted, #6b7280);
+	font-size: 12px;
+}
+
+.hrms-attendance-minimal-rule-grid .hrms-attendance-rule-field {
+	background: #fff;
+	border-color: var(--blue-200, #bfdbfe);
+}
+
+.hrms-attendance-rule-more {
+	border-top: 1px solid var(--border-color, #e5e7eb);
+	margin-top: 16px;
+	padding-top: 12px;
+}
+
+.hrms-attendance-rule-more summary {
+	color: var(--text-muted, #6b7280);
+	cursor: pointer;
+	font-weight: 600;
+	margin-bottom: 12px;
+}
+
 .hrms-attendance-dialog-note pre {
 	background: #fff;
 	border: 1px solid var(--border-color, #e5e7eb);

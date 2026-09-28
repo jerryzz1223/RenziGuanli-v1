@@ -364,10 +364,12 @@ EXCEPTION_LABELS = {
 	"RESTDAY_CLOCKED_WITHOUT_APPROVAL": "休息日加班为0：有打卡但缺加班单",
 	"RESTDAY_OVERTIME_TIME_MISMATCH": "休息日加班时长与打卡不一致",
 	"RESTDAY_PUNCH_APPROVAL_MISMATCH": "休息日打卡与加班审批不匹配",
+	"LEAVE_PUNCH_APPROVAL_MISMATCH": "打卡与请假审批时段冲突",
 	"HOLIDAY_CLOCKED_WITHOUT_APPROVAL": "节假日打卡缺加班单",
 	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED": "钉钉加班为0：缺加班申请",
 	"WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED": "钉钉加班为0：已有审批未生效",
-	"WORKDAY_OVERTIME_DINGTALK_ANOMALY": "钉钉加班为0：免审批计算异常",
+	"WORKDAY_OVERTIME_DINGTALK_ANOMALY": "疑似钉钉工作日加班为0",
+	"WORKDAY_OVERTIME_APPROVAL_MISMATCH": "钉钉加班与审批申报时长不一致",
 	"SHIFT_SCHEDULE_REVIEW_REQUIRED": "班次计划起止待复核",
 	"UNSCHEDULED_MIDDLE_NIGHT_REVIEW": "未排班中班夜班待复核",
 	"INVALID_NUMERIC_VALUE": "工时或次数格式无效",
@@ -421,13 +423,15 @@ def _review_guidance(exception_codes: list[str], source_type: str) -> list[str]:
 	if "ABSENCE_MARKED" in codes:
 		guidance.append("旷工字段在该来源中没有小时单位；先核对排班、有效请假及主管确认，再决定是否形成薪资缺勤工时。")
 	if "RESTDAY_CLOCKED_WITHOUT_OVERTIME" in codes:
-		guidance.append("周末休息日有完整上下班卡且跨度超过 30 分钟，但钉钉休息日加班时长为 0；请核对钉钉来源，确认本次打卡是否应计加班。")
+		guidance.append("周末休息日有完整上下班卡且跨度超过 2 小时，但钉钉休息日加班时长为 0；请核对钉钉来源，确认本次打卡是否应计加班。")
 	if "RESTDAY_CLOCKED_WITHOUT_APPROVAL" in codes:
 		guidance.append("本日休息日加班时长为 0，但有打卡且所属规则要求加班单；请在“修改本日”核对关联审批单。")
 	if "RESTDAY_OVERTIME_TIME_MISMATCH" in codes:
 		guidance.append("休息日加班时长已按钉钉结果计入，不需要加班审批；但与上下班打卡净时长差异达到 30 分钟或打卡不完整，请核对打卡及休息扣除。")
 	if "RESTDAY_PUNCH_APPROVAL_MISMATCH" in codes:
 		guidance.append("休息日不计算迟到、早退或旷工；请核对上下班卡是否完整，以及实际打卡区间是否与加班审批时段一致。")
+	if "LEAVE_PUNCH_APPROVAL_MISMATCH" in codes:
+		guidance.append("打卡落在已通过的请假时段内；请核对实际打卡或请假起止时间，不自动删除任一来源事实。")
 	if "HOLIDAY_CLOCKED_WITHOUT_APPROVAL" in codes:
 		guidance.append("该班次节日加班来源要求加班单；请在“修改本日”核对本日打卡和有效审批。未确认前不自动补算节日加班工时。")
 	if "WORKDAY_OUTSIDE_SHIFT_UNAPPROVED" in codes:
@@ -435,7 +439,9 @@ def _review_guidance(exception_codes: list[str], source_type: str) -> list[str]:
 	if "WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED" in codes:
 		guidance.append("已有加班审批但钉钉工作日加班仍为 0；请核对审批日期、打卡和钉钉考勤规则，不根据审批文字自动追加时长。")
 	if "WORKDAY_OVERTIME_DINGTALK_ANOMALY" in codes:
-		guidance.append("免审批班次存在明显班后打卡，但钉钉工作日加班为 0；请检查钉钉规则，或在“修改本日”人工确认并填写原因。")
+		guidance.append("钉钉工作日加班为 0，但实际下班减计划下班并扣除班后休息后仍达到 30 分钟；只作疑似复核，不自动生成加班时长。")
+	if "WORKDAY_OVERTIME_APPROVAL_MISMATCH" in codes:
+		guidance.append("钉钉工作日加班正数仍原样采用；本提示仅要求核对审批申报时长，不用审批或打卡重算钉钉加班。")
 	if "SHIFT_SCHEDULE_REVIEW_REQUIRED" in codes:
 		guidance.append("无法取得完整班次计划起止，不能从打卡或跨日文字凭空推算；请补齐班次后重新校验。")
 	if "UNSCHEDULED_MIDDLE_NIGHT_REVIEW" in codes:
@@ -5888,14 +5894,16 @@ def get_complete_attendance_rules(company: str):
 		"builtin_shift_rules": _builtin_shift_rule_items(),
 		"policy_rules": policy_rules,
 		"system_boundaries": [
-			{"name": "钉钉事实来源", "logic": "员工每日班次、计划上下班时间、实际打卡、工时及异常标记均以钉钉每日统计为准", "impact": "HRMS不重复排班、不按打卡时间改写源结果，只整理、关联、汇总和提示冲突"},
-			{"name": "员工身份匹配", "logic": "公司工号为主键；姓名、部门用于冲突核对", "impact": "冲突进入异常处理，不自动合并员工"},
-			{"name": "班次匹配", "logic": "先按钉钉考勤组+班次别名精确匹配，未命中时再用班次关键词；食堂21:00-次日00:00使用已确认的独立兼容规则", "impact": "避免 CCD、品保等专用班次被通用生产班次覆盖；食堂凌晨班保留钉钉时数且不报缺审批异常"},
-			{"name": "钉钉考勤结果", "logic": "加班、夜班、迟到、早退、缺卡和旷工标记直接采用钉钉每日明细数值", "impact": "审批、打卡和本地班次规则只用于解释与报错，不追加、清零或改写源结果"},
-			{"name": "班后异常识别", "logic": "仅当钉钉工作日加班为 0 且存在明显班后打卡时，按考勤组、班次和审批情况分类", "impact": "缺申请、审批未生效、免审批计算异常分别进入人工处理"},
-			{"name": "人工修改留痕", "logic": "人工修改必须填写原因，不覆盖原始导入值", "impact": "保留修改前后值、处理人、时间和完整历史"},
-			{"name": "周末与调班边界", "logic": "普通周六日按考勤口径处理；明确标为工作日、调班或补班的日期仍按工作日", "impact": "普通周末不制造标准工时、请假、旷工、迟到或早退；有打卡也不要求加班申请"},
-			{"name": "历史数据兼容", "logic": "只有旧导入记录完全缺少加班、夜班或异常字段时，才允许使用旧版兼容判断", "impact": "新版钉钉每日统计中明确的空值或 0 也是有效源结果，系统不补算"},
+			{"category": "来源", "name": "钉钉结果为正数", "logic": "工作日加班、夜班、迟到、早退、缺卡和旷工有明确钉钉结果时直接采用", "impact": "不按打卡或本地班次二次计算，不覆盖源值"},
+			{"category": "工作日", "name": "加班为0的班后疑似异常", "logic": "用钉钉当天计划下班与实际下班，排除重叠的餐休、特殊工时和正式加班窗口前等待段；剩余达到30分钟", "impact": "只提示“疑似钉钉加班为0”进入人工复核，不生成或覆盖加班时长"},
+			{"category": "工作日", "name": "班后解释规则待确认", "logic": "餐休、特殊工时或加班开始规则缺少可解析起止时间；或钉钉计划时间/共享班别匹配缺失", "impact": "标记规则待确认，不报员工缺加班"},
+			{"category": "缺卡", "name": "单边打卡（含周末）", "logic": "当天仅有上班卡或仅有下班卡；不依赖钉钉是否同时导出缺卡次数", "impact": "立即生成对应的上班或下班缺卡异常"},
+			{"category": "周末", "name": "休息日完整打卡但加班为0", "logic": "普通周末存在完整打卡、跨度超过2小时且钉钉休息日加班为0", "impact": "提示休息日有打卡未计加班，不自动补加班时长"},
+			{"category": "审批", "name": "休息日打卡与审批冲突", "logic": "已有有效休息日加班审批，但打卡不完整或不在审批时段", "impact": "进入人工复核，不按迟到、早退或旷工处理"},
+			{"category": "请假", "name": "打卡与请假时段重叠", "logic": "实际打卡严格落在已通过的请假时段内", "impact": "提示打卡或请假时段冲突，保留两个源事实"},
+			{"category": "人员范围", "name": "入职前或离职后日期", "logic": "考勤日早于入职日或晚于离职日；当日入职/离职仍在范围内", "impact": "保留来源审计行，不进入考勤汇总和异常队列"},
+			{"category": "日历", "name": "周末与调班边界", "logic": "普通周六日按休息日；明确标为工作日、调班或补班的日期仍按工作日", "impact": "普通周末不制造标准工时、请假、旷工、迟到或早退"},
+			{"category": "审计", "name": "人工修改留痕", "logic": "人工修改必须填原因，不覆盖原始导入值", "impact": "保留修改前后值、处理人、时间和完整历史"},
 		],
 	}
 

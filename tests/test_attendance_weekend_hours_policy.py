@@ -144,9 +144,9 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 				self.assertEqual("CLOCK_OUT_MISSING" not in row["exception_codes"], exempt)
 				self.assertEqual("CLOCK_IN_MISSING" not in row["exception_codes"], exempt)
 
-	def test_weekend_single_punch_is_audit_only_not_a_missing_punch_exception(self):
+	def test_weekend_single_punch_is_a_missing_punch_exception(self):
 		row = self.process(**{"日期": "2026-09-20", "病假(小时)": 8, "上班时间": "08:00"})
-		self.assertNotIn("CLOCK_OUT_MISSING", row["exception_codes"])
+		self.assertIn("CLOCK_OUT_MISSING", row["exception_codes"])
 		self.assertEqual(row["processed_value"]["attendance_details"][0]["clock_in"], "08:00")
 
 	def test_explicit_weekday_restday_missing_marks_remain_exceptions(self):

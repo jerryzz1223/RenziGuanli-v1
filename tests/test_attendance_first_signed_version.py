@@ -320,9 +320,10 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(result["shift_rules"][0]["rule_code"], "SHIFT-001")
 		self.assertEqual(result["policy_rules"][0]["rule_code"], "ATT-LATE-30")
 		self.assertTrue(any(row["rule_name"] == "中班" for row in result["builtin_shift_rules"]))
-		self.assertEqual(len(result["system_boundaries"]), 6)
+		self.assertGreaterEqual(len(result["system_boundaries"]), 9)
 		self.assertTrue(any(item["name"] == "周末与调班边界" for item in result["system_boundaries"]))
-		self.assertTrue(any(item["name"] == "周末未排班中班夜班" for item in result["system_boundaries"]))
+		self.assertTrue(any(item["name"] == "单边打卡（含周末）" for item in result["system_boundaries"]))
+		self.assertTrue(any(item["name"] == "入职前或离职后日期" for item in result["system_boundaries"]))
 
 	def test_shift_match_preview_uses_active_matcher_without_writing(self):
 		api = self.api

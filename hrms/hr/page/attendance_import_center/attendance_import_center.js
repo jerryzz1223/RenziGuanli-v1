@@ -2606,8 +2606,8 @@ class AttendanceImportCenter {
 		${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}${fallbackNotice}
 		<div class="hrms-attendance-kpi-grid hrms-attendance-rule-kpis"><div class="hrms-attendance-kpi"><strong>${this.escape(__("钉钉"))}</strong><span>${this.escape(__("事实来源"))}</span><small>${this.escape(__("班次、计划时间、打卡和考勤结果"))}</small></div><div class="hrms-attendance-kpi"><strong>${this.escape(data.shift_rule_version || "--")}</strong><span>${this.escape(__("检查规则版本"))}</span><small>${this.escape(__("只用于异常分类和留痕"))}</small></div><div class="hrms-attendance-kpi"><strong>${this.escape(policies.filter((row) => row.enabled).length)}</strong><span>${this.escape(__("生效考勤口径"))}</span><small>${this.escape(__("不复制钉钉日常排班"))}</small></div></div>
 		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("一、周末与日历口径"))}</h4><small>${this.escape(__("只补充普通周末的系统处理方式。休息日不产生迟到、早退、旷工和标准工时；调班、补班仍按钉钉的工作日结果。"))}</small></div><button class="btn btn-primary btn-sm" data-add-scheduling-policy>${this.escape(__("新增考勤口径"))}</button></div><div class="hrms-attendance-rule-cards">${loading ? `<div class="text-muted">${this.escape(__("正在读取考勤口径..."))}</div>` : policies.length ? policies.map(policyCard).join("") : `<div class="text-muted">${this.escape(__("暂无公司考勤口径；系统使用安全默认值，不要为了复制钉钉排班而新建规则。"))}</div>`}</div></section>
-		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("二、特殊班次异常识别"))}</h4><small>${this.escape(__("仅用于发现缺值、冲突或无法关联的数据；不创建员工排班，不覆盖钉钉已给出的加班、迟到、早退和夜班结果。"))}</small></div></div><div class="hrms-attendance-rule-browser" data-rule-browser>${loading ? this.escape(__("正在读取班别...")) : ""}</div></section>
-		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("三、系统处理边界（只读）"))}</h4><small>${this.escape(__("这些边界保护来源、审批、人工复核与历史版本，不能由备注文字绕过。"))}</small></div></div><div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr><th>${this.escape(__("边界"))}</th><th>${this.escape(__("判断逻辑"))}</th><th>${this.escape(__("影响"))}</th></tr></thead><tbody>${boundaries.length ? boundaries.map((row) => `<tr><td><strong>${this.escape(row.name)}</strong></td><td>${this.escape(row.logic)}</td><td>${this.escape(row.impact)}</td></tr>`).join("") : `<tr><td colspan="3" class="text-muted">${this.escape(__("正在读取系统边界..."))}</td></tr>`}</tbody></table></div></section></div>`;
+		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("二、工作日加班为0的班后解释"))}</h4><small>${this.escape(__("钉钉加班大于0直接采用；为0时排除餐休、已定义特殊工时和正式加班前等待段，只筛选无法解释的班后时间。"))}</small></div></div><div class="hrms-attendance-rule-browser" data-rule-browser>${loading ? this.escape(__("正在读取班别...")) : ""}</div></section>
+		<section class="hrms-attendance-rule-block"><div class="hrms-attendance-list-head"><div><h4>${this.escape(__("三、异常检测约束清单（只读）"))}</h4><small>${this.escape(__("这里展示系统真正会执行的条件和结果，包括周末单边打卡、入离职范围、请假与打卡冲突等。"))}</small></div></div><div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr><th>${this.escape(__("分类"))}</th><th>${this.escape(__("检测项"))}</th><th>${this.escape(__("触发条件"))}</th><th>${this.escape(__("系统结果"))}</th></tr></thead><tbody>${boundaries.length ? boundaries.map((row) => `<tr><td><span class="hrms-attendance-source">${this.escape(row.category || __("通用"))}</span></td><td><strong>${this.escape(row.name)}</strong></td><td>${this.escape(row.logic)}</td><td>${this.escape(row.impact)}</td></tr>`).join("") : `<tr><td colspan="4" class="text-muted">${this.escape(__("正在读取异常检测约束..."))}</td></tr>`}</tbody></table></div></section></div>`;
 	}
 
 	bind_complete_attendance_rule_events(data = {}) {
@@ -2670,6 +2670,18 @@ class AttendanceImportCenter {
 			const mappingWarning = fixedHoursMismatch
 				? `<div class="alert alert-warning">${this.escape(__("当前平日固定加班 {0} 小时，与 Excel L{1} 的 {2} 小时不同。请核对人工编辑或重新导入预览；历史结果不会自动覆盖。", [selected.weekday_overtime_hours ?? 0, selected.source_row || "--", rawFixedHours]))}</div>`
 				: "";
+			const mealRule = String(selected.meal_deduction_rule || "");
+			const mealClocks = mealRule.match(/(?:[01]?\d|2[0-4]):[0-5]\d/g) || [];
+			const mealRuleNeedsReview = mealRule && !mealRule.includes("不扣")
+				&& /(扣|休息|餐)/.test(mealRule) && mealClocks.length < 2;
+			const minimalDetails = [
+				["钉钉班次识别", selected.dingtalk_shift_aliases || selected.match_tokens || selected.rule_name],
+				["计划下班", "只读取钉钉当天计划；缺失时转规则待确认"],
+				["班后休息扣除", selected.meal_deduction_rule || "无", "meal_deduction_rule"],
+				["已定义特殊工时", selected.special_workday_time || "无", "extended_shift_rule"],
+				["正式加班前等待段", selected.weekday_overtime_time || selected.overtime_begin_time ? `截至 ${selected.weekday_overtime_time || selected.overtime_begin_time}` : "无"],
+				["30分钟边界", "排除重叠的餐休、特殊工时和等待段后：小于30分钟不提示；达到30分钟进入疑似复核"],
+			];
 			const details = [
 				["规则编码", selected.rule_code], ["匹配关键词", selected.match_tokens],
 				["钉钉考勤组", selected.dingtalk_attendance_groups], ["钉钉班次别名", selected.dingtalk_shift_aliases],
@@ -2690,7 +2702,11 @@ class AttendanceImportCenter {
 			browser.innerHTML = '<div class="hrms-attendance-rule-browser-head"><button type="button" class="btn btn-default btn-sm" data-rule-back="variants">' + this.escape(__("返回班次")) + '</button><div><h4>' + this.escape(this.attendance_rule_group + " / " + variantOf(selected)) + '</h4><small>' + this.escape(selected.rule_name || "") + '</small></div>'
 				+ (usingBuiltin ? '<span class="text-muted">' + this.escape(__("内置检查规则（只读）")) + '</span>'
 					: '<button type="button" class="btn btn-primary btn-sm" data-edit-selected-rule>' + this.escape(__("编辑规则")) + '</button>') + '</div>'
-				+ mappingWarning + '<div class="hrms-attendance-rule-detail-grid">' + details.map(([label, value, sourceField]) => field(label, value, sourceField)).join("") + '</div>';
+				+ mappingWarning
+				+ (mealRuleNeedsReview ? `<div class="alert alert-warning">${this.escape(__("休息规则只有时长、没有明确起止时间，系统将保留为规则待核对，不直接认定员工缺加班申请。"))}</div>` : "")
+				+ '<div class="hrms-attendance-minimal-rule-note"><strong>' + this.escape(__("只排除“已有规则解释”的班后时间")) + '</strong><span>' + this.escape(__("餐休、特殊工时和正式加班前等待段不代表新增加班；系统不复算、不覆盖钉钉加班。")) + '</span></div>'
+				+ '<div class="hrms-attendance-rule-detail-grid hrms-attendance-minimal-rule-grid">' + minimalDetails.map(([label, value, sourceField]) => field(label, value, sourceField)).join("") + '</div>'
+				+ '<details class="hrms-attendance-rule-more"><summary>' + this.escape(__("查看完整来源、夜班津贴与审计字段")) + '</summary><div class="hrms-attendance-rule-detail-grid">' + details.map(([label, value, sourceField]) => field(label, value, sourceField)).join("") + '</div></details>';
 		}
 		browser.querySelectorAll("[data-select-rule-group]").forEach((button) => button.addEventListener("click", () => {
 			this.attendance_rule_group = button.dataset.selectRuleGroup;

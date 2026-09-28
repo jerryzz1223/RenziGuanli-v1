@@ -74,7 +74,7 @@ for (const marker of [
 	"load_complete_attendance_rules",
 	"钉钉负责每日排班",
 	"编辑完整规则",
-	"系统处理边界（只读）",
+	"异常检测约束清单（只读）",
 	"考勤初稿",
 	"苹果树",
 	"忘打卡",
