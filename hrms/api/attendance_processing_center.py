@@ -421,7 +421,7 @@ def _review_guidance(exception_codes: list[str], source_type: str) -> list[str]:
 	if "ABSENCE_MARKED" in codes:
 		guidance.append("旷工字段在该来源中没有小时单位；先核对排班、有效请假及主管确认，再决定是否形成薪资缺勤工时。")
 	if "RESTDAY_CLOCKED_WITHOUT_OVERTIME" in codes:
-		guidance.append("休息日已有钉钉打卡，但未匹配加班申请且加班工时为 0；请核对主管确认后，在该日期填写实际休息日加班工时，或确认本次打卡不计加班。")
+		guidance.append("周末休息日有完整上下班卡且跨度超过 30 分钟，但钉钉休息日加班时长为 0；请核对钉钉来源，确认本次打卡是否应计加班。")
 	if "RESTDAY_CLOCKED_WITHOUT_APPROVAL" in codes:
 		guidance.append("本日休息日加班时长为 0，但有打卡且所属规则要求加班单；请在“修改本日”核对关联审批单。")
 	if "RESTDAY_OVERTIME_TIME_MISMATCH" in codes:
