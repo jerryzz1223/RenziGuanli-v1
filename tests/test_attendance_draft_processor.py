@@ -616,6 +616,72 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 				self.assertFalse(detail["weekend_restday_non_overtime_pair"])
 				self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", row["exception_codes"])
 
+	def test_restday_zero_overtime_requires_complete_natural_half_hour_after_shift_start(self):
+		def processed(rows):
+			return processor.process_attendance_draft_rows(
+				rows, attendance_month="2026-08",
+			)["processed_rows"][0]
+
+		indirect_workday = {
+			"姓名": "间接员工", "工号": "E-001", "考勤组": "间接人员", "实际部门": "行政课",
+			"日期": "2026-08-28", "日期类型": "工作日", "班次": "间接长白班 08:00-17:00",
+			"标准工时": 8, "实际出勤（小时）": 8, "上班时间": "08:00", "下班时间": "17:00",
+		}
+
+		def indirect_restday(name, code, clock_in, clock_out, attendance_date="2026-08-29"):
+			return {
+				**indirect_workday, "姓名": name, "工号": code, "日期": attendance_date,
+				"日期类型": "周末休息日", "班次": "休息", "标准工时": 0,
+				"实际出勤（小时）": 0, "上班时间": clock_in, "下班时间": clock_out,
+				"休息日加班（小时）": 0, "关联审批单": "",
+			}
+
+		for name, code, clock_in, clock_out in (
+			("戴佳妮", "4047", "10:58", "11:32"),
+			("李微微", "3966", "10:44", "11:32"),
+		):
+			with self.subTest(name=name):
+				weekday = {**indirect_workday, "姓名": name, "工号": code}
+				row = processed([weekday, indirect_restday(name, code, clock_in, clock_out)])
+				self.assertIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", row["exception_codes"])
+				detail = row["processed_value"]["attendance_details"][1]
+				self.assertEqual(detail["restday_zero_overtime_half_hour_blocks"], [
+					{"start": "11:00", "end": "11:30"},
+				])
+				self.assertEqual(detail["restday_zero_overtime_review_minutes"], 30)
+				self.assertEqual(row["processed_value"]["restday_overtime_hours"], 0)
+
+		for name, code, clock_in, clock_out in (
+			("朱耀辉-不跨整段", "164-A", "13:52", "14:23"),
+			("朱耀辉-早于班次", "164-B", "07:24", "08:12"),
+			("跨半小时但无完整自然段", "NATURAL-001", "18:45", "19:15"),
+			("只覆盖午休", "MEAL-001", "11:49", "13:19"),
+		):
+			with self.subTest(name=name):
+				weekday = {**indirect_workday, "姓名": name, "工号": code}
+				row = processed([weekday, indirect_restday(name, code, clock_in, clock_out)])
+				self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", row["exception_codes"])
+
+		night = processed([{
+			"姓名": "武蒙蒙", "工号": "4028", "考勤组": "生产人员", "实际部门": "生产课",
+			"日期": "2026-08-01", "日期类型": "周末休息日", "班次": "生产夜班 20:00-次日04:30",
+			"上班时间": "19:43", "下班时间": "20:19", "休息日加班（小时）": 0,
+		}])
+		self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", night["exception_codes"])
+
+		middle_weekday = {
+			"姓名": "张袁震", "工号": "3801", "考勤组": "中班", "实际部门": "生管课",
+			"日期": "2026-08-03", "日期类型": "工作日", "班次": "中班 13:00-22:00",
+			"标准工时": 8, "实际出勤（小时）": 8, "上班时间": "12:53", "下班时间": "22:06",
+		}
+		middle_restday = {
+			**middle_weekday, "日期": "2026-08-02", "日期类型": "周末休息日", "班次": "休息",
+			"标准工时": 0, "实际出勤（小时）": 0, "上班时间": "11:49", "下班时间": "13:19",
+			"休息日加班（小时）": 0,
+		}
+		middle = processed([middle_restday, middle_weekday])
+		self.assertNotIn("RESTDAY_CLOCKED_WITHOUT_OVERTIME", middle["exception_codes"])
+
 	def test_early_departure_with_leave_evidence_does_not_create_absence_hours(self):
 		rows = [{
 			"姓名": "张三", "工号": "E-001", "日期": "26-06-01", "日期类型": "工作日", "实际部门": "工程课",

@@ -72,7 +72,7 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 48
+ATTENDANCE_POLICY_VERSION = 49
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
 RESTDAY_INCIDENTAL_PUNCH_MAX_MINUTES = 120
 DEFAULT_CALENDAR_WEEKEND_MODE = "休息日加班口径"
@@ -406,7 +406,7 @@ EXCEPTION_MESSAGES = {
 	"LATE_MARKED": "钉钉明确标记迟到；系统保留源次数并提示复核，不根据打卡时间追加次数或改写请假时长。",
 	"EARLY_MARKED": "钉钉明确标记早退；系统保留源次数并提示复核，不根据打卡时间追加次数或改写旷工时长。",
 	"ABSENCE_MARKED": "工作日无出勤且无可抵扣请假，已按未出勤工时计入旷工并进入薪资三倍扣款。",
-	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "周末休息日打卡达到需核对的工作时长，但钉钉休息日加班时长为 0；请核对钉钉来源。",
+	"RESTDAY_CLOCKED_WITHOUT_OVERTIME": "周末休息日打卡覆盖至少一个有效的自然半小时段，但钉钉休息日加班时长为 0；请核对钉钉来源。",
 	"RESTDAY_CLOCKED_WITHOUT_APPROVAL": "休息日加班时长为 0，但当天有打卡且所属考勤组要求加班申请；请核对该日期的加班单。",
 	"RESTDAY_OVERTIME_TIME_MISMATCH": "钉钉休息日加班时长已保留并计入，但与上下班打卡净时长差异达到 30 分钟，或缺少完整打卡；请核对时间。",
 	"RESTDAY_PUNCH_APPROVAL_MISMATCH": "休息日存在加班审批，但上下班打卡不完整或打卡区间与审批时段不匹配；不按迟到、早退或旷工处理，请人工核对。",
@@ -1556,6 +1556,58 @@ def _worked_minutes_after_meal_breaks(
 	return max(actual_out - actual_in - deducted, 0)
 
 
+def _restday_zero_overtime_half_hour_blocks(
+	row: Mapping[str, Any], policy_row: Mapping[str, Any] | None, shift_rule: Mapping[str, Any] | None,
+) -> list[tuple[int, int]]:
+	"""Return complete clock-aligned half hours requiring zero-overtime review.
+
+	A continuous 30-minute punch span is not enough: 18:45-19:15 contains no
+	complete natural half-hour block. Candidate blocks must be wholly contained
+	by the punch pair, start no earlier than the applicable shift start, and not
+	overlap a configured meal/rest interval. These blocks are audit evidence
+	only; they never synthesize DingTalk overtime hours.
+	"""
+	if not policy_row or not shift_rule:
+		return []
+	bounds = _shift_bounds_minutes(policy_row, shift_rule)
+	if not bounds:
+		return []
+	scheduled_start, _scheduled_end = bounds
+	actual_in, actual_out = _actual_bounds_minutes(row, scheduled_start)
+	if actual_in is None or actual_out is None or actual_out <= actual_in:
+		return []
+
+	meal_intervals: list[tuple[int, int]] = []
+	meal_rule_text = _text(shift_rule.get("meal_deduction_rule")).replace("：", ":")
+	clocks = _SHIFT_CLOCK_RE.findall(meal_rule_text)
+	# An incomplete rest definition is a rule-data problem, not an employee
+	# exception. Leave it for rule maintenance instead of guessing a duration.
+	if (
+		meal_rule_text and "不扣" not in meal_rule_text
+		and any(token in meal_rule_text for token in ("扣", "休息", "餐"))
+		and len(clocks) < 2
+	):
+		return []
+	for index in range(0, len(clocks) - 1, 2):
+		interval = _normalized_clock_interval(
+			int(clocks[index][0]) * 60 + int(clocks[index][1]),
+			int(clocks[index + 1][0]) * 60 + int(clocks[index + 1][1]),
+			scheduled_start,
+		)
+		if interval:
+			meal_intervals.append(interval)
+
+	window_start = max(actual_in, scheduled_start)
+	block_start = ((window_start + 29) // 30) * 30
+	blocks: list[tuple[int, int]] = []
+	while block_start + 30 <= actual_out:
+		block = (block_start, block_start + 30)
+		if not any(min(block[1], end) > max(block[0], start) for start, end in meal_intervals):
+			blocks.append(block)
+		block_start += 30
+	return blocks
+
+
 def _configured_night_allowances(row: Mapping[str, Any], shift_rule: Mapping[str, Any] | None) -> tuple[bool, bool]:
 	"""Return small/large night matches from structured workbook conditions."""
 	if not shift_rule:
@@ -2474,11 +2526,25 @@ def _aggregate_employee_rows(
 			or _schedule_overtime_rule(restday_policy_row, shift_rules)
 			if restday_policy_row and schedule_restday_overtime_mode != "schedule_review" else None
 		)
+		restday_zero_overtime_blocks = (
+			_restday_zero_overtime_half_hour_blocks(row, restday_policy_row, restday_rule)
+			if (
+				policy["genuine_restday_mode"] and is_calendar_weekend(parsed_date)
+				and raw_restday_overtime_hours <= 0
+			)
+			else []
+		)
 		row_restday_clock_without_overtime = bool(
 			policy["genuine_restday_mode"] and is_calendar_weekend(parsed_date)
 			and raw_restday_overtime_hours <= 0
-			and punch_span_minutes is not None
-			and punch_span_minutes > RESTDAY_INCIDENTAL_PUNCH_MAX_MINUTES
+			and (
+				bool(restday_zero_overtime_blocks)
+				or (
+					not restday_rule
+					and punch_span_minutes is not None
+					and punch_span_minutes > RESTDAY_INCIDENTAL_PUNCH_MAX_MINUTES
+				)
+			)
 		)
 		# A positive DingTalk rest-day duration is authoritative, regardless of
 		# punch-span differences or overtime-approval coverage.
@@ -2672,6 +2738,11 @@ def _aggregate_employee_rows(
 			"indirect_restday_rule_date": restday_rule_date,
 			"indirect_restday_rule_name": _text(restday_rule.get("name")) if restday_rule else "",
 			"indirect_restday_rule_weekend_mode": _text(restday_rule.get("weekend_overtime_mode")) if restday_rule else "",
+			"restday_zero_overtime_half_hour_blocks": [
+				{"start": _format_minutes(start), "end": _format_minutes(end)}
+				for start, end in restday_zero_overtime_blocks
+			],
+			"restday_zero_overtime_review_minutes": len(restday_zero_overtime_blocks) * 30,
 			"restday_clocked_without_approval": row_restday_clock_without_approval,
 			"restday_overtime_time_mismatch": False,
 			"restday_overtime_time_match": None,
