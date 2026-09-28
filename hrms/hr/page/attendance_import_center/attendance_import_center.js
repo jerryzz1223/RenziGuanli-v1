@@ -112,6 +112,7 @@ class AttendanceImportCenter {
 				items: [
 					{ key: "import-batches", label: "导入批次" },
 					{ key: "manual-adjustments", label: "考勤修改记录" },
+					{ key: "approval-records", label: "考勤审批记录" },
 				],
 			},
 			{
@@ -632,6 +633,7 @@ class AttendanceImportCenter {
 		if (this.active_view === "monthly-final") return this.load_monthly_final();
 		if (this.active_view === "import-batches") return this.load_processing_ledger("batches");
 		if (this.active_view === "manual-adjustments") return this.load_processing_ledger("adjustments");
+		if (this.active_view === "approval-records") return this.load_processing_ledger("approvals");
 		if (this.active_view === "processing-rules") return this.load_complete_attendance_rules();
 		if (["field-mapping", "department-mapping"].includes(this.active_view)) return this.load_processing_configuration();
 		return this.load_monthly_final();
@@ -1119,6 +1121,7 @@ class AttendanceImportCenter {
 					<div><dt>${this.escape(__("识别行数"))}</dt><dd>${this.escape(loading ? "--" : sourceRows)}</dd></div>
 					<div><dt>${this.escape(__("员工数量"))}</dt><dd>${this.escape(loading ? "--" : employeeSummaries)}</dd></div>
 					<div><dt>${this.escape(__("异常"))}</dt><dd>${this.escape(loading ? "--" : slot.exception_count ?? 0)}</dd></div>
+					<div><dt>${this.escape(__("提交人"))}</dt><dd>${this.escape(loading ? "--" : slot.submitted_by_name || slot.submitted_by || "--")}</dd></div>
 				</dl>
 				<div class="hrms-attendance-source-card__actions">
 					<button class="btn btn-default btn-xs" data-slot-upload="${this.escape(slot.source_type)}" ${loading ? "disabled" : ""}>${this.escape(__(slot.source_file ? "重新上传" : "上传"))}</button>
@@ -2485,9 +2488,9 @@ class AttendanceImportCenter {
 
 	load_processing_ledger(kind) {
 		const body = this.body();
-		const expectedView = kind === "batches" ? "import-batches" : "manual-adjustments";
+		const expectedView = kind === "batches" ? "import-batches" : kind === "approvals" ? "approval-records" : "manual-adjustments";
 		const requestId = ++this.ledger_query_request_id;
-		const method = kind === "batches" ? "list_processing_batches" : "list_attendance_manual_adjustments";
+		const method = kind === "batches" ? "list_processing_batches" : kind === "approvals" ? "list_monthly_final_approval_history" : "list_attendance_manual_adjustments";
 		body.innerHTML = this.render_processing_ledger(kind, [], true);
 		if (!this.ensure_company()) return;
 		const args = { company: this.company, attendance_month: this.attendance_month };
@@ -2510,10 +2513,16 @@ class AttendanceImportCenter {
 
 	render_processing_ledger(kind, rows = [], loading = false, error = "", meta = {}) {
 		const isBatch = kind === "batches";
-		const title = isBatch ? "导入批次" : "考勤修改记录";
-		const headers = isBatch ? ["批次", "月份", "考勤初稿", "苹果树", "忘打卡", "创建时间"] : ["员工", "日期", "来源", "修改字段", "修改前的值", "修改后的值", "原因", "操作人", "时间"];
+		const isApproval = kind === "approvals";
+		const title = isBatch ? "六类来源提交记录" : isApproval ? "考勤审批记录" : "考勤修改记录";
+		const headers = isBatch
+			? ["批次", "月份", "来源", "文件", "状态", "提交人", "提交时间"]
+			: isApproval
+				? ["审批动作", "操作人", "操作时间", "审批说明", "数据快照"]
+				: ["员工", "日期", "来源", "修改字段", "修改前的值", "修改后的值", "原因", "操作人", "时间"];
 		const renderRow = (row) => {
-			if (isBatch) return `<tr><td>${this.escape(row.batch_id || row.name || "--")}</td><td>${this.escape(row.attendance_month || "--")}</td><td>${this.escape(row.attendance_draft_status || "--")}</td><td>${this.escape(row.apple_tree_status || "--")}</td><td>${this.escape(row.missing_card_status || "--")}</td><td>${this.escape(row.created_at || row.creation || "--")}</td></tr>`;
+			if (isBatch) return `<tr><td>${this.escape(row.batch_id || row.name || "--")}</td><td>${this.escape(row.attendance_month || "--")}</td><td>${this.escape(row.source_label || this.processing_source_label(row.source_type) || "--")}</td><td>${this.escape(row.source_file_name || "--")}</td><td>${this.escape(row.status || "--")}</td><td>${this.escape(row.submitted_by_name || row.submitted_by || "--")}<br><small>${this.escape(row.submitted_by || "")}</small></td><td>${this.escape(row.submitted_on || row.creation || "--")}</td></tr>`;
+			if (isApproval) return `<tr><td>${this.escape(row.action || "--")}</td><td>${this.escape(row.operator_name || row.operator || "--")}<br><small>${this.escape(row.operator || "")}</small></td><td>${this.escape(row.occurred_on || "--")}</td><td>${this.escape(row.note || "--")}</td><td>${this.escape(row.snapshot_version || "--")}</td></tr>`;
 			const changes = this.manual_adjustment_changes(row);
 			return changes.map((change) => `<tr><td>${this.escape(`${row.employee_code || "--"} ${row.employee_name || ""}`)}</td><td>${this.escape(row.attendance_date || "--")}</td><td>${this.escape(this.processing_source_label(row.source_type))}</td><td>${this.escape(change.label)}</td><td>${this.escape(this.format_processing_value(change.original))}</td><td>${this.escape(this.format_processing_value(change.modified))}</td><td>${this.escape(row.reason || "--")}</td><td>${this.escape(row.modified_by || row.operator || "--")}</td><td>${this.escape(row.modified_at || row.creation || "--")}</td></tr>`).join("");
 		};
@@ -2521,8 +2530,14 @@ class AttendanceImportCenter {
 			? `<div class="alert alert-info">${this.escape(__("为保证读取速度，当前显示最近 {0} 条修改记录；更早记录仍在系统中保留。", [meta.page_length || rows.length]))}</div>`
 			: "";
 		const renderedRows = rows.map(renderRow).filter(Boolean).join("");
-		const emptyText = isBatch ? __("暂无台账记录。") : __("当前月份暂无实际值修改记录。");
-		return `<div class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__(title))}</h3><small>${this.escape(__(isBatch ? "按月查看三个输入槽的独立状态。清空仅删除本月加工、异常、人工调整与终稿引用，不删除原始上传文件。" : "只显示真实发生变化的字段。每个员工、每个日期、每个修改字段单独一行，修改前后值逐行对应；规则校验、来源修复和仅处理决定不在此显示。"))}</small></div>${isBatch ? `<button class="btn btn-danger btn-sm" data-reset-attendance-month>${this.escape(__("清空本月数据"))}</button>` : ""}</div>${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}${boundedNotice}<div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr>${headers.map((header) => `<th>${this.escape(__(header))}</th>`).join("")}</tr></thead><tbody>${loading ? `<tr><td colspan="${headers.length}" class="text-muted">${this.escape(__("正在读取台账..."))}</td></tr>` : renderedRows || `<tr><td colspan="${headers.length}" class="text-muted">${this.escape(emptyText)}</td></tr>`}</tbody></table></div></div>`;
+		const emptyText = isBatch ? __("当前月份暂无六类来源提交记录。") : isApproval ? __("当前月份暂无审批记录。") : __("当前月份暂无实际值修改记录。");
+		const description = isBatch
+			? "每次上传都保留批次、六类来源、提交账号和时间；重新上传会产生新版本并更新当前月有效数据，无需先清空。"
+			: isApproval
+				? "记录月度终稿的提交、批准、驳回和数据变化后的失效过程。"
+				: "只显示真实发生变化的字段。每个员工、每个日期、每个修改字段单独一行，修改前后值逐行对应。";
+		const headerAction = isBatch ? `<button class="btn btn-danger btn-sm" data-reset-attendance-month>${this.escape(__("清空本月数据"))}</button>` : "";
+		return `<div class="hrms-attendance-section"><div class="hrms-attendance-list-head"><div><h3>${this.escape(__(title))}</h3><small>${this.escape(__(description))}</small></div>${headerAction}</div>${error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(error)}</span></div>` : ""}${boundedNotice}<div class="hrms-attendance-table-wrap"><table class="table table-bordered hrms-attendance-table"><thead><tr>${headers.map((header) => `<th>${this.escape(__(header))}</th>`).join("")}</tr></thead><tbody>${loading ? `<tr><td colspan="${headers.length}" class="text-muted">${this.escape(__("正在读取台账..."))}</td></tr>` : renderedRows || `<tr><td colspan="${headers.length}" class="text-muted">${this.escape(emptyText)}</td></tr>`}</tbody></table></div></div>`;
 	}
 
 	bind_processing_ledger_events(kind) {
@@ -3101,7 +3116,7 @@ class AttendanceImportCenter {
 						const detectionCompleted = processedRows > 0 || ["导入异常", "已确认", "已就绪"].includes(check.status);
 						const errorDisplay = detectionCompleted ? importErrors : __("待校验");
 						const manualAction = `<button class="btn btn-default btn-xs" data-monthly-support-manual="${this.escape(source.key)}" ${processedRows ? "" : "disabled"}>${this.escape(__("手动修改"))}</button>${source.key === "special_hours" ? ` <button class="btn btn-default btn-xs" data-special-hours-manual ${processedRows && check.status === "已就绪" ? "" : "disabled"}>${this.escape(__("新增/按日修改"))}</button>` : ""}`;
-						return `<article class="hrms-attendance-source-card"><div class="hrms-attendance-source-card__head"><div><strong>${this.escape(__(source.label))}</strong></div>${this.status_badge(check.status)}</div><dl><div><dt>${this.escape(__("文件"))}</dt><dd title="${this.escape(fileName)}">${this.escape(fileName)}</dd></div><div><dt>${this.escape(__("识别记录"))}</dt><dd>${this.escape(check.record_count || "--")}</dd></div><div><dt>${this.escape(__("导入错误"))}</dt><dd>${this.escape(errorDisplay)}</dd></div><div><dt>${this.escape(__("已导入记录"))}</dt><dd>${this.escape(processedRows || "--")}</dd></div></dl><div class="hrms-attendance-source-card__actions"><button class="btn btn-default btn-xs" data-monthly-support-upload="${this.escape(source.key)}">${this.escape(__(check.source_file ? "重新上传" : "上传文件"))}</button><button class="btn btn-default btn-xs" data-monthly-support-results="${this.escape(source.key)}" ${processedRows || check.status === "结构异常" ? "" : "disabled"}>${this.escape(__("查看导入校验"))}</button>${manualAction}</div></article>`;
+						return `<article class="hrms-attendance-source-card"><div class="hrms-attendance-source-card__head"><div><strong>${this.escape(__(source.label))}</strong></div>${this.status_badge(check.status)}</div><dl><div><dt>${this.escape(__("文件"))}</dt><dd title="${this.escape(fileName)}">${this.escape(fileName)}</dd></div><div><dt>${this.escape(__("识别记录"))}</dt><dd>${this.escape(check.record_count || "--")}</dd></div><div><dt>${this.escape(__("导入错误"))}</dt><dd>${this.escape(errorDisplay)}</dd></div><div><dt>${this.escape(__("已导入记录"))}</dt><dd>${this.escape(processedRows || "--")}</dd></div><div><dt>${this.escape(__("提交人"))}</dt><dd>${this.escape(check.submitted_by_name || check.submitted_by || "--")}</dd></div></dl><div class="hrms-attendance-source-card__actions"><button class="btn btn-default btn-xs" data-monthly-support-upload="${this.escape(source.key)}">${this.escape(__(check.source_file ? "重新上传" : "上传文件"))}</button><button class="btn btn-default btn-xs" data-monthly-support-results="${this.escape(source.key)}" ${processedRows || check.status === "结构异常" ? "" : "disabled"}>${this.escape(__("查看导入校验"))}</button>${manualAction}</div></article>`;
 					}).join("")}
 				</div>
 			</section>
@@ -3130,12 +3145,13 @@ class AttendanceImportCenter {
 		];
 		const approvalActions = [
 			`<button class="btn btn-default btn-sm" data-hrms-capability="attendance_import_submit" data-submit-final-approval ${submitApprovalDisabled ? "disabled" : ""}>${this.escape(__(submitApprovalLabel))}</button>`,
-			approvalStatus === "待审批" ? `<button class="btn btn-success btn-sm" data-hrms-capability="attendance_final_approve" data-review-final-approval="approve" ${approval.can_approve ? "" : "disabled"}>${this.escape(__("审核通过"))}</button><button class="btn btn-danger btn-sm" data-hrms-capability="attendance_final_approve" data-review-final-approval="reject" ${approval.can_approve ? "" : "disabled"}>${this.escape(__("审核驳回"))}</button>` : "",
+			approval.can_one_click_approve ? `<button class="btn btn-success btn-sm" data-hrms-capability="attendance_final_approve" data-one-click-final-approval>${this.escape(__("一键提交并审批"))}</button>` : "",
+			approvalStatus === "待审批" ? `<button class="btn btn-success btn-sm" data-hrms-capability="attendance_final_approve" data-review-final-approval="approve" ${approval.can_approve ? "" : "disabled"}>${this.escape(__("审批通过（可审本人）"))}</button><button class="btn btn-danger btn-sm" data-hrms-capability="attendance_final_approve" data-review-final-approval="reject" ${approval.can_approve ? "" : "disabled"}>${this.escape(__("审批驳回"))}</button>` : "",
 		].join("");
 		const approvalHint = approvalStatus === "待审批"
-			? __("提交人：{0}；等待另一位有“考勤终稿审批”权限的账号审核。", [approval.submitted_by || "--"])
+			? __("提交人：{0}；有“考勤终稿审批”权限的账号可审批，也可由提交人本人审批。", [approval.submitted_by_name || approval.submitted_by || "--"])
 			: approvalStatus === "已批准"
-				? __("审核人：{0}；只有本次审核通过的同一份月考勤数据可以锁定。", [approval.reviewed_by || "--"])
+				? __("审批人：{0}；只有本次审批通过的同一份月考勤数据可以锁定。", [approval.reviewed_by_name || approval.reviewed_by || "--"])
 				: approvalStatus === "已驳回"
 					? __("审核驳回意见：{0}。修改完成后请重新提交月考勤审核。", [approval.review_note || "未填写"])
 					: approvalStatus === "已失效"
@@ -3154,6 +3170,7 @@ class AttendanceImportCenter {
 	bind_monthly_final_events(body) {
 		body.querySelector("[data-generate-final]")?.addEventListener("click", () => this.generate_monthly_final_files());
 		body.querySelector("[data-submit-final-approval]")?.addEventListener("click", () => this.submit_monthly_final_for_approval());
+		body.querySelector("[data-one-click-final-approval]")?.addEventListener("click", () => this.approve_monthly_final_in_one_click());
 		body.querySelectorAll("[data-review-final-approval]").forEach((button) => button.addEventListener("click", () => this.review_monthly_final_approval(button.dataset.reviewFinalApproval)));
 		body.querySelectorAll("[data-download-final]").forEach((button) => button.addEventListener("click", () => this.download_final_file(button.dataset.downloadFinal)));
 		body.querySelectorAll("[data-preview-final]").forEach((button) => button.addEventListener("click", () => this.open_monthly_final_preview(button.dataset.previewFinal)));
@@ -3171,7 +3188,7 @@ class AttendanceImportCenter {
 				company: this.company, attendance_month: this.attendance_month, note: values.note || "",
 			}, {
 				freeze: true, freeze_message: __("正在提交月度终稿审批..."),
-				on_success: () => { frappe.show_alert({ message: __("已提交审批，需由另一位有审批权限的账号处理。"), indicator: "blue" }); this.load_monthly_final(); },
+				on_success: () => { frappe.show_alert({ message: __("已提交审批，有审批权限的账号可处理，提交人本人也可审批。"), indicator: "blue" }); this.load_monthly_final(); },
 				on_error: (message) => frappe.msgprint(message),
 			}),
 			__("提交考勤终稿审批"), __("提交审批"),
@@ -3190,6 +3207,20 @@ class AttendanceImportCenter {
 				on_error: (message) => frappe.msgprint(message),
 			}),
 			approved ? __("批准考勤终稿") : __("驳回考勤终稿"), approved ? __("批准") : __("驳回"),
+		);
+	}
+
+	approve_monthly_final_in_one_click() {
+		frappe.prompt(
+			[{ fieldname: "note", fieldtype: "Small Text", label: __("审批说明"), description: __("系统会先提交当前六类来源快照，随后由当前账号审批通过。") }],
+			(values) => this.call_processing_api("approve_monthly_final_in_one_click", {
+				company: this.company, attendance_month: this.attendance_month, note: values.note || "",
+			}, {
+				freeze: true, freeze_message: __("正在提交并审批月度终稿..."),
+				on_success: () => { frappe.show_alert({ message: __("已由当前账号提交并审批，现在可以锁定生成。"), indicator: "green" }); this.load_monthly_final(); },
+				on_error: (message) => frappe.msgprint(message),
+			}),
+			__("一键提交并审批"), __("确认审批"),
 		);
 	}
 

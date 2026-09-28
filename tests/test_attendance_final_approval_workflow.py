@@ -27,8 +27,15 @@ class AttendanceFinalApprovalWorkflowTests(unittest.TestCase):
 		review = self.functions["review_monthly_final_approval"]
 		self.assertIn('_require_processing_manager("attendance_import_submit")', submit)
 		self.assertIn('_require_processing_manager("attendance_final_approve")', review)
-		self.assertIn('submitted_by") == frappe.session.user', review)
-		self.assertIn("上传/提交人不能审批本人提交", review)
+		self.assertNotIn('submitted_by") == frappe.session.user', review)
+		self.assertNotIn("不能审批本人提交", review)
+
+	def test_one_click_approval_submits_then_self_approves(self):
+		one_click = self.functions["approve_monthly_final_in_one_click"]
+		self.assertIn('_require_processing_manager("attendance_final_approve")', one_click)
+		self.assertIn('_require_processing_manager("attendance_import_submit")', one_click)
+		self.assertIn("submit_monthly_final_for_approval", one_click)
+		self.assertIn('review_monthly_final_approval(company, attendance_month, "approve", note)', one_click)
 
 	def test_lock_generation_requires_current_approved_snapshot(self):
 		generate = self.functions["generate_monthly_final_files"]
@@ -48,11 +55,26 @@ class AttendanceFinalApprovalWorkflowTests(unittest.TestCase):
 			'data-hrms-capability="attendance_final_approve" data-review-final-approval="approve"',
 			'data-hrms-capability="attendance_final_lock" data-generate-final',
 			'"提交月考勤审核"',
-			'"审核通过"',
+			'"审批通过（可审本人）"',
 			'"月考勤审核：{0}"',
 			"submit_monthly_final_for_approval()",
 			"review_monthly_final_approval(decision)",
 		):
+			self.assertIn(marker, self.page_source)
+		self.assertIn("data-one-click-final-approval", self.page_source)
+		self.assertIn("一键提交并审批", self.page_source)
+		self.assertIn("审批通过（可审本人）", self.page_source)
+
+	def test_six_source_submission_and_approval_ledgers_are_exposed(self):
+		batch_ledger = self.functions["list_processing_batches"]
+		approval_ledger = self.functions["list_monthly_final_approval_history"]
+		register_source = self.functions["register_source_file"]
+		self.assertIn("SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES", batch_ledger)
+		self.assertIn('"submitted_by_name"', batch_ledger)
+		self.assertIn('"operator_name"', approval_ledger)
+		self.assertIn('"source_type": "attendance_draft"', approval_ledger)
+		self.assertIn('"monthly_final_approval_history"', register_source)
+		for marker in ("六类来源提交记录", "考勤审批记录", "approval-records"):
 			self.assertIn(marker, self.page_source)
 
 	def test_submit_action_stays_visible_while_sources_are_incomplete(self):

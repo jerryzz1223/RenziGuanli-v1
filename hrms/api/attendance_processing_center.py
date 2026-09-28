@@ -2960,7 +2960,18 @@ def _slot_payload(batch):
 		"data_quality": meta.get("data_quality", {}),
 		"processed_result": meta.get("processed_result"),
 		"merge": meta.get("merge", {}),
+		"submitted_by": batch.imported_by or "",
+		"submitted_by_name": _user_display_name(batch.imported_by),
+		"submitted_on": batch.imported_on or batch.creation,
 	}
+
+
+def _user_display_name(user: str) -> str:
+	"""Return the account name used in attendance audit ledgers."""
+	user = str(user or "").strip()
+	if not user:
+		return ""
+	return str(frappe.db.get_value("User", user, "full_name") or user)
 
 
 def _refresh_batch_review_status(batch):
@@ -3123,6 +3134,21 @@ def register_source_file(company: str, attendance_month: str, source_type: str, 
 		frappe.throw(_("当前考勤处理仅接受 .xlsx 文件，以保证结构预检和加工结果可追溯。"))
 	checksum = _file_checksum(file_url)
 	parent = _latest_batch(company, attendance_month, source_type)
+	processing_notes = {
+		"source_version": now_datetime().isoformat(),
+		"registered_by": frappe.session.user,
+		"merge_parent_batch": parent.name if parent else "",
+		"merge_mode": "business_unique_key",
+	}
+	# Approval is anchored to the attendance-draft batch.  Carry its audit chain
+	# into a replacement draft so the subsequent source-change invalidation is
+	# visible on the current month instead of being stranded on the old version.
+	if source_type == "attendance_draft" and parent:
+		parent_meta = _processing_meta(parent)
+		processing_notes.update({
+			"monthly_final_approval": parent_meta.get("monthly_final_approval") or {},
+			"monthly_final_approval_history": parent_meta.get("monthly_final_approval_history") or [],
+		})
 	batch = frappe.get_doc({
 		"doctype": IMPORT_BATCH_DOCTYPE,
 		"company": company,
@@ -3133,12 +3159,7 @@ def register_source_file(company: str, attendance_month: str, source_type: str, 
 		"status": "待加工",
 		"imported_by": frappe.session.user,
 		"imported_on": now_datetime(),
-		"notes": _json({"attendance_processing_center": {
-			"source_version": now_datetime().isoformat(),
-			"registered_by": frappe.session.user,
-			"merge_parent_batch": parent.name if parent else "",
-			"merge_mode": "business_unique_key",
-		}}),
+		"notes": _json({"attendance_processing_center": processing_notes}),
 	}).insert(ignore_permissions=True)
 	return {"batch": batch.name, "source_type": source_type, "status": batch.status, "file_url": file_url}
 
@@ -5334,23 +5355,31 @@ def _processing_exception_sort_key(row: dict[str, Any]):
 def list_processing_batches(company: str, attendance_month: str, page_length: int = 100):
 	_require_processing_manager()
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
-	latest = {}
-	for source_type in SOURCE_TYPES:
-		batch = _latest_batch(company, attendance_month, source_type)
-		if batch:
-			latest[source_type] = batch
-	if not latest:
-		return {"items": []}
-	created_at = min((batch.creation for batch in latest.values()), default="")
+	limit = min(max(cint(page_length), 1), 500)
+	rows = frappe.get_all(
+		IMPORT_BATCH_DOCTYPE,
+		filters={
+			"company": company,
+			"attendance_month": attendance_month,
+			"source_type": ["in", SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES],
+		},
+		fields=["name", "attendance_month", "source_type", "source_file", "status", "imported_by", "imported_on", "creation"],
+		order_by="creation desc",
+		limit_page_length=limit,
+	)
 	return {
 		"items": [{
-			"batch_id": f"{company}:{attendance_month}",
-			"attendance_month": attendance_month,
-			"attendance_draft_status": latest.get("attendance_draft").status if latest.get("attendance_draft") else "未上传",
-			"apple_tree_status": latest.get("apple_tree").status if latest.get("apple_tree") else "未上传",
-			"missing_card_status": latest.get("missing_card").status if latest.get("missing_card") else "未上传",
-			"created_at": created_at,
-		}][: min(max(cint(page_length), 1), 200)]
+			"batch_id": row.name,
+			"attendance_month": row.attendance_month,
+			"source_type": row.source_type,
+			"source_label": SOURCE_LABELS.get(row.source_type, row.source_type),
+			"source_file": row.source_file or "",
+			"source_file_name": Path(row.source_file or "").name,
+			"status": row.status,
+			"submitted_by": row.imported_by or "",
+			"submitted_by_name": _user_display_name(row.imported_by),
+			"submitted_on": row.imported_on or row.creation,
+		} for row in rows],
 	}
 
 
@@ -6322,6 +6351,9 @@ def _finalization_inputs(company, attendance_month, slots):
 			"snapshot_version": "",
 			"source_file": batch.source_file if batch else "",
 			"source_file_name": Path(batch.source_file).name if batch and batch.source_file else "",
+			"submitted_by": batch.imported_by if batch else "",
+			"submitted_by_name": _user_display_name(batch.imported_by) if batch else "",
+			"submitted_on": (batch.imported_on or batch.creation) if batch else "",
 			"record_count": cint(precheck.get("record_count")),
 			"processed_rows": processed_rows,
 			# Kept for compatibility with existing clients.  Import validation errors
@@ -6818,7 +6850,10 @@ def _monthly_final_approval_state(company: str, attendance_month: str, anchor_me
 		"stale": stale,
 		"approved_for_current_snapshot": bool(status == "已批准" and stored_snapshot and stored_snapshot == current_snapshot),
 		"can_submit": bool(current_snapshot and status in {"未提交", "已驳回", "已失效"} and has_hrms_capability("attendance_import_submit")),
-		"can_approve": bool(status == "待审批" and current_snapshot and stored_snapshot == current_snapshot and approval.get("submitted_by") != frappe.session.user and has_hrms_capability("attendance_final_approve")),
+		"submitted_by_name": _user_display_name(approval.get("submitted_by")),
+		"reviewed_by_name": _user_display_name(approval.get("reviewed_by")),
+		"can_approve": bool(status == "待审批" and current_snapshot and stored_snapshot == current_snapshot and has_hrms_capability("attendance_final_approve")),
+		"can_one_click_approve": bool(current_snapshot and not (status == "已批准" and stored_snapshot == current_snapshot) and has_hrms_capability("attendance_final_approve") and (status == "待审批" or has_hrms_capability("attendance_import_submit"))),
 		"can_lock": bool(status == "已批准" and stored_snapshot == current_snapshot and has_hrms_capability("attendance_final_lock")),
 		"current_user_is_submitter": bool(approval.get("submitted_by") == frappe.session.user),
 	}
@@ -6871,7 +6906,7 @@ def submit_monthly_final_for_approval(company: str, attendance_month: str, note:
 
 @frappe.whitelist()
 def review_monthly_final_approval(company: str, attendance_month: str, decision: str, note: str = ""):
-	"""Approve or reject another account's submitted attendance-final snapshot."""
+	"""Approve or reject the submitted snapshot, including the submitter's own."""
 	_require_processing_manager("attendance_final_approve")
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
 	decision = str(decision or "").strip()
@@ -6883,8 +6918,6 @@ def review_monthly_final_approval(company: str, attendance_month: str, decision:
 	state = _monthly_final_approval_state(company, attendance_month)
 	if state.get("status") != "待审批":
 		frappe.throw(_("当前终稿不是待审批状态，请由上传人重新提交。"))
-	if state.get("submitted_by") == frappe.session.user:
-		frappe.throw(_("上传/提交人不能审批本人提交的考勤终稿，请由另一位有审批权限的账号处理。"), frappe.PermissionError)
 	if state.get("snapshot_version") != state.get("current_snapshot_version"):
 		frappe.throw(_("提交后的来源或处理结果已经变化，请重新提交审批。"))
 	now = now_datetime().isoformat()
@@ -6904,6 +6937,53 @@ def review_monthly_final_approval(company: str, attendance_month: str, decision:
 	})
 	frappe.db.commit()
 	return _monthly_final_approval_state(company, attendance_month)
+
+
+@frappe.whitelist()
+def approve_monthly_final_in_one_click(company: str, attendance_month: str, note: str = ""):
+	"""Submit (when needed) and approve the current six-source snapshot."""
+	_require_processing_manager("attendance_final_approve")
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	state = _monthly_final_approval_state(company, attendance_month)
+	if state.get("approved_for_current_snapshot"):
+		return state
+	if state.get("status") != "待审批" or state.get("snapshot_version") != state.get("current_snapshot_version"):
+		_require_processing_manager("attendance_import_submit")
+		submit_monthly_final_for_approval(company, attendance_month, note)
+	return review_monthly_final_approval(company, attendance_month, "approve", note)
+
+
+@frappe.whitelist()
+def list_monthly_final_approval_history(company: str, attendance_month: str):
+	"""Return the submit/review/invalidation ledger for the month."""
+	_require_processing_manager("attendance_view", "attendance_import_submit", "attendance_final_approve", "attendance_final_lock")
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	batches = frappe.get_all(
+		IMPORT_BATCH_DOCTYPE,
+		filters={"company": company, "attendance_month": attendance_month, "source_type": "attendance_draft"},
+		fields=["notes"],
+		order_by="creation asc",
+		limit_page_length=500,
+	)
+	history, seen = [], set()
+	for batch in batches:
+		meta = (_loads(batch.notes, {}) or {}).get("attendance_processing_center") or {}
+		for event in meta.get("monthly_final_approval_history") or []:
+			identity = tuple(str(event.get(key) or "") for key in ("action", "snapshot_version", "operator", "occurred_on"))
+			if identity in seen:
+				continue
+			seen.add(identity)
+			history.append(event)
+	history.sort(key=lambda event: str(event.get("occurred_on") or ""), reverse=True)
+	items = []
+	for event in history:
+		operator = str(event.get("operator") or "")
+		items.append({
+			**event,
+			"operator": operator,
+			"operator_name": _user_display_name(operator),
+		})
+	return {"items": items}
 
 
 def _monthly_final_rows(batches: dict[str, Any], employee_code: str = ""):
