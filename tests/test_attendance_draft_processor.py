@@ -45,6 +45,24 @@ class _FakeWorkbook:
 
 
 class AttendanceDraftProcessorContractTest(unittest.TestCase):
+	def test_month_date_coverage_blocks_a_truncated_month_only_when_required(self):
+		rows = [
+			{"工号": "E-001", "姓名": "张三", "日期": f"2026-08-{day:02d}", "实际部门": "工程课"}
+			for day in range(1, 31)
+		]
+		coverage = processor.attendance_month_date_coverage(rows, attendance_month="2026-08")
+		self.assertFalse(coverage["is_complete"])
+		self.assertEqual(coverage["missing_dates"], ["2026-08-31"])
+
+		fixture_result = processor.process_attendance_draft_rows(rows, attendance_month="2026-08")
+		self.assertTrue(fixture_result["structure_precheck"]["is_valid"])
+		strict_result = processor.process_attendance_draft_rows(
+			rows, attendance_month="2026-08", require_full_month_coverage=True,
+		)
+		self.assertFalse(strict_result["structure_precheck"]["is_valid"])
+		self.assertEqual(strict_result["structure_precheck"]["status"], "结构异常")
+		self.assertEqual(strict_result["metrics"]["missing_calendar_dates"], 1)
+
 	def test_daily_statistics_export_is_detected_by_headers_not_worksheet_name(self):
 		sheet = _FakeWorksheet("每日统计", [
 			("每日统计配置版 统计日期：2026-07-01 至 2026-07-31",),
@@ -2319,6 +2337,38 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertNotIn("EMPLOYEE_DEPARTMENT_MISMATCH", row["exception_codes"])
 		self.assertEqual(row["review_status"], "无需审核")
 		self.assertTrue(row["eligible_for_downstream"])
+
+	def test_specific_roster_designation_fuzzy_matches_dingtalk_department(self):
+		rows = [{
+			"姓名": "陆体廷", "工号": "1223", "日期": "26-08-04", "实际部门": "模具组", "班次": "白班", "标准工时": 8, "实际出勤": 8,
+			"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+		}]
+		roster = [{
+			"employee_code": "1223", "employee_name": "陆体廷", "department": "工程课", "designation": "模具组组长",
+		}]
+		row = processor.process_attendance_draft_rows(
+			rows, attendance_month="2026-08", employee_directory=roster,
+		)["processed_rows"][0]
+
+		self.assertNotIn("EMPLOYEE_DEPARTMENT_MISMATCH", row["exception_codes"])
+		self.assertEqual(row["department"], "工程课")
+		self.assertEqual(row["review_status"], "无需审核")
+		self.assertTrue(row["eligible_for_downstream"])
+
+	def test_different_department_and_designation_still_require_review(self):
+		rows = [{
+			"姓名": "张三", "工号": "E-001", "日期": "26-08-04", "实际部门": "品保课", "班次": "白班", "标准工时": 8,
+			"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3,
+		}]
+		roster = [{
+			"employee_code": "E-001", "employee_name": "张三", "department": "工程课", "designation": "品管组长",
+		}]
+		row = processor.process_attendance_draft_rows(
+			rows, attendance_month="2026-08", employee_directory=roster,
+		)["processed_rows"][0]
+
+		self.assertIn("EMPLOYEE_DEPARTMENT_MISMATCH", row["exception_codes"])
+		self.assertEqual(row["review_status"], "待审核")
 
 	def test_dingtalk_departed_name_suffix_does_not_create_identity_exception(self):
 		rows = [

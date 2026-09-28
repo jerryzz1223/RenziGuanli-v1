@@ -10,6 +10,7 @@ DingTalk result.
 from __future__ import annotations
 
 import re
+from calendar import monthrange
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
@@ -1885,6 +1886,37 @@ def rows_from_dingtalk_daily_sheet(sheet: Any, *, source_file: str = "") -> list
 	return rows
 
 
+def attendance_month_date_coverage(
+	raw_rows: Iterable[Mapping[str, Any]], *, attendance_month: str,
+) -> dict[str, Any]:
+	"""Report whether a monthly daily export contains every calendar date.
+
+	A structurally valid DingTalk export can still end before the selected month
+	does. Aggregating that file would silently understate attendance and payroll
+	hours, so the upload workflow treats this as one batch-level validation error.
+	"""
+	if not _MONTH_RE.fullmatch(_text(attendance_month)):
+		raise ValueError("attendance_month must use YYYY-MM")
+	year, month = (int(part) for part in attendance_month.split("-", 1))
+	expected = {f"{attendance_month}-{day:02d}" for day in range(1, monthrange(year, month)[1] + 1)}
+	observed = {
+		parsed
+		for row in raw_rows
+		if (parsed := _parse_date(_value(row, IDENTITY_FIELDS["attendance_date"]), attendance_month))
+		and parsed[:7] == attendance_month
+	}
+	missing = sorted(expected - observed)
+	return {
+		"is_complete": not missing,
+		"expected_date_count": len(expected),
+		"observed_date_count": len(observed),
+		"first_observed_date": min(observed, default=""),
+		"last_observed_date": max(observed, default=""),
+		"missing_dates": missing,
+		"message": "" if not missing else f"考勤每日数据未覆盖完整月份，缺少：{'、'.join(missing)}",
+	}
+
+
 def _reassign_restday_0800_to_previous_overnight(
 	rows: list[dict[str, Any]], shift_rules: Sequence[Mapping[str, Any]] | None,
 ) -> int:
@@ -1965,6 +1997,7 @@ def process_attendance_draft_rows(
 	shift_rules: Sequence[Mapping[str, Any]] | None = None,
 	shift_rule_version: str = "",
 	scheduling_policies: Sequence[Mapping[str, Any]] | None = None,
+	require_full_month_coverage: bool = False,
 ) -> dict[str, Any]:
 	"""Aggregate a DingTalk daily-detail export into one employee dataset."""
 	if not _MONTH_RE.fullmatch(_text(attendance_month)):
@@ -1972,6 +2005,12 @@ def process_attendance_draft_rows(
 	input_rows = [_normalize_wrapped_daily_row_headers(row) for row in raw_rows]
 	cross_day_punch_reassignments = _reassign_restday_0800_to_previous_overnight(input_rows, shift_rules)
 	structure = precheck_attendance_draft_structure(_ordered_headers(input_rows))
+	date_coverage = attendance_month_date_coverage(input_rows, attendance_month=attendance_month)
+	structure["month_date_coverage"] = date_coverage
+	if require_full_month_coverage and not date_coverage["is_complete"]:
+		structure["is_valid"] = False
+		structure["status"] = "结构异常"
+		structure.setdefault("validation_errors", []).append(date_coverage["message"])
 	employee_index = _build_employee_index(employee_directory)
 	policy = {**DEFAULT_EXCEPTION_POLICY, **{key: bool(value) for key, value in (exception_policy or {}).items() if key in DEFAULT_EXCEPTION_POLICY}}
 	# DingTalk monthly exports can include the first day of the following month
@@ -2062,6 +2101,7 @@ def process_attendance_draft_rows(
 		"structure_precheck": structure,
 		"processed_rows": processed_rows,
 		"data_quality": {
+			"month_date_coverage": date_coverage,
 			"excluded_test_attendance_rows": len(test_shift_rows),
 			"cross_day_punch_reassignments": cross_day_punch_reassignments,
 			"excluded_missing_employee_code_rows": len(missing_code_rows),
@@ -2077,6 +2117,7 @@ def process_attendance_draft_rows(
 			"notice": "工号为空的来源行不作为员工考勤处理；未匹配花名册且整月无打卡、实际出勤、请假、加班或审批证据的空白占位行不进入员工异常，有证据时保留并核对身份；测试药水分析组班次不参与正式计算；入职日期晚于考勤日期的人员不参与该日考勤，整月均在入职前的人员自动从当月加工结果删除；夜班后排休日被误列为上班卡的08:00单卡归回前一夜班下班卡；真实休息日不出勤不产生请假或缺勤；所属考勤组的周末规则要求加班单时，有打卡须匹配有效申请。明确标记为工作日、调班或补班的日期仍按工作日处理。",
 		},
 		"metrics": {
+			"missing_calendar_dates": len(date_coverage["missing_dates"]),
 			"cross_day_punch_reassignments": cross_day_punch_reassignments,
 			"source_rows": len(input_rows),
 			"eligible_employee_source_rows": len(processing_rows) - len(missing_code_rows) - len(future_joining_rows) - len(unmatched_blank_rows),
@@ -2991,7 +3032,9 @@ def _resolve_employee(code, name, department, employee_index, codes):
 			return code, name, department, None
 		if name and employee["employee_name"] and _name_key(name) != _name_key(employee["employee_name"]):
 			_add_code(codes, "EMPLOYEE_NAME_MISMATCH")
-		if department and employee["department"] and _department_key(department) != _department_key(employee["department"]):
+		if department and employee["department"] and not _department_matches_roster(
+			department, employee["department"], employee.get("designation")
+		):
 			_add_code(codes, "EMPLOYEE_DEPARTMENT_MISMATCH")
 		return employee["employee_code"], employee["employee_name"] or name, employee["department"] or department, employee
 	if name:
@@ -3256,6 +3299,22 @@ def _department_key(value):
 	"""
 	key = re.sub(r"\s+", "", normalize_department_name(value)).casefold()
 	return key[:-1] if len(key) > 1 and key[-1:] in {"组", "课", "科"} else key
+
+
+def _department_matches_roster(source_department, roster_department, designation=""):
+	"""Match a DingTalk unit to either the roster department or its specific job.
+
+	A roster can keep the parent department (for example ``工程课``) while the
+	job carries the concrete unit (for example ``模具组组长``).  In that case a
+	DingTalk value of ``模具组`` is valid.  Keep this fallback directional and
+	require the complete source unit to occur in the job title; arbitrary character
+	similarity would incorrectly merge genuinely different units.
+	"""
+	if _department_key(source_department) == _department_key(roster_department):
+		return True
+	source_key = re.sub(r"\s+", "", normalize_department_name(source_department)).casefold()
+	designation_key = re.sub(r"\s+", "", _text(designation)).casefold()
+	return bool(len(source_key) >= 2 and source_key in designation_key)
 
 
 def _add_code(codes, code):

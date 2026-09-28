@@ -15,6 +15,88 @@
 	to { transform: rotate(360deg); }
 }
 
+/* Long-running imports and validations use Frappe's shared freeze layer.  Keep
+ * the real operation message visible, and add a small branded waiting state
+ * without pretending that a synchronous request has a measurable percent. */
+#freeze.in {
+	opacity: 1;
+}
+
+#freeze .freeze-message-container {
+	background: rgba(248, 249, 251, 0.9) !important;
+	backdrop-filter: blur(2px);
+	-webkit-backdrop-filter: blur(2px);
+}
+
+#freeze .freeze-message {
+	box-sizing: border-box;
+	width: min(320px, calc(100vw - 40px));
+	min-height: 220px;
+	margin: 0 auto;
+	padding: 28px 30px 26px;
+	border: 1px solid rgba(31, 35, 40, 0.08);
+	border-radius: 24px;
+	background: rgba(255, 255, 255, 0.96);
+	box-shadow: 0 22px 60px rgba(31, 35, 40, 0.12);
+	color: #565b63 !important;
+	font-size: 14px;
+	font-weight: 500;
+	line-height: 1.65;
+	text-align: center;
+}
+
+#freeze .freeze-message::before {
+	content: "永新 · 人资管理系统";
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 116px;
+	margin: 0 auto 12px;
+	padding-top: 88px;
+	background: url("/assets/hrms/images/yongxin-brand-mark-red.png") center top / 76px 76px no-repeat;
+	color: #202328;
+	font-size: 16px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	animation: hrms-freeze-brand-breathe 2.2s ease-in-out infinite;
+}
+
+#freeze .freeze-message::after {
+	content: "";
+	display: block;
+	width: 164px;
+	height: 4px;
+	margin: 18px auto 0;
+	border-radius: 999px;
+	background:
+		linear-gradient(90deg, transparent 0 18%, #c7272d 42% 58%, transparent 82% 100%),
+		#eceef1;
+	background-size: 220% 100%, 100% 100%;
+	animation: hrms-freeze-progress 1.55s ease-in-out infinite;
+}
+
+#freeze .freeze-message > .lead {
+	margin: 0;
+	color: inherit;
+	font-size: inherit;
+	font-weight: inherit;
+	line-height: inherit;
+}
+
+@keyframes hrms-freeze-brand-breathe {
+	0%, 100% { transform: translateY(0) scale(1); opacity: 0.92; }
+	50% { transform: translateY(-4px) scale(1.035); opacity: 1; }
+}
+
+@keyframes hrms-freeze-progress {
+	0% { background-position: 110% 0, 0 0; }
+	100% { background-position: -110% 0, 0 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-	.splash img { animation: none; }
+	.splash img,
+	#freeze .freeze-message::before,
+	#freeze .freeze-message::after {
+		animation: none;
+	}
 }

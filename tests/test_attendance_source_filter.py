@@ -58,6 +58,35 @@ class AttendanceSourceFilterTest(TestCase):
         self.assertEqual(merged["merge"]["merged_rows"], 1)
         self.assertEqual(merged["processed_rows"][0]["review_history"], [{"reason": "原审核"}])
 
+    def test_monthly_support_reupload_replaces_the_prior_effective_view(self):
+        batch = SimpleNamespace(name="new", company="永新", attendance_month="2026-08", source_type="special_hours")
+        parent = SimpleNamespace(name="old", company="永新", attendance_month="2026-08", source_type="special_hours")
+        incoming = [
+            {"employee_code": "1223", "exception_codes": [], "processed_value": {"special_hours": 1}},
+            {"employee_code": "1616", "exception_codes": ["SPECIAL_HOURS_INVALID"], "processed_value": {"special_hours": 0}},
+        ]
+        result = {"processed_rows": incoming, "metrics": {"processed_rows": 99, "exception_rows": 0}}
+        with (
+            patch.object(self.api, "_processing_meta", return_value={"merge_parent_batch": "old"}),
+            patch.object(self.api.frappe.db, "exists", return_value=True, create=True),
+            patch.object(self.api.frappe.db, "count", return_value=200, create=True),
+            patch.object(self.api.frappe, "get_doc", return_value=parent, create=True),
+            patch.object(self.api, "_result_rows") as prior_rows,
+        ):
+            replaced = self.api._merge_processed_rows(batch, result)
+
+        self.assertEqual(replaced["processed_rows"], incoming)
+        self.assertEqual(replaced["metrics"]["processed_rows"], 2)
+        self.assertEqual(replaced["metrics"]["exception_rows"], 1)
+        self.assertEqual(replaced["merge"], {
+            "mode": "latest_upload_replacement",
+            "parent_batch": "old",
+            "replaced_previous_rows": 200,
+            "inserted_rows": 2,
+            "effective_rows": 2,
+        })
+        prior_rows.assert_not_called()
+
     def test_other_sources_are_not_filtered(self):
         self.assertEqual(self.api._approval_source_exclusion("attendance_draft", "2026-08", {"审批状态": "终止", "奖/惩日期": "2026-07-01"}), "")
 

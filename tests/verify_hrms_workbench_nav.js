@@ -73,8 +73,8 @@ if (!topNavCssVersion || topNavCssVersion < "20260903f") {
 	throw new Error("The top navigation CSS cache version must change when its desktop layout is corrected.");
 }
 
-if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260922-permission-safe-navbar-v1")) {
-	throw new Error("The top navigation JavaScript cache version must change when framework controls change.");
+if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260928-navbar-route-refresh-v1")) {
+	throw new Error("The top navigation JavaScript cache version must change when route-transition behavior changes.");
 }
 
 for (const marker of ["#full-search-button", ".navbar .search-wrapper", ".navbar .awesomebar", ".navbar .btn-new", ".navbar .btn-primary", "path === \"/app\"", "input.closest(\"form, .input-group, .form-group, .search, .search-bar, .search-wrapper, .search-container, .search-box, .awesomebar\")"]) {

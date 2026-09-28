@@ -191,7 +191,7 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertEqual(set(invalid["缺失字段"]), {"数据ID", "审批状态"})
 
 	def test_hr_monthly_register_does_not_require_nonexistent_dingtalk_audit_columns(self):
-		row = source_row(**{"source_kind": "monthly_summary", "绿苹果": 8, "奖/惩项目": "人资组/绿苹果/新员工/每天2颗"})
+		row = source_row(**{"绿苹果": 8, "红苹果": "", "奖/惩项目": "人资组/绿苹果/新员工/每天2颗"})
 		for field in ("数据id", "审批编号", "审批结果", "审批状态"):
 			row.pop(field, None)
 		preflight = preflight_apple_tree_rows([row])
@@ -208,8 +208,50 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertEqual(preflight["来源口径"], "人资月度汇总表")
 		self.assertEqual(processed[0]["review_status"], "无需审核")
 		self.assertEqual(processed[0]["有效苹果数"], 8)
+		self.assertEqual(processed[0]["source_kind"], "monthly_summary")
 		self.assertTrue(processed[0]["source_id"].startswith("monthly-summary:苹果树合计:"))
 		self.assertNotIn("AMOUNT_TEXT_CONFLICT", processed[0]["exception_codes"])
+		self.assertNotIn("AMOUNT_CALCULATION_REQUIRED", processed[0]["exception_codes"])
+
+	def test_apple_tree_grid_uses_the_monthly_register_identity_headers(self):
+		page_source = ATTENDANCE_PAGE.read_text(encoding="utf-8")
+		self.assertIn(
+			'["部门", "受奖/惩人部门"], ["工号", "受奖/惩人工号"], ["姓名", "受奖/惩人"]',
+			page_source,
+		)
+
+	def test_monthly_register_flags_only_an_amount_entered_in_the_wrong_apple_column(self):
+		cases = (
+			({"奖/惩项目": "连续课/绿苹果/保养。5颗", "绿苹果": "", "红苹果": 5}, "绿苹果"),
+			({"奖/惩项目": "连续课/红苹果/违规。5颗", "绿苹果": 5, "红苹果": ""}, "红苹果"),
+		)
+		for changes, apple_type in cases:
+			with self.subTest(apple_type=apple_type):
+				row = source_row(**changes)
+				for field in ("数据id", "审批编号", "审批结果", "审批状态"):
+					row.pop(field, None)
+				processed = normalize_apple_tree_rows(
+					[row], rules=self.confirmed_rules(), employees=EMPLOYEES,
+					source_file="6月苹果树.xlsx", source_sheet="苹果树合计", start_row=4,
+				)[0]
+				self.assertIn("INACTIVE_APPLE_VALUE_CONFLICT", processed["exception_codes"])
+				self.assertIn("填写数量的苹果列不一致", processed["exception_message"])
+				self.assertNotIn("AMOUNT_TEXT_CONFLICT", processed["exception_codes"])
+				self.assertNotIn("AMOUNT_CALCULATION_REQUIRED", processed["exception_codes"])
+
+	def test_monthly_register_allows_blank_or_zero_in_the_other_apple_column(self):
+		for inactive_value in ("", 0, "0"):
+			with self.subTest(inactive_value=inactive_value):
+				row = source_row(**{"绿苹果": 8, "红苹果": inactive_value, "奖/惩项目": "人资组/绿苹果/新员工/每天2颗"})
+				for field in ("数据id", "审批编号", "审批结果", "审批状态"):
+					row.pop(field, None)
+				processed = normalize_apple_tree_rows(
+					[row], rules=self.confirmed_rules(), employees=EMPLOYEES,
+					source_file="6月苹果树.xlsx", source_sheet="苹果树合计", start_row=4,
+				)[0]
+				self.assertNotIn("INACTIVE_APPLE_VALUE_CONFLICT", processed["exception_codes"])
+				self.assertNotIn("AMOUNT_TEXT_CONFLICT", processed["exception_codes"])
+				self.assertNotIn("AMOUNT_CALCULATION_REQUIRED", processed["exception_codes"])
 
 	def test_historical_event_before_relieving_date_is_not_a_former_employee_exception(self):
 		row = source_row(**{"source_kind": "monthly_summary"})
@@ -254,7 +296,8 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		# Apple-tree exceptions must be handled per record.  A page-wide "approve"
 		# action would allow unresolved identity or source conflicts into downstream
 		# payroll calculations.
-		self.assertIn('待处理异常保留在表中，不计入下游汇总。', page_source)
+		self.assertIn('绿苹果、红苹果直接采用来源表数值', page_source)
+		self.assertIn('不用于重算或判断数量是否一致', page_source)
 		self.assertIn('data-edit-processing-source="apple_tree"', page_source)
 		self.assertIn('"review_status": "待审核"', center_source)
 		self.assertNotIn('bulk_resolve_apple_tree_employees', center_source)

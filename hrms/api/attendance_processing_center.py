@@ -35,6 +35,7 @@ from hrms.api.attendance_processors.attendance_draft import (
 	NUMERIC_FIELDS as ATTENDANCE_NUMERIC_FIELDS,
 	EXCEPTION_MESSAGES as ATTENDANCE_DRAFT_EXCEPTION_MESSAGES,
 	NON_BLOCKING_ATTENDANCE_EVENT_CODES,
+	attendance_month_date_coverage,
 	dingtalk_daily_header_location,
 	exception_lines_from_attendance_details,
 	find_dingtalk_daily_sheet,
@@ -400,6 +401,7 @@ EXCEPTION_LABELS = {
 	"AMOUNT_INVALID": "苹果数量无效",
 	"AMOUNT_TEXT_CONFLICT": "苹果数量与项目说明不一致",
 	"AMOUNT_CALCULATION_REQUIRED": "累计苹果数量待确认",
+	"INACTIVE_APPLE_VALUE_CONFLICT": "苹果数量填写列错误",
 	"APPLE_TYPE_UNRECOGNIZED": "无法识别红苹果或绿苹果",
 	"APPROVAL_NOT_FINISHED": "审批未结束",
 	"APPROVAL_NOT_PASSED": "审批未通过",
@@ -1738,6 +1740,12 @@ def _precheck(batch):
 		location = dingtalk_daily_header_location(sheet)
 		headers = location["headers"] if location else []
 		result = precheck_attendance_draft_structure(headers)
+		coverage = attendance_month_date_coverage(rows, attendance_month=batch.attendance_month)
+		result["month_date_coverage"] = coverage
+		if not coverage["is_complete"]:
+			result["is_valid"] = False
+			result["status"] = "结构异常"
+			result.setdefault("validation_errors", []).append(coverage["message"])
 	elif batch.source_type == "apple_tree":
 		result = preflight_apple_tree_rows(rows)
 	else:
@@ -1873,6 +1881,7 @@ def _process_batch(batch) -> dict[str, Any]:
 			shift_rules=shift_bundle["rules"],
 			shift_rule_version=shift_bundle["version"],
 			scheduling_policies=_attendance_scheduling_policies(batch.company),
+			require_full_month_coverage=True,
 		)
 	source_rows = rows
 	rows, excluded = _filter_approval_source_rows(batch, rows)
@@ -2039,13 +2048,38 @@ def _merge_processed_rows(batch, result: dict[str, Any]) -> dict[str, Any]:
 	"""Merge a new import into the immediately preceding source version.
 
 	Each upload remains its own source batch for audit.  Its *effective* rows,
-	however, are an upsert view: a matching business key is replaced by the new
-	row, while distinct or unkeyed rows are retained without manufacturing a
-	duplicate match.  Existing manual-review history survives for rows not
-	replaced by the new submission.
+	however, depend on the source contract. Monthly-support workbooks are complete
+	monthly snapshots, so their newest upload replaces the prior effective view.
+	Other sources remain an upsert view: a matching business key is replaced by
+	the new row, while distinct or unkeyed rows are retained without manufacturing
+	a duplicate match. Existing manual-review history survives for rows not
+	replaced by an upsert submission.
 	"""
 	meta = _processing_meta(batch)
 	parent_name = str(meta.get("merge_parent_batch") or "").strip()
+	if batch.source_type in MONTHLY_SUPPORT_SOURCE_TYPES:
+		incoming_rows = list(result.get("processed_rows") or [])
+		previous_rows = 0
+		valid_parent_name = ""
+		if parent_name and frappe.db.exists(IMPORT_BATCH_DOCTYPE, parent_name):
+			parent = frappe.get_doc(IMPORT_BATCH_DOCTYPE, parent_name)
+			if parent.company == batch.company and parent.attendance_month == batch.attendance_month and parent.source_type == batch.source_type:
+				valid_parent_name = parent.name
+				previous_rows = frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": parent.name})
+		metrics = dict(result.get("metrics") or {})
+		metrics["processed_rows"] = len(incoming_rows)
+		metrics["exception_rows"] = sum(1 for row in incoming_rows if row.get("exception_codes"))
+		metrics["merged_rows"] = 0
+		metrics["inserted_rows"] = len(incoming_rows)
+		result["metrics"] = metrics
+		result["merge"] = {
+			"mode": "latest_upload_replacement",
+			"parent_batch": valid_parent_name,
+			"replaced_previous_rows": previous_rows,
+			"inserted_rows": len(incoming_rows),
+			"effective_rows": len(incoming_rows),
+		}
+		return result
 	if not parent_name or not frappe.db.exists(IMPORT_BATCH_DOCTYPE, parent_name):
 		result["merge"] = {"mode": "business_unique_key", "inserted_rows": len(result.get("processed_rows") or []), "merged_rows": 0}
 		return result
@@ -3208,7 +3242,7 @@ def register_monthly_support_file(company: str, attendance_month: str, source_ty
 			"registered_by": frappe.session.user,
 			"monthly_support": True,
 			"merge_parent_batch": parent.name if parent else "",
-			"merge_mode": "business_unique_key",
+			"merge_mode": "latest_upload_replacement",
 		}}),
 	}).insert(ignore_permissions=True)
 	return {"batch": batch.name, "source_type": source_type, "status": batch.status, "file_url": file_url}
@@ -3402,14 +3436,14 @@ def process_monthly_support_file(company: str, attendance_month: str, source_typ
 	batch.status = result["status"]
 	batch.daily_sheet_rows = cint(result["metrics"]["source_rows"])
 	batch.save(ignore_permissions=True)
-	_invalidate_monthly_final_after_source_change(batch, "source_import_merge")
+	_invalidate_monthly_final_after_source_change(batch, "source_import_replacement")
 	processed_result = _export_processed_result(batch)
 	_save_batch_notes(batch, {
 		"metrics": result["metrics"],
 		"processed_result": processed_result,
 		"processed_on": now_datetime().isoformat(),
 		"monthly_support_processing_version": 2,
-		"monthly_support_import_mode": "business_unique_key_merge",
+		"monthly_support_import_mode": "latest_upload_replacement",
 		"merge": result.get("merge", {}),
 	})
 	return {"batch": batch.name, "source_type": source_type, "status": batch.status, "metrics": result["metrics"], "processed_result": processed_result, "merge": result.get("merge", {})}

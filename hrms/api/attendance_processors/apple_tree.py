@@ -40,7 +40,7 @@ ANOMALY_MESSAGES = {
 	"EMPLOYEE_NAME_MISMATCH": "工号对应姓名与来源姓名不一致。",
 	"EMPLOYEE_NOT_FOUND": "未匹配到员工工号。",
 	"FORMER_EMPLOYEE_REQUIRES_CONFIRMATION": "员工不是在职状态，需要人工确认。",
-	"INACTIVE_APPLE_VALUE_CONFLICT": "非当前苹果类型列包含非占位值。",
+	"INACTIVE_APPLE_VALUE_CONFLICT": "奖/惩项目中的苹果类型与填写数量的苹果列不一致。",
 	"MISSING_APPROVAL_NO": "审批编号为空。",
 	"MISSING_APPROVAL_RESULT": "审批结果为空。",
 	"MISSING_APPROVAL_STATUS": "审批状态为空。",
@@ -211,9 +211,17 @@ def _is_monthly_summary_headers(headers: set[str]) -> bool:
 
 
 def is_monthly_summary_apple_tree_row(raw: Mapping[str, Any]) -> bool:
-	return _text(_first(raw, _SOURCE_ALIASES["source_kind"])).casefold() in {
+	if _text(_first(raw, _SOURCE_ALIASES["source_kind"])).casefold() in {
 		"monthly_summary", "monthly-register", "人资月度汇总表", "月度汇总表"
-	}
+	}:
+		return True
+	# Historical records and direct processor callers may not carry the
+	# source-kind marker added by the upload reader.  The signed HR register is
+	# still unambiguous from its own headers: it has the Apple-tree columns but
+	# none of the DingTalk approval/audit columns.  Its green/red amount is the
+	# recorded total, so project text is descriptive and must not be used to
+	# recalculate or challenge that total.
+	return _is_monthly_summary_headers({str(key).strip() for key in raw})
 
 
 def normalize_apple_tree_rows(
@@ -347,7 +355,14 @@ def _normalize_row(
 		elif amount is None or amount < 0:
 			_add_code(codes, "AMOUNT_INVALID")
 			amount = None
-		if _text(inactive_value) not in {_text(value) for value in rules.placeholder_values}:
+		inactive_text = _text(inactive_value)
+		inactive_number = _number(inactive_value)
+		inactive_conflict = (
+			(inactive_text != "" and (inactive_number is None or inactive_number != 0))
+			if is_monthly_summary
+			else inactive_text not in {_text(value) for value in rules.placeholder_values}
+		)
+		if inactive_conflict:
 			_add_code(codes, "INACTIVE_APPLE_VALUE_CONFLICT")
 	amount_validation = {} if is_monthly_summary else _validate_project_amount(
 		project, _text(_first(raw, _SOURCE_ALIASES["remark"])), amount
@@ -434,7 +449,7 @@ def _normalize_row(
 		"include_in_downstream": review_status == REVIEW_NOT_REQUIRED,
 		"review_history": [],
 		"source_type": "apple_tree",
-		"source_kind": _text(raw.get("source_kind")) or "dingtalk_export",
+		"source_kind": "monthly_summary" if is_monthly_summary else _text(raw.get("source_kind")) or "dingtalk_export",
 		"source_file": row_source_file,
 		"source_sheet": row_source_sheet,
 		"source_row": raw.get("_source_row") or raw.get("source_row") or start_row + offset,

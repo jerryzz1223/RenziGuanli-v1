@@ -510,8 +510,11 @@
 
 	function navigate(route) {
 		if (window.frappe && frappe.set_route && route.indexOf("/desk/") === 0) {
-			window.dispatchEvent(new CustomEvent("hrms:route-change", { detail: { route } }));
 			const routeParts = route.replace(/^\/desk\/?/, "").split("/").filter(Boolean);
+			// Let the Desk router finish switching the active page before the shared
+			// shell reacts to its normal `change` event. Broadcasting a synthetic
+			// route change here races the router and can leave the old cached page
+			// visible even though the browser URL already points at the target page.
 			frappe.set_route(...routeParts);
 			return;
 		}

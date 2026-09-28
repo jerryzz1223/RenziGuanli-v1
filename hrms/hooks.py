@@ -29,7 +29,7 @@ app_include_js = [
 	"hrms.bundle.js",
 	"/assets/hrms/js/hrms_capability_ui.js?v=20260928-attendance-final-approval-v1",
 	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260926-dingtalk-attendance-authority-v1",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260924-training-home-v1",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260928-navbar-route-refresh-v1",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
 	"/assets/hrms/js/hrms_file_uploader.js?v=20260912a",
 	"/assets/hrms/js/hrms_entry.js?v=20260912-intranet-entry-v1",
@@ -42,7 +42,7 @@ app_include_css = [
 	"/assets/hrms/css/hrms_top_nav.css?v=20260926-native-list-chrome-v1",
 	"/assets/hrms/css/hrms_training_learning.css?v=20260924-training-workflow-v11",
 	"/assets/hrms/css/hrms_entry.css?v=20260912-intranet-entry-v1",
-	"/assets/hrms/css/hrms_loading.css?v=20260909-black-loader",
+	"/assets/hrms/css/hrms_loading.css?v=20260928-branded-freeze-v1",
 	"/assets/hrms/css/hrms_employee_registration.css?v=20260915a",
 	"/assets/hrms/css/hrms_announcement.css?v=20260916-announcement-v6-directory-version-rows",
 ]
@@ -52,7 +52,7 @@ app_include_css = [
 # include js, css files in header of web template
 web_include_css = [
 	"/assets/hrms/css/hrms_login.css?v=20260922-register-entry-v3",
-	"/assets/hrms/css/hrms_loading.css?v=20260909-black-loader",
+	"/assets/hrms/css/hrms_loading.css?v=20260928-branded-freeze-v1",
 ]
 web_include_js = "/assets/hrms/js/hrms_login.js?v=20260922-register-entry-v3"
 

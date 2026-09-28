@@ -34,6 +34,22 @@ for (const marker of [
 	}
 }
 
+for (const marker of [
+	'#freeze .freeze-message-container',
+	'#freeze .freeze-message',
+	'#freeze.in',
+	'content: "永新 · 人资管理系统"',
+	'background: url("/assets/hrms/images/yongxin-brand-mark-red.png")',
+	'animation: hrms-freeze-brand-breathe 2.2s ease-in-out infinite;',
+	'animation: hrms-freeze-progress 1.55s ease-in-out infinite;',
+	'@keyframes hrms-freeze-brand-breathe',
+	'@keyframes hrms-freeze-progress',
+]) {
+	if (!css.includes(marker)) {
+		throw new Error(`Long-running freeze screens must use the branded waiting state: ${marker}`);
+	}
+}
+
 for (const hook of ["app_include_css", "web_include_css"]) {
 	const block = hooks.match(new RegExp(`${hook} = \\[([\\s\\S]*?)\\]`));
 	if (!block || !block[1].includes('/assets/hrms/css/hrms_loading.css?v=')) {
