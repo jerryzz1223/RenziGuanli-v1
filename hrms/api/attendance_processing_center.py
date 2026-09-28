@@ -2050,12 +2050,15 @@ def _merge_processed_rows(batch, result: dict[str, Any]) -> dict[str, Any]:
 		_business_merge_key(batch.source_type, row)
 		for row in result.get("excluded_source_records", [])
 	} - {""}
+	excluded_unmatched_codes = set((result.get("data_quality") or {}).get("excluded_unmatched_blank_employee_codes") or [])
 	for row in existing_rows:
 		raw = dict(row.get("processed_value") or {})
 		raw.update(row.get("original_data") or {})
 		reason = _approval_source_exclusion(batch.source_type, batch.attendance_month, raw)
 		if _business_merge_key(batch.source_type, row) in excluded_keys:
 			reason = "本次原始审批已剔除"
+		if batch.source_type == "attendance_draft" and str(row.get("employee_code") or "").strip() in excluded_unmatched_codes:
+			reason = "未匹配花名册且整月无考勤证据的空白占位行"
 		if reason:
 			removed_rows.append({key: row.get(key) for key in ("source_id", "approval_no", "source_file", "source_sheet", "source_row")} | {"reason": reason})
 		else:
@@ -4062,6 +4065,7 @@ def update_attendance_draft_daily_row(
 
 
 ATTENDANCE_SOURCE_TOTAL_REPAIR_FIELDS = ("workday_overtime_hours", "deep_night_shifts")
+UNMATCHED_BLANK_RECHECK_REASON = "未匹配花名册且整月无考勤证据的空白占位行"
 
 
 def _attendance_policy_replacement(
@@ -4089,6 +4093,8 @@ def _attendance_policy_replacement(
 	)
 	replacement = next((row for row in rebuilt["processed_rows"] if str(row["employee_code"]) == str(record.get("employee_code"))), None)
 	if replacement is None:
+		if str(record.get("employee_code") or "").strip() in set(rebuilt["data_quality"].get("excluded_unmatched_blank_employee_codes") or []):
+			return None, UNMATCHED_BLANK_RECHECK_REASON
 		return None, "重新校验后工号无法唯一匹配。"
 	decisions = _daily_exception_decisions(current)
 	# A numerical conflict cannot be waived by an old human-review decision.
@@ -4169,7 +4175,7 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 					) or "").strip()
 					if code:
 						workbook_rows_by_employee[code].append(source_row)
-	preview, skipped, replacements = [], [], []
+	preview, skipped, replacements, exclusions = [], [], [], []
 	for record in _result_rows(batch, 0):
 		employee_source_rows = workbook_rows_by_employee.get(str(record.get("employee_code") or "").strip())
 		replacement, reason = _attendance_policy_replacement(
@@ -4180,6 +4186,13 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 		)
 		identity = {key: record.get(key) for key in ("record_id", "employee_code", "employee_name")}
 		if replacement is None:
+			if reason == UNMATCHED_BLANK_RECHECK_REASON:
+				if record.get("review_status") in {"已通过", "已驳回"} or record.get("review_history") or record.get("confirmed_value") is not None:
+					skipped.append({**identity, "reason": "该占位记录已有人工处理，请逐日核对后再排除。"})
+					continue
+				preview.append({**identity, "changes": {"来源记录": {"before": "在加工结果中", "after": "排除空白占位"}}, "exception_dates": [], "hours_mismatch_lines": [], "exception_codes": [], "review_status": "排除占位记录"})
+				exclusions.append(record)
+				continue
 			skipped.append({**identity, "reason": reason})
 			continue
 		current = _effective_result_values(record)
@@ -4189,7 +4202,7 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 		changes = {field: {"before": current.get(field) or 0, "after": values.get(field) or 0} for field in (*ATTENDANCE_NUMERIC_FIELDS, "leave_hours") if flt(current.get(field)) != flt(values.get(field))}
 		preview.append({**identity, "changes": changes, "exception_dates": [line["attendance_date"] for line in values["exception_lines"]], "hours_mismatch_lines": [line for line in values["exception_lines"] if "ATTENDANCE_HOURS_MISMATCH" in line["exception_codes"]], "exception_codes": replacement["exception_codes"], "review_status": replacement["review_status"]})
 		replacements.append((record, replacement))
-	token = hashlib.sha256(_json({"batch": batch.name, "replacements": replacements, "skipped": skipped}).encode()).hexdigest()
+	token = hashlib.sha256(_json({"batch": batch.name, "replacements": replacements, "exclusions": exclusions, "skipped": skipped}).encode()).hexdigest()
 	if cint(execute):
 		if not preview_token or preview_token != token:
 			frappe.throw(_("考勤数据已变化，请重新预览本月校验结果后再应用。"))
@@ -4210,7 +4223,29 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 			doc.review_status, doc.eligible_for_downstream = replacement["review_status"], int(replacement["eligible_for_downstream"])
 			doc.review_history_json = _json(history)
 			doc.save(ignore_permissions=True)
-		if replacements:
+		audit = {}
+		if exclusions:
+			for record in exclusions:
+				fresh = _serialize_record(frappe.get_doc(PROCESSING_RECORD_DOCTYPE, record["record_id"]).as_dict())
+				if (
+					_effective_result_values(fresh) != _effective_result_values(record)
+					or fresh["review_history"] != record["review_history"]
+					or fresh["exception_codes"] != record["exception_codes"]
+					or fresh["review_status"] != record["review_status"]
+					or fresh["confirmed_value"] != record["confirmed_value"]
+					or fresh["original_value"] != record["original_value"]
+				):
+					frappe.throw(_("记录已被其他操作修改，请重新预览。"))
+			audit = _save_exclusion_audit(batch, {"excluded_previous_records": [
+				{"record_id": record["record_id"], "employee_code": record["employee_code"],
+				 "source_file": record.get("source_file"), "source_sheet": record.get("source_sheet"),
+				 "source_row": record.get("source_row"), "reason": UNMATCHED_BLANK_RECHECK_REASON,
+				 "original_value": record.get("original_value"), "processed_value": record.get("processed_value")}
+				for record in exclusions
+			]})
+			for record in exclusions:
+				frappe.delete_doc(PROCESSING_RECORD_DOCTYPE, record["record_id"], ignore_permissions=True)
+		if replacements or exclusions:
 			_refresh_batch_review_status(batch)
 			_invalidate_monthly_final_after_source_change(batch, "attendance_policy_recheck")
 			employment_scope_excluded_rows = sum(
@@ -4219,15 +4254,18 @@ def recheck_attendance_policy(company: str, attendance_month: str, execute: int 
 			)
 			data_quality = dict(_processing_meta(batch).get("data_quality") or {})
 			data_quality["employment_scope_excluded_rows"] = employment_scope_excluded_rows
+			if exclusions:
+				data_quality["excluded_unmatched_blank_records_on_recheck"] = data_quality.get("excluded_unmatched_blank_records_on_recheck", 0) + len(exclusions)
 			_save_batch_notes(batch, {
 				"processed_result": _export_processed_result(batch),
 				"attendance_policy_version": ATTENDANCE_POLICY_VERSION,
 				"shift_rule_version": shift_bundle["version"],
 				"processed_result_refresh_reason": "attendance_policy_recheck",
 				"data_quality": data_quality,
+				**({"exclusion_audit": audit} if audit else {}),
 			})
 		frappe.db.commit()
-	return {"batch": batch.name, "preview_token": token, "changed_count": len(preview), "preview": preview, "skipped": skipped, "execute": bool(cint(execute))}
+	return {"batch": batch.name, "preview_token": token, "changed_count": len(preview), "excluded_count": len(exclusions), "preview": preview, "skipped": skipped, "execute": bool(cint(execute))}
 
 
 def _attendance_source_total_repairs(record: dict[str, Any], rebuilt_values: dict[str, Any]) -> dict[str, dict[str, Any]]:

@@ -366,6 +366,75 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 		with self.assertRaisesRegex(ValueError, "修改本日"):
 			api.update_processing_record("TEST", "2026-09", "attendance_draft", doc.name, "__review_decision__", review_status="已通过", reason="不能跳过等式校验")
 
+	def test_recheck_removes_unmatched_blank_record_after_preview_and_audit(self):
+		api = load_processing_center()
+		source = {"姓名": "新员工", "工号": "NEW-001", "日期": "2026-08-17", "班次": "",
+			"标准工时": 8, "实际出勤": 0, "上班时间": "", "下班时间": "",
+			"source_file": "daily.xlsx", "source_sheet": "每日统计", "source_row": 1168}
+		old_row = processor.process_attendance_draft_rows([source], attendance_month="2026-08")["processed_rows"][0]
+		class Record:
+			def __init__(self):
+				self.name, self.company, self.import_batch = "record-blank", "TEST", "batch-blank"
+				for field in ("employee_code", "employee_name", "department", "source_type", "source_file", "source_sheet", "source_row", "source_id", "approval_no", "review_status", "exception_message", "eligible_for_downstream"):
+					setattr(self, field, old_row.get(field))
+				self.attendance_month = "2026-08"
+				self.processed_value_json = self.proposed_value_json = api._json(old_row["proposed_value"])
+				self.original_value_json = api._json(old_row["original_value"])
+				self.confirmed_value_json = ""
+				self.exception_codes = api._json(old_row["exception_codes"])
+				self.review_history_json = "[]"
+			def as_dict(self):
+				return vars(self).copy()
+		doc = Record()
+		batch = SimpleNamespace(name="batch-blank", company="TEST", attendance_month="2026-08", source_type="attendance_draft", source_file="", notes="")
+		deleted = []
+		api._require_processing_manager = lambda: None
+		api._require_company = api._require_month = lambda value: value
+		api._latest_batch = lambda *args: batch
+		api._employee_directory = lambda company: [{"employee_code": "OTHER", "employee_name": "在册员工"}]
+		api._attendance_draft_exception_policy = lambda: None
+		api._result_rows = lambda *args: [] if deleted else [api._serialize_record(doc.as_dict())]
+		api.frappe.get_doc = lambda *args: doc
+		api.frappe.delete_doc = lambda _doctype, record_id, **_kwargs: deleted.append(record_id)
+		api.frappe.throw = lambda message: (_ for _ in ()).throw(ValueError(message))
+		api.frappe.db.commit = Mock()
+		api._save_exclusion_audit = Mock(return_value={"file_url": "/private/files/excluded.json"})
+		api._refresh_batch_review_status = Mock()
+		api._invalidate_monthly_final_after_source_change = Mock()
+		api._processing_meta = lambda _batch: {}
+		api._save_batch_notes = Mock()
+		api._export_processed_result = Mock(return_value={})
+		preview = api.recheck_attendance_policy("TEST", "2026-08")
+		self.assertEqual((preview["changed_count"], preview["excluded_count"]), (1, 1))
+		self.assertEqual(deleted, [])
+		original_status = doc.review_status
+		doc.review_status = "已通过"
+		protected = api.recheck_attendance_policy("TEST", "2026-08")
+		self.assertEqual((protected["excluded_count"], len(protected["skipped"])), (0, 1))
+		doc.review_status = original_status
+		with self.assertRaisesRegex(ValueError, "数据已变化"):
+			api.recheck_attendance_policy("TEST", "2026-08", execute=1, preview_token="old")
+		api.recheck_attendance_policy("TEST", "2026-08", execute=1, preview_token=preview["preview_token"])
+		self.assertEqual(deleted, ["record-blank"])
+		self.assertEqual(api._save_exclusion_audit.call_args.args[1]["excluded_previous_records"][0]["employee_code"], "NEW-001")
+		api._invalidate_monthly_final_after_source_change.assert_called_once()
+		self.assertEqual(api.recheck_attendance_policy("TEST", "2026-08")["changed_count"], 0)
+
+	def test_new_import_does_not_merge_back_unmatched_blank_employee(self):
+		api = load_processing_center()
+		batch = SimpleNamespace(name="new", company="TEST", attendance_month="2026-08", source_type="attendance_draft")
+		prior = SimpleNamespace(name="old", company="TEST", attendance_month="2026-08", source_type="attendance_draft")
+		api._processing_meta = lambda _batch: {"merge_parent_batch": "old"}
+		api.frappe.db.exists = lambda *_args: True
+		api.frappe.get_doc = lambda *_args: prior
+		api._result_rows = lambda *_args: [{"employee_code": "NEW-001", "employee_name": "新员工", "original_value": {"rows": []}}]
+		api._approval_source_exclusion = lambda *_args: ""
+		result = api._merge_processed_rows(batch, {"processed_rows": [], "metrics": {}, "data_quality": {
+			"excluded_unmatched_blank_employee_codes": ["NEW-001"],
+		}})
+		self.assertEqual(result["processed_rows"], [])
+		self.assertEqual(result["merge"]["excluded_previous_rows"], 1)
+
 
 if __name__ == "__main__":
 	unittest.main()
