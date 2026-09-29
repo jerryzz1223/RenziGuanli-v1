@@ -41,6 +41,93 @@ def load_module():
 
 
 class DingTalkRosterAttachmentTests(unittest.TestCase):
+	def test_each_full_roster_pull_gets_its_own_review_row(self):
+		module = load_module()
+
+		class ImportDoc(dict):
+			def save(self, **_kwargs):
+				self["saved"] = True
+
+		previous = ImportDoc(sync_log="OLD", payload_hash="same", import_status="已批准")
+		fresh = ImportDoc()
+		module.frappe.get_all = lambda *_args, **_kwargs: ["RAW-1"]
+		module.frappe.db = types.SimpleNamespace(get_value=lambda *_args, **_kwargs: "IMPORT-OLD")
+		module.frappe.get_doc = lambda *_args: previous
+		module.frappe.new_doc = lambda *_args: fresh
+		module._dingtalk_employee_mapping = lambda *_args: ({"custom_employee_code": "4018", "employee_name": "测试", "date_of_joining": "2026-01-01"}, {})
+		module._dingtalk_employee_match = lambda *_args: {"status": "待审批", "reason": "", "employee": ""}
+		module._payload_hash = lambda *_args: "same"
+		module.now_datetime = lambda: "2026-09-29"
+		class Source(dict):
+			name = "RAW-1"
+
+		source = Source(source_type=module.DINGTALK_EMPLOYEE_ROSTER_SOURCE_TYPE)
+		result = module._stage_dingtalk_employee_import(
+			{"dingtalk_userid": "USER-1", "raw": {"userid": "USER-1"}},
+			"永新", types.SimpleNamespace(name="LATEST"), source,
+		)
+		self.assertIs(result, fresh)
+		self.assertEqual(result["sync_log"], "LATEST")
+		self.assertTrue(result["saved"])
+		self.assertEqual(previous["sync_log"], "OLD")
+
+	def test_initial_roster_import_requires_a_complete_coded_snapshot(self):
+		module = load_module()
+		self.assertTrue(module._dingtalk_suspected_placeholder_code("111111111111"))
+		self.assertFalse(module._dingtalk_suspected_placeholder_code("260905"))
+		issues = module._dingtalk_roster_initial_import_source_issues({
+			"sync_log": "SYNC-1",
+			"status": "已完成",
+			"records_received": 217,
+			"snapshot_row_count": 217,
+			"employee_codes": {"4018"},
+			"missing_employee_code_count": 24,
+			"duplicate_employee_codes": [],
+		})
+		self.assertIn("24 条钉钉在职档案缺少公司工号", issues)
+		self.assertEqual(module._dingtalk_roster_initial_import_source_issues({
+			"sync_log": "SYNC-2",
+			"status": "已完成",
+			"records_received": 1,
+			"snapshot_row_count": 1,
+			"employee_codes": {"4018"},
+			"missing_employee_code_count": 0,
+			"duplicate_employee_codes": [],
+		}), [])
+
+	def test_initial_roster_import_rejects_stale_preview_before_writing(self):
+		module = load_module()
+		module._require_dingtalk_employee_import_approver = lambda: None
+		module._require_sync_company = lambda company: company
+		module._build_dingtalk_roster_initial_import_preview = lambda _company: {
+			"can_import": True, "sync_log": "SYNC-2", "preview_token": "current", "issues": []
+		}
+		module.frappe.db = types.SimpleNamespace(sql=lambda *_args: None)
+		module.frappe.throw = lambda message: (_ for _ in ()).throw(ValueError(message))
+		module._upsert_dingtalk_employee_values = lambda *_args: self.fail("stale preview reached Employee write")
+		with self.assertRaisesRegex(ValueError, "重新预检"):
+			module.apply_dingtalk_roster_initial_import("永新", "SYNC-2", "stale")
+
+	def test_initial_roster_job_rolls_back_all_employee_writes_on_failure(self):
+		module = load_module()
+		events = []
+		module.frappe.db = types.SimpleNamespace(
+			sql=lambda *_args: events.append("lock"),
+			rollback=lambda: events.append("rollback"),
+			commit=lambda: events.append("commit"),
+		)
+		module.frappe.get_doc = lambda *_args: object()
+		module._require_dingtalk_roster_initial_import_preview = lambda *_args: {"can_import": True}
+		def fail_after_write(*_args):
+			events.append("write")
+			raise ValueError("bad row")
+
+		module._apply_dingtalk_roster_initial_import = fail_after_write
+		module._finish_sync_log = lambda _log, status, **_kwargs: events.append(status)
+		with self.assertRaisesRegex(ValueError, "bad row"):
+			module.run_queued_dingtalk_roster_initial_import("永新", "SYNC-2", "token", "OP-1", "reviewer")
+		self.assertEqual(events, ["lock", "write", "rollback", "失败", "commit"])
+
 	def test_sync_operation_distinguishes_created_updated_and_attachment_only(self):
 		module = load_module()
 

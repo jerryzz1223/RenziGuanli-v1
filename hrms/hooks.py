@@ -32,7 +32,7 @@ app_include_js = [
 	"/assets/hrms/js/hrms_top_nav.js?v=20260928-navbar-route-refresh-v1",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
 	"/assets/hrms/js/hrms_file_uploader.js?v=20260912a",
-	"/assets/hrms/js/hrms_entry.js?v=20260912-intranet-entry-v1",
+	"/assets/hrms/js/hrms_entry.js?v=20260929-mute-desk-sounds-v1",
 	"/assets/hrms/js/hrms_employee_registration_entry.js?v=20260915-qr-entry-v1",
 	"/assets/hrms/js/hrms_employee_form_entry.js?v=20260916-three-form-pages-v9-record-breadcrumb",
 	"/assets/hrms/js/hrms_announcement.js?v=20260916-announcement-v13-signed-version-lock",
@@ -40,7 +40,7 @@ app_include_js = [
 app_include_css = [
 	"hrms.bundle.css",
 	"/assets/hrms/css/hrms_top_nav.css?v=20260926-native-list-chrome-v1",
-	"/assets/hrms/css/hrms_training_learning.css?v=20260924-training-workflow-v11",
+	"/assets/hrms/css/hrms_training_learning.css?v=20260929-session-rosters-v16",
 	"/assets/hrms/css/hrms_entry.css?v=20260912-intranet-entry-v1",
 	"/assets/hrms/css/hrms_loading.css?v=20260928-branded-freeze-v1",
 	"/assets/hrms/css/hrms_employee_registration.css?v=20260915a",

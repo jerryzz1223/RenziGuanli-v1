@@ -14,11 +14,14 @@ from hrms.api.training_learning import (
 	create_training_activity,
 	create_training_course,
 	find_training_employees,
+	get_training_course_defaults,
 	get_training_activity_roster,
 	_training_roster_rows,
 	record_training_completion,
 	save_training_activity_roster,
+	update_training_completion,
 )
+from hrms.hr.doctype.training_program.training_program import get_training_plan_detail
 
 
 class TestTrainingLearningWorkflow(IntegrationTestCase):
@@ -59,12 +62,20 @@ class TestTrainingLearningWorkflow(IntegrationTestCase):
 					"plan_period": "2026",
 					"planned_month": "2026-10",
 					"planned_hours": 2,
+					"planned_location": "计划培训室",
+					"target_audience": "工程岗位",
+					"trainer_name": "课程默认讲师",
 					"training_category": "内部培训",
 					"training_mode": "内部",
 					"objective": "验证计划、上课、结果和员工档案链路",
 				}
 			)
 		)
+		defaults = get_training_course_defaults(company, course["name"])
+		self.assertEqual(defaults["course"], course["course_name"])
+		self.assertEqual(defaults["location"], "计划培训室")
+		self.assertEqual(defaults["target_audience"], "工程岗位")
+		self.assertEqual(defaults["trainer_name"], "课程默认讲师")
 		start_time = get_datetime(add_days(now_datetime(), 1)).replace(hour=9, minute=0, second=0)
 		activity = create_training_activity(
 			json.dumps(
@@ -74,12 +85,19 @@ class TestTrainingLearningWorkflow(IntegrationTestCase):
 					"start_time": str(start_time),
 					"end_time": str(start_time.replace(hour=11)),
 					"location": "测试培训室",
+					"trainer_employee_code": employee_code,
 					"assessment_required": 1,
 					"passing_score": 60,
 					"participants": [],
 				}
 			)
 		)
+		first_event = frappe.get_doc("Training Event", activity["name"])
+		self.assertEqual(first_event.trainer_employee, employee_name)
+		self.assertEqual(first_event.trainer_employee_code, employee_code)
+		self.assertEqual(first_event.trainer_name, frappe.db.get_value("Employee", employee_name, "employee_name"))
+		self.assertEqual(first_event.location, "测试培训室")
+		self.assertEqual(first_event.course_hours, 2)
 		matches = find_training_employees("_Test Company", employee_code)
 		self.assertEqual(matches[0]["employee_code"], employee_code)
 		save_training_activity_roster(
@@ -105,11 +123,26 @@ class TestTrainingLearningWorkflow(IntegrationTestCase):
 					"start_time": str(add_days(start_time, 1)),
 					"end_time": str(add_days(start_time.replace(hour=11), 1)),
 					"location": "测试培训室",
+					"course_hours": 1.5,
+					"trainer_name": "外部讲师乙",
 					"participants": [{"employee": employee_name}],
 				}
 			)
 		)
 		self.assertEqual(blank_activity["participant_count"], 1)
+		second_event = frappe.get_doc("Training Event", blank_activity["name"])
+		self.assertEqual(second_event.training_program, first_event.training_program)
+		self.assertNotEqual(second_event.name, first_event.name)
+		self.assertEqual(second_event.trainer_name, "外部讲师乙")
+		self.assertEqual(second_event.course_hours, 1.5)
+		self.assertFalse(second_event.trainer_employee_code)
+		with self.assertRaisesRegex(frappe.ValidationError, "授课人工号"):
+			create_training_activity(json.dumps({
+				"company": company, "training_program": course["name"],
+				"start_time": str(add_days(start_time, 2)),
+				"end_time": str(add_days(start_time.replace(hour=11), 2)),
+				"trainer_employee_code": "OTHER-COMPANY-CODE",
+			}))
 		blank_roster = get_training_activity_roster(blank_activity["name"])
 		self.assertIsNone(blank_roster["participants"][0]["hours"])
 		self.assertIsNone(blank_roster["participants"][0]["score"])
@@ -131,3 +164,39 @@ class TestTrainingLearningWorkflow(IntegrationTestCase):
 		self.assertEqual(record["study_hours"], 1.5)
 		self.assertEqual(record["score"], 88)
 		self.assertEqual(record["review_status"], "已确认")
+
+		blank_completion = record_training_completion(
+			json.dumps(
+				{
+					"training_event": blank_activity["name"],
+					"participants": blank_roster["participants"],
+				}
+			)
+		)
+		self.assertEqual(frappe.db.get_value("Training Result", blank_completion["training_result"], "docstatus"), 1)
+		self.assertEqual(
+			frappe.db.get_value(
+				"Training Event Employee",
+				{"parent": blank_activity["name"], "employee_code": employee_code},
+				"draft_hours",
+			),
+			"",
+		)
+		blank_detail = get_training_plan_detail("actual", blank_activity["name"], company)
+		blank_participant = blank_detail["events"][0]["participants"][0]
+		self.assertIsNone(blank_participant["study_hours"])
+		self.assertIsNone(blank_participant["score"])
+		self.assertEqual(blank_participant["assessment_result"], "")
+
+		update_training_completion(
+			json.dumps(
+				{
+					"training_event": blank_activity["name"],
+					"participants": [{"employee": employee_name, "hours": "2", "score": "75"}],
+				}
+			)
+		)
+		updated_detail = get_training_plan_detail("actual", blank_activity["name"], company)
+		updated_participant = updated_detail["events"][0]["participants"][0]
+		self.assertEqual(updated_participant["study_hours"], 2)
+		self.assertEqual(updated_participant["score"], 75)

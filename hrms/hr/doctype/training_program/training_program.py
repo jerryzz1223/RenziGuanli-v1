@@ -74,6 +74,12 @@ def _program_source_content(row):
 	return re.sub(r"（20\d{2}·.+?·第\d+行）$", "", text(row.training_program)).strip()
 
 
+def _event_session_dates(event):
+	"""Count source dates as sessions while keeping their shared roster on one source record."""
+	dates = parse_dates(event.get("source_actual_dates")) or parse_dates(event.get("start_time"))
+	return [day.isoformat() for day in dates]
+
+
 def _training_plan_sources(company):
 	programs = frappe.get_all(
 		"Training Program",
@@ -127,11 +133,9 @@ def _training_event_sources(company):
 	)
 	event_rows = []
 	for row in events:
+		row["session_dates"] = _event_session_dates(row)
 		if not row.source_import_key:
 			continue
-		dates = parse_dates(row.source_actual_dates, row.start_time.year if row.start_time else 2026)
-		if not dates and row.start_time:
-			dates = [row.start_time.date()]
 		event_rows.append(
 			{
 				"source_key": row.source_import_key,
@@ -139,7 +143,7 @@ def _training_event_sources(company):
 				"owner_department": row.source_owner_department or row.owner_department,
 				"course_type": row.source_course_type or row.training_category,
 				"hours": row.source_course_hours or row.course_hours,
-				"actual_dates": [item.isoformat() for item in dates],
+				"actual_dates": row.session_dates,
 				"internal_external": "外" if row.training_mode == "外部" else "内",
 			}
 		)
@@ -247,6 +251,32 @@ def get_training_plan_management(company: str | None = None):
 	for event in events:
 		if event.training_program:
 			events_by_program[event.training_program].append(event)
+	program_by_name = {program.name: program for program in programs}
+	activity_statuses = {"Completed": "已完成", "Scheduled": "待开展", "Cancelled": "已取消"}
+	activity_rows = []
+	for event in events:
+		program = program_by_name.get(event.training_program)
+		match = matches.get(event.source_import_key, {})
+		activity_rows.append(
+			{
+				"key": f"event:{event.name}", "kind": "actual",
+				"status": activity_statuses.get(event.event_status, event.event_status or "待开展"),
+				"event_status": event.event_status, "course": event.course or event.event_name,
+				"department": event.source_owner_department or event.owner_department,
+				"planned_month": (program.source_planned_month or program.planned_month) if program else "",
+				"classification": "实际发生", "program": event.training_program or "", "event": event.name,
+				"training_type": event.source_course_type or event.training_category, "training_mode": event.training_mode,
+				"course_hours": event.source_course_hours or event.course_hours, "convener": event.trainer_name,
+				"convener_department": event.source_owner_department or event.owner_department, "location": event.location,
+				"target": event.source_target or event.target_audience, "source_row": event.source_rows,
+				"event_count": len(event.session_dates) or 1, "participant_count": participant_counts.get(event.name, 0),
+				"actual_dates": event.source_actual_dates or str(event.start_time or ""),
+				"actual_courses": event.course or event.event_name,
+				"match_basis": event.plan_match_basis or match.get("basis", ""),
+				"match_score": event.plan_match_score or match.get("score", 0),
+				"candidates": match.get("candidates", []),
+			}
+		)
 	rows = []
 	for program in programs:
 		linked = events_by_program.get(program.name, [])
@@ -266,7 +296,7 @@ def get_training_plan_management(company: str | None = None):
 				"course_hours": program.source_course_hours or program.planned_hours, "convener": program.trainer_name,
 				"convener_department": program.source_convener_department, "location": program.source_location or program.planned_location,
 				"target": program.source_target or program.target_audience, "source_row": program.source_row,
-				"program": program.name, "event": "", "event_count": len(linked),
+				"program": program.name, "event": "", "event_count": sum(len(item.session_dates) or 1 for item in linked),
 				"participant_count": sum(participant_counts.get(item.name, 0) for item in linked),
 				"actual_dates": "；".join(filter(None, (item.source_actual_dates for item in linked))),
 				"actual_courses": "；".join(dict.fromkeys(item.course or item.event_name for item in linked)),
@@ -288,7 +318,7 @@ def get_training_plan_management(company: str | None = None):
 				"course_hours": event.source_course_hours or event.course_hours, "convener": event.trainer_name,
 				"convener_department": event.source_owner_department or event.owner_department, "location": event.location,
 				"target": event.source_target or event.target_audience, "source_row": event.source_rows,
-				"event_count": 1, "participant_count": participant_counts.get(event.name, 0),
+				"event_count": len(event.session_dates) or 1, "participant_count": participant_counts.get(event.name, 0),
 				"actual_dates": event.source_actual_dates, "actual_courses": event.course or event.event_name,
 				"match_basis": event.plan_match_basis or match.get("basis", ""),
 				"match_score": event.plan_match_score or match.get("score", 0),
@@ -316,6 +346,7 @@ def get_training_plan_management(company: str | None = None):
 			"review_matches": review_event_count,
 		},
 		"rows": rows,
+		"activity_rows": activity_rows,
 	}
 
 
@@ -337,7 +368,7 @@ def _event_details(event_names):
 		filters={"name": ["in", event_names], "docstatus": ["<", 2]},
 		fields=[
 			"name", "event_name", "event_status", "docstatus", "training_program", "course", "company", "training_category",
-			"training_mode", "type", "trainer_name", "location", "start_time", "end_time",
+			"training_mode", "type", "trainer_name", "trainer_employee_code", "location", "start_time", "end_time",
 			"owner_department", "course_hours", "delivery_method", "target_audience",
 			"source_owner_department", "source_course_type", "source_courseware", "source_course_hours",
 			"source_target", "source_actual_dates", "plan_match_status", "plan_match_basis", "plan_match_score",
@@ -382,16 +413,19 @@ def _event_details(event_names):
 	participants_by_event = defaultdict(list)
 	for row in participants:
 		result = result_by_event_employee.get((row.parent, row.employee_code or row.employee_name))
+		draft_hours = _optional_float(row.draft_hours)
+		draft_score = _optional_float(row.draft_score)
+		has_assessment_value = draft_score is not None or bool(row.draft_grade)
 		participant_keys.add((row.parent, row.employee_code or row.employee_name))
 		participants_by_event[row.parent].append(
 			{
 				"employee_code": row.employee_code, "employee_name": row.employee_name, "department": row.department,
 				"status": row.status, "attendance": row.attendance, "source_row": row.source_row,
-				"score": result.score if result else _optional_float(row.draft_score),
+				"score": result.score if result and draft_score is not None else draft_score,
 				"grade": result.grade if result else row.draft_grade,
-				"assessment_result": result.assessment_result if result else "",
+				"assessment_result": result.assessment_result if result and (has_assessment_value or result.assessment_result == "Absent") else "",
 				"needs_retraining": result.needs_retraining if result else row.draft_needs_retraining,
-				"study_hours": (result.hours or result.source_study_hours) if result else _optional_float(row.draft_hours),
+				"study_hours": result.hours if result and draft_hours is not None else draft_hours,
 				"comments": result.comments if result else row.draft_comments,
 			}
 		)
@@ -410,6 +444,8 @@ def _event_details(event_names):
 			}
 		)
 	for event in events:
+		event["session_dates"] = _event_session_dates(event)
+		event["session_count"] = len(event.session_dates) or 1
 		event["participants"] = participants_by_event.get(event.name, [])
 		event["participant_count"] = len(event["participants"])
 		event["has_submitted_result"] = event.name in submitted_result_events
@@ -441,7 +477,7 @@ def get_training_plan_detail(kind: str, name: str, company: str | None = None):
 			"convener_department": program.source_convener_department, "location": program.source_location or program.planned_location,
 			"target": program.source_target or program.target_audience, "planned_month": program.source_planned_month or program.planned_month,
 			"source_actual_dates": program.source_actual_dates, "audience_matrix": _json_list(program.source_audience_matrix),
-			"events": events, "event_count": len(events),
+			"events": events, "event_count": sum(row.session_count for row in events),
 			"participant_count": sum(row.participant_count for row in events),
 			"source": {
 				"created_by": program.owner, "created_on": program.creation,
@@ -468,7 +504,7 @@ def get_training_plan_detail(kind: str, name: str, company: str | None = None):
 			"course_hours": event.source_course_hours or event.course_hours, "convener": event.trainer_name,
 			"convener_department": event.source_owner_department or event.owner_department, "location": event.location,
 			"target": event.source_target or event.target_audience, "planned_month": "", "audience_matrix": [],
-			"events": events, "event_count": 1, "participant_count": detail.participant_count,
+			"events": events, "event_count": detail.session_count, "participant_count": detail.participant_count,
 			"matched_program": program, "match_basis": event.plan_match_basis, "match_score": event.plan_match_score,
 			"source": {
 				"created_by": event.owner, "created_on": event.creation,

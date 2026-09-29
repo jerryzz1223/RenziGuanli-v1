@@ -207,8 +207,6 @@ for (const marker of [
 	"hrms.api.employee_field_template.download_employee_import_template",
 	"match_by",
 	"按工号",
-	"按身份证",
-	"按手机号",
 	"下载失败行",
 	"重新上传文件",
 	"back-to-upload",
@@ -318,11 +316,18 @@ for (const marker of [
 }
 
 for (const marker of [
-	"包括在职、待离职和离职员工",
-	"找不到匹配员工时不会新增",
+	"历史档案补录（例外）",
+	"找不到对应公司工号时不会新增",
 	"未找到可更新的员工",
 ]) {
 	mustInclude(api + importJs, marker, `新增与修改必须按员工档案是否存在分流：${marker}`);
+}
+
+const matchStrategies = api.match(/EMPLOYEE_DUPLICATE_MATCH_FIELDS = \{[\s\S]*?\n\}/)?.[0] || "";
+for (const alternate of ['"id_card":', '"phone":', '"auto":']) {
+	if (matchStrategies.includes(alternate)) {
+		throw new Error(`员工导入只能按公司工号匹配，不能保留替代身份键：${alternate}`);
+	}
 }
 
 for (const obsolete of ["start-history", 'state.mode === "history"', 'mode == "history"']) {

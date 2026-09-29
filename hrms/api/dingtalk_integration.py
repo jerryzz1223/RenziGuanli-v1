@@ -1262,13 +1262,14 @@ def _upsert_dingtalk_employee_values(values, company):
 
 	warnings = []
 	base_records = {}
-	_ensure_employee_base_records(values, base_records, warnings)
 	if existing:
 		doc = frappe.get_doc("Employee", existing)
 		fillable, preserved = _dingtalk_existing_employee_import_plan(values, doc)
+		prepared_fillable = {"company": company, **fillable}
+		_ensure_employee_base_records(prepared_fillable, base_records, warnings)
 		for fieldname, value in fillable.items():
 			if fieldname in doc.meta.get_valid_columns():
-				doc.set(fieldname, value)
+				doc.set(fieldname, prepared_fillable[fieldname])
 		if fillable:
 			doc.flags.hrms_dingtalk_sync = True
 			doc.save(ignore_permissions=True)
@@ -1278,6 +1279,7 @@ def _upsert_dingtalk_employee_values(values, company):
 			"filled_fields": sorted(fillable),
 			"preserved_fields": sorted(preserved),
 		}
+	_ensure_employee_base_records(values, base_records, warnings)
 	doc = frappe.new_doc("Employee")
 	doc.flags.hrms_dingtalk_sync = True
 	for fieldname, value in values.items():
@@ -1352,9 +1354,18 @@ def _stage_dingtalk_employee_import(user, company, sync_log, raw_record):
 		order_by="modified desc",
 	)
 	doc = frappe.get_doc(DINGTALK_EMPLOYEE_IMPORT_DOCTYPE, name) if name else frappe.new_doc(DINGTALK_EMPLOYEE_IMPORT_DOCTYPE)
+	if (
+		source_type == DINGTALK_EMPLOYEE_ROSTER_SOURCE_TYPE
+		and doc.get("sync_log")
+		and doc.get("sync_log") != (sync_log.name if sync_log else None)
+	):
+		# Every full-roster pull needs its own review row. Reusing a row from a
+		# prior pull makes the latest batch appear incomplete, especially after
+		# an earlier approval retained an unchanged payload.
+		doc = frappe.new_doc(DINGTALK_EMPLOYEE_IMPORT_DOCTYPE)
 	# A previously approved/rejected snapshot is retained when the same payload is
-	# pulled again. A changed payload becomes a new reviewable version on the same
-	# external record, so the approval decision always applies to visible data.
+	# pulled again within its batch. A changed payload becomes a new reviewable
+	# version on the same external record, so approval applies to visible data.
 	if doc.get("payload_hash") == payload_hash and doc.get("import_status") in ("已批准", "已驳回"):
 		return doc
 	doc.update(
@@ -2030,11 +2041,16 @@ def _dingtalk_new_employee_validation_issues(values):
 		("custom_employee_code", "公司工号"),
 		("employee_name", "姓名"),
 		("date_of_joining", "入职日期"),
+		("gender", "性别"),
+		("date_of_birth", "出生日期"),
+		("custom_work_nature", "工作性质"),
 		("department", "部门"),
 		("designation", "岗位"),
 	):
 		if not values.get(fieldname):
 			issues.append("缺少{0}".format(label))
+	if _dingtalk_suspected_placeholder_code(values.get("custom_employee_code")):
+		issues.append("公司工号疑似占位值，请在钉钉核对真实工号")
 	meta_fields = {field.fieldname: field for field in frappe.get_meta("Employee").fields if field.fieldname}
 	for fieldname, value in values.items():
 		if value in (None, "") or fieldname not in meta_fields:
@@ -2047,6 +2063,214 @@ def _dingtalk_new_employee_validation_issues(values):
 			if str(value) not in options:
 				issues.append("{0}“{1}”不在允许的选项中".format(meta_field.label or fieldname, value))
 	return issues
+
+
+def _dingtalk_roster_initial_import_source_issues(snapshot):
+	"""A completed log alone does not prove the on-job roster is usable."""
+	issues = []
+	if not snapshot.get("sync_log") or snapshot.get("status") != "已完成":
+		issues.append("请先完成一次钉钉全量在职档案同步")
+	if snapshot.get("snapshot_row_count") != snapshot.get("records_received"):
+		issues.append("同步接收数与落库记录数不一致")
+	if not snapshot.get("employee_codes"):
+		issues.append("钉钉在职档案没有有效公司工号")
+	if snapshot.get("missing_employee_code_count"):
+		issues.append("{0} 条钉钉在职档案缺少公司工号".format(snapshot["missing_employee_code_count"]))
+	if snapshot.get("duplicate_employee_codes"):
+		issues.append("钉钉在职档案存在重复公司工号")
+	return issues
+
+
+def _dingtalk_suspected_placeholder_code(code):
+	code = str(code or "").strip()
+	return code.lower() in {"待定", "暂无", "无", "unknown", "test"} or (len(code) >= 12 and len(set(code)) == 1)
+
+
+@frappe.whitelist()
+def preview_dingtalk_roster_initial_import(company: str = ""):
+	"""Preview one DingTalk-led baseline import without changing Employee."""
+	_require_dingtalk_employee_import_approver()
+	company = _require_sync_company(company)
+	return _build_dingtalk_roster_initial_import_preview(company)
+
+
+def _build_dingtalk_roster_initial_import_preview(company):
+	from hrms.api.employee_field_template import _get_latest_dingtalk_onjob_snapshot
+
+	snapshot = _get_latest_dingtalk_onjob_snapshot(company)
+	result = {
+		"company": company,
+		"sync_log": snapshot.get("sync_log") or "",
+		"received": snapshot.get("records_received") or 0,
+		"snapshot_rows": snapshot.get("snapshot_row_count") or 0,
+		"new": 0,
+		"existing": 0,
+		"fillable": 0,
+		"manual_comparisons": 0,
+		"issues": _dingtalk_roster_initial_import_source_issues(snapshot),
+		"rows": [],
+		"preview_token": "",
+	}
+	imports = frappe.get_all(
+		DINGTALK_EMPLOYEE_IMPORT_DOCTYPE,
+		filters={"company": company, "sync_log": snapshot["sync_log"], "source_record": ["in", list(snapshot["source_record_names"]) or ["__no_dingtalk_roster_source__"]]},
+		fields=["name", "employee_code", "modified", "import_status"],
+		order_by="employee_code asc",
+		limit_page_length=0,
+	)
+	fingerprint = [snapshot["sync_log"], snapshot["status"], snapshot["records_received"]]
+	for row in imports:
+		import_doc = frappe.get_doc(DINGTALK_EMPLOYEE_IMPORT_DOCTYPE, row.name)
+		values, _labels = _recompute_dingtalk_employee_import(import_doc)
+		code = str(values.get("custom_employee_code") or "").strip()
+		if not code:
+			# The source-level count already reports these rows; no identity can
+			# be inferred from a name or phone number during the preview.
+			continue
+		row_issues = []
+		if code != str(row.employee_code or "").strip():
+			row_issues.append("钉钉原始工号与待审记录不一致，请重新同步")
+		if row.import_status == "已驳回":
+			row_issues.append("该钉钉档案已被驳回，须重新同步或人工处理")
+		if str(import_doc.approval_note or "").startswith("钉钉全量初始建档"):
+			row_issues.append("此来源批次已执行过初次建档，请拉取新批次再预检")
+		if values.get("custom_work_nature") == "离职":
+			row_issues.append("钉钉在职来源却标为离职，须先核对状态")
+		match = _dingtalk_employee_match(values, company)
+		if match["status"] != "待审批":
+			row_issues.append(match["reason"] or match["status"])
+		existing = match.get("employee")
+		if existing:
+			employee = frappe.get_doc("Employee", existing)
+			if employee.status == "Left":
+				row_issues.append("系统档案已离职，须先人工核对状态")
+			fillable, preserved = _dingtalk_existing_employee_import_plan(values, employee)
+			meta_fields = {field.fieldname: field for field in employee.meta.fields if field.fieldname}
+			for fieldname, value in fillable.items():
+				difference = _set_dingtalk_difference_applyability(
+					{"fieldname": fieldname, "dingtalk_value": value}, meta_fields.get(fieldname)
+				)
+				if not difference["can_apply"]:
+					row_issues.append(difference["validation_message"])
+			result["existing"] += 1
+			result["fillable"] += len(fillable)
+			result["manual_comparisons"] += len(preserved)
+			fingerprint.append([row.name, str(row.modified), import_doc.payload_hash, existing, str(employee.modified)])
+		else:
+			# A new Employee needs real identity and employment facts. Optional
+			# profile fields can be enriched in HRMS after the baseline is created.
+			row_issues.extend(_dingtalk_new_employee_validation_issues(values))
+			if frappe.db.exists("Employee", {"custom_employee_code": code}):
+				row_issues.append("此工号已在其他公司使用，当前员工主档不能直接建档")
+			result["new"] += 1
+			fingerprint.append([row.name, str(row.modified), import_doc.payload_hash, "", ""])
+		if row_issues:
+			result["issues"].append("工号 {0}：{1}".format(code or "未填写", "；".join(dict.fromkeys(row_issues))))
+		result["rows"].append({"employee_code": code, "action": "更新空字段" if existing else "新建", "issues": row_issues})
+	result["preview_token"] = hashlib.sha256(json.dumps(fingerprint, ensure_ascii=False, default=str).encode()).hexdigest()
+	result["can_import"] = bool(result["rows"]) and not result["issues"]
+	return result
+
+
+@frappe.whitelist(methods=["POST"])
+def apply_dingtalk_roster_initial_import(company: str, sync_log: str, preview_token: str):
+	"""Queue a reviewed full-roster baseline for one atomic background job."""
+	_require_dingtalk_employee_import_approver()
+	company = _require_sync_company(company)
+	frappe.db.sql("select name from tabCompany where name=%s for update", company)
+	_require_dingtalk_roster_initial_import_preview(company, sync_log, preview_token)
+	if frappe.db.exists(
+		DINGTALK_SYNC_LOG_DOCTYPE,
+		{"company": company, "sync_type": "员工一次建档导入", "status": ["in", ["已排队", "运行中"]]},
+	):
+		frappe.throw(_("已有员工一次建档任务正在执行，请先查看同步记录。"))
+	operation_log = _new_sync_log("员工一次建档导入", company=company)
+	frappe.enqueue(
+		"hrms.api.dingtalk_integration.run_queued_dingtalk_roster_initial_import",
+		queue="long",
+		timeout=7200,
+		enqueue_after_commit=True,
+		job_name="dingtalk-roster-initial-import-{0}".format(sync_log),
+		company=company,
+		sync_log=sync_log,
+		preview_token=preview_token,
+		operation_log=operation_log.name,
+		approved_by=frappe.session.user,
+	)
+	return {"queued": True, "sync_log": sync_log, "operation_log": operation_log.name}
+
+
+def _require_dingtalk_roster_initial_import_preview(company, sync_log, preview_token):
+	preview = _build_dingtalk_roster_initial_import_preview(company)
+	if not preview["can_import"]:
+		frappe.throw(_("钉钉一次建档预检未通过：{0}").format("；".join(preview["issues"][:5])))
+	if preview["sync_log"] != sync_log or preview["preview_token"] != preview_token:
+		frappe.throw(_("员工档案或钉钉来源已变化，请重新预检后再导入。"))
+	return preview
+
+
+def _apply_dingtalk_roster_initial_import(company, sync_log, approved_by):
+	"""Write every reviewed Employee in the caller's single transaction."""
+
+	from hrms.api.employee_field_template import _get_latest_dingtalk_onjob_snapshot
+
+	snapshot = _get_latest_dingtalk_onjob_snapshot(company)
+	if _dingtalk_roster_initial_import_source_issues(snapshot) or snapshot["sync_log"] != sync_log:
+		frappe.throw(_("钉钉在职快照已变化或不完整，请重新同步并预检。"))
+	imports = frappe.get_all(
+		DINGTALK_EMPLOYEE_IMPORT_DOCTYPE,
+		filters={"company": company, "sync_log": sync_log, "source_record": ["in", list(snapshot["source_record_names"]) or ["__no_dingtalk_roster_source__"]]},
+		pluck="name",
+		order_by="employee_code asc",
+		limit_page_length=0,
+	)
+	created = filled = preserved = 0
+	for import_name in imports:
+		import_doc = frappe.get_doc(DINGTALK_EMPLOYEE_IMPORT_DOCTYPE, import_name)
+		values, _labels = _recompute_dingtalk_employee_import(import_doc)
+		if import_doc.company != company or str(values.get("custom_employee_code") or "").strip() != str(import_doc.employee_code or "").strip():
+			frappe.throw(_("钉钉待审记录已变化，请重新预检。"))
+		result = _upsert_dingtalk_employee_values(values, company)
+		if result.get("status") not in {"已创建", "已更新"}:
+			frappe.throw(_("工号 {0} 建档失败：{1}").format(values.get("custom_employee_code"), result.get("reason") or result.get("status")))
+		if result["status"] == "已创建":
+			created += 1
+		else:
+			filled += len(result.get("filled_fields") or [])
+			preserved += len(result.get("preserved_fields") or [])
+		import_doc.matched_employee = result["employee"]
+		import_doc.sync_operation = "新建员工" if result["status"] == "已创建" else ("补全资料" if result.get("filled_fields") else "核对无改动")
+		import_doc.sync_completed_at = now_datetime()
+		import_doc.approved_by = approved_by
+		import_doc.approved_at = now_datetime()
+		import_doc.approval_note = "钉钉全量初始建档；已有值差异保留人工核对"
+		import_doc.import_status = "待人工比对" if result.get("preserved_fields") else "无变更"
+		import_doc.error_message = "仍有 {0} 个已有值差异待确认".format(len(result["preserved_fields"])) if result.get("preserved_fields") else None
+		import_doc.save(ignore_permissions=True)
+		_set_dingtalk_mapping_after_import(import_doc, values, result["employee"])
+	return {"sync_log": sync_log, "processed": len(imports), "created": created, "filled_fields": filled, "preserved_differences": preserved}
+
+
+def run_queued_dingtalk_roster_initial_import(company: str, sync_log: str, preview_token: str, operation_log: str, approved_by: str):
+	"""Recheck source and Employee state, then commit all rows or none."""
+	try:
+		frappe.db.sql("select name from tabCompany where name=%s for update", company)
+		_require_dingtalk_roster_initial_import_preview(company, sync_log, preview_token)
+		result = _apply_dingtalk_roster_initial_import(company, sync_log, approved_by)
+		log = frappe.get_doc(DINGTALK_SYNC_LOG_DOCTYPE, operation_log)
+		_finish_sync_log(
+			log, "已完成", result["processed"], result["created"],
+			result["processed"] - result["created"], 0,
+			"补空字段 {0} 项；保留差异 {1} 项".format(result["filled_fields"], result["preserved_differences"]),
+		)
+		frappe.db.commit()
+		return result
+	except Exception as exc:
+		frappe.db.rollback()
+		log = frappe.get_doc(DINGTALK_SYNC_LOG_DOCTYPE, operation_log)
+		_finish_sync_log(log, "失败", error_message=str(exc))
+		frappe.db.commit()
+		raise
 
 
 @frappe.whitelist()

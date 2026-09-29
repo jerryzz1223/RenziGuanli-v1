@@ -100,50 +100,51 @@ class IdentityTests(unittest.TestCase):
         self.assertIn('DEPARTMENT_CONFLICT', result['exception_codes'])
 
 
-class QuantityTests(unittest.TestCase):
+class SourceQuantityTests(unittest.TestCase):
     daily = '人资组/绿苹果/带教期间每天奖励绿苹果2颗，按实际带教天数计算。带教合计不超过15天。2颗'
     hourly = '药水课/绿苹果/延班按照0.5H计算，每0.5H奖1颗，以此类推'
 
     def record(self, project, remark, amount, **changes):
         return apple.normalize_apple_tree_rows([apple_row(**{'奖/惩项目': project, '备注': remark, '绿苹果': str(amount), **changes})], employees=employees(), rules=apple.AppleTreeRules(target_month='2026-08'), source_file='original.xlsx')[0]
 
-    def test_daily_total_and_audit_evidence(self):
+    def test_daily_total_uses_source_value_without_recalculation(self):
         for days, amount in [(5, 10), (10, 20)]:
             row = self.record(self.daily, f'带新员工李四{days}天', amount)
             self.assertTrue(row['include_in_downstream'])
             self.assertEqual(row['有效苹果数'], amount)
-            self.assertEqual(row['processed_value']['数量校验']['expected_amount'], amount)
+            self.assertEqual(row['processed_value']['数量校验'], {})
             self.assertEqual(row['original_data']['绿苹果'], str(amount))
 
-    def test_wrong_daily_total_remains_blocked(self):
+    def test_project_text_does_not_challenge_daily_total(self):
         row = self.record(self.daily, '带新员工李四5天', 2)
-        self.assertIn('AMOUNT_TEXT_CONFLICT', row['exception_codes'])
+        self.assertNotIn('AMOUNT_TEXT_CONFLICT', row['exception_codes'])
         self.assertEqual(row['有效苹果数'], 2)
-        self.assertFalse(row['include_in_downstream'])
+        self.assertTrue(row['include_in_downstream'])
 
     def test_explicit_hours_support_numeric_and_chinese(self):
         for remark in ['延班两个小时测废水', '延班2小时测废水']:
             self.assertTrue(self.record(self.hourly, remark, 4)['include_in_downstream'])
 
-    def test_missing_quantity_is_not_false_fixed_amount_conflict(self):
+    def test_missing_calculation_basis_does_not_require_confirmation(self):
         row = self.record(self.hourly, '开缸分析', 4)
-        self.assertIn('AMOUNT_CALCULATION_REQUIRED', row['exception_codes'])
+        self.assertNotIn('AMOUNT_CALCULATION_REQUIRED', row['exception_codes'])
         self.assertNotIn('AMOUNT_TEXT_CONFLICT', row['exception_codes'])
-        self.assertFalse(row['include_in_downstream'])
+        self.assertTrue(row['include_in_downstream'])
 
-    def test_proration_and_rounding_are_not_invented(self):
+    def test_proration_and_rounding_are_not_checked(self):
         row = self.record('品管课/绿苹果/看三条线12小时。3颗', '一人看3线（6H）', 2)
-        self.assertIn('AMOUNT_CALCULATION_REQUIRED', row['exception_codes'])
+        self.assertNotIn('AMOUNT_CALCULATION_REQUIRED', row['exception_codes'])
         self.assertEqual(row['有效苹果数'], 2)
 
-    def test_mixed_duration_and_days_over_cap_require_confirmation(self):
+    def test_mixed_duration_and_days_over_cap_use_source_value(self):
         for remark in ['带教5天另带教3天', '带新员工李四16天']:
-            self.assertIn('AMOUNT_CALCULATION_REQUIRED', self.record(self.daily, remark, 32)['exception_codes'])
-        self.assertIn('AMOUNT_CALCULATION_REQUIRED', self.record(self.daily, '带教16天', 2)['exception_codes'])
+            self.assertNotIn('AMOUNT_CALCULATION_REQUIRED', self.record(self.daily, remark, 32)['exception_codes'])
+        self.assertNotIn('AMOUNT_CALCULATION_REQUIRED', self.record(self.daily, '带教16天', 2)['exception_codes'])
 
-    def test_fixed_award_still_checks_amount(self):
+    def test_fixed_award_uses_source_value(self):
         row = self.record('品管课/绿苹果/保养。2颗', '完成保养', 5)
-        self.assertIn('AMOUNT_TEXT_CONFLICT', row['exception_codes'])
+        self.assertNotIn('AMOUNT_TEXT_CONFLICT', row['exception_codes'])
+        self.assertEqual(row['有效苹果数'], 5)
 
     def test_quantity_and_identity_fixes_never_approve_pending(self):
         row = self.record(self.daily, '带教5天', 10, 审批结果='--', 审批状态='审批中')

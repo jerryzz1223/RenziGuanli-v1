@@ -87,6 +87,32 @@ class AttendanceSourceFilterTest(TestCase):
         })
         prior_rows.assert_not_called()
 
+    def test_attendance_draft_reupload_replaces_the_prior_effective_view(self):
+        batch = SimpleNamespace(name="new", company="永新", attendance_month="2026-08", source_type="attendance_draft")
+        parent = SimpleNamespace(name="old", company="永新", attendance_month="2026-08", source_type="attendance_draft")
+        incoming = [{"employee_code": "260813", "exception_codes": [], "source_file": "new.xlsx"}]
+        result = {"processed_rows": incoming, "metrics": {"processed_rows": 7110, "exception_rows": 49}}
+        with (
+            patch.object(self.api, "_processing_meta", return_value={"merge_parent_batch": "old"}),
+            patch.object(self.api.frappe.db, "exists", return_value=True, create=True),
+            patch.object(self.api.frappe.db, "count", return_value=215, create=True),
+            patch.object(self.api.frappe, "get_doc", return_value=parent, create=True),
+            patch.object(self.api, "_result_rows") as prior_rows,
+        ):
+            replaced = self.api._merge_processed_rows(batch, result)
+
+        self.assertEqual(replaced["processed_rows"], incoming)
+        self.assertEqual(replaced["metrics"]["processed_rows"], 1)
+        self.assertEqual(replaced["metrics"]["exception_rows"], 0)
+        self.assertEqual(replaced["merge"], {
+            "mode": "latest_upload_replacement",
+            "parent_batch": "old",
+            "replaced_previous_rows": 215,
+            "inserted_rows": 1,
+            "effective_rows": 1,
+        })
+        prior_rows.assert_not_called()
+
     def test_other_sources_are_not_filtered(self):
         self.assertEqual(self.api._approval_source_exclusion("attendance_draft", "2026-08", {"审批状态": "终止", "奖/惩日期": "2026-07-01"}), "")
 
@@ -103,9 +129,29 @@ class AttendanceSourceFilterTest(TestCase):
 
     def test_default_result_request_is_bounded_and_reports_complete_count(self):
         rows = [{"eligible_for_downstream": True, "processed_value": {"苹果类型": "绿苹果", "有效苹果数": 1}} for _ in range(601)]
-        with patch.object(self.api, "_require_processing_manager"), patch.object(self.api, "_require_company", side_effect=lambda v:v), patch.object(self.api, "_require_month", side_effect=lambda v:v), patch.object(self.api, "_require_processing_source_type", side_effect=lambda v:v), patch.object(self.api, "_latest_batch", return_value=SimpleNamespace(name="batch", status="已确认")), patch.object(self.api, "_processing_meta", return_value={}), patch.object(self.api.frappe.db, "count", side_effect=[601, 0]), patch.object(self.api, "_result_rows", side_effect=lambda batch, limit, **kwargs: rows[kwargs.get("page_start", 0):kwargs.get("page_start", 0) + limit]):
+        with patch.object(self.api, "_require_processing_manager"), patch.object(self.api, "_require_company", side_effect=lambda v:v), patch.object(self.api, "_require_month", side_effect=lambda v:v), patch.object(self.api, "_require_processing_source_type", side_effect=lambda v:v), patch.object(self.api, "_latest_batch", return_value=SimpleNamespace(name="batch", status="已确认", source_type="apple_tree")), patch.object(self.api, "_ensure_current_apple_tree_policy", return_value=0), patch.object(self.api, "_processing_meta", return_value={}), patch.object(self.api.frappe.db, "count", side_effect=[601, 0]), patch.object(self.api, "_result_rows", side_effect=lambda batch, limit, **kwargs: rows[kwargs.get("page_start", 0):kwargs.get("page_start", 0) + limit]):
             response = self.api.list_processing_results("永新", "2026-08", "apple_tree")
         self.assertEqual(len(response["processed_rows"]), 25)
         self.assertEqual(response["total_count"], 601)
         self.assertEqual(response["page_length"], 25)
         self.assertEqual(response["result_summary"]["green_apples"], 25)
+
+    def test_housing_allowance_errors_precede_valid_rows_across_pages(self):
+        batch = SimpleNamespace(name="housing-batch", source_type="housing_allowance")
+        index = [
+            {"name": f"record-{number:02d}", "exception_codes": '["EMPLOYEE_MISMATCH"]' if number in (2, 27, 29) else "[]"}
+            for number in range(30)
+        ]
+
+        def result_rows(_batch, limit, **kwargs):
+            selected = set(kwargs["record_filters"]["name"][1])
+            return [{"record_id": row["name"]} for row in index if row["name"] in selected][:limit]
+
+        with patch.object(self.api.frappe, "get_all", return_value=index) as get_all, patch.object(self.api, "_result_rows", side_effect=result_rows):
+            first = self.api._housing_allowance_result_page(batch, 25, 0)
+            second = self.api._housing_allowance_result_page(batch, 25, 25)
+
+        self.assertEqual([row["record_id"] for row in first[:3]], ["record-02", "record-27", "record-29"])
+        self.assertEqual([row["record_id"] for row in first[3:]], [f"record-{number:02d}" for number in range(23) if number != 2])
+        self.assertEqual([row["record_id"] for row in second], [f"record-{number:02d}" for number in range(23, 30) if number not in (27, 29)])
+        self.assertTrue(all(call.kwargs["limit_page_length"] == 0 for call in get_all.call_args_list))

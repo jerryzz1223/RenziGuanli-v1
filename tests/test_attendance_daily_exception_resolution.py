@@ -63,6 +63,49 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 	def setUpClass(cls):
 		cls.module = load_processing_center()
 
+	def test_attendance_slot_counts_pending_dates_instead_of_employee_records(self):
+		m = self.module
+		line = lambda day: {"attendance_date": day, "exception_codes": [CLOCK_IN_CODE]}
+		rows = [
+			{
+				"processed_value_json": json.dumps({}),
+				"proposed_value_json": json.dumps({
+					"exception_lines": [line("2026-08-01"), line("2026-08-02")],
+					"_daily_resolved_exception_lines": [line("2026-08-03")],
+				}),
+				"confirmed_value_json": "",
+				"exception_codes": json.dumps([CLOCK_IN_CODE]),
+			},
+			{
+				"processed_value_json": json.dumps({"exception_lines": [line("2026-08-04")]}),
+				"proposed_value_json": "",
+				"confirmed_value_json": "",
+				"exception_codes": json.dumps([CLOCK_IN_CODE]),
+			},
+			{
+				"processed_value_json": json.dumps({"attendance_details": [
+					{"attendance_date": "2026-08-05", "clock_in_missing": True},
+					{"attendance_date": "2026-08-06", "clock_in_missing": False},
+				]}),
+				"proposed_value_json": "",
+				"confirmed_value_json": "",
+				"exception_codes": json.dumps([CLOCK_IN_CODE]),
+			},
+		]
+		batch = SimpleNamespace(
+			name="B", source_type="attendance_draft", source_file="draft.xlsx",
+			attendance_month="2026-08", daily_sheet_rows=4, status="待处理异常",
+			imported_by="", imported_on=None, creation=None,
+		)
+		with patch.object(m.frappe, "get_all", return_value=rows), \
+			patch.object(m.frappe.db, "count", return_value=3), \
+			patch.object(m, "_processing_meta", return_value={"metrics": {"processed_rows": 3}}), \
+			patch.object(m, "_user_display_name", return_value=""):
+			slot = m._slot_payload(batch)
+		self.assertEqual(slot["employee_summary_count"], 3)
+		self.assertEqual(slot["exception_count"], 4)
+		self.assertEqual(slot["status"], "待处理异常")
+
 	def employee_row(self):
 		lines = [
 			{"attendance_date": "2026-07-04", "source_row": 10, "exception_codes": [RESTDAY_CODE]},
@@ -403,6 +446,7 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 			result = m.list_processing_exceptions(
 				"C", "2026-07", page_length=20, page_start=60,
 				snapshot_record_ids=json.dumps(requested_ids),
+				snapshot_token=m._json([("B", "")] * (len(m.SOURCE_TYPES) + len(m.MONTHLY_SUPPORT_SOURCE_TYPES))),
 			)
 		self.assertTrue(result["snapshot_reused"])
 		self.assertEqual([row["record_id"] for row in result["review_rows"]], requested_ids)

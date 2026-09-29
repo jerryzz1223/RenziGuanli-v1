@@ -88,12 +88,15 @@ def apply_employee_work_nature(employee):
 		return
 
 	selected = cstr(employee.get("custom_work_nature")).strip()
-	is_roster_import = bool(getattr(employee.flags, "hrms_employee_roster_import", False))
+	is_roster_import = bool(
+		getattr(employee.flags, "hrms_employee_roster_import", False)
+		or getattr(employee.flags, "hrms_dingtalk_sync", False)
+	)
 	if selected and selected not in WORK_NATURE_OPTIONS:
 		frappe.throw(_("工作性质只能选择：{0}").format("、".join(WORK_NATURE_OPTIONS)))
 	# Manual Employee creation is always a probationary onboarding record. The
-	# roster importer is the only path allowed to declare another work nature for
-	# a new employee, and only when the workbook actually supplies that field.
+	# roster or approved DingTalk import may declare another work nature for a
+	# new employee, only when its source actually supplies that field.
 	if employee.is_new() and (not is_roster_import or not selected):
 		selected = "在职·试用期"
 	selected_changed = employee.is_new() or employee.has_value_changed("custom_work_nature")

@@ -42,7 +42,7 @@ test("root entry supports intranet Desktop icons without data-id", () => {
 		querySelector: (selector) => (selector === ".desktop-wrapper" ? wrapper : null),
 		querySelectorAll: () => [],
 	};
-	const window = { location: { pathname: "/" }, frappe: { router: { on() {} } } };
+	const window = { location: { pathname: "/" }, frappe: { boot: { user: { mute_sounds: 0 } }, router: { on() {} } } };
 	const source = fs.readFileSync(path.join(projectRoot, "hrms/public/js/hrms_entry.js"), "utf8");
 
 	vm.runInNewContext(source, {
@@ -58,6 +58,7 @@ test("root entry supports intranet Desktop icons without data-id", () => {
 	assert.equal(wrapper.classList.contains("hrms-entry"), true);
 	assert.equal(entry.classList.contains("hrms-entry-card"), true);
 	assert.equal(appended.length, 2);
+	assert.equal(window.frappe.boot.user.mute_sounds, 1);
 });
 
 test("entry layout hides non-HRMS Desktop icons", () => {

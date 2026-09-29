@@ -177,6 +177,17 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertEqual(row["部门"], "连续课")
 		self.assertEqual(row["processed_value"]["部门"], "连续课")
 
+	def test_matched_employee_department_difference_does_not_block_source_apples(self):
+		row = normalize_apple_tree_rows(
+			[source_row(**{"受奖/惩人部门": "旧部门"})],
+			rules=self.confirmed_rules(), employees=EMPLOYEES, source_file="苹果树.xlsx",
+		)[0]
+		self.assertEqual(row["工号"], "E-001")
+		self.assertNotIn("EMPLOYEE_DEPARTMENT_MISMATCH", row["exception_codes"])
+		self.assertTrue(row["include_in_downstream"])
+		self.assertEqual(row["部门"], "旧部门")
+		self.assertEqual(row["processed_value"]["部门"], "旧部门")
+
 	def test_structure_preflight_reports_missing_columns_without_consuming_rows(self):
 		valid = preflight_apple_tree_rows([source_row()])
 		invalid_row = source_row()
@@ -220,24 +231,28 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 			page_source,
 		)
 
-	def test_monthly_register_flags_only_an_amount_entered_in_the_wrong_apple_column(self):
-		cases = (
-			({"奖/惩项目": "连续课/绿苹果/保养。5颗", "绿苹果": "", "红苹果": 5}, "绿苹果"),
-			({"奖/惩项目": "连续课/红苹果/违规。5颗", "绿苹果": 5, "红苹果": ""}, "红苹果"),
-		)
-		for changes, apple_type in cases:
-			with self.subTest(apple_type=apple_type):
-				row = source_row(**changes)
-				for field in ("数据id", "审批编号", "审批结果", "审批状态"):
-					row.pop(field, None)
-				processed = normalize_apple_tree_rows(
-					[row], rules=self.confirmed_rules(), employees=EMPLOYEES,
-					source_file="6月苹果树.xlsx", source_sheet="苹果树合计", start_row=4,
-				)[0]
-				self.assertIn("INACTIVE_APPLE_VALUE_CONFLICT", processed["exception_codes"])
-				self.assertIn("填写数量的苹果列不一致", processed["exception_message"])
-				self.assertNotIn("AMOUNT_TEXT_CONFLICT", processed["exception_codes"])
-				self.assertNotIn("AMOUNT_CALCULATION_REQUIRED", processed["exception_codes"])
+	def test_monthly_register_flags_green_rule_amount_entered_in_red_column(self):
+		row = source_row(**{"奖/惩项目": "连续课/绿苹果/保养。5颗", "绿苹果": "", "红苹果": 5})
+		for field in ("数据id", "审批编号", "审批结果", "审批状态"):
+			row.pop(field, None)
+		processed = normalize_apple_tree_rows(
+			[row], rules=self.confirmed_rules(), employees=EMPLOYEES,
+			source_file="6月苹果树.xlsx", source_sheet="苹果树合计", start_row=4,
+		)[0]
+		self.assertIn("INACTIVE_APPLE_VALUE_CONFLICT", processed["exception_codes"])
+		self.assertIn("填写数量的苹果列不一致", processed["exception_message"])
+		self.assertNotIn("AMOUNT_TEXT_CONFLICT", processed["exception_codes"])
+		self.assertNotIn("AMOUNT_CALCULATION_REQUIRED", processed["exception_codes"])
+
+	def test_monthly_register_does_not_apply_wrong_column_rule_to_red_project(self):
+		row = source_row(**{"奖/惩项目": "连续课/红苹果/违规。5颗", "绿苹果": 5, "红苹果": ""})
+		for field in ("数据id", "审批编号", "审批结果", "审批状态"):
+			row.pop(field, None)
+		processed = normalize_apple_tree_rows(
+			[row], rules=self.confirmed_rules(), employees=EMPLOYEES,
+			source_file="6月苹果树.xlsx", source_sheet="苹果树合计", start_row=4,
+		)[0]
+		self.assertNotIn("INACTIVE_APPLE_VALUE_CONFLICT", processed["exception_codes"])
 
 	def test_monthly_register_allows_blank_or_zero_in_the_other_apple_column(self):
 		for inactive_value in ("", 0, "0"):
@@ -297,7 +312,13 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		# action would allow unresolved identity or source conflicts into downstream
 		# payroll calculations.
 		self.assertIn('绿苹果、红苹果直接采用来源表数值', page_source)
-		self.assertIn('不用于重算或判断数量是否一致', page_source)
+		self.assertIn('仅当项目明确为绿苹果、数量却填入红苹果列时报错', page_source)
+		self.assertIn('不根据奖/惩项目重算或核对颗数', page_source)
+		self.assertIn('_ensure_current_apple_tree_policy(batch)', center_source)
+		self.assertIn('ensure_current_exception_policies(options = {})', page_source)
+		self.assertIn('skipPolicyRefresh: true', page_source)
+		self.assertNotIn('按当前映射重新识别异常', page_source)
+		self.assertNotIn('data-recheck-attendance-policy', page_source)
 		self.assertIn('data-edit-processing-source="apple_tree"', page_source)
 		self.assertIn('"review_status": "待审核"', center_source)
 		self.assertNotIn('bulk_resolve_apple_tree_employees', center_source)
@@ -343,6 +364,77 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 				self.assertEqual(result["姓名"], "旧员工")
 				self.assertEqual(result["审批编号"], "")
 				self.assertEqual(result["备注"], "")
+
+	def test_current_apple_tree_policy_automatically_clears_legacy_quantity_exception(self):
+		center, _, _ = processing_center_module()
+		batch = SimpleNamespace(
+			name="APPLE-BATCH", company="永新", attendance_month="2026-06",
+			source_type="apple_tree", source_file="苹果树.xlsx",
+		)
+		raw = source_row(**{"绿苹果": "5", "奖/惩项目": "连续课/绿苹果/保养。2颗"})
+		stored = {
+			"name": "APPLE-ROW", "original_value_json": center._json(raw),
+			"processed_value_json": center._json({"有效苹果数": 5}),
+			"proposed_value_json": center._json({"工号": "E-001", "姓名": "张三", "部门": "连续课", "苹果类型": "绿苹果", "有效苹果数": 5}),
+			"confirmed_value_json": "", "exception_codes": center._json(["AMOUNT_TEXT_CONFLICT"]),
+			"exception_message": "苹果数量与项目说明不一致", "review_status": "待审核",
+			"review_history_json": "[]", "eligible_for_downstream": 0,
+			"source_file": "苹果树.xlsx", "source_sheet": "钉钉导出数据", "source_row": 2,
+			"source_id": "DATA-001", "approval_no": "APPROVAL-001",
+		}
+		doc = SimpleNamespace(**stored)
+		doc.save = lambda **_kwargs: None
+		with (
+			patch.object(center, "_processing_meta", return_value={}),
+			patch.object(center.frappe, "get_all", return_value=[stored]),
+			patch.object(center.frappe, "get_doc", return_value=doc, create=True),
+			patch.object(center, "_employee_directory", return_value=EMPLOYEES),
+			patch.object(center, "_save_batch_notes") as save_notes,
+			patch.object(center, "_refresh_batch_review_status") as refresh_status,
+			patch.object(center, "_invalidate_monthly_final_after_source_change") as invalidate,
+			patch.object(center, "now_datetime", return_value=SimpleNamespace(isoformat=lambda: "2026-09-29T12:00:00")),
+		):
+			changed = center._ensure_current_apple_tree_policy(batch)
+
+		self.assertEqual(changed, 1)
+		self.assertEqual(doc.exception_codes, "[]")
+		self.assertEqual(doc.exception_message, "")
+		self.assertEqual(doc.review_status, "无需审核")
+		self.assertEqual(doc.eligible_for_downstream, 1)
+		self.assertEqual(save_notes.call_args.args[1]["apple_tree_policy_version"], center.APPLE_TREE_POLICY_VERSION)
+		refresh_status.assert_called_once_with(batch)
+		invalidate.assert_called_once_with(batch, "apple_tree_policy_update")
+
+	def test_exception_queue_rechecks_apple_policy_and_rejects_stale_snapshot(self):
+		center, _, _ = processing_center_module()
+		batch = SimpleNamespace(name="APPLE-BATCH", source_type="apple_tree", modified="old")
+		seen = []
+		def refresh(current):
+			seen.append(current.name)
+			current.modified = "new"
+			return 1
+		def get_all(_doctype, **kwargs):
+			self.assertNotIn("name", kwargs["filters"], "stale snapshot must be discarded")
+			return []
+		with (
+			patch.object(center, "_require_processing_manager"),
+			patch.object(center, "_require_company", side_effect=lambda value: value),
+			patch.object(center, "_require_month", side_effect=lambda value: value),
+			patch.object(center, "_require_processing_source_type", side_effect=lambda value: value),
+			patch.object(center, "_latest_batch", side_effect=lambda _company, _month, source: batch if source == "apple_tree" else None),
+			patch.object(center, "_ensure_current_apple_tree_policy", side_effect=refresh),
+			patch.object(center, "_attendance_shift_rule_bundle", return_value={"version": "test"}),
+			patch.object(center.frappe, "get_all", side_effect=get_all),
+		):
+			result = center.list_processing_exceptions(
+				"永新", "2026-08", source_type="apple_tree",
+				snapshot_record_ids='["OLD-EXCEPTION"]', snapshot_token="old",
+			)
+		self.assertEqual(seen, ["APPLE-BATCH"])
+		self.assertEqual(result["apple_tree_policy_refreshed_rows"], 1)
+		self.assertEqual(result["filtered_pending_count"], 0)
+		self.assertEqual(result["snapshot_record_ids"], [])
+		self.assertNotEqual(result["snapshot_token"], "old")
 
 	def test_apple_tree_export_is_only_the_printable_signoff_list(self):
 		if load_workbook is None:
@@ -713,6 +805,65 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertEqual([row["employee_code"] for row in rows], ["1001", "1002"])
 		self.assertEqual([row["housing_allowance"] for row in rows], [200, 0])
 
+	def test_monthly_amount_parser_excludes_numbered_date_reference_with_same_amount_header(self):
+		"""A future reference section can reuse the main table's amount heading."""
+		if load_workbook is None:
+			self.skipTest("openpyxl is unavailable")
+		from openpyxl import Workbook
+
+		center, _file_manager, _frappe_modules = processing_center_module()
+		for source_type, value_header in (("housing_allowance", "住房补贴"), ("full_attendance", "全勤奖")):
+			with self.subTest(source_type=source_type):
+				workbook = Workbook()
+				sheet = workbook.active
+				sheet.title = "8月"
+				sheet.append(["序号", "工号", "姓名", "单位", value_header])
+				sheet.append([1, "1001", "张三", "工程课", 200])
+				sheet.append([])
+				sheet.append(["序号", "入职日期", "工号", "姓名", "部门", value_header])
+				sheet.append([1, datetime(2026, 8, 4), "1002", "李四", "品管课", 100])
+				batch = SimpleNamespace(source_type=source_type, attendance_month="2026-08", source_file="/private/files/monthly.xlsx")
+
+				rows = center._monthly_amount_rows(sheet, batch, center.MONTHLY_SUPPORT_SOURCE_CONFIG[source_type])
+
+				self.assertEqual(len(rows), 1)
+				self.assertEqual(rows[0]["employee_code"], "1001")
+				self.assertEqual(rows[0][center.MONTHLY_SUPPORT_SOURCE_CONFIG[source_type]["value_field"]], 200)
+
+	def test_august_housing_reference_tables_do_not_enter_import_precheck(self):
+		"""The two-column August layout must stop before its dated side tables."""
+		if load_workbook is None:
+			self.skipTest("openpyxl is unavailable")
+		from openpyxl import Workbook
+
+		center, _file_manager, _frappe_modules = processing_center_module()
+		workbook = Workbook()
+		sheet = workbook.active
+		sheet.title = "8月住房补贴"
+		sheet.append(["序号", "工号", "姓名", "单位", "住房补贴", "备注", "序号", "工号", "姓名", "单位", "住房补贴"])
+		sheet.append([1, "1001", "张三", "工程课", 200, "", 2, "1002", "李四", "品管课", 0])
+		sheet.append([])
+		sheet.append(["序号", "入职日期", "工号", "姓名", "部门", "补贴金额", "序号", "入职日期", "工号", "姓名", "部门", "补贴金额"])
+		sheet.append([1, datetime(2026, 8, 4), "1003", "王五", "连续课", 200, 2, datetime(2026, 8, 5), "1004", "赵六", "资财课", 0])
+		batch = SimpleNamespace(source_type="housing_allowance", attendance_month="2026-08", source_file="/private/files/housing.xlsx")
+		config = center.MONTHLY_SUPPORT_SOURCE_CONFIG["housing_allowance"]
+		with patch.object(center, "_load_workbook", return_value=workbook):
+			precheck = center._monthly_support_precheck(batch)
+		rows = center._monthly_amount_rows(sheet, batch, config)
+		self.assertTrue(precheck["is_valid"])
+		self.assertEqual(precheck["record_count"], 2)
+		self.assertEqual([(row["employee_code"], row["housing_allowance"]) for row in rows], [("1001", 200), ("1002", 0)])
+
+		# A workbook consisting only of the dated reference section cannot pass
+		# precheck even if its amount column reuses the canonical heading.
+		reference_only = Workbook()
+		reference_sheet = reference_only.active
+		reference_sheet.title = "8月住房补贴"
+		reference_sheet.append(["序号", "入职日期", "工号", "姓名", "部门", "住房补贴"])
+		reference_sheet.append([1, datetime(2026, 8, 4), "1003", "王五", "连续课", 200])
+		with patch.object(center, "_load_workbook", return_value=reference_only):
+			self.assertFalse(center._monthly_support_precheck(batch)["is_valid"])
+
 	def test_bulk_file_classification_accepts_a_partial_unique_selection(self):
 		center, _file_manager, _frappe_modules = processing_center_module()
 		files = [
@@ -921,7 +1072,7 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertEqual(len(processed), len(rows) - 1)
 		self.assertIn("DUPLICATE_SOURCE_ID", processed[0]["exception_codes"])
 		self.assertIn("DUPLICATE_APPROVAL_NO", processed[1]["exception_codes"])
-		self.assertIn("AMOUNT_TEXT_CONFLICT", processed[1]["exception_codes"])
+		self.assertNotIn("AMOUNT_TEXT_CONFLICT", processed[1]["exception_codes"])
 		for row in processed:
 			self.assertEqual(row["review_status"], "待审核")
 			self.assertFalse(row["include_in_downstream"])
@@ -960,7 +1111,7 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 		self.assertEqual(processed[0]["工号"], "E-102")
 		self.assertEqual(processed[0]["review_status"], "无需审核")
 		self.assertIn("EMPLOYEE_NAME_MISMATCH", processed[1]["exception_codes"])
-		self.assertIn("EMPLOYEE_DEPARTMENT_MISMATCH", processed[1]["exception_codes"])
+		self.assertNotIn("EMPLOYEE_DEPARTMENT_MISMATCH", processed[1]["exception_codes"])
 		self.assertIn("FORMER_EMPLOYEE_REQUIRES_CONFIRMATION", processed[2]["exception_codes"])
 
 	def test_in_progress_apple_approval_remains_reviewable_while_closed_rows_disappear(self):

@@ -112,14 +112,23 @@ From the repository root, run the lightweight regression checks that do not requ
 a running Frappe site:
 
 ```sh
-python3 -m unittest tests.test_docker_site_preflight tests.test_hrms_data_statistics tests.test_roster_summary_loading -v
+python3 -m unittest \
+  tests.test_docker_site_preflight \
+  tests.test_docker_deploy_safety \
+  tests.test_docker_recovery \
+  tests.test_docker_runtime_paths \
+  tests.test_podman_deployment \
+  tests.test_hrms_data_statistics \
+  tests.test_roster_summary_loading -v
 node --test frontend/tests/*.test.js
 ```
 
-The Python checks cover isolated deployment, statistics, and permission-aware
-query contracts. The Node checks cover frontend utility behavior. Install the
-project dependencies declared in `pyproject.toml` before running Excel-related
-tests; they require `openpyxl`.
+The Python checks cover deployment and recovery safety, isolated runtime paths,
+Podman deployment contracts, statistics, and permission-aware query contracts.
+They do not start containers, migrate a site, or contact an intranet server.
+The Node checks cover frontend utility behavior. Install the project dependencies
+declared in `pyproject.toml` before running Excel-related tests; they require
+`openpyxl`.
 
 These checks do not replace an authenticated browser check or an acceptance run
 against a real Frappe site. Validate role permissions, company-scoped data, and

@@ -3,6 +3,7 @@ import json
 import os
 import re
 import zipfile
+from collections import Counter
 from datetime import date, datetime, timedelta
 from io import BytesIO
 from xml.etree import ElementTree
@@ -290,9 +291,6 @@ ETHNICITY_VALUE_ALIASES = {
 }
 EMPLOYEE_DUPLICATE_MATCH_FIELDS = {
 	"employee_code": ("custom_employee_code",),
-	"id_card": ("passport_number", "custom_id_number"),
-	"phone": ("cell_number",),
-	"auto": ("custom_employee_code", "passport_number", "custom_id_number", "cell_number"),
 }
 
 DEFAULT_EMPLOYEE_REPORTS = [
@@ -5486,7 +5484,7 @@ def _resolve_company(value, default_company, warnings):
 		company = frappe.db.exists("Company", text) or frappe.db.get_value("Company", {"company_name": text}, "name")
 		if company:
 			return company
-		warnings.append(_("公司“{0}”不存在，已使用默认公司“{1}”。").format(text, default_company or ""))
+		frappe.throw(_("公司“{0}”不存在，请核对后再导入；不能自动改为默认公司。").format(text))
 	return default_company
 
 
@@ -5669,6 +5667,8 @@ def _find_existing_employee_by_strategy(values, meta_fields, match_by="employee_
 			filters = {fieldname: values[fieldname]}
 			if company:
 				filters["company"] = company
+			if frappe.db.count(EMPLOYEE_DOCTYPE, filters) > 1:
+				frappe.throw(_("同公司存在重复工号 {0}，请先清理员工主档。").format(values[fieldname]))
 			existing = frappe.db.get_value(EMPLOYEE_DOCTYPE, filters, "name")
 			if existing:
 				return existing
@@ -5763,6 +5763,14 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 			values["custom_work_nature"], values.get("custom_is_confirmed")
 		)
 	_apply_identity_card_derivatives(values, warnings, row_index)
+	return values, errors
+
+
+def _apply_employee_roster_insert_defaults(values, warnings, row_index, fields_by_name):
+	"""Only a new Employee may receive missing-field defaults from an import."""
+	# 批量新增只写员工资料，不默认创建系统用户。
+	values["create_user_automatically"] = 0
+	values["create_user_permission"] = 0
 	if not values.get("status"):
 		values["status"] = "Active"
 	if not values.get("date_of_birth") and fields_by_name.get("date_of_birth"):
@@ -5772,11 +5780,6 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 				row_index or "", EMPLOYEE_FALLBACK_DATE_OF_BIRTH
 			)
 		)
-
-	# 批量导入只写员工资料，不默认创建系统用户，避免因为邮箱缺失阻断花名册导入。
-	values["create_user_automatically"] = 0
-	values["create_user_permission"] = 0
-	return values, errors
 
 
 def _normalise_work_nature_import_value(value, is_confirmed=None):
@@ -5860,44 +5863,70 @@ def _preview_employee_action(values, meta_fields, mode, match_by):
 	return "insert", None
 
 
+def _empty_dingtalk_onjob_snapshot():
+	return {
+		"sync_log": "",
+		"status": "",
+		"started_at": "",
+		"employee_codes": set(),
+		"missing_employee_code_count": 0,
+		"duplicate_employee_codes": [],
+		"snapshot_row_count": 0,
+		"records_received": 0,
+		"source_record_names": set(),
+	}
+
+
 def _get_latest_dingtalk_onjob_snapshot(company):
-	"""Return confirmed on-job codes from the latest completed DingTalk roster sync.
+	"""Return on-job codes and quality flags from the latest DingTalk roster sync.
 
 	The form importer uses this only as a conflict guard.  DingTalk never decides
 	a departure, but a person confirmed as on-job by the latest roster snapshot
 	must not be made Left merely because a spreadsheet says so or omits the row.
 	"""
 	if not company:
-		return {"sync_log": "", "status": "", "started_at": "", "employee_codes": set()}
+		return _empty_dingtalk_onjob_snapshot()
 	if not frappe.db.exists("DocType", "HRMS DingTalk Sync Log") or not frappe.db.exists(
 		"DocType", "HRMS DingTalk Employee Import"
 	):
-		return {"sync_log": "", "status": "", "started_at": "", "employee_codes": set()}
+		return _empty_dingtalk_onjob_snapshot()
 
 	log = frappe.get_all(
 		"HRMS DingTalk Sync Log",
 		filters={
 			"company": company,
 			"sync_type": "员工档案同步",
-			"status": ["in", ["已完成", "部分失败"]],
 		},
-		fields=["name", "status", "started_at"],
+		fields=["name", "status", "started_at", "records_received"],
 		order_by="started_at desc",
 		limit_page_length=1,
 	)
 	if not log:
-		return {"sync_log": "", "status": "", "started_at": "", "employee_codes": set()}
+		return _empty_dingtalk_onjob_snapshot()
+	source_record_names = set(frappe.get_all(
+		"HRMS DingTalk Raw Record",
+		filters={"company": company, "source_type": "employee_roster"},
+		pluck="name",
+		limit_page_length=0,
+	))
 	rows = frappe.get_all(
 		"HRMS DingTalk Employee Import",
-		filters={"company": company, "sync_log": log[0].name, "employee_code": ["!=", ""]},
-		pluck="employee_code",
+		filters={"company": company, "sync_log": log[0].name, "source_record": ["in", list(source_record_names) or ["__no_dingtalk_roster_source__"]]},
+		fields=["employee_code"],
 		limit_page_length=0,
 	)
+	codes = [str(row.employee_code or "").strip() for row in rows]
+	code_counts = Counter(code for code in codes if code)
 	return {
 		"sync_log": log[0].name,
 		"status": log[0].status,
 		"started_at": str(log[0].started_at or ""),
-		"employee_codes": {str(code).strip() for code in rows if str(code or "").strip()},
+		"employee_codes": set(code_counts),
+		"missing_employee_code_count": codes.count(""),
+		"duplicate_employee_codes": sorted(code for code, count in code_counts.items() if count > 1),
+		"snapshot_row_count": len(rows),
+		"records_received": int(log[0].records_received or 0),
+		"source_record_names": source_record_names,
 	}
 
 
@@ -5929,6 +5958,23 @@ def get_employee_import_source_balance(company: str = ""):
 	snapshot = _get_latest_dingtalk_onjob_snapshot(company)
 	if not snapshot.get("sync_log"):
 		return {"company": company, "has_snapshot": False, "current_not_in_dingtalk": [], "left_in_dingtalk": [], "dingtalk_not_in_employee": []}
+	if (
+		snapshot["status"] != "已完成"
+		or snapshot["snapshot_row_count"] != snapshot["records_received"]
+		or not snapshot["employee_codes"]
+		or snapshot["missing_employee_code_count"]
+		or snapshot["duplicate_employee_codes"]
+	):
+		return {
+			"company": company,
+			"has_snapshot": False,
+			"snapshot": {"sync_log": snapshot["sync_log"], "status": snapshot["status"], "started_at": snapshot["started_at"]},
+			"current_not_in_dingtalk": [],
+			"left_in_dingtalk": [],
+			"dingtalk_not_in_employee": [],
+			"dingtalk_missing_code_count": snapshot["missing_employee_code_count"],
+			"dingtalk_duplicate_employee_codes": snapshot["duplicate_employee_codes"],
+		}
 
 	employees = frappe.get_all(
 		EMPLOYEE_DOCTYPE,
@@ -5947,15 +5993,13 @@ def get_employee_import_source_balance(company: str = ""):
 	]
 	left_in_dingtalk = [row for code, row in by_code.items() if row.status == "Left" and code in dingtalk_codes]
 	dingtalk_missing_codes = sorted(dingtalk_codes.difference(by_code))
-	dingtalk_missing_code_count = frappe.db.count(
-		"HRMS DingTalk Employee Import",
-		{"company": company, "sync_log": snapshot["sync_log"], "employee_code": ["in", ["", None]]},
-	)
+	dingtalk_missing_code_count = snapshot["missing_employee_code_count"]
 	dingtalk_rows = frappe.get_all(
 		"HRMS DingTalk Employee Import",
 		filters={
 			"company": company,
 			"sync_log": snapshot["sync_log"],
+			"source_record": ["in", list(snapshot["source_record_names"]) or ["__no_dingtalk_roster_source__"]],
 			"employee_code": ["in", dingtalk_missing_codes or ["__no_employee__"]],
 		},
 		fields=["employee_code", "employee_name", "import_status"],
@@ -5979,11 +6023,16 @@ def get_employee_import_source_balance(company: str = ""):
 			"status": snapshot["status"],
 			"started_at": snapshot["started_at"],
 			"employee_count": len(dingtalk_codes),
+			"missing_employee_code_count": snapshot["missing_employee_code_count"],
+			"duplicate_employee_code_count": len(snapshot["duplicate_employee_codes"]),
+			"snapshot_row_count": snapshot["snapshot_row_count"],
+			"records_received": snapshot["records_received"],
 		},
 		"current_not_in_dingtalk": [serialise_employee(row) for row in current_not_in_dingtalk],
 		"left_in_dingtalk": [serialise_employee(row) for row in left_in_dingtalk],
 		"dingtalk_not_in_employee": [dict(row) for row in dingtalk_rows],
 		"dingtalk_missing_code_count": dingtalk_missing_code_count,
+		"dingtalk_duplicate_employee_codes": snapshot["duplicate_employee_codes"],
 	}
 
 
@@ -6102,6 +6151,7 @@ def _build_employee_roster_import_plan(
 	}
 	planned_rows = []
 	dingtalk_snapshots = {}
+	seen_employee_codes = set()
 
 	for row_index, row in enumerate(context["rows"][context["data_start_index"] :], start=context["data_start_index"] + 1):
 		if not any(not _is_blank_value(value) for value in row):
@@ -6121,6 +6171,8 @@ def _build_employee_roster_import_plan(
 		# cross-company search of an administrator's entire employee table.
 		values["company"] = _resolve_company(values.get("company"), _get_default_company(), result["warnings"])
 		company = values.get("company")
+		if not company:
+			frappe.throw(_("请先选择导入公司；不能在公司未知时匹配员工工号。"))
 		if company not in dingtalk_snapshots:
 			dingtalk_snapshots[company] = _get_latest_dingtalk_onjob_snapshot(company)
 		row_errors = _dedupe_import_errors(
@@ -6129,6 +6181,18 @@ def _build_employee_roster_import_plan(
 				values, fields_by_name, meta_fields, row_index, parse_errors, mode=mode, match_by=match_by
 			)
 		)
+		employee_code = str(values.get("custom_employee_code") or "").strip()
+		business_key = (company, employee_code)
+		if employee_code:
+			if business_key in seen_employee_codes:
+				row_errors.append(
+					_field_error(
+						row_index,
+						fields_by_name.get("custom_employee_code") or {"fieldname": "custom_employee_code", "field_label": _("工号")},
+						_("同一文件中公司“{0}”的工号 {1} 重复，请先合并为一行。").format(company, employee_code),
+					)
+				)
+			seen_employee_codes.add(business_key)
 		source_conflict = _employee_roster_source_conflict(
 			values, dingtalk_snapshots[company], fields_by_name, row_index
 		)
@@ -6162,6 +6226,8 @@ def _build_employee_roster_import_plan(
 				}
 			)
 			continue
+		if action == "insert":
+			_apply_employee_roster_insert_defaults(values, result["warnings"], row_index, fields_by_name)
 
 		if action == "update":
 			result["updated"] += 1
@@ -6205,7 +6271,13 @@ def _build_employee_roster_import_plan(
 		}
 		snapshot = dingtalk_snapshots.get(target_company) or _get_latest_dingtalk_onjob_snapshot(target_company)
 		protected = sorted(set(candidate_codes).intersection(snapshot.get("employee_codes", set())))
-		if replace_candidates and snapshot.get("status") == "部分失败":
+		if replace_candidates and (
+			snapshot.get("status") != "已完成"
+			or not snapshot.get("employee_codes")
+			or snapshot.get("snapshot_row_count") != snapshot.get("records_received")
+			or snapshot.get("missing_employee_code_count")
+			or snapshot.get("duplicate_employee_codes")
+		):
 			result["source_conflicts"] += 1
 			result["failed"] += 1
 			result["errors"].append(
@@ -6213,7 +6285,7 @@ def _build_employee_roster_import_plan(
 					"row": "",
 					"fieldname": "custom_employee_code",
 					"field_label": _("来源冲突"),
-					"message": _("最新钉钉在职快照为“部分失败”，无法确认遗漏人员是否确已离职，已阻止整表覆盖。"),
+					"message": _("钉钉在职快照未完成、记录数不完整或工号有缺失/重复，无法确认遗漏人员是否确已离职，已阻止整表覆盖。"),
 					"suggestion": _("请先成功完成一次钉钉全量在职同步，再重新预览完整花名册。"),
 				}
 			)
@@ -6234,7 +6306,7 @@ def _build_employee_roster_import_plan(
 					),
 				}
 			)
-		result["archived"] = len(replace_candidates) - len(protected)
+		result["archived"] = 0 if result["failed"] else len(replace_candidates)
 
 	for company, snapshot in dingtalk_snapshots.items():
 		if snapshot.get("sync_log"):
@@ -6243,6 +6315,10 @@ def _build_employee_roster_import_plan(
 				"status": snapshot["status"],
 				"started_at": snapshot["started_at"],
 				"employee_count": len(snapshot["employee_codes"]),
+				"missing_employee_code_count": snapshot.get("missing_employee_code_count", 0),
+				"duplicate_employee_code_count": len(snapshot.get("duplicate_employee_codes") or []),
+				"snapshot_row_count": snapshot.get("snapshot_row_count", 0),
+				"records_received": snapshot.get("records_received", 0),
 			}
 	return result, planned_rows, meta_fields
 

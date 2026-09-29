@@ -42,7 +42,7 @@
   {"fieldname": "original_value_json", "fieldtype": "Long Text", "label": "原始值 JSON"},
   {"fieldname": "exception_codes", "fieldtype": "Small Text", "label": "异常代码"},
   {"fieldname": "exception_message", "fieldtype": "Small Text", "label": "异常说明"},
-  {"fieldname": "review_status", "fieldtype": "Select", "label": "审核状态", "options": "无需审核\n待审核\n已通过\n已驳回", "default": "待审核", "in_list_view": 1},
+  {"fieldname": "review_status", "fieldtype": "Select", "label": "审核状态", "options": "无需审核\n待审核\n暂不计入\n已通过\n已驳回", "default": "待审核", "in_list_view": 1},
   {"fieldname": "proposed_value_json", "fieldtype": "Long Text", "label": "建议值 JSON"},
   {"fieldname": "confirmed_value_json", "fieldtype": "Long Text", "label": "确认值 JSON"},
   {"fieldname": "reviewer", "fieldtype": "Link", "label": "审核人", "options": "User"},

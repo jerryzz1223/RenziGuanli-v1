@@ -4,6 +4,12 @@
 	const ENTRY_PATHS = new Set(["", "/desktop", "/desk/desktop", "/app/desktop"]);
 	const BRAND = "/assets/hrms/images/yongxin-brand-mark-red.png";
 
+	function muteDeskSounds() {
+		if (window.frappe?.boot?.user) window.frappe.boot.user.mute_sounds = 1;
+	}
+
+	muteDeskSounds();
+
 	function enhanceEntry() {
 		const isEntry = ENTRY_PATHS.has(window.location.pathname.replace(/\/+$/, ""));
 		const wrapper = isEntry && document.querySelector(".desktop-wrapper");
@@ -53,6 +59,7 @@
 	}
 
 	function start() {
+		muteDeskSounds();
 		enhanceEntry();
 		// Desktop and its icons render asynchronously and can be rebuilt on return.
 		let pending = false;

@@ -23,6 +23,8 @@ REVIEW_PENDING = "待审核"
 REVIEW_APPROVED = "已通过"
 REVIEW_REJECTED = "已驳回"
 REVIEW_STATUSES = (REVIEW_NOT_REQUIRED, REVIEW_PENDING, REVIEW_APPROVED, REVIEW_REJECTED)
+# Re-evaluate persisted batches through the exception queue as well as results.
+APPLE_TREE_POLICY_VERSION = 4
 
 ANOMALY_MESSAGES = {
 	"AMOUNT_MISSING": "项目对应的苹果数量为空。",
@@ -116,7 +118,6 @@ _EMPLOYEE_ALIASES = {
 
 _REVIEW_VALUE_FIELDS = {"工号", "姓名", "部门", "苹果类型", "有效苹果数"}
 _MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
-_PROJECT_AMOUNT_RE = re.compile(r"(?<!\d)(\d+(?:\.\d+)?)\s*颗")
 _DINGTALK_DEPARTMENT_IDENTIFIER_RE = re.compile(r"\s*[-－—–]\s*\d+\s*$")
 
 
@@ -357,18 +358,18 @@ def _normalize_row(
 			amount = None
 		inactive_text = _text(inactive_value)
 		inactive_number = _number(inactive_value)
-		inactive_conflict = (
+		# The source workbook is authoritative for Apple-tree quantities.  The
+		# only project-text check requested by HR is the one-way data-entry error
+		# where a green-apple rule has its quantity entered in the red column.
+		# DingTalk's known placeholder values are not quantities.
+		green_amount_entered_in_red_column = apple_type == "绿苹果" and (
 			(inactive_text != "" and (inactive_number is None or inactive_number != 0))
 			if is_monthly_summary
 			else inactive_text not in {_text(value) for value in rules.placeholder_values}
 		)
-		if inactive_conflict:
+		if green_amount_entered_in_red_column:
 			_add_code(codes, "INACTIVE_APPLE_VALUE_CONFLICT")
-	amount_validation = {} if is_monthly_summary else _validate_project_amount(
-		project, _text(_first(raw, _SOURCE_ALIASES["remark"])), amount
-	)
-	if amount_validation.get("exception_code"):
-		_add_code(codes, amount_validation["exception_code"])
+	amount_validation = {}
 
 	approval_result = _text(_first(raw, _SOURCE_ALIASES["approval_result"]))
 	approval_status = _text(_first(raw, _SOURCE_ALIASES["approval_status"]))
@@ -651,8 +652,9 @@ def _within_employment(employee, event_date):
 def _validate_employee_context(employee, employee_name, department, event_date, codes):
 	if employee_name and _name_key(employee.name) != _name_key(employee_name):
 		_add_code(codes, "EMPLOYEE_NAME_MISMATCH")
-	if department and employee.department and department_match_key(employee.department) != department_match_key(department):
-		_add_code(codes, "EMPLOYEE_DEPARTMENT_MISMATCH")
+	# Source departments can differ from today's roster after a transfer.  Keep
+	# using them to disambiguate homonyms, but do not make the matched award a
+	# review exception solely because the department text differs.
 	# Current status alone cannot invalidate a historical July record.  A person
 	# who left in August was still eligible in July.  Only flag an event outside
 	# the actual employment interval (or a former employee without dated proof).
@@ -755,56 +757,6 @@ def _exception_message(codes):
 def _apple_type(project):
 	has_green, has_red = "绿苹果" in project, "红苹果" in project
 	return "" if has_green == has_red else ("绿苹果" if has_green else "红苹果")
-
-
-def _project_amounts(project):
-	return {Decimal(match) for match in _PROJECT_AMOUNT_RE.findall(project)}
-
-
-def _validate_project_amount(project, remark, amount):
-	"""Check explicit totals, without inventing proration or rounding rules."""
-	units = _project_amounts(project)
-	if len(units) > 1:
-		return {"exception_code": "PROJECT_AMOUNT_AMBIGUOUS"}
-	if amount is None or not units:
-		return {}
-	unit = next(iter(units))
-	quantity = None
-	divisor = Decimal(1)
-	basis = "fixed"
-	requires_confirmation = False
-	# Only these explicit remark forms provide enough evidence to calculate a
-	# total. Multi-day schedules, clock end times and mixed tasks stay reviewable.
-	if re.search(r"(?:每天|每日)[^。；]*?\d+(?:\.\d+)?\s*颗", project):
-		basis = "days"
-		match = re.fullmatch(r"带(?:教|新员工)[^0-9天，,；;。\n]*?(\d+(?:\.\d+)?)天[。！!]?", remark)
-		if match:
-			quantity = Decimal(match[1])
-			cap = re.search(r"不超过(\d+)天", project)
-			if cap and quantity > Decimal(cap[1]):
-				quantity = None
-				requires_confirmation = True
-	else:
-		rate = re.search(r"每\s*(\d+(?:\.\d+)?)\s*(?:小时|[hH])[^。；]*?\d+(?:\.\d+)?\s*(?:颗|苹果)", project)
-		if not rate:
-			rate = re.search(r"(\d+(?:\.\d+)?)\s*[hH]\s*\d+(?:\.\d+)?\s*颗累加", project)
-		if rate:
-			basis, divisor = "hours", Decimal(rate[1])
-			match = re.fullmatch(r"延班(?:了)?([0-9]+(?:\.[0-9]+)?|[一二两三四五六七八九十])(?:个)?小时[^0-9一二两三四五六七八九十\n]*", remark)
-			if match:
-				chinese = dict(zip("一二两三四五六七八九十", [1, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10]))
-				quantity = Decimal(chinese[match[1]]) if match[1] in chinese else Decimal(match[1])
-		elif re.search(r"\d+(?:\.\d+)?\s*(?:小时|[hH])", project):
-			basis = "conditional_duration"
-	result = {"basis": basis, "unit_amount": _display_number(unit), "source_amount": _display_number(amount)}
-	if quantity is not None and divisor > 0:
-		expected = unit * quantity / divisor
-		result.update({"quantity": _display_number(quantity), "unit_quantity": _display_number(divisor), "expected_amount": _display_number(expected)})
-		if amount != expected:
-			result["exception_code"] = "AMOUNT_TEXT_CONFLICT"
-	elif requires_confirmation or amount != unit:
-		result["exception_code"] = "AMOUNT_CALCULATION_REQUIRED" if basis != "fixed" else "AMOUNT_TEXT_CONFLICT"
-	return result
 
 
 def _number(value):

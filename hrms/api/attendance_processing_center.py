@@ -26,7 +26,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, getdate, now_datetime
 
-from hrms.api.attendance_processors.apple_tree import AppleTreeRules, preflight_apple_tree_rows, process_apple_tree_rows
+from hrms.api.attendance_processors.apple_tree import APPLE_TREE_POLICY_VERSION, AppleTreeRules, preflight_apple_tree_rows, process_apple_tree_rows
 from hrms.api.attendance_processors.attendance_draft import (
 	ATTENDANCE_POLICY_VERSION,
 	SCHEDULE_OVERTIME_RULES,
@@ -1340,20 +1340,22 @@ def _monthly_amount_header_groups(sheet, config: dict[str, Any]):
 			"amount_indexes": amount_indexes,
 			"is_numbered_list": "序号" in headers,
 			"is_primary_amount_header": primary_amount_header in headers,
+			"is_reference_table": "入职日期" in headers or "离职日期" in headers,
 		})
 	# A numbered list is the main source of truth.  If a customer provides a
 	# simple one-table template without serial numbers, preserve its first table
 	# rather than rejecting a valid import.
 	# Prefer the numbered list that uses this source's canonical amount heading.
-	# An appended reference table may also be numbered, but its alternate amount
-	# heading is only a boundary marker and must not become payroll input.
+	# An appended hire/leaver reference table may also be numbered and may reuse
+	# the main amount heading.  Keep it as a boundary, never as payroll input.
+	main_candidates = [match for match in matches if not match["is_reference_table"]]
 	primary_numbered_matches = [
-		match for match in matches
+		match for match in main_candidates
 		if match["is_numbered_list"] and match["is_primary_amount_header"]
 	]
-	numbered_matches = [match for match in matches if match["is_numbered_list"]]
-	primary_matches = [match for match in matches if match["is_primary_amount_header"]]
-	return matches, (primary_numbered_matches or numbered_matches or primary_matches or matches[:1])
+	numbered_matches = [match for match in main_candidates if match["is_numbered_list"]]
+	primary_matches = [match for match in main_candidates if match["is_primary_amount_header"]]
+	return matches, (primary_numbered_matches or numbered_matches or primary_matches or main_candidates[:1])
 
 
 def _monthly_amount_rows(sheet, batch, config: dict[str, Any]):
@@ -1458,12 +1460,18 @@ def _monthly_support_precheck(batch) -> dict[str, Any]:
 	matches = []
 	monthly_sheets = _monthly_support_sheets(workbook, batch.attendance_month)
 	for sheet in monthly_sheets:
-		header_row, positions = _support_header_matches(sheet, config["required_headers"])
-		if not header_row:
-			continue
 		if config["mode"] == "monthly_amount":
+			# A dated hire/leaver reference section can repeat the canonical
+			# amount heading.  It is a boundary, not a valid standalone source.
+			_all_headers, main_headers = _monthly_amount_header_groups(sheet, config)
+			if not main_headers or not main_headers[0]["is_primary_amount_header"]:
+				continue
+			header_row = main_headers[0]["row_number"]
 			record_count = len(_monthly_amount_rows(sheet, batch, config))
 		else:
+			header_row, _positions = _support_header_matches(sheet, config["required_headers"])
+			if not header_row:
+				continue
 			record_count = len(_special_hours_rows(sheet, batch))
 		matches.append({"sheet": sheet.title, "header_row": header_row, "record_count": record_count})
 	if not matches:
@@ -2048,16 +2056,16 @@ def _merge_processed_rows(batch, result: dict[str, Any]) -> dict[str, Any]:
 	"""Merge a new import into the immediately preceding source version.
 
 	Each upload remains its own source batch for audit.  Its *effective* rows,
-	however, depend on the source contract. Monthly-support workbooks are complete
-	monthly snapshots, so their newest upload replaces the prior effective view.
-	Other sources remain an upsert view: a matching business key is replaced by
-	the new row, while distinct or unkeyed rows are retained without manufacturing
-	a duplicate match. Existing manual-review history survives for rows not
-	replaced by an upsert submission.
+	however, depend on the source contract. Attendance-draft and monthly-support
+	workbooks are complete monthly snapshots, so their newest upload replaces the
+	prior effective view. Approval-centred sources remain an upsert view: a
+	matching business key is replaced by the new row, while distinct or unkeyed
+	rows are retained without manufacturing a duplicate match. Existing
+	manual-review history survives for rows not replaced by an upsert submission.
 	"""
 	meta = _processing_meta(batch)
 	parent_name = str(meta.get("merge_parent_batch") or "").strip()
-	if batch.source_type in MONTHLY_SUPPORT_SOURCE_TYPES:
+	if batch.source_type == "attendance_draft" or batch.source_type in MONTHLY_SUPPORT_SOURCE_TYPES:
 		incoming_rows = list(result.get("processed_rows") or [])
 		previous_rows = 0
 		valid_parent_name = ""
@@ -2160,7 +2168,107 @@ def _persist_processed_rows(batch, result):
 	return result
 
 
+def _apple_tree_record_identity(row: dict[str, Any]) -> tuple[Any, ...]:
+	"""Prefer immutable source coordinates; approval ids are the legacy fallback."""
+	if row.get("source_file") and row.get("source_sheet") and row.get("source_row"):
+		return ("row", row.get("source_file"), row.get("source_sheet"), str(row.get("source_row")))
+	if row.get("source_id"):
+		return ("source", str(row.get("source_id")))
+	if row.get("approval_no"):
+		return ("approval", str(row.get("approval_no")))
+	return ()
+
+
+def _ensure_current_apple_tree_policy(batch) -> int:
+	"""Apply the current Apple-tree policy once, without a manual recheck button.
+
+	Only untouched automatic records are refreshed. A row with a confirmed value
+	or review history belongs to the HR audit trail and is never overwritten by a
+	page load.
+	"""
+	if not batch or batch.source_type != "apple_tree":
+		return 0
+	meta = _processing_meta(batch)
+	if cint(meta.get("apple_tree_policy_version")) >= APPLE_TREE_POLICY_VERSION:
+		return 0
+	fields = [
+		"name", "original_value_json", "processed_value_json", "proposed_value_json", "confirmed_value_json",
+		"exception_codes", "exception_message", "review_status", "review_history_json", "eligible_for_downstream",
+		"source_file", "source_sheet", "source_row", "source_id", "approval_no",
+	]
+	stored = frappe.get_all(
+		PROCESSING_RECORD_DOCTYPE,
+		filters={"import_batch": batch.name},
+		fields=fields,
+		order_by="source_row asc",
+		limit_page_length=0,
+	)
+	if not stored:
+		_save_batch_notes(batch, {"apple_tree_policy_version": APPLE_TREE_POLICY_VERSION})
+		return 0
+	raw_rows = []
+	for record in stored:
+		raw = _loads(record.get("original_value_json"), {})
+		if not isinstance(raw, dict) or not raw:
+			continue
+		raw = dict(raw)
+		raw.setdefault("source_file", record.get("source_file") or batch.source_file)
+		raw.setdefault("source_sheet", record.get("source_sheet") or "")
+		raw.setdefault("source_row", record.get("source_row") or 0)
+		raw_rows.append(raw)
+	if not raw_rows:
+		# Keep retrying after a future source repair instead of falsely declaring
+		# the legacy records current.
+		return 0
+	refreshed_rows = process_apple_tree_rows(
+		raw_rows,
+		rules=AppleTreeRules(target_month=batch.attendance_month),
+		employees=_employee_directory(batch.company) or None,
+		source_file=batch.source_file,
+		start_row=2,
+	)
+	refreshed_by_identity = {
+		identity: row for row in refreshed_rows
+		if (identity := _apple_tree_record_identity(row))
+	}
+	changed = 0
+	for record in stored:
+		# Manual decisions and edits are immutable audit facts.
+		if _loads(record.get("confirmed_value_json"), None) is not None or _loads(record.get("review_history_json"), []):
+			continue
+		identity = _apple_tree_record_identity(record)
+		refreshed = refreshed_by_identity.get(identity)
+		if not refreshed:
+			continue
+		payload = _record_payload(batch, refreshed)
+		updates = {
+			"processed_value_json": payload["processed_value_json"],
+			"proposed_value_json": payload["proposed_value_json"],
+			"exception_codes": payload["exception_codes"],
+			"exception_message": payload["exception_message"],
+			"review_status": payload["review_status"],
+			"eligible_for_downstream": payload["eligible_for_downstream"],
+		}
+		if all(record.get(field) == value for field, value in updates.items()):
+			continue
+		doc = frappe.get_doc(PROCESSING_RECORD_DOCTYPE, record["name"])
+		for field, value in updates.items():
+			setattr(doc, field, value)
+		doc.save(ignore_permissions=True)
+		changed += 1
+	_save_batch_notes(batch, {
+		"apple_tree_policy_version": APPLE_TREE_POLICY_VERSION,
+		"apple_tree_policy_refreshed_on": now_datetime().isoformat(),
+		"apple_tree_policy_refreshed_rows": changed,
+	})
+	if changed:
+		_refresh_batch_review_status(batch)
+		_invalidate_monthly_final_after_source_change(batch, "apple_tree_policy_update")
+	return changed
+
+
 def _result_rows(batch, page_length: int = 5000, employee_code: str = "", page_start: int = 0, record_filters: dict[str, Any] | None = None):
+	_ensure_current_apple_tree_policy(batch)
 	filters = {"import_batch": batch.name}
 	if employee_code:
 		filters["employee_code"] = employee_code
@@ -2257,9 +2365,7 @@ def _serialize_record(record, current_shift_rule_version: str | None = None, *, 
 		# New batches persist exception_lines.  Rebuild them from the retained
 		# daily facts for old batches.  If the historic projection itself lacks a
 		# marker (for example, 旷工), replay its retained original rows read-only.
-		result["daily_exception_lines"] = values.get("exception_lines") or exception_lines_from_attendance_details(
-			values.get("attendance_details") or [], result["exception_codes"]
-		)
+		result["daily_exception_lines"] = _active_attendance_exception_lines(values, result["exception_codes"])
 		# A queue index pass must never replay an employee's retained source rows.
 		# Historic recovery is reserved for the small visible page or the explicit
 		# record-detail endpoint.
@@ -2276,7 +2382,7 @@ def _serialize_record(record, current_shift_rule_version: str | None = None, *, 
 		# dates in a read-only history projection so the operator can still see
 		# what was changed, while pending dates remain independently actionable.
 		pending_lines = [
-			{**line, "daily_record_id": _daily_line_key(line), "review_status": "待审核", "resolved": False}
+			{**line, "daily_record_id": _daily_line_key(line), "review_status": "暂不计入" if result.get("review_status") == "暂不计入" else "待审核", "resolved": result.get("review_status") == "暂不计入"}
 			for line in result["daily_exception_lines"]
 		]
 		resolved_lines = [
@@ -2284,7 +2390,7 @@ def _serialize_record(record, current_shift_rule_version: str | None = None, *, 
 			for line in _daily_resolved_exception_lines(values)
 		]
 		pending_keys = {_daily_line_key(line) for line in pending_lines}
-		result["daily_pending_exception_lines"] = pending_lines
+		result["daily_pending_exception_lines"] = [] if result.get("review_status") == "暂不计入" else pending_lines
 		result["daily_exception_lines"] = pending_lines + [
 			line for line in resolved_lines if _daily_line_key(line) not in pending_keys
 		]
@@ -2963,15 +3069,46 @@ def _export_processed_result(batch, include_logo: bool = True) -> dict[str, str]
 	return {"file_url": file.file_url, "file_name": file.file_name}
 
 
+def _active_attendance_exception_lines(values: dict[str, Any], exception_codes: list[str]) -> list[dict[str, Any]]:
+	return values.get("exception_lines") or exception_lines_from_attendance_details(
+		values.get("attendance_details") or [], exception_codes,
+	)
+
+
+def _pending_attendance_exception_line_count(batch) -> int:
+	"""Use the exception queue's date-level count for an attendance-draft slot."""
+	rows = frappe.get_all(
+		PROCESSING_RECORD_DOCTYPE,
+		filters={"import_batch": batch.name},
+		fields=["processed_value_json", "proposed_value_json", "confirmed_value_json", "exception_codes"],
+		order_by="modified desc",
+		limit_page_length=5000,
+	)
+	count = 0
+	for row in rows:
+		values = _effective_result_values({
+			"processed_value": _loads(row.get("processed_value_json"), {}),
+			"proposed_value": _loads(row.get("proposed_value_json"), {}),
+			"confirmed_value": _loads(row.get("confirmed_value_json"), None),
+		})
+		lines = _active_attendance_exception_lines(values, _loads(row.get("exception_codes"), []))
+		count += len(lines)
+	return count
+
+
 def _slot_payload(batch):
 	if not batch:
 		return None
 	meta = _processing_meta(batch)
 	metrics = meta.get("metrics", {})
 	processed_rows = frappe.db.count(PROCESSING_RECORD_DOCTYPE, {"import_batch": batch.name})
-	pending_exception_count = frappe.db.count(
-		PROCESSING_RECORD_DOCTYPE,
-		{"import_batch": batch.name, "review_status": "待审核"},
+	pending_exception_count = (
+		_pending_attendance_exception_line_count(batch)
+		if batch.source_type == "attendance_draft"
+		else frappe.db.count(
+			PROCESSING_RECORD_DOCTYPE,
+			{"import_batch": batch.name, "review_status": "待审核"},
+		)
 	)
 	# A confirmed source may deliberately retain unresolved exception records for
 	# audit.  They are excluded from downstream calculation at confirmation time,
@@ -3186,7 +3323,7 @@ def register_source_file(company: str, attendance_month: str, source_type: str, 
 		"source_version": now_datetime().isoformat(),
 		"registered_by": frappe.session.user,
 		"merge_parent_batch": parent.name if parent else "",
-		"merge_mode": "business_unique_key",
+		"merge_mode": "latest_upload_replacement" if source_type == "attendance_draft" else "business_unique_key",
 	}
 	# Approval is anchored to the attendance-draft batch.  Carry its audit chain
 	# into a replacement draft so the subsequent source-change invalidation is
@@ -3509,6 +3646,8 @@ def process_source_slot(company: str, attendance_month: str, source_type: str):
 	result["status"] = batch.status
 	batch.save(ignore_permissions=True)
 	_invalidate_monthly_final_after_source_change(batch, "source_import_merge")
+	if source_type == "apple_tree":
+		_save_batch_notes(batch, {"apple_tree_policy_version": APPLE_TREE_POLICY_VERSION})
 	processed_result = _export_processed_result(batch)
 	_save_batch_notes(batch, {
 		"precheck": result.get("structure_precheck"),
@@ -3536,6 +3675,7 @@ def list_processing_results(
 	batch = _latest_batch(company, attendance_month, source_type)
 	if not batch:
 		return {"processed_rows": [], "total_count": 0, "pending_exception_count": 0, "page_start": 0, "page_length": 25, "can_confirm": False}
+	_ensure_current_apple_tree_policy(batch)
 	meta = _processing_meta(batch)
 	page_length = min(max(cint(page_length), 1), 100)
 	page_start = max(cint(page_start), 0)
@@ -3548,12 +3688,15 @@ def list_processing_results(
 		PROCESSING_RECORD_DOCTYPE,
 		{"import_batch": batch.name, "review_status": "待审核"},
 	)
-	rows = _result_rows(
-		batch,
-		page_length,
-		page_start=page_start,
-		record_filters=record_filters,
-	)
+	if source_type == "housing_allowance" and not cint(exception_only):
+		rows = _housing_allowance_result_page(batch, page_length, page_start)
+	else:
+		rows = _result_rows(
+			batch,
+			page_length,
+			page_start=page_start,
+			record_filters=record_filters,
+		)
 	result_summary = _missed_punch_summary(rows) if source_type == "missing_card" else _apple_tree_summary(rows) if source_type == "apple_tree" else {}
 	table_rows = [_processing_result_table_payload(row) for row in rows]
 	return {
@@ -3569,6 +3712,27 @@ def list_processing_results(
 		"result_summary": result_summary,
 		"can_confirm": bool(total_count) or batch.status in {"待处理异常", "待确认"},
 	}
+
+
+def _housing_allowance_result_page(batch, page_length: int, page_start: int) -> list[dict[str, Any]]:
+	"""Place import errors before valid rows across the entire paginated result."""
+	index = frappe.get_all(
+		PROCESSING_RECORD_DOCTYPE,
+		filters={"import_batch": batch.name},
+		fields=["name", "exception_codes"],
+		order_by="employee_code asc, source_row asc",
+		limit_page_length=0,
+	)
+	errors, valid = [], []
+	for row in index:
+		(errors if _loads(row.get("exception_codes"), []) else valid).append(row)
+	ordered = errors + valid
+	page_ids = [row["name"] for row in ordered[page_start:page_start + page_length]]
+	if not page_ids:
+		return []
+	page_rows = _result_rows(batch, len(page_ids), record_filters={"name": ["in", page_ids]})
+	by_id = {row["record_id"]: row for row in page_rows}
+	return [by_id[name] for name in page_ids if name in by_id]
 
 
 def _attendance_draft_data_quality_value(row: dict[str, Any], *fieldnames: str) -> str:
@@ -3731,14 +3895,14 @@ def get_processing_record(company: str, attendance_month: str, source_type: str,
 def update_processing_record(company: str, attendance_month: str, source_type: str, record_id: str, field_name: str, original_value: str = "", new_value: str = "", review_status: str = "待审核", reason: str = ""):
 	_require_processing_manager()
 	company, attendance_month, source_type = _require_company(company), _require_month(attendance_month), _require_processing_source_type(source_type)
-	if review_status not in {"待审核", "已通过", "已驳回"}:
+	if review_status not in ({"待审核", "已通过", "已驳回", "暂不计入"} if source_type == "attendance_draft" else {"待审核", "已通过", "已驳回"}):
 		frappe.throw(_("处理结果无效。"))
 	if not (reason or "").strip():
 		frappe.throw(_("人工调整必须填写原因。"))
 	doc = frappe.get_doc(PROCESSING_RECORD_DOCTYPE, record_id)
 	if doc.company != company or doc.attendance_month != attendance_month or doc.source_type != source_type:
 		frappe.throw(_("无权修改该加工记录。"))
-	if source_type == "attendance_draft" and "ATTENDANCE_HOURS_MISMATCH" in _loads(doc.exception_codes, []):
+	if source_type == "attendance_draft" and review_status == "已通过" and "ATTENDANCE_HOURS_MISMATCH" in _loads(doc.exception_codes, []):
 		frappe.throw(_("工时合计与标准工时不符，请按异常日期使用“修改本日”更正后重新校验。"))
 	if source_type == "attendance_draft" and review_status == "已通过" and {"RESTDAY_CLOCKED_WITHOUT_APPROVAL", "HOLIDAY_CLOCKED_WITHOUT_APPROVAL"} & set(_loads(doc.exception_codes, [])):
 		frappe.throw(_("周末或节假日打卡尚无规则要求的有效加班单，请按日期使用“修改本日”补充审批，不能直接确认通过。"))
@@ -3747,7 +3911,7 @@ def update_processing_record(company: str, attendance_month: str, source_type: s
 	decision_only = field_name == "__review_decision__"
 	if decision_only and source_type == "attendance_draft":
 		daily_lines = _serialize_record(doc.as_dict()).get("daily_exception_lines") or []
-		if any("RESTDAY_CLOCKED_WITHOUT_OVERTIME" in (line.get("exception_codes") or []) for line in daily_lines):
+		if review_status == "已通过" and any("RESTDAY_CLOCKED_WITHOUT_OVERTIME" in (line.get("exception_codes") or []) for line in daily_lines):
 			frappe.throw(_("休息日打卡异常必须按具体日期分别处理；请在对应日期选择“填写休息日加班时长”或“确认本日不计加班”。"))
 	if decision_only and review_status == doc.review_status:
 		frappe.throw(_("该记录已经完成相同处理；如需更正，请选择具体字段后提交新的调整。"))
@@ -4193,8 +4357,8 @@ def _attendance_policy_replacement(
 	decisions = {key: {code: value for code, value in codes.items() if code != "ATTENDANCE_HOURS_MISMATCH"} for key, codes in decisions.items()}
 	replacement = _apply_daily_exception_decisions(replacement, decisions)
 	values = {**current, **replacement["proposed_value"], "_daily_exception_decisions": decisions}
-	status = record.get("review_status") if record.get("review_status") in {"已通过", "已驳回"} else "无需审核"
-	if status != "已驳回" and set(replacement["exception_codes"]) - NON_BLOCKING_ATTENDANCE_EVENT_CODES:
+	status = record.get("review_status") if record.get("review_status") in {"已通过", "已驳回", "暂不计入"} else "无需审核"
+	if status not in {"已驳回", "暂不计入"} and set(replacement["exception_codes"]) - NON_BLOCKING_ATTENDANCE_EVENT_CODES:
 		status = "待审核"
 	replacement.update(
 		proposed_value=values,
@@ -4606,7 +4770,7 @@ def bulk_update_processing_records(
 	"""
 	_require_processing_manager()
 	company, attendance_month, source_type = _require_company(company), _require_month(attendance_month), _require_processing_source_type(source_type)
-	if review_status not in {"待审核", "已通过", "已驳回"}:
+	if review_status not in ({"待审核", "已通过", "已驳回", "暂不计入"} if source_type == "attendance_draft" else {"待审核", "已通过", "已驳回"}):
 		frappe.throw(_("处理结果无效。"))
 	if not (reason or "").strip():
 		frappe.throw(_("批量处理必须填写原因。"))
@@ -4621,23 +4785,46 @@ def bulk_update_processing_records(
 	batch = _latest_batch(company, attendance_month, source_type)
 	if not batch:
 		frappe.throw(_("尚未上传该来源文件。"))
+	shift_rule_version = _attendance_shift_rule_bundle(company)["version"] if source_type == "attendance_draft" else None
 	if select_all_pending:
 		# A source-filtered all-selection is resolved on the server at submit time,
 		# so every pending record is included even when the browser only displays
-		# one page.  The source boundary remains mandatory: different source types
-		# can carry different review semantics.
-		pending_filters = {"import_batch": batch.name, "exception_codes": ["!=", "[]"], "review_status": "待审核"}
-		if (employee_code or "").strip():
-			pending_filters["employee_code"] = ["like", f"%{employee_code.strip()}%"]
-		if (employee_name or "").strip():
-			pending_filters["employee_name"] = ["like", f"%{employee_name.strip()}%"]
-		record_ids = [row.name for row in frappe.get_all(
-			PROCESSING_RECORD_DOCTYPE,
-			filters=pending_filters,
-			fields=["name"],
-			order_by="modified desc",
-			limit_page_length=501,
-		)]
+		# one page. Draft pending counts come from dated lines, not the parent
+		# review_status or exception_codes (both may be clear after a partial edit).
+		if source_type == "attendance_draft":
+			pending_filters = {"import_batch": batch.name}
+			index_rows = frappe.get_all(
+				PROCESSING_RECORD_DOCTYPE,
+				filters=pending_filters,
+				fields=["name", "company", "source_type", "employee_code", "employee_name", "department", "processed_value_json", "original_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "review_history_json"],
+				order_by="modified desc",
+				limit_page_length=5000,
+			)
+			code_filter = re.sub(r"\s+", "", str(employee_code or "").casefold())
+			name_filter = re.sub(r"\s+", "", str(employee_name or "").casefold())
+			record_ids = []
+			for index_row in index_rows:
+				row = _serialize_record(index_row, shift_rule_version, hydrate_daily_details=False)
+				if not row.get("daily_pending_exception_lines"):
+					continue
+				if code_filter and code_filter not in re.sub(r"\s+", "", str(row.get("employee_code") or "").casefold()):
+					continue
+				if name_filter and name_filter not in re.sub(r"\s+", "", str(row.get("employee_name") or "").casefold()):
+					continue
+				record_ids.append(row["record_id"])
+		else:
+			pending_filters = {"import_batch": batch.name, "exception_codes": ["!=", "[]"], "review_status": "待审核"}
+			if (employee_code or "").strip():
+				pending_filters["employee_code"] = ["like", f"%{employee_code.strip()}%"]
+			if (employee_name or "").strip():
+				pending_filters["employee_name"] = ["like", f"%{employee_name.strip()}%"]
+			record_ids = [row.name for row in frappe.get_all(
+				PROCESSING_RECORD_DOCTYPE,
+				filters=pending_filters,
+				fields=["name"],
+				order_by="modified desc",
+				limit_page_length=501,
+			)]
 		if not record_ids:
 			frappe.throw(_("当前筛选来源没有待处理异常，请刷新页面后重试。"))
 	elif len(record_ids) > 500:
@@ -4647,22 +4834,30 @@ def bulk_update_processing_records(
 	rows = frappe.get_all(
 		PROCESSING_RECORD_DOCTYPE,
 		filters={"name": ["in", record_ids]},
-		fields=["name", "import_batch", "exception_codes", "review_status"],
+		fields=["name", "import_batch", "company", "source_type", "employee_code", "employee_name", "department", "processed_value_json", "original_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "review_history_json"] if source_type == "attendance_draft" else ["name", "import_batch", "exception_codes", "review_status"],
 		limit_page_length=len(record_ids),
 	)
 	if len(rows) != len(record_ids) or any(row.import_batch != batch.name for row in rows):
 		frappe.throw(_("所选记录不属于当前来源的最新加工版本，请刷新后重试。"))
-	if any(not _loads(row.exception_codes, []) for row in rows):
+	draft_pending_lines = {
+		row.name: _serialize_record(row, shift_rule_version, hydrate_daily_details=False).get("daily_pending_exception_lines") or []
+		for row in rows
+	} if source_type == "attendance_draft" else {}
+	if source_type == "attendance_draft":
+		has_nonexception = any(not draft_pending_lines[row.name] for row in rows)
+	else:
+		has_nonexception = any(not _loads(row.exception_codes, []) for row in rows)
+	if has_nonexception:
 		frappe.throw(_("批量处理仅适用于异常记录；正常记录无需审核。"))
 	if source_type == "attendance_draft" and review_status == "已通过" and any(
-		"ATTENDANCE_HOURS_MISMATCH" in _loads(row.exception_codes, []) for row in rows
+		any("ATTENDANCE_HOURS_MISMATCH" in (line.get("exception_codes") or []) for line in draft_pending_lines[row.name]) for row in rows
 	):
 		frappe.throw(_("所选记录包含工时合计与标准工时不符的日期，请先逐日更正，不能批量确认通过。"))
 	if source_type == "attendance_draft" and review_status == "已通过" and any(
-		{"RESTDAY_CLOCKED_WITHOUT_APPROVAL", "HOLIDAY_CLOCKED_WITHOUT_APPROVAL"} & set(_loads(row.exception_codes, [])) for row in rows
+		any({"RESTDAY_CLOCKED_WITHOUT_APPROVAL", "HOLIDAY_CLOCKED_WITHOUT_APPROVAL"} & set(line.get("exception_codes") or []) for line in draft_pending_lines[row.name]) for row in rows
 	):
 		frappe.throw(_("所选记录包含周末或节假日打卡缺加班单的日期，请先逐日补充审批，不能批量确认通过。"))
-	if any(row.review_status != "待审核" for row in rows):
+	if (source_type != "attendance_draft" or review_status != "暂不计入") and any(row.review_status != "待审核" for row in rows):
 		frappe.throw(_("所选记录已经处理。若需更正，请逐条使用“查看/更正记录”。"))
 
 	processed_at = now_datetime()
@@ -4703,20 +4898,26 @@ def bulk_update_processing_records(
 		"processed_result_refreshed_on": processed_at.isoformat(),
 		"processed_result_refresh_reason": "bulk_manual_review_update",
 	})
+	_invalidate_monthly_final_after_source_change(batch, "bulk_manual_review_update")
 	all_rows = frappe.get_all(
 		PROCESSING_RECORD_DOCTYPE,
 		filters={"import_batch": batch.name},
 		fields=["review_status", "eligible_for_downstream"],
 		limit_page_length=0,
 	)
+	# Match single-record review: only report success after the decisions,
+	# refreshed export, and invalidated monthly final are durable.
+	frappe.db.commit()
 	return {
 		"batch": batch.name,
 		"source_type": source_type,
 		"updated_rows": len(record_ids),
+		"updated_exception_lines": sum(len(lines) for lines in draft_pending_lines.values()) if source_type == "attendance_draft" else len(record_ids),
 		"review_status": review_status,
 		"batch_status": batch_status,
 		"included_rows": sum(1 for row in all_rows if cint(row.eligible_for_downstream)),
 		"rejected_rows": sum(1 for row in all_rows if row.review_status == "已驳回"),
+		"deferred_rows": sum(1 for row in all_rows if row.review_status == "暂不计入"),
 		"processed_result": processed_result,
 	}
 
@@ -4998,6 +5199,7 @@ def list_processing_exceptions(
 	sort_order: str = "asc",
 	focus_record_id: str = "",
 	snapshot_record_ids: str = "",
+	snapshot_token: str = "",
 ):
 	_require_processing_manager()
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
@@ -5006,8 +5208,15 @@ def list_processing_exceptions(
 	page_length = min(max(cint(page_length), 1), 100)
 	page_start = max(cint(page_start), 0)
 	batches = [_latest_batch(company, attendance_month, source) for source in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES]
+	# The exception queue does not read through _result_rows. Refresh the saved
+	# Apple-tree projection before taking its counts or a pagination snapshot.
+	policy_refreshed_rows = 0
+	for batch in batches:
+		if batch and getattr(batch, "source_type", "") == "apple_tree":
+			policy_refreshed_rows += _ensure_current_apple_tree_policy(batch)
 	all_batch_names = [batch.name for batch in batches if batch]
 	batch_names = [batch.name for batch in batches if batch and (not source_type or batch.source_type == source_type)]
+	current_snapshot_token = _json([(batch.name, str(getattr(batch, "modified", "") or "")) for batch in batches if batch])
 	# Attendance-draft records are one employee summary containing many dated
 	# lines. The parent review_status must not hide sibling dates after one date
 	# is saved, and a fixed date remains visible as read-only history.
@@ -5030,6 +5239,8 @@ def list_processing_exceptions(
 	# first request. Revalidate them against the active company's latest batches,
 	# then hydrate only those rows; counts and ordering stay in the browser.
 	snapshot_ids = _loads(snapshot_record_ids, [])
+	if snapshot_token != current_snapshot_token:
+		snapshot_ids = []
 	if isinstance(snapshot_ids, list) and snapshot_ids:
 		snapshot_ids = list(dict.fromkeys(str(value) for value in snapshot_ids if str(value or "").strip()))[:page_length]
 		stored_page = frappe.get_all(
@@ -5058,7 +5269,7 @@ def list_processing_exceptions(
 				row["exception_codes"] = [exception_code_filter]
 				row["exception_labels"] = [EXCEPTION_LABELS.get(exception_code_filter, exception_code_filter)]
 			page_rows.append(_exception_queue_payload(row))
-		return {"review_rows": page_rows, "snapshot_reused": True, "source_type": source_type, "page_start": page_start, "page_length": page_length}
+		return {"review_rows": page_rows, "snapshot_reused": True, "snapshot_token": current_snapshot_token, "apple_tree_policy_refreshed_rows": policy_refreshed_rows, "source_type": source_type, "page_start": page_start, "page_length": page_length}
 	# The exception history is stored inside the retained JSON projection, so a
 	# database filter on exception_codes would hide a fully resolved daily row.
 	# Load the latest source rows and apply the pending/display split below.
@@ -5144,7 +5355,7 @@ def list_processing_exceptions(
 		if row.get("import_batch") in batch_names and employee_matches(row)
 	)
 	if not batch_names:
-		return {"review_rows": [], "available_departments": [], "total_pending_count": total_pending_count, "filtered_pending_count": 0, "total_exception_count": total_exception_count, "filtered_exception_count": 0, "filtered_parent_count": 0, "source_type": source_type, "page_start": page_start, "page_length": page_length}
+		return {"review_rows": [], "available_departments": [], "total_pending_count": total_pending_count, "filtered_pending_count": 0, "total_exception_count": total_exception_count, "filtered_exception_count": 0, "filtered_parent_count": 0, "snapshot_token": current_snapshot_token, "apple_tree_policy_refreshed_rows": policy_refreshed_rows, "source_type": source_type, "page_start": page_start, "page_length": page_length}
 	rows = [row for row in all_rows if row.get("import_batch") in batch_names and display_filter(row) and employee_matches(row)]
 	filtered_parent_count = len(rows)
 	def apply_line_projection(row):
@@ -5195,7 +5406,7 @@ def list_processing_exceptions(
 		apply_line_projection(page_by_id.get(str(row.get("record_id") or ""), row))
 		for row in page_index_rows
 	]
-	return {"review_rows": page_rows, "snapshot_record_ids": [row.get("record_id") for row in rows if row.get("record_id")], "available_departments": available_departments, "total_pending_count": total_pending_count, "filtered_pending_count": filtered_pending_count, "total_exception_count": total_exception_count, "filtered_exception_count": filtered_exception_count, "filtered_parent_count": filtered_parent_count, "source_type": source_type, "page_start": page_start, "page_length": page_length}
+	return {"review_rows": page_rows, "snapshot_record_ids": [row.get("record_id") for row in rows if row.get("record_id")], "snapshot_token": current_snapshot_token, "apple_tree_policy_refreshed_rows": policy_refreshed_rows, "available_departments": available_departments, "total_pending_count": total_pending_count, "filtered_pending_count": filtered_pending_count, "filtered_exception_count": filtered_exception_count, "total_exception_count": total_exception_count, "filtered_parent_count": filtered_parent_count, "source_type": source_type, "page_start": page_start, "page_length": page_length}
 
 
 PROCESSING_EXCEPTION_EXPORT_COLUMNS = (
@@ -5331,6 +5542,9 @@ def export_processing_exceptions(
 	if source_type:
 		_require_processing_source_type(source_type)
 	batches = [_latest_batch(company, attendance_month, source) for source in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES]
+	for batch in batches:
+		if batch and batch.source_type == "apple_tree":
+			_ensure_current_apple_tree_policy(batch)
 	batch_names = [batch.name for batch in batches if batch and (not source_type or batch.source_type == source_type)]
 	queue_fields = ["name", "company", "import_batch", "attendance_month", "employee_code", "employee_name", "department", "source_type", "original_value_json", "processed_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "reviewer", "reviewed_on", "review_note", "review_history_json", "eligible_for_downstream", "source_file", "source_sheet", "source_row", "source_id", "approval_no"]
 	stored_records = frappe.get_all(

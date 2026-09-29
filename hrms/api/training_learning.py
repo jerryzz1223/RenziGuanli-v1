@@ -335,6 +335,41 @@ def find_training_employees(company: str, query: str = "", limit: int = 20):
 
 
 @frappe.whitelist()
+def get_training_course_defaults(company: str, training_program: str):
+	"""Read the selected course before a new, independently editable class session."""
+	if not frappe.has_permission("Training Program", "read"):
+		frappe.throw(_("无权查看培训课程。"), frappe.PermissionError)
+	company = _company(company)
+	program = frappe.get_doc("Training Program", _require(training_program, _("计划课程")))
+	if program.company != company or not frappe.has_permission("Training Program", "read", doc=program):
+		frappe.throw(_("计划课程不属于当前公司或无权查看。"), frappe.PermissionError)
+	return {
+		"course": _text(program.get("source_content")) or program.training_program,
+		"owner_department": program.owner_department,
+		"training_category": program.training_category,
+		"training_mode": program.training_mode,
+		"location": program.planned_location or program.get("source_location"),
+		"target_audience": program.target_audience or program.get("source_target"),
+		"trainer_name": program.trainer_name,
+		"planned_hours": program.planned_hours or program.get("source_course_hours"),
+	}
+
+
+def _training_instructor(company, data):
+	"""Resolve a roster selection by company code; free text remains valid for external trainers."""
+	code = _text(data.get("trainer_employee_code"))
+	if not code:
+		return {"trainer_name": _text(data.get("trainer_name")), "trainer_employee": None, "trainer_employee_code": None}
+	row = frappe.db.get_value(
+		"Employee", {"company": company, "custom_employee_code": code, "status": "Active"},
+		["name", "employee_name"], as_dict=True,
+	)
+	if not row or frappe.db.count("Employee", {"company": company, "custom_employee_code": code}) != 1:
+		frappe.throw(_("授课人工号 {0} 在当前公司无有效且唯一的在职员工记录。").format(code))
+	return {"trainer_name": row.employee_name, "trainer_employee": row.name, "trainer_employee_code": code}
+
+
+@frappe.whitelist()
 def create_training_course(payload: str):
 	require_hrms_capability("training_submit", legacy_roles=("HR Manager",))
 	data = _values(payload)
@@ -391,10 +426,14 @@ def create_training_activity(payload: str):
 	participants = data.get("participants") or []
 	resolved = _employee_rows(company, participants) if participants else []
 	duration = round((end_time - start_time).total_seconds() / 3600, 2)
+	requested_hours = _optional_number(data.get("course_hours"), _("本场课时"))
+	if requested_hours == 0:
+		frappe.throw(_("本场课时必须大于 0。"))
 	assessment_required = cint(data.get("assessment_required"))
 	passing_score = flt(data.get("passing_score"))
 	if assessment_required and not 0 < passing_score <= 100:
 		frappe.throw(_("需要考核的课程必须设置 1 到 100 之间的合格分数。"))
+	instructor = _training_instructor(company, data)
 	doc = frappe.get_doc(
 		{
 			"doctype": "Training Event",
@@ -407,13 +446,15 @@ def create_training_activity(payload: str):
 			"training_category": data.get("training_category") or program.training_category,
 			"training_mode": data.get("training_mode") or program.training_mode,
 			"course": course,
-			"course_hours": flt(data.get("course_hours")) or duration,
+			"course_hours": requested_hours if requested_hours is not None else duration,
 			"delivery_method": data.get("delivery_method"),
 			"target_audience": data.get("target_audience") or program.target_audience,
-			"location": _require(data.get("location") or program.planned_location, _("上课地点")),
+			"location": _require(data.get("location") or program.planned_location or program.get("source_location"), _("上课地点")),
 			"start_time": start_time,
 			"end_time": end_time,
-			"trainer_name": data.get("trainer_name") or program.trainer_name,
+			"trainer_name": instructor["trainer_name"] if data.get("trainer_employee_code") or "trainer_name" in data else program.trainer_name,
+			"trainer_employee": instructor["trainer_employee"],
+			"trainer_employee_code": instructor["trainer_employee_code"],
 			"introduction": data.get("introduction") or program.description,
 			"assessment_required": assessment_required,
 			"passing_score": passing_score or None,
@@ -473,6 +514,61 @@ def save_training_activity_roster(payload: str):
 	return {"training_event": event.name, "participant_count": len(participants)}
 
 
+def _completion_rows(event, participants):
+	if event.assessment_required:
+		if not 0 < flt(event.passing_score) <= 100:
+			frappe.throw(_("该培训活动需要考核，但尚未设置有效的合格分数。"))
+		missing_scores = [row["employee_code"] for row in participants if row.get("attendance", "Present") != "Absent" and row.get("score") in (None, "")]
+		if missing_scores:
+			frappe.throw(_("需要考核的课程必须填写成绩；未填写工号：{0}").format("、".join(missing_scores)))
+
+	event_rows = []
+	result_rows = []
+	for row in participants:
+		attendance = row.get("attendance") or "Present"
+		if attendance not in ("Present", "Absent"):
+			frappe.throw(_("工号 {0} 的出席状态无效。").format(row["employee_code"]))
+		hours = 0 if attendance == "Absent" else _optional_number(
+			row.get("hours"), _("{0} 的学时").format(row["employee_code"])
+		)
+		if hours is not None and hours < 0:
+			frappe.throw(_("工号 {0} 的课时不能小于 0。").format(row["employee_code"]))
+		score = row.get("score")
+		if score not in (None, "") and not 0 <= flt(score) <= 100:
+			frappe.throw(_("工号 {0} 的分数必须介于 0 到 100。").format(row["employee_code"]))
+		assessment = "Absent" if attendance == "Absent" else "Pending" if event.assessment_required else "Pass"
+		event_rows.append({
+			"employee": row["employee"], "employee_code": row["employee_code"],
+			"employee_name": row["employee_name"], "department": row["department"],
+			"attendance": attendance, "status": "Open" if attendance == "Absent" else "Completed",
+			"draft_hours": "" if hours is None else str(hours), "draft_score": "" if score in (None, "") else str(flt(score)),
+			"draft_grade": _text(row.get("grade")),
+			"draft_needs_retraining": cint(row.get("needs_retraining")),
+			"draft_comments": _text(row.get("comments")),
+		})
+		result_rows.append({
+			"employee": row["employee"], "employee_code": row["employee_code"],
+			"employee_name": row["employee_name"], "department": row["department"],
+			"hours": hours, "score": flt(score) if score not in (None, "") else None,
+			"grade": row.get("grade"), "assessment_result": assessment,
+			"needs_retraining": cint(row.get("needs_retraining")) or attendance == "Absent",
+			"comments": row.get("comments"),
+		})
+	return event_rows, result_rows
+
+
+def _reconcile_training_skill_maps(result):
+	passed_employees = {row.employee for row in result.employees if row.assessment_result == "Pass" and row.employee}
+	linked_maps = frappe.get_all("Employee Training", filters={"training": result.training_event}, pluck="parent")
+	for map_name in set(linked_maps):
+		skill_map = frappe.get_doc("Employee Skill Map", map_name)
+		if skill_map.employee in passed_employees:
+			continue
+		skill_map.set("trainings", [row for row in skill_map.trainings if row.training != result.training_event])
+		skill_map.save(ignore_permissions=True)
+	result.sync_passed_training_to_skill_map()
+
+
 @frappe.whitelist()
 def record_training_completion(payload: str):
 	"""Submit the event and result, then let Training Result update employee history."""
@@ -487,44 +583,7 @@ def record_training_completion(payload: str):
 		frappe.throw(_("该培训活动已有已提交结果，不能重复登记。"))
 
 	participants = _employee_rows(company, data.get("participants"))
-	default_hours = flt(event.course_hours) or round((get_datetime(event.end_time) - get_datetime(event.start_time)).total_seconds() / 3600, 2)
-	if event.assessment_required:
-		if not 0 < flt(event.passing_score) <= 100:
-			frappe.throw(_("该培训活动需要考核，但尚未设置有效的合格分数。"))
-		missing_scores = [row["employee_code"] for row in participants if row.get("attendance", "Present") != "Absent" and row.get("score") in (None, "")]
-		if missing_scores:
-			frappe.throw(_("需要考核的课程必须填写成绩；未填写工号：{0}").format("、".join(missing_scores)))
-
-	event_rows = []
-	result_rows = []
-	for row in participants:
-		attendance = row.get("attendance") or "Present"
-		if attendance not in ("Present", "Absent"):
-			frappe.throw(_("工号 {0} 的出席状态无效。").format(row["employee_code"]))
-		hours = 0 if attendance == "Absent" else flt(row.get("hours") if row.get("hours") not in (None, "") else default_hours)
-		if hours < 0:
-			frappe.throw(_("工号 {0} 的课时不能小于 0。").format(row["employee_code"]))
-		score = row.get("score")
-		if score not in (None, "") and not 0 <= flt(score) <= 100:
-			frappe.throw(_("工号 {0} 的分数必须介于 0 到 100。").format(row["employee_code"]))
-		assessment = "Absent" if attendance == "Absent" else "Pending" if event.assessment_required else "Pass"
-		event_rows.append({
-			"employee": row["employee"], "employee_code": row["employee_code"],
-			"employee_name": row["employee_name"], "department": row["department"],
-			"attendance": attendance, "status": "Open" if attendance == "Absent" else "Completed",
-			"draft_hours": str(hours), "draft_score": "" if score in (None, "") else str(flt(score)),
-			"draft_grade": _text(row.get("grade")),
-			"draft_needs_retraining": cint(row.get("needs_retraining")),
-			"draft_comments": _text(row.get("comments")),
-		})
-		result_rows.append({
-			"employee": row["employee"], "employee_code": row["employee_code"],
-			"employee_name": row["employee_name"], "department": row["department"],
-			"hours": hours, "score": flt(score) if score not in (None, "") else None,
-			"grade": row.get("grade"), "assessment_result": assessment,
-			"needs_retraining": cint(row.get("needs_retraining")) or attendance == "Absent",
-			"comments": row.get("comments"),
-		})
+	event_rows, result_rows = _completion_rows(event, participants)
 
 	if event.docstatus == 0:
 		event.set("employees", event_rows)
@@ -541,6 +600,50 @@ def record_training_completion(payload: str):
 		result = frappe.get_doc({"doctype": "Training Result", "training_event": event.name, "employees": result_rows})
 		result.insert()
 	result.submit()
+	return {
+		"training_event": event.name, "training_result": result.name,
+		"participant_count": len(result_rows),
+		"passed_count": sum(row.assessment_result == "Pass" for row in result.employees),
+		"retraining_count": sum(cint(row.needs_retraining) for row in result.employees),
+	}
+
+
+@frappe.whitelist()
+def update_training_completion(payload: str):
+	"""Update a submitted roster and keep employee skill-map links in sync."""
+	require_hrms_capability("training_submit", legacy_roles=("HR Manager",))
+	data = _values(payload)
+	event = frappe.get_doc("Training Event", _require(data.get("training_event"), _("培训活动")))
+	event.check_permission("write")
+	if event.docstatus != 1 or event.event_status == "Cancelled":
+		frappe.throw(_("只有已完成且未取消的培训活动可以修改。"))
+	result_name = frappe.db.get_value("Training Result", {"training_event": event.name, "docstatus": 1}, "name")
+	if not result_name:
+		frappe.throw(_("未找到已写入的培训结果，请先完成首次写入。"))
+	result = frappe.get_doc("Training Result", result_name)
+	result.check_permission("write")
+	participants = _employee_rows(_company(event.company), data.get("participants"))
+	event_rows, result_rows = _completion_rows(event, participants)
+	existing_event_rows = {row.employee_code: row for row in event.employees}
+	existing_result_rows = {row.employee_code: row for row in result.employees}
+	for row in event_rows:
+		previous = existing_event_rows.get(row["employee_code"])
+		if previous:
+			row["source_row"] = previous.source_row
+	for row in result_rows:
+		previous = existing_result_rows.get(row["employee_code"])
+		if not previous:
+			continue
+		for fieldname in ("source_row", "source_month", "source_employee_name", "source_department", "source_study_hours"):
+			row[fieldname] = previous.get(fieldname)
+
+	event.set("employees", event_rows)
+	event.flags.ignore_validate_update_after_submit = True
+	event.save()
+	result.set("employees", result_rows)
+	result.flags.ignore_validate_update_after_submit = True
+	result.save()
+	_reconcile_training_skill_maps(result)
 	return {
 		"training_event": event.name, "training_result": result.name,
 		"participant_count": len(result_rows),

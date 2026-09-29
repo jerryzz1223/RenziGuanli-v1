@@ -31,10 +31,14 @@ class TrainingLearningHome {
 		}
 		if (this.load_promise) return this.load_promise;
 		if (!this.data) this.wrapper.innerHTML = `<section class="hrms-training-home"><div class="hrms-training-home-state">${__("正在读取培训统计与近期安排…")}</div></section>`;
-		this.load_promise = frappe.call({
+		// The deployed Frappe version returns a jQuery Deferred from frappe.call.
+		// Normalize it before chaining so Promise.prototype.finally is available;
+		// otherwise the page-load hook throws after the route has changed and Desk
+		// leaves the previously visible page mounted under the new navigation shell.
+		this.load_promise = Promise.resolve(frappe.call({
 			method: "hrms.hr.doctype.training_program.training_program.get_training_learning_dashboard",
 			args: { company: this.company(), include_plan_management: 0 },
-		}).then(({ message }) => {
+		})).then(({ message }) => {
 			this.data = message || {};
 			this.last_loaded_at = Date.now();
 			this.render(this.data);
@@ -73,7 +77,7 @@ class TrainingLearningHome {
 					${this.metric(__("已实施计划"), metrics.implemented_plans, __("已匹配实际上课"), "training-program")}
 					${this.metric(__("待实施计划"), metrics.pending_plans, __("尚未匹配实际课程"), "training-program")}
 					${this.metric(__("临时新增"), metrics.temporary_events, __("计划外实际课程"), "training-event")}
-					${this.metric(__("已完成活动"), metrics.completed_events, __("已完成的培训场次"), "training-event")}
+					${this.metric(__("已完成活动"), metrics.completed_events, __("已完成的培训场次"), "completed-training-event")}
 				</div>
 				<div class="hrms-training-home-grid">
 					<section class="hrms-training-panel hrms-training-flow-panel">
@@ -101,16 +105,23 @@ class TrainingLearningHome {
 
 	bind() {
 		this.wrapper.querySelectorAll("[data-training-home-refresh]").forEach((button) => button.addEventListener("click", () => this.show(true)));
-		this.wrapper.querySelectorAll("[data-training-home-route]").forEach((button) => button.addEventListener("click", () => frappe.set_route("List", this.doctype(button.dataset.trainingHomeRoute))));
+		this.wrapper.querySelectorAll("[data-training-home-route]").forEach((button) => button.addEventListener("click", () => this.navigate(button.dataset.trainingHomeRoute)));
 	}
 
-	doctype(route) {
+	navigate(route) {
+		const destination = this.destination(route);
+		window.hrmsTrainingPlanNavigation = destination;
+		frappe.set_route("List", "Training Program");
+	}
+
+	destination(route) {
 		return {
-			"training-program": "Training Program",
-			"training-event": "Training Event",
-			"training-result": "Training Result",
-			"training-feedback": "Training Feedback",
-			"employee-skill-map": "Employee Skill Map",
-		}[route] || "Training Program";
+			"training-program": { view: "plans", status: "全部" },
+			"training-event": { view: "activities", status: "全部" },
+			"completed-training-event": { view: "activities", status: "已完成" },
+			"training-result": { view: "activities", status: "已完成" },
+			"training-feedback": { view: "activities", status: "已完成" },
+			"employee-skill-map": { view: "activities", status: "已完成" },
+		}[route] || { view: "plans", status: "全部" };
 	}
 }

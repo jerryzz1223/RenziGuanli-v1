@@ -1,20 +1,27 @@
 (() => {
-	const routes = {
-		plans: ["List", "Training Program"],
-		events: ["List", "Training Event"],
-		results: ["List", "Training Result"],
-		feedback: ["List", "Training Feedback"],
-		skills: ["List", "Employee Skill Map"],
-	};
-
 	const escape = (value) => frappe.utils.escape_html(String(value ?? ""));
 	const number = (value) => escape(value || 0);
-	const route = (key) => frappe.set_route(...routes[key]);
 	const importApi = "hrms.api.training_import";
 	const workflowApi = "hrms.api.training_learning";
 	const currentCompany = () => window.hrmsCompanyContext?.getCurrentCompany?.() || frappe.defaults?.get_user_default?.("Company") || "";
 	let importState = { company: "", active_type: "", plan_file_url: "", record_file_url: "", preview: null };
-	const planTableState = { status: "全部", department: "", person: "", personInput: "", trainingType: "", month: "", query: "", sort: "department", direction: "asc", page: 1, pageSize: 25 };
+	const planTableState = { view: "plans", status: "全部", department: "", person: "", personInput: "", trainingType: "", month: "", query: "", sort: "department", direction: "asc", page: 1, pageSize: 25 };
+
+	function consume_training_navigation() {
+		const navigation = window.hrmsTrainingPlanNavigation;
+		if (!navigation) return false;
+		planTableState.view = navigation.view === "activities" ? "activities" : "plans";
+		planTableState.status = navigation.status || "全部";
+		planTableState.department = "";
+		planTableState.person = "";
+		planTableState.personInput = "";
+		planTableState.trainingType = "";
+		planTableState.month = "";
+		planTableState.query = "";
+		planTableState.page = 1;
+		delete window.hrmsTrainingPlanNavigation;
+		return true;
+	}
 
 	function get_import_state(company) {
 		if (importState.company !== company) importState = { company, active_type: "", plan_file_url: "", record_file_url: "", preview: null };
@@ -65,22 +72,50 @@
 		const company = currentCompany();
 		if (!company) return frappe.msgprint(__("请先在页面顶部选择当前公司。"));
 		const participantState = { participants: [], results: [], issues: [], importedFile: "" };
-		const dialog = new frappe.ui.Dialog({
+		const instructorState = { selected: null, results: [], query: "", searched: false, request: 0 };
+		const savedSessions = [];
+		let batchProgram = "";
+		let saving = false;
+		let defaultsRequest = 0;
+		let dialog;
+		const padTime = (value) => String(value).padStart(2, "0");
+		const localDate = (value) => `${value.getFullYear()}-${padTime(value.getMonth() + 1)}-${padTime(value.getDate())}`;
+		const defaultSessionTime = () => {
+			const start = new Date();
+			const end = new Date(start.getTime() + 60 * 60 * 1000);
+			return {
+				start: { date: localDate(start), hour: start.getHours(), minute: start.getMinutes() },
+				end: { date: localDate(end), hour: end.getHours(), minute: end.getMinutes() },
+			};
+		};
+		let sessionTime = defaultSessionTime();
+		dialog = new frappe.ui.Dialog({
 			title: __("安排实际上课"), size: "large",
 			fields: [
-				{ fieldtype: "HTML", fieldname: "guide", options: `<div class="hrms-training-workflow-guide"><b>02</b><div><strong>${__("安排实际上课并选择员工")}</strong><span>${__("可按公司工号或姓名逐人添加，也可用基础模板批量导入；学时和成绩可后补。")}</span></div></div>` },
-				{ fieldtype: "Link", fieldname: "training_program", label: __("计划课程"), options: "Training Program", reqd: 1, default: program, get_query: () => ({ filters: { company } }) },
+				{ fieldtype: "HTML", fieldname: "guide", options: `<div class="hrms-training-workflow-guide"><b>02</b><div><strong>${__("同一课程可分多场安排")}</strong><span>${__("填写本场后，点击底部“保存本场并继续下一场”；已保存场次会列在下方，下一场保留课程信息并重新填写时间与参训人员。")}</span></div></div>` },
+				{ fieldtype: "HTML", fieldname: "session_progress" },
+				{ fieldtype: "Link", fieldname: "training_program", label: __("计划课程"), options: "Training Program", reqd: 1, default: program, get_query: () => ({ filters: { company } }), onchange: () => { if (dialog) loadProgramDefaults(); } },
 				{ fieldtype: "Data", fieldname: "course", label: __("实际上课名称") },
 				{ fieldtype: "Column Break" },
 				{ fieldtype: "Select", fieldname: "type", label: __("授课形式"), options: "Theory\nSeminar\nWorkshop\nConference\nExam\nInternet\nSelf-Study", default: "Theory", reqd: 1 },
 				{ fieldtype: "Data", fieldname: "delivery_method", label: __("授课 / 课件方式") },
+				{ fieldtype: "Section Break", label: __("本场课程信息") },
+				{ fieldtype: "Select", fieldname: "training_category", label: __("培训类别"), options: "\n内部培训\n外部培训\n安全教育\n特种作业\n新员工培训\n职业健康\n岗位资格" },
+				{ fieldtype: "Select", fieldname: "training_mode", label: __("培训方式"), options: "\n内部\n外部\n线上\n自主学习\n混合" },
+				{ fieldtype: "Column Break" },
+				{ fieldtype: "Float", fieldname: "course_hours", label: __("本场课时"), description: __("留空按本场开始和结束时间计算；课程计划总课时不会重复计入每一场。") },
 				{ fieldtype: "Section Break", label: __("时间与地点") },
-				{ fieldtype: "Datetime", fieldname: "start_time", label: __("开始时间"), reqd: 1 },
-				{ fieldtype: "Datetime", fieldname: "end_time", label: __("结束时间"), reqd: 1 },
+				{ fieldtype: "HTML", fieldname: "session_time_picker" },
 				{ fieldtype: "Data", fieldname: "location", label: __("地点"), reqd: 1 },
 				{ fieldtype: "Column Break" },
 				{ fieldtype: "Link", fieldname: "owner_department", label: __("课程归属部门"), options: "Department", get_query: () => ({ filters: { company } }) },
-				{ fieldtype: "Data", fieldname: "trainer_name", label: __("授课人") },
+				{ fieldtype: "Data", fieldname: "trainer_name", label: __("授课人"), onchange: () => {
+					if (instructorState.selected && dialog.get_value("trainer_name") !== instructorState.selected.employee_name) {
+						instructorState.selected = null;
+						renderInstructorResults();
+					}
+				} },
+				{ fieldtype: "HTML", fieldname: "instructor_picker" },
 				{ fieldtype: "Small Text", fieldname: "target_audience", label: __("培训对象 / 岗位") },
 				{ fieldtype: "Section Break", label: __("考核与复训") },
 				{ fieldtype: "Check", fieldname: "assessment_required", label: __("需要考核") },
@@ -93,17 +128,137 @@
 				{ fieldtype: "Section Break", label: __("参训员工（可后补）") },
 				{ fieldtype: "HTML", fieldname: "participant_picker" },
 			],
-			primary_action_label: __("保存上课安排"),
-			primary_action(values) {
-				collectParticipants();
-				frappe.call({ method: `${workflowApi}.create_training_activity`, args: { payload: JSON.stringify({ ...values, company, participants: participantState.participants }) }, freeze: true, freeze_message: __("正在建立培训活动…") }).then(({ message }) => {
-					dialog.hide();
-					frappe.show_alert({ message: participantState.participants.length ? __("上课场次及参训名单已保存。") : __("上课场次已创建，可稍后补充参训员工。"), indicator: "green" });
-					if (on_saved) on_saved(message);
-					else reload?.();
-				});
-			},
+			primary_action_label: __("保存并结束排课"),
+			primary_action(values) { return saveSession(values, false); },
+			secondary_action_label: __("保存本场并继续下一场"),
+			secondary_action() { return saveSession(dialog.get_values(), true); },
 		});
+
+		function renderSessionProgress() {
+			const rows = savedSessions.map((row, index) => `<span><b>${escape(__("第 {0} 场", [index + 1]))}</b>${escape(row.start_time || __("时间未记录"))} · ${escape(row.course || "")} · ${escape(__("{0} 人", [row.participant_count]))}</span>`).join("");
+			dialog.fields_dict.session_progress.$wrapper.html(`<div class="hrms-training-session-progress"><strong>${escape(__("本次已保存 {0} 场", [savedSessions.length]))}</strong>${rows ? `<div>${rows}</div>` : `<small>${__("填写第一场；需要继续时使用底部“保存本场并继续下一场”。")}</small>`}</div>`);
+		}
+
+		function renderSessionTimePicker() {
+			const wheel = (which, part, count) => `<div class="hrms-training-time-wheel" role="listbox" aria-label="${escape(__(which === "start" ? "开始时间" : "结束时间"))} · ${escape(__(part === "hour" ? "小时" : "分钟"))}" data-training-time-wheel="${which}:${part}"><div class="hrms-training-time-spacer" aria-hidden="true"></div>${Array.from({ length: count }, (_, value) => `<div role="option" tabindex="0" aria-selected="${sessionTime[which][part] === value}" class="hrms-training-time-option ${sessionTime[which][part] === value ? "active" : ""}" data-training-time-option="${which}:${part}:${value}">${padTime(value)}</div>`).join("")}<div class="hrms-training-time-spacer" aria-hidden="true"></div></div>`;
+			const field = (which, label) => `<div class="hrms-training-time-field"><label>${escape(label)} <span>*</span></label><input type="date" class="form-control" aria-label="${escape(label)} · ${__("日期")}" data-training-time-date="${which}" value="${sessionTime[which].date}"><div class="hrms-training-time-frame"><div class="hrms-training-time-selection" aria-hidden="true"></div>${wheel(which, "hour", 24)}<span class="hrms-training-time-separator" aria-hidden="true">:</span>${wheel(which, "minute", 60)}</div></div>`;
+			const style = `<style>
+				.hrms-training-time-picker{display:grid;gap:18px;margin:2px 0 14px}
+				.hrms-training-time-field{min-width:0}
+				.hrms-training-time-field>label{display:block;margin:0 0 7px;color:#35445b;font-size:12px;font-weight:600}
+				.hrms-training-time-field>label span{color:#e24c4c}
+				.hrms-training-time-field>input{display:block;width:100%;margin-bottom:9px}
+				.hrms-training-time-frame{display:grid;grid-template-columns:minmax(0,1fr) 24px minmax(0,1fr);position:relative;height:132px;overflow:hidden;border:1px solid #dfe7f2;border-radius:8px;background:#f5f7fa}
+				.hrms-training-time-selection{position:absolute;z-index:2;top:44px;right:8px;left:8px;height:44px;border-top:1px solid #8db4ed;border-bottom:1px solid #8db4ed;pointer-events:none}
+				.hrms-training-time-wheel{height:132px;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y mandatory;scrollbar-width:none;touch-action:pan-y}
+				.hrms-training-time-wheel::-webkit-scrollbar{display:none}
+				.hrms-training-time-option,.hrms-training-time-spacer{display:flex;align-items:center;justify-content:center;height:44px;scroll-snap-align:start}
+				.hrms-training-time-option{color:#45556b;font-size:18px;font-variant-numeric:tabular-nums;cursor:pointer;user-select:none}
+				.hrms-training-time-option.active{color:#245fae;font-weight:700}
+				.hrms-training-time-option:focus-visible{outline:2px solid #8db4ed;outline-offset:-2px}
+				.hrms-training-time-separator{display:flex;align-items:center;justify-content:center;position:relative;z-index:3;color:#45556b;font-size:20px;font-weight:600}
+			</style>`;
+			const wrapper = dialog.fields_dict.session_time_picker.$wrapper;
+			wrapper.html(`${style}<div class="hrms-training-time-picker">${field("start", __("开始时间"))}${field("end", __("结束时间"))}</div>`);
+			wrapper[0]?.querySelectorAll("[data-training-time-wheel]").forEach((element) => {
+				const [which, part] = element.dataset.trainingTimeWheel.split(":");
+				element.scrollTop = sessionTime[which][part] * 44;
+				element.addEventListener("scroll", () => {
+					const selected = Math.max(0, Math.min(part === "hour" ? 23 : 59, Math.round(element.scrollTop / 44)));
+					if (sessionTime[which][part] === selected) return;
+					sessionTime[which][part] = selected;
+					element.querySelectorAll("[data-training-time-option]").forEach((option) => {
+						const active = Number(option.dataset.trainingTimeOption.split(":")[2]) === selected;
+						option.classList.toggle("active", active);
+						option.setAttribute("aria-selected", String(active));
+					});
+				});
+			});
+		}
+
+		function sessionDatetime(which) {
+			const value = sessionTime[which];
+			return value.date ? `${value.date} ${padTime(value.hour)}:${padTime(value.minute)}` : "";
+		}
+
+		async function saveSession(values, continueNext) {
+			if (!values || saving) return;
+			if (batchProgram && values.training_program && values.training_program !== batchProgram) return frappe.msgprint(__("连续安排的场次必须属于同一门课程。"));
+			const startTime = sessionDatetime("start");
+			const endTime = sessionDatetime("end");
+			if (!startTime || !endTime) return frappe.msgprint(__("请选择开始和结束日期。"));
+			if (new Date(endTime.replace(" ", "T")) <= new Date(startTime.replace(" ", "T"))) return frappe.msgprint(__("结束时间必须晚于开始时间。"));
+			values = { ...values, training_program: batchProgram || values.training_program, start_time: startTime, end_time: endTime };
+			collectParticipants();
+			const participants = participantState.participants;
+			saving = true;
+			try {
+				const { message } = await Promise.resolve(frappe.call({ method: `${workflowApi}.create_training_activity`, args: { payload: JSON.stringify({ ...values, company, trainer_employee_code: instructorState.selected?.employee_code || "", participants }) }, freeze: true, freeze_message: __("正在保存本场上课安排…") }));
+				batchProgram = values.training_program;
+				savedSessions.push({ name: message?.name, course: values.course, start_time: values.start_time, participant_count: participants.length });
+				renderSessionProgress();
+				frappe.show_alert({ message: __("第 {0} 场已保存。", [savedSessions.length]), indicator: "green" });
+				if (continueNext) {
+					dialog.set_df_property("training_program", "read_only", 1);
+					for (const field of ["course_hours", "introduction"]) await dialog.set_value(field, "");
+					sessionTime = defaultSessionTime();
+					renderSessionTimePicker();
+					participantState.participants = [];
+					participantState.results = [];
+					participantState.issues = [];
+					renderParticipants();
+					dialog.fields_dict.session_time_picker.$wrapper.find("[data-training-time-date=start]").trigger?.("focus");
+				} else {
+					dialog.hide();
+				}
+				if (on_saved) on_saved(message);
+				else reload?.();
+			} finally {
+				saving = false;
+			}
+		}
+
+		function renderInstructorResults() {
+			const selected = instructorState.selected;
+			const results = instructorState.results.map((row, index) => `<button type="button" class="hrms-training-employee-result" data-instructor-select="${index}"><strong>${escape(row.employee_code)}</strong><span>${escape(row.employee_name)}</span><small>${escape(row.department || __("未分配部门"))}</small></button>`).join("");
+			dialog.fields_dict.instructor_picker.$wrapper.html(`<div class="hrms-training-instructor-picker"><div class="hrms-training-employee-search"><input class="form-control" data-instructor-search value="${escape(instructorState.query)}" placeholder="${__("按当前公司工号或姓名查找授课人")}"><button type="button" class="btn btn-default" data-instructor-search-button>${__("查找花名册")}</button></div><div class="hrms-training-employee-results">${results || (instructorState.searched ? `<small>${__("未找到当前公司在职员工，请核对工号或姓名。")}</small>` : "")}</div><small>${selected ? escape(__("已关联花名册：{0} · {1}", [selected.employee_code, selected.employee_name])) : escape(__("可从花名册选择；外部授课人可直接填写上方姓名。"))}</small></div>`);
+		}
+
+		function searchInstructor() {
+			const query = dialog.fields_dict.instructor_picker.$wrapper.find("[data-instructor-search]").val()?.trim() || "";
+			if (!query) return frappe.msgprint(__("请输入授课人的公司工号或姓名。"));
+			instructorState.query = query;
+			const request = ++instructorState.request;
+			frappe.call({ method: `${workflowApi}.find_training_employees`, args: { company, query, limit: 20 } }).then(({ message = [] }) => {
+				if (request !== instructorState.request) return;
+				instructorState.results = message;
+				instructorState.searched = true;
+				renderInstructorResults();
+			});
+		}
+
+		function loadProgramDefaults() {
+			const selectedProgram = dialog.get_value("training_program");
+			const request = ++defaultsRequest;
+			if (!selectedProgram) return;
+			const fields = ["course", "owner_department", "training_category", "training_mode", "location", "target_audience", "trainer_name"];
+			const beforeLoad = Object.fromEntries(fields.map((field) => [field, dialog.get_value(field)]));
+			instructorState.selected = null;
+			instructorState.results = [];
+			instructorState.query = "";
+			instructorState.searched = false;
+			instructorState.request += 1;
+			renderInstructorResults();
+			frappe.call({ method: `${workflowApi}.get_training_course_defaults`, args: { company, training_program: selectedProgram } }).then(async ({ message: defaults = {} }) => {
+				if (request !== defaultsRequest || dialog.get_value("training_program") !== selectedProgram) return;
+				for (const field of fields) {
+					if (request !== defaultsRequest || dialog.get_value("training_program") !== selectedProgram) return;
+					if (dialog.get_value(field) !== beforeLoad[field]) continue;
+					await dialog.set_value(field, defaults[field] || "");
+				}
+				renderInstructorResults();
+			});
+		}
 
 		const picker = () => dialog.fields_dict.participant_picker.$wrapper;
 		function collectParticipants() {
@@ -166,6 +321,41 @@
 		}
 
 		dialog.show();
+		renderSessionProgress();
+		renderSessionTimePicker();
+		const timePicker = dialog.fields_dict.session_time_picker.$wrapper;
+		timePicker.on("change", "[data-training-time-date]", function () { sessionTime[this.dataset.trainingTimeDate].date = this.value; });
+		timePicker.on("click", "[data-training-time-option]", function () {
+			const [which, part, rawValue] = this.dataset.trainingTimeOption.split(":");
+			const value = Number(rawValue);
+			sessionTime[which][part] = value;
+			const wheel = this.closest("[data-training-time-wheel]");
+			wheel.scrollTo({ top: value * 44, behavior: "smooth" });
+			wheel.querySelectorAll("[data-training-time-option]").forEach((option) => {
+				const active = option === this;
+				option.classList.toggle("active", active);
+				option.setAttribute("aria-selected", String(active));
+			});
+		});
+		timePicker.on("keydown", "[data-training-time-option]", function (event) {
+			if (event.key !== "Enter" && event.key !== " ") return;
+			event.preventDefault();
+			this.click();
+		});
+		renderInstructorResults();
+		const instructorPicker = dialog.fields_dict.instructor_picker.$wrapper;
+		instructorPicker.on("click", "[data-instructor-search-button]", searchInstructor).on("click", "[data-instructor-select]", async function () {
+			const row = instructorState.results[Number(this.dataset.instructorSelect)];
+			if (!row) return;
+			instructorState.results = [];
+			instructorState.query = "";
+			instructorState.searched = false;
+			await dialog.set_value("trainer_name", row.employee_name);
+			instructorState.selected = row;
+			renderInstructorResults();
+		});
+		instructorPicker.on("keydown", "[data-instructor-search]", (event) => { if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); searchInstructor(); } });
+		if (program) loadProgramDefaults();
 		renderParticipants();
 		picker().off("click.trainingSchedule").on("click.trainingSchedule", "[data-schedule-search-button]", searchParticipants).on("click.trainingSchedule", "[data-schedule-template]", () => window.open(frappe.urllib.get_full_url(`/api/method/${workflowApi}.download_training_roster_template`), "_blank")).on("click.trainingSchedule", "[data-schedule-import]", importParticipants).on("click.trainingSchedule", "[data-schedule-add]", function () { mergeParticipants([participantState.results[Number(this.dataset.scheduleAdd)]]); participantState.results = []; renderParticipants(); }).on("click.trainingSchedule", "[data-schedule-remove]", function () { collectParticipants(); participantState.participants.splice(Number(this.dataset.scheduleRemove), 1); renderParticipants(); });
 		picker().off("keydown.trainingSchedule").on("keydown.trainingSchedule", "[data-schedule-search]", (event) => { if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); searchParticipants(); } });
@@ -432,9 +622,10 @@
 	}
 
 	function plan_management_html(management = {}, loading = false) {
-		const rows = management.rows || [];
+		const activities = planTableState.view === "activities";
+		const rows = activities ? (management.activity_rows || []) : (management.rows || []);
 		if (loading) return `<div class="hrms-training-panel hrms-training-plan-panel"><div class="hrms-training-empty">${__("正在核对计划与实际上课…")}</div></div>`;
-		const statuses = ["全部", "已实施", "待实施", "待确认", "临时新增", "临时课程"];
+		const statuses = activities ? ["全部", "已完成", "待开展", "已取消"] : ["全部", "已实施", "待实施", "待确认", "临时新增", "临时课程"];
 		const filtered = plan_table_rows(rows);
 		const totalPages = Math.max(1, Math.ceil(filtered.length / planTableState.pageSize));
 		planTableState.page = Math.min(planTableState.page, totalPages);
@@ -444,7 +635,7 @@
 			const actualDetail = row.actual_courses && row.actual_courses !== row.course ? `<small>${escape(__("实际：{0}", [row.actual_courses]))}</small>` : "";
 			return `<tr><td class="sticky-status"><span class="hrms-training-plan-status status-${escape(row.status)}">${escape(row.status)}</span></td><td class="sticky-course"><button type="button" class="hrms-training-course-link" data-training-open-detail="${escape(index)}">${escape(row.course || __("未命名课程"))}</button>${actualDetail}</td><td>${escape(row.department || "—")}</td><td>${escape(row.classification || "—")}</td><td>${escape(row.training_type || "—")}</td><td>${escape(row.training_mode || "—")}</td><td>${escape(row.course_hours ?? "—")}</td><td>${escape(row.convener || "—")}</td><td>${escape(row.convener_department || "—")}</td><td>${escape(row.location || "—")}</td><td class="target-cell">${escape(row.target || "—")}</td><td>${escape(row.planned_month || "—")}</td><td class="actual-cell"><strong>${escape(row.actual_dates || "—")}</strong><small>${escape(__("{0} 场 / {1} 人次", [row.event_count || 0, row.participant_count || 0]))}</small></td></tr>`;
 		}).join("");
-		return `<div class="hrms-training-panel hrms-training-plan-panel" data-training-plan-management><div class="hrms-training-panel-heading"><div><p>${__("计划管理")}</p><h2>${__("计划与实际上课对照")}</h2></div><button class="btn btn-default btn-sm" data-training-action="reconcile">${__("重新匹配")}</button></div><div class="hrms-training-plan-tools"><div>${statuses.map((status) => `<button class="btn btn-xs ${planTableState.status === status ? "active" : ""}" data-training-plan-filter="${escape(status)}">${escape(status)}</button>`).join("")}</div><label class="hrms-training-search"><span>⌕</span><input class="form-control input-sm" data-training-plan-search value="${escape(planTableState.query)}" placeholder="${__("搜索课程、地点或日期")}"></label></div><div class="hrms-training-column-filters"><select class="form-control input-sm" data-training-column-filter="department">${filter_options(rows, "department", __("请选择部门"))}</select><label class="hrms-training-person-filter"><span>${__("人名")}</span><input class="form-control input-sm" data-training-person-search value="${escape(planTableState.personInput)}" placeholder="${__("输入人员姓名")}"></label><select class="form-control input-sm" data-training-column-filter="trainingType">${filter_options(rows, "training_type", __("全部培训类型"))}</select><select class="form-control input-sm" data-training-column-filter="month">${filter_options(rows, "planned_month", __("全部计划月份"))}</select><span class="hrms-training-result-count">${__("已找到 {0} 条", [filtered.length])}</span></div><div class="table-responsive hrms-training-plan-table"><table class="table"><thead><tr><th class="sticky-status">${sort_header(__("执行状态"), "status")}</th><th class="sticky-course">${sort_header(__("计划课程 / 实际课程"), "course")}</th><th>${sort_header(__("归属部门"), "department")}</th><th>${sort_header(__("分类"), "classification")}</th><th>${sort_header(__("培训类型"), "training_type")}</th><th>${sort_header(__("内/外"), "training_mode")}</th><th>${sort_header(__("课时"), "course_hours")}</th><th>${sort_header(__("召集人员"), "convener")}</th><th>${sort_header(__("召集部门"), "convener_department")}</th><th>${sort_header(__("地点"), "location")}</th><th>${sort_header(__("主要培训岗位/人员"), "target")}</th><th>${sort_header(__("计划月份"), "planned_month")}</th><th>${sort_header(__("实际执行"), "actual")}</th></tr></thead><tbody>${body || `<tr><td colspan="13"><div class="hrms-training-empty">${__("没有符合条件的课程")}</div></td></tr>`}</tbody></table></div><div class="hrms-training-pagination"><span>${__("第 {0} / {1} 页", [planTableState.page, totalPages])}</span><div><button class="btn btn-xs btn-default" data-training-page="prev" ${planTableState.page <= 1 ? "disabled" : ""}>← ${__("上一页")}</button><button class="btn btn-xs btn-default" data-training-page="next" ${planTableState.page >= totalPages ? "disabled" : ""}>${__("下一页")} →</button></div></div></div>`;
+		return `<div class="hrms-training-panel hrms-training-plan-panel" data-training-plan-management><div class="hrms-training-panel-heading"><div><p>${activities ? __("培训执行") : __("计划管理")}</p><h2>${activities ? __("培训活动") : __("计划与实际上课对照")}</h2></div>${activities ? "" : `<button class="btn btn-default btn-sm" data-training-action="reconcile">${__("重新匹配")}</button>`}</div><div class="hrms-training-plan-tools"><div><button class="btn btn-xs ${activities ? "" : "active"}" data-training-plan-view="plans">${__("计划课程")}</button><button class="btn btn-xs ${activities ? "active" : ""}" data-training-plan-view="activities">${__("培训活动")}</button>${statuses.map((status) => `<button class="btn btn-xs ${planTableState.status === status ? "active" : ""}" data-training-plan-filter="${escape(status)}">${escape(status)}</button>`).join("")}</div><label class="hrms-training-search"><span>⌕</span><input class="form-control input-sm" data-training-plan-search value="${escape(planTableState.query)}" placeholder="${__("搜索课程、地点或日期")}"></label></div><div class="hrms-training-column-filters"><select class="form-control input-sm" data-training-column-filter="department">${filter_options(rows, "department", __("请选择部门"))}</select><label class="hrms-training-person-filter"><span>${__("人名")}</span><input class="form-control input-sm" data-training-person-search value="${escape(planTableState.personInput)}" placeholder="${__("输入人员姓名")}"></label><select class="form-control input-sm" data-training-column-filter="trainingType">${filter_options(rows, "training_type", __("全部培训类型"))}</select><select class="form-control input-sm" data-training-column-filter="month">${filter_options(rows, "planned_month", __("全部计划月份"))}</select><span class="hrms-training-result-count">${__("已找到 {0} 条", [filtered.length])}</span></div><div class="table-responsive hrms-training-plan-table"><table class="table"><thead><tr><th class="sticky-status">${sort_header(__(activities ? "活动状态" : "执行状态"), "status")}</th><th class="sticky-course">${sort_header(__(activities ? "培训活动" : "计划课程 / 实际课程"), "course")}</th><th>${sort_header(__("归属部门"), "department")}</th><th>${sort_header(__("分类"), "classification")}</th><th>${sort_header(__("培训类型"), "training_type")}</th><th>${sort_header(__("内/外"), "training_mode")}</th><th>${sort_header(__("课时"), "course_hours")}</th><th>${sort_header(__("召集人员"), "convener")}</th><th>${sort_header(__("召集部门"), "convener_department")}</th><th>${sort_header(__("地点"), "location")}</th><th>${sort_header(__("主要培训岗位/人员"), "target")}</th><th>${sort_header(__("计划月份"), "planned_month")}</th><th>${sort_header(__("实际执行"), "actual")}</th></tr></thead><tbody>${body || `<tr><td colspan="13"><div class="hrms-training-empty">${__("没有符合条件的课程")}</div></td></tr>`}</tbody></table></div><div class="hrms-training-pagination"><span>${__("第 {0} / {1} 页", [planTableState.page, totalPages])}</span><div><button class="btn btn-xs btn-default" data-training-page="prev" ${planTableState.page <= 1 ? "disabled" : ""}>← ${__("上一页")}</button><button class="btn btn-xs btn-default" data-training-page="next" ${planTableState.page >= totalPages ? "disabled" : ""}>${__("下一页")} →</button></div></div></div>`;
 	}
 
 	function open_event_plan_match(row, reload) {
@@ -476,7 +667,33 @@
 	}
 
 	function participant_rows(events) {
-		return events.flatMap((event) => (event.participants || []).map((participant) => ({ ...participant, event_name: event.course || event.event_name, event_date: event.source_actual_dates || event.start_time })));
+		return events.flatMap((event) => (event.participants || []).map((participant) => ({ ...participant, event_name: event.course || event.event_name, event_date: event.session_dates?.length > 1 ? `${event.session_dates.join(" / ")}（合并记录）` : event.session_dates?.[0] || event.start_time })));
+	}
+
+	function training_attendance_label(value) {
+		return ({ Present: __("出席"), Absent: __("缺席"), Completed: __("已完成"), Open: __("待处理"), Invited: __("已邀请") })[value] || value || "—";
+	}
+
+	function sort_training_people(rows, sortState) {
+		const state = sortState || { key: "employee_code", direction: "asc" };
+		const numericFields = new Set(["hours", "study_hours", "score"]);
+		return [...rows].sort((left, right) => {
+			const leftValue = left?.[state.key];
+			const rightValue = right?.[state.key];
+			let comparison = 0;
+			if (numericFields.has(state.key) && leftValue !== "" && leftValue !== null && leftValue !== undefined && rightValue !== "" && rightValue !== null && rightValue !== undefined) {
+				comparison = Number(leftValue) - Number(rightValue);
+			} else {
+				comparison = String(leftValue ?? "").localeCompare(String(rightValue ?? ""), "zh-CN", { numeric: true, sensitivity: "base" });
+			}
+			return state.direction === "desc" ? -comparison : comparison;
+		});
+	}
+
+	function training_sort_header(label, key, sortState, attribute) {
+		const active = sortState?.key === key;
+		const arrow = active ? (sortState.direction === "asc" ? "↑" : "↓") : "↕";
+		return `<th><button type="button" class="hrms-training-sort hrms-training-sort-button ${active ? "active" : ""}" ${attribute}="${escape(key)}">${escape(label)} <span>${arrow}</span></button></th>`;
 	}
 
 	function roster_rows_from_dom(workspace) {
@@ -499,8 +716,10 @@
 		const wrapper = workspace.querySelector("[data-training-roster-editor]");
 		if (!state || !wrapper) return;
 		wrapper.hidden = false;
-		const editable = !state.has_submitted_result;
-		const rows = (state.participants || []).map((row, index) => `
+		const editable = true;
+		state.sort = state.sort || { key: "employee_code", direction: "asc" };
+		const sortedParticipants = sort_training_people(state.participants || [], state.sort);
+		const rows = sortedParticipants.map((row, index) => `
 			<tr data-training-roster-row data-employee="${escape(row.employee)}" data-employee-code="${escape(row.employee_code)}" data-employee-name="${escape(row.employee_name)}" data-department="${escape(row.department || "")}">
 				<td><strong>${escape(row.employee_code)}</strong></td><td>${escape(row.employee_name)}</td><td>${escape(row.department || "—")}</td>
 				<td><select class="form-control input-sm" data-roster-field="attendance" ${editable ? "" : "disabled"}><option value="Present" ${row.attendance !== "Absent" ? "selected" : ""}>${__("出席")}</option><option value="Absent" ${row.attendance === "Absent" ? "selected" : ""}>${__("缺席")}</option></select></td>
@@ -513,14 +732,20 @@
 			</tr>`).join("");
 		wrapper.innerHTML = `
 			<div class="hrms-training-detail-title"><div><p>EMPLOYEE RESULTS</p><h2>${__("参训员工与成绩")}</h2></div><button class="btn btn-default btn-sm" data-training-action="roster-close">${__("收起")}</button></div>
-			<div class="hrms-training-roster-summary"><strong>${escape(state.course || state.name)}</strong><span>${state.has_submitted_result ? __("已归档，下方仅供查看") : __("先按公司工号搜索员工，学时、成绩和备注可留空后补")}</span></div>
-			${editable ? `<div class="hrms-training-employee-search"><input class="form-control" data-training-roster-search-input placeholder="${__("输入公司工号，也可输入姓名或部门")}"><button class="btn btn-primary" data-training-action="roster-search">${__("搜索员工")}</button></div><div class="hrms-training-employee-results" data-training-employee-results></div>` : ""}
-			<div class="table-responsive hrms-training-roster-table"><table class="table"><thead><tr><th>${__("公司工号")}</th><th>${__("姓名")}</th><th>${__("部门")}</th><th>${__("出席")}</th><th>${__("学时")}</th><th>${__("成绩")}</th><th>${__("等级/结果")}</th><th>${__("补训")}</th><th>${__("备注（选填）")}</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="10"><div class="hrms-training-empty">${__("尚未添加参训员工")}</div></td></tr>`}</tbody></table></div>
-			${editable ? `<div class="hrms-training-roster-actions">${state.docstatus === 0 ? `<button class="btn btn-default" data-training-action="roster-save">${__("保存草稿")}</button>` : ""}<button class="btn btn-primary" data-training-action="roster-submit">${__("确认完成并写入员工档案")}</button></div>` : ""}`;
+			<div class="hrms-training-roster-summary"><strong>${escape(state.course || state.name)}</strong><span>${state.has_submitted_result ? __("已写入员工档案，保存修改后将同步更新本场人员明细") : __("先按公司工号搜索员工，学时、成绩和备注可留空后补")}</span></div>
+			${editable ? `<div class="hrms-training-employee-search"><input class="form-control" data-training-roster-search-input placeholder="${__("输入公司工号，也可输入姓名或部门")}"><button class="btn btn-primary" data-training-action="roster-search">${__("添加员工")}</button></div><div class="hrms-training-employee-results" data-training-employee-results></div>` : ""}
+			<div class="table-responsive hrms-training-roster-table"><table class="table"><thead><tr>${training_sort_header(__("公司工号"), "employee_code", state.sort, "data-training-roster-sort")}${training_sort_header(__("姓名"), "employee_name", state.sort, "data-training-roster-sort")}${training_sort_header(__("部门"), "department", state.sort, "data-training-roster-sort")}${training_sort_header(__("出席"), "attendance", state.sort, "data-training-roster-sort")}${training_sort_header(__("学时"), "hours", state.sort, "data-training-roster-sort")}${training_sort_header(__("成绩"), "score", state.sort, "data-training-roster-sort")}${training_sort_header(__("等级/结果"), "grade", state.sort, "data-training-roster-sort")}${training_sort_header(__("补训"), "needs_retraining", state.sort, "data-training-roster-sort")}${training_sort_header(__("备注（选填）"), "comments", state.sort, "data-training-roster-sort")}<th></th></tr></thead><tbody>${rows || `<tr><td colspan="10"><div class="hrms-training-empty">${__("尚未添加参训员工")}</div></td></tr>`}</tbody></table></div>
+			${editable ? `<div class="hrms-training-roster-actions">${state.has_submitted_result ? `<button class="btn btn-primary" data-training-action="roster-update">${__("保存修改并同步员工档案")}</button>` : `${state.docstatus === 0 ? `<button class="btn btn-default" data-training-action="roster-save">${__("保存草稿")}</button>` : ""}<button class="btn btn-primary" data-training-action="roster-submit">${__("确认完成并写入员工档案")}</button>`}</div>` : ""}`;
 	}
 
-	function open_training_roster_editor(eventName, workspace) {
+	function open_training_roster_editor(eventName, workspace, sessionKey) {
+		const request = workspace.__trainingRosterRequest = (workspace.__trainingRosterRequest || 0) + 1;
 		frappe.call({ method: `${workflowApi}.get_training_activity_roster`, args: { event_name: eventName }, freeze: true }).then(({ message = {} }) => {
+			if (request !== workspace.__trainingRosterRequest) return;
+			const card = [...workspace.querySelectorAll("[data-training-session-key]")].find((item) => item.dataset.trainingSessionKey === sessionKey);
+			const editor = workspace.querySelector("[data-training-roster-editor]");
+			if (!card || !editor) return;
+			card.querySelector(".hrms-training-execution-main")?.appendChild(editor);
 			workspace.__trainingRoster = message;
 			render_roster_editor(workspace);
 		});
@@ -538,35 +763,91 @@
 		});
 	}
 
-	function save_training_roster(workspace, submit = false, refresh_detail = null) {
+	function save_training_roster(workspace, submit = false, refresh_detail = null, update = false) {
 		const state = workspace.__trainingRoster;
 		const participants = roster_rows_from_dom(workspace);
 		if (submit && !participants.length) return frappe.msgprint(__("请至少添加一名实际参训员工。"));
 		const run = () => frappe.call({
-			method: `${workflowApi}.${submit ? "record_training_completion" : "save_training_activity_roster"}`,
+			method: `${workflowApi}.${update ? "update_training_completion" : submit ? "record_training_completion" : "save_training_activity_roster"}`,
 			args: { payload: JSON.stringify({ training_event: state.name, participants }) },
 			freeze: true,
-			freeze_message: submit ? __("正在写入员工档案…") : __("正在保存参训草稿…"),
+			freeze_message: update ? __("正在同步修改后的员工档案…") : submit ? __("正在写入员工档案…") : __("正在保存参训草稿…"),
 		}).then(() => {
-			frappe.show_alert({ message: submit ? __("培训结果已写入员工档案。") : __("参训员工与成绩草稿已保存。"), indicator: "green" });
+			frappe.show_alert({ message: update ? __("培训结果及本场参训记录已更新。") : submit ? __("培训结果已写入员工档案。") : __("参训员工与成绩草稿已保存。"), indicator: "green" });
 			refresh_detail?.();
 		});
+		if (update) return frappe.confirm(__("将更新已写入的培训结果和员工档案，是否继续？"), run);
 		if (submit) return frappe.confirm(__("提交后将完成本场培训并写入员工档案，是否继续？"), run);
 		return run();
 	}
 
-	function event_detail_html(event, index) {
-		const rosterAction = event.has_submitted_result
-			? `<span class="hrms-training-archive-label">${__("已写入员工档案")}</span>`
-			: `<button class="btn btn-primary btn-sm" data-training-edit-roster="${escape(event.name)}">${__("添加人员 / 学时 / 成绩")}</button>`;
-		return `<article class="hrms-training-execution"><div class="hrms-training-execution-index">${String(index + 1).padStart(2, "0")}</div><div class="hrms-training-execution-main"><div class="hrms-training-execution-heading"><div><strong>${escape(event.course || event.event_name)}</strong><span>${escape(event.source_actual_dates || event.start_time || "日期未记录")}</span></div><span class="hrms-training-plan-status status-${escape(event.plan_match_status || "已实施")}">${escape(event.plan_match_status || event.event_status || "已实施")}</span></div><div class="hrms-training-execution-grid">${detail_field(__("课程归属部门"), event.source_owner_department || event.owner_department)}${detail_field(__("课程类型"), event.source_course_type || event.training_category)}${detail_field(__("课件方式"), event.source_courseware || event.delivery_method)}${detail_field(__("培训方式"), event.training_mode)}${detail_field(__("课时"), event.source_course_hours || event.course_hours)}${detail_field(__("授课人"), event.trainer_name)}${detail_field(__("地点"), event.location)}${detail_field(__("培训对象"), event.source_target || event.target_audience, true)}</div><div class="hrms-training-execution-meta"><span>${escape(__("{0} 人次", [event.participant_count || 0]))}</span><span>${escape(event.plan_match_basis || __("未记录匹配依据"))}</span>${event.plan_match_score ? `<span>${escape(__("匹配分数 {0}", [event.plan_match_score]))}</span>` : ""}${rosterAction}</div></div></article>`;
+	function execution_sessions(events) {
+		return events.flatMap((event) => {
+			const dates = event.session_dates?.length ? event.session_dates : [event.start_time || __("日期未记录")];
+			return dates.map((date, sessionIndex) => ({ event, date, sessionIndex, sessionCount: dates.length, combined: dates.length > 1 }));
+		});
+	}
+
+	function session_key(session) {
+		return `${session.event.name}:${session.sessionIndex}`;
+	}
+
+	function session_toggle_text(count, combined, expanded) {
+		return combined
+			? (expanded ? __("收起合并参训记录（{0}）", [count]) : __("查看合并参训记录（{0}）", [count]))
+			: (expanded ? __("收起本场员工（{0}）", [count]) : __("查看本场员工（{0}）", [count]));
+	}
+
+	function session_participants_html(session, index, expanded, sortState, search = "") {
+		const { event, combined } = session;
+		const participants = sort_training_people(participant_rows([event]), sortState);
+		const query = search.trim().toLowerCase();
+		const note = combined
+			? __("来源表仅保存了跨日期合并的参训名单，无法确认每位员工参加了哪一天；此名单在对应日期卡片中展示，但只计入一次总人次。")
+			: __("以下只显示本场实际保存的参训员工；其他场次的名单互不混用。");
+		const rows = participants.map((row) => {
+			const searchText = [row.employee_code, row.employee_name, row.department].join(" ").toLowerCase();
+			return `<tr data-training-participant data-search="${escape(searchText)}" ${query && !searchText.includes(query) ? "hidden" : ""}><td>${escape(row.employee_code || "—")}</td><td><strong>${escape(row.employee_name || "—")}</strong></td><td>${escape(row.department || "—")}</td><td>${escape(training_attendance_label(row.attendance || row.status))}</td><td>${escape(row.study_hours ?? "—")}</td><td>${escape(row.score ?? "—")}</td><td>${escape([row.grade, row.assessment_result].filter((value) => value !== null && value !== undefined && value !== "").join(" / ") || "—")}</td><td>${escape(row.needs_retraining ? __("是") : __("否"))}</td><td>${escape(row.comments || "—")}</td></tr>`;
+		}).join("");
+		return `<div id="training-session-participants-${index}" class="hrms-training-session-panel" data-training-session-panel ${expanded ? "" : "hidden"}><div class="hrms-training-session-panel-heading"><div><strong>${escape(combined ? __("合并参训记录") : __("本场参训员工"))}</strong><small>${escape(note)}</small></div><label class="hrms-training-search"><span>⌕</span><input class="form-control input-sm" data-training-participant-search value="${escape(search)}" placeholder="${__("搜索工号、姓名或部门")}"></label></div><div class="table-responsive hrms-training-participant-table"><table class="table"><thead><tr>${training_sort_header(__("公司工号"), "employee_code", sortState, "data-training-participant-sort")}${training_sort_header(__("姓名"), "employee_name", sortState, "data-training-participant-sort")}${training_sort_header(__("部门"), "department", sortState, "data-training-participant-sort")}${training_sort_header(__("出席"), "attendance", sortState, "data-training-participant-sort")}${training_sort_header(__("学时"), "study_hours", sortState, "data-training-participant-sort")}${training_sort_header(__("成绩"), "score", sortState, "data-training-participant-sort")}${training_sort_header(__("等级/结论"), "grade", sortState, "data-training-participant-sort")}${training_sort_header(__("需补训"), "needs_retraining", sortState, "data-training-participant-sort")}${training_sort_header(__("备注"), "comments", sortState, "data-training-participant-sort")}</tr></thead><tbody>${rows || `<tr><td colspan="9"><div class="hrms-training-empty">${__("本场尚未添加参训员工")}</div></td></tr>`}</tbody></table></div></div>`;
+	}
+
+	function event_detail_html(session, index, expanded = false, sortState = null, search = "") {
+		const { event, date, sessionIndex, sessionCount, combined } = session;
+		const key = session_key(session);
+		const rosterAction = `<button class="btn btn-primary btn-sm" data-training-edit-roster="${escape(event.name)}">${combined ? __("修改合并参训记录") : event.participant_count ? __("修改人员 / 学时 / 成绩") : __("添加人员 / 学时 / 成绩")}</button>`;
+		const attendance = combined ? __("{0} 场合计 {1} 人次，原表未区分每场人员与学时", [sessionCount, event.participant_count || 0]) : __("{0} 人次", [event.participant_count || 0]);
+		return `<article class="hrms-training-execution" data-training-session-key="${escape(key)}"><div class="hrms-training-execution-index">${String(index + 1).padStart(2, "0")}</div><div class="hrms-training-execution-main"><div class="hrms-training-execution-heading"><div><strong>${escape(event.course || event.event_name)}</strong><span>${escape(date)}${combined ? ` · ${escape(__("第 {0}/{1} 场", [sessionIndex + 1, sessionCount]))}` : ""}</span></div><span class="hrms-training-plan-status status-${escape(event.plan_match_status || "已实施")}">${escape(event.plan_match_status || event.event_status || "已实施")}</span></div><div class="hrms-training-execution-grid">${detail_field(__("课程归属部门"), event.source_owner_department || event.owner_department)}${detail_field(__("课程类型"), event.source_course_type || event.training_category)}${detail_field(__("课件方式"), event.source_courseware || event.delivery_method)}${detail_field(__("培训方式"), event.training_mode)}${detail_field(combined ? __("来源课时（多场合并）") : __("课时"), event.source_course_hours || event.course_hours)}${detail_field(__("授课人"), [event.trainer_name, event.trainer_employee_code ? `（${event.trainer_employee_code}）` : ""].filter(Boolean).join(""))}${detail_field(__("地点"), event.location)}${detail_field(__("培训对象"), event.source_target || event.target_audience, true)}</div><div class="hrms-training-execution-meta"><span>${escape(attendance)}</span><span>${escape(event.plan_match_basis || __("未记录匹配依据"))}</span>${event.plan_match_score ? `<span>${escape(__("匹配分数 {0}", [event.plan_match_score]))}</span>` : ""}${rosterAction}<button type="button" class="btn btn-default btn-sm hrms-training-session-toggle" data-training-toggle-session="${escape(key)}" data-training-session-count="${event.participant_count || 0}" data-training-session-combined="${combined ? 1 : 0}" aria-expanded="${expanded ? "true" : "false"}" aria-controls="training-session-participants-${index}">${escape(session_toggle_text(event.participant_count || 0, combined, expanded))}</button></div>${session_participants_html(session, index, expanded, sortState, search)}</div></article>`;
+	}
+
+	function toggle_session_panel(workspace, key) {
+		const card = [...workspace.querySelectorAll("[data-training-session-key]")].find((item) => item.dataset.trainingSessionKey === key);
+		const panel = card?.querySelector("[data-training-session-panel]");
+		const button = card?.querySelector("[data-training-toggle-session]");
+		if (!panel || !button) return;
+		const expanded = panel.hidden;
+		panel.hidden = !expanded;
+		button.setAttribute("aria-expanded", String(expanded));
+		button.textContent = session_toggle_text(Number(button.dataset.trainingSessionCount) || 0, button.dataset.trainingSessionCombined === "1", expanded);
+		const open = workspace.__trainingExpandedSessions || new Set();
+		if (expanded) open.add(key);
+		else open.delete(key);
+		workspace.__trainingExpandedSessions = open;
 	}
 
 	function render_training_detail(workspace, detail) {
 		const events = detail.events || [];
-		const participants = participant_rows(events);
+		const sessions = execution_sessions(events);
+		const detailKey = `${detail.kind}:${detail.name}`;
+		if (workspace.__trainingExpandedDetail !== detailKey) {
+			workspace.__trainingExpandedDetail = detailKey;
+			workspace.__trainingExpandedSessions = new Set();
+			workspace.__trainingSessionSort = {};
+			workspace.__trainingSessionSearch = {};
+		}
+		workspace.__trainingDetail = detail;
 		const audience = detail.audience_matrix || [];
-		workspace.innerHTML = `<section class="hrms-training-detail-page"><div class="hrms-training-detail-nav"><button class="btn btn-default btn-sm" data-training-action="detail-back">← ${__("返回计划管理")}</button><span>${escape(detail.kind === "plan" ? __("计划课程详情") : __("实际上课详情"))}</span></div><header class="hrms-training-detail-hero"><div><span class="hrms-training-plan-status status-${escape(detail.status)}">${escape(detail.status)}</span><p>${escape([detail.department, detail.classification, detail.training_type].filter(Boolean).join(" · "))}</p><h1>${escape(detail.title)}</h1><small>${escape(detail.kind === "plan" ? __("来自年度计划表，下方汇总已匹配的实际上课。") : __("来自培训登记表，并显示计划匹配结果。"))}</small></div><div class="hrms-training-detail-metrics"><div><span>${__("实际场次")}</span><strong>${number(detail.event_count)}</strong></div><div><span>${__("参训人次")}</span><strong>${number(detail.participant_count)}</strong></div><div><span>${__("计划月份")}</span><strong>${escape(detail.planned_month || "—")}</strong></div></div></header><div class="hrms-training-detail-layout"><main><section class="hrms-training-detail-card"><div class="hrms-training-detail-title"><div><p>PLAN INFORMATION</p><h2>${__("计划与课程信息")}</h2></div>${detail.status === "待确认" ? `<button class="btn btn-primary btn-sm" data-training-action="detail-match">${__("确认计划归属")}</button>` : ""}</div><div class="hrms-training-detail-fields">${detail_field(__("归属部门"), detail.department)}${detail_field(__("分类"), detail.classification)}${detail_field(__("培训类型"), detail.training_type)}${detail_field(__("内/外训"), detail.training_mode)}${detail_field(__("课时"), detail.course_hours)}${detail_field(__("召集/授课人员"), detail.convener)}${detail_field(__("召集部门"), detail.convener_department)}${detail_field(__("地点"), detail.location)}${detail_field(__("主要培训岗位/人员"), detail.target, true)}${detail_field(__("计划月份"), detail.planned_month)}${detail_field(__("原表实际日期"), detail.source_actual_dates)}</div>${audience.length ? `<div class="hrms-training-audience"><span>${__("课程对象矩阵")}</span><div>${audience.map((item) => `<span><b>${escape(item.unit)}</b>${escape(item.requirement)}</span>`).join("")}</div></div>` : ""}${detail.matched_program ? `<div class="hrms-training-match-summary"><span>${__("已关联计划")}</span><strong>${escape(detail.matched_program.source_content || detail.matched_program.name)}</strong><small>${escape([detail.matched_program.source_department, detail.matched_program.source_planned_month, detail.match_basis].filter(Boolean).join(" · "))}</small></div>` : ""}</section><section class="hrms-training-detail-card"><div class="hrms-training-detail-title"><div><p>ACTUAL EXECUTION</p><h2>${__("实际上课记录")}</h2></div><div class="hrms-training-detail-actions"><span>${escape(__("{0} 场", [events.length]))}</span>${detail.kind === "plan" ? `<button class="btn btn-primary btn-sm" data-training-action="detail-schedule">${__("安排上课")}</button>` : ""}</div></div><div class="hrms-training-executions">${events.length ? events.map(event_detail_html).join("") : `<div class="hrms-training-empty">${__("暂无实际上课记录")}</div>`}</div></section><section class="hrms-training-detail-card hrms-training-roster-editor" data-training-roster-editor hidden></section><section class="hrms-training-detail-card"><div class="hrms-training-detail-title"><div><p>PARTICIPANTS</p><h2>${__("已保存参训员工")}</h2></div><label class="hrms-training-search"><span>⌕</span><input class="form-control input-sm" data-training-participant-search placeholder="${__("搜索工号、姓名或部门")}"></label></div><div class="table-responsive hrms-training-participant-table"><table class="table"><thead><tr><th>${__("公司工号")}</th><th>${__("姓名")}</th><th>${__("部门")}</th><th>${__("实际课程")}</th><th>${__("日期")}</th><th>${__("出席")}</th><th>${__("学时")}</th><th>${__("成绩/结论")}</th></tr></thead><tbody>${participants.map((row) => { const search = [row.employee_code, row.employee_name, row.department, row.event_name].join(" ").toLowerCase(); return `<tr data-training-participant data-search="${escape(search)}"><td>${escape(row.employee_code || "—")}</td><td><strong>${escape(row.employee_name || "—")}</strong></td><td>${escape(row.department || "—")}</td><td>${escape(row.event_name || "—")}</td><td>${escape(row.event_date || "—")}</td><td>${escape(row.attendance || row.status || "—")}</td><td>${escape(row.study_hours ?? "—")}</td><td>${escape([row.score, row.assessment_result].filter((value) => value !== null && value !== undefined && value !== "").join(" / ") || "—")}</td></tr>`; }).join("") || `<tr><td colspan="8"><div class="hrms-training-empty">${__("暂无参训员工明细")}</div></td></tr>`}</tbody></table></div></section></main><aside><section class="hrms-training-detail-card"><div class="hrms-training-detail-title"><div><p>SOURCE TRACE</p><h2>${__("数据来源")}</h2></div></div><div class="hrms-training-source-list">${detail_field(__("来源文件"), detail.source?.file)}${detail_field(__("工作表"), detail.source?.sheet)}${detail_field(__("原表行号"), detail.source?.row)}${detail_field(__("导入人"), detail.source?.imported_by)}${detail_field(__("导入时间"), detail.source?.imported_on)}</div></section><section class="hrms-training-detail-card hrms-training-detail-help"><strong>${__("这是自定义培训详情页")}</strong><p>${__("计划信息和实际上课保持分离，参训员工与成绩在本页完成，不再使用 Frappe 原生子表。")}</p></section></aside></div></section>`;
+		workspace.innerHTML = `<section class="hrms-training-detail-page"><div class="hrms-training-detail-nav"><button class="btn btn-default btn-sm" data-training-action="detail-back">← ${__("返回计划管理")}</button><span>${escape(detail.kind === "plan" ? __("计划课程详情") : __("实际上课详情"))}</span></div><header class="hrms-training-detail-hero"><div><span class="hrms-training-plan-status status-${escape(detail.status)}">${escape(detail.status)}</span><p>${escape([detail.department, detail.classification, detail.training_type].filter(Boolean).join(" · "))}</p><h1>${escape(detail.title)}</h1><small>${escape(detail.kind === "plan" ? __("来自年度计划表，下方汇总已匹配的实际上课。") : __("来自培训登记表，并显示计划匹配结果。"))}</small></div><div class="hrms-training-detail-metrics"><div><span>${__("实际场次")}</span><strong>${number(detail.event_count)}</strong></div><div><span>${__("参训人次")}</span><strong>${number(detail.participant_count)}</strong></div><div><span>${__("计划月份")}</span><strong>${escape(detail.planned_month || "—")}</strong></div></div></header><div class="hrms-training-detail-layout"><main><section class="hrms-training-detail-card"><div class="hrms-training-detail-title"><div><p>PLAN INFORMATION</p><h2>${__("计划与课程信息")}</h2></div>${detail.status === "待确认" ? `<button class="btn btn-primary btn-sm" data-training-action="detail-match">${__("确认计划归属")}</button>` : ""}</div><div class="hrms-training-detail-fields">${detail_field(__("归属部门"), detail.department)}${detail_field(__("分类"), detail.classification)}${detail_field(__("培训类型"), detail.training_type)}${detail_field(__("内/外训"), detail.training_mode)}${detail_field(__("课时"), detail.course_hours)}${detail_field(__("召集/授课人员"), detail.convener)}${detail_field(__("召集部门"), detail.convener_department)}${detail_field(__("地点"), detail.location)}${detail_field(__("主要培训岗位/人员"), detail.target, true)}${detail_field(__("计划月份"), detail.planned_month)}${detail_field(__("原表实际日期"), detail.source_actual_dates)}</div>${audience.length ? `<div class="hrms-training-audience"><span>${__("课程对象矩阵")}</span><div>${audience.map((item) => `<span><b>${escape(item.unit)}</b>${escape(item.requirement)}</span>`).join("")}</div></div>` : ""}${detail.matched_program ? `<div class="hrms-training-match-summary"><span>${__("已关联计划")}</span><strong>${escape(detail.matched_program.source_content || detail.matched_program.name)}</strong><small>${escape([detail.matched_program.source_department, detail.matched_program.source_planned_month, detail.match_basis].filter(Boolean).join(" · "))}</small></div>` : ""}</section><section class="hrms-training-detail-card"><div class="hrms-training-detail-title"><div><p>ACTUAL EXECUTION</p><h2>${__("实际上课记录")}</h2><small>${__("点击场次可查看对应员工；多场可以同时展开。")}</small></div><div class="hrms-training-detail-actions"><span>${escape(__("{0} 场", [sessions.length]))}</span>${detail.kind === "plan" ? `<button class="btn btn-primary btn-sm" data-training-action="detail-schedule">${__("安排上课")}</button>` : ""}</div></div><div class="hrms-training-executions">${sessions.length ? sessions.map((session, index) => { const key = session_key(session); return event_detail_html(session, index, workspace.__trainingExpandedSessions.has(key), workspace.__trainingSessionSort[key] || { key: "employee_code", direction: "asc" }, workspace.__trainingSessionSearch[key] || ""); }).join("") : `<div class="hrms-training-empty">${__("暂无实际上课记录")}</div>`}</div></section><section class="hrms-training-detail-card hrms-training-roster-editor" data-training-roster-editor hidden></section></main><aside><section class="hrms-training-detail-card"><div class="hrms-training-detail-title"><div><p>SOURCE TRACE</p><h2>${__("数据来源")}</h2></div></div><div class="hrms-training-source-list">${detail_field(__("来源文件"), detail.source?.file)}${detail_field(__("工作表"), detail.source?.sheet)}${detail_field(__("原表行号"), detail.source?.row)}${detail_field(__("导入人"), detail.source?.imported_by)}${detail_field(__("导入时间"), detail.source?.imported_on)}</div></section><section class="hrms-training-detail-card hrms-training-detail-help"><strong>${__("这是自定义培训详情页")}</strong><p>${__("计划信息和实际上课保持分离，参训员工与成绩在本页完成，不再使用 Frappe 原生子表。")}</p></section></aside></div></section>`;
 		workspace.querySelector(".hrms-training-detail-hero small")?.remove();
 		const auditList = workspace.querySelector(".hrms-training-source-list");
 		if (auditList) auditList.innerHTML = `${detail_field(__("创建人"), detail.source?.created_by)}${detail_field(__("创建时间"), detail.source?.created_on)}`;
@@ -616,7 +897,8 @@
 	function bind_dashboard_actions(workspace, reload) {
 		const management = () => workspace.__trainingDashboard?.plan_management || { rows: [] };
 		const visibleRows = () => {
-			const filtered = plan_table_rows(management().rows || []);
+			const rows = planTableState.view === "activities" ? (management().activity_rows || []) : (management().rows || []);
+			const filtered = plan_table_rows(rows);
 			const start = (planTableState.page - 1) * planTableState.pageSize;
 			return filtered.slice(start, start + planTableState.pageSize);
 		};
@@ -651,7 +933,11 @@
 			}
 			if (event.target.matches("[data-training-participant-search]")) {
 				const query = event.target.value.trim().toLowerCase();
-				workspace.querySelectorAll("[data-training-participant]").forEach((row) => { row.hidden = Boolean(query && !row.dataset.search.includes(query)); });
+				const card = event.target.closest("[data-training-session-key]");
+				if (!card) return;
+				workspace.__trainingSessionSearch[card.dataset.trainingSessionKey] = event.target.value;
+				card.querySelectorAll("[data-training-participant]").forEach((row) => { row.hidden = Boolean(query && !row.dataset.search.includes(query)); });
+				return;
 			}
 		};
 		workspace.onkeydown = (event) => {
@@ -687,6 +973,7 @@
 			if (action === "roster-search") return search_training_roster_employee(workspace);
 			if (action === "roster-save") return save_training_roster(workspace, false, () => open_training_detail(workspace.__trainingDetailRow || {}, workspace, reload));
 			if (action === "roster-submit") return save_training_roster(workspace, true, () => open_training_detail(workspace.__trainingDetailRow || {}, workspace, reload));
+			if (action === "roster-update") return save_training_roster(workspace, false, () => open_training_detail(workspace.__trainingDetailRow || {}, workspace, reload), true);
 			if (action === "detail-match") return open_event_plan_match(workspace.__trainingDetailRow || {}, reload);
 			if (action === "reconcile") return frappe.confirm(__("将重新计算课程名称、归属部门、计划月份、培训方式和课时的匹配关系。人工确认过的归属不会被覆盖。是否继续？"), () => frappe.call({
 				method: "hrms.hr.doctype.training_program.training_program.reconcile_training_plan_matches",
@@ -702,6 +989,39 @@
 				planTableState.status = planFilter;
 				planTableState.page = 1;
 				return refreshPlanPanel();
+			}
+			const planView = event.target.closest("[data-training-plan-view]")?.dataset.trainingPlanView;
+			if (planView) {
+				planTableState.view = planView;
+				planTableState.status = "全部";
+				planTableState.page = 1;
+				return refreshPlanPanel();
+			}
+			const rosterSort = event.target.closest("[data-training-roster-sort]")?.dataset.trainingRosterSort;
+			if (rosterSort && workspace.__trainingRoster) {
+				workspace.__trainingRoster.participants = roster_rows_from_dom(workspace);
+				const current = workspace.__trainingRoster.sort || {};
+				workspace.__trainingRoster.sort = {
+					key: rosterSort,
+					direction: current.key === rosterSort && current.direction === "asc" ? "desc" : "asc",
+				};
+				return render_roster_editor(workspace);
+			}
+			const participantSort = event.target.closest("[data-training-participant-sort]")?.dataset.trainingParticipantSort;
+			if (participantSort && workspace.__trainingDetail) {
+				const card = event.target.closest("[data-training-session-key]");
+				const key = card?.dataset.trainingSessionKey;
+				if (!key) return;
+				const current = workspace.__trainingSessionSort[key] || {};
+				workspace.__trainingSessionSort[key] = {
+					key: participantSort,
+					direction: current.key === participantSort && current.direction === "asc" ? "desc" : "asc",
+				};
+				const sessions = execution_sessions(workspace.__trainingDetail.events || []);
+				const index = sessions.findIndex((session) => session_key(session) === key);
+				const panel = card.querySelector("[data-training-session-panel]");
+				if (index >= 0 && panel) panel.outerHTML = session_participants_html(sessions[index], index, true, workspace.__trainingSessionSort[key], workspace.__trainingSessionSearch[key] || "");
+				return;
 			}
 			const sort = event.target.closest("[data-training-sort]")?.dataset.trainingSort;
 			if (sort) {
@@ -719,8 +1039,10 @@
 			if (matchIndex !== undefined) return open_event_plan_match(visibleRows()[Number(matchIndex)] || {}, reload);
 			const detailIndex = event.target.closest("[data-training-open-detail]")?.dataset.trainingOpenDetail;
 			if (detailIndex !== undefined) return open_training_detail(visibleRows()[Number(detailIndex)] || {}, workspace, reload);
+			const toggleKey = event.target.closest("[data-training-toggle-session]")?.dataset.trainingToggleSession;
+			if (toggleKey !== undefined) return toggle_session_panel(workspace, toggleKey);
 			const rosterEvent = event.target.closest("[data-training-edit-roster]")?.dataset.trainingEditRoster;
-			if (rosterEvent) return open_training_roster_editor(rosterEvent, workspace);
+			if (rosterEvent) return open_training_roster_editor(rosterEvent, workspace, event.target.closest("[data-training-session-key]")?.dataset.trainingSessionKey);
 			const removeIndex = event.target.closest("[data-training-roster-remove]")?.dataset.trainingRosterRemove;
 			if (removeIndex !== undefined) {
 				workspace.__trainingRoster.participants = roster_rows_from_dom(workspace).filter((row, index) => index !== Number(removeIndex));
@@ -735,14 +1057,17 @@
 				workspace.__trainingRoster.participants = [...current, { ...candidate, attendance: "Present", hours: "", score: "", grade: "", needs_retraining: 0, comments: "" }];
 				return render_roster_editor(workspace);
 			}
-			const route_key = event.target.closest("[data-training-route]")?.dataset.trainingRoute;
-			if (route_key) return route(route_key);
 			const event_name = event.target.closest("[data-training-event]")?.dataset.trainingEvent;
-			if (event_name) open_training_detail({ kind: "actual", event: event_name }, workspace, reload);
+			if (event_name) return open_training_detail({ kind: "actual", event: event_name }, workspace, reload);
+			const card = event.target.closest("[data-training-session-key]");
+			if (card && !event.target.closest("[data-training-session-panel], [data-training-roster-editor], button, input, select, textarea, a")) {
+				return toggle_session_panel(workspace, card.dataset.trainingSessionKey);
+			}
 		};
 	}
 
 	function load_dashboard(listview, workspace) {
+		consume_training_navigation();
 		render_dashboard(workspace, {}, true);
 		bind_dashboard_actions(workspace, () => load_dashboard(listview, workspace));
 		frappe.call({
@@ -770,6 +1095,11 @@
 			listview.$paging_area?.hide();
 			listview.page.main.find(".list-paging-area, .list-count").hide();
 			const workspace = ensure_dashboard(listview);
+			if (workspace) load_dashboard(listview, workspace);
+		},
+		refresh(listview) {
+			if (!window.hrmsTrainingPlanNavigation) return;
+			const workspace = listview.page.main?.[0]?.querySelector(".hrms-training-learning-workspace");
 			if (workspace) load_dashboard(listview, workspace);
 		},
 		get_indicator(doc) {

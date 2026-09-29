@@ -28,6 +28,8 @@
   "qualification_gate",
   "section_break_4",
   "trainer_name",
+  "trainer_employee",
+  "trainer_employee_code",
   "trainer_email",
   "column_break_7",
   "supplier",
@@ -190,6 +192,19 @@
    "fieldname": "trainer_name",
    "fieldtype": "Data",
    "label": "Trainer Name"
+  },
+  {
+   "fieldname": "trainer_employee",
+   "fieldtype": "Link",
+   "label": "授课人员工",
+   "options": "Employee",
+   "read_only": 1
+  },
+  {
+   "fieldname": "trainer_employee_code",
+   "fieldtype": "Data",
+   "label": "授课人公司工号",
+   "read_only": 1
   },
   {
    "fieldname": "trainer_email",

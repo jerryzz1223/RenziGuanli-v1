@@ -50,6 +50,7 @@ for (const marker of [
 	"sync_users_from_dingtalk",
 	"sync_preentry_employees_from_dingtalk",
 	"sync_all_employee_rosters_from_dingtalk",
+	"preview_dingtalk_roster_initial_import",
 	"fetch_dingtalk_attendance_update_data",
 	"sync_attendance_from_dingtalk",
 	"fetch_dingtalk_process_instance_ids",
@@ -163,6 +164,9 @@ for (const fieldname of [
 }
 
 const syncLog = readJson("hrms/hr/doctype/hrms_dingtalk_sync_log/hrms_dingtalk_sync_log.json");
+if (!syncLog.fields.find((field) => field.fieldname === "sync_type")?.options.includes("员工一次建档导入")) {
+	throw new Error("钉钉一次建档必须有独立的同步日志类型，不能覆盖来源快照日志。");
+}
 for (const fieldname of [
 	"sync_type",
 	"sync_direction",
@@ -198,6 +202,9 @@ for (const marker of [
 	"get_dingtalk_directory_sync_status",
 	"sync_preentry_employees_from_dingtalk",
 	"sync_all_employee_rosters_from_dingtalk",
+	"preview_dingtalk_roster_initial_import",
+	"apply_dingtalk_roster_initial_import",
+	"钉钉一次建档预检",
 	"preview_existing_dingtalk_employee_attachments",
 	"queue_existing_dingtalk_employee_attachments",
 	"list_dingtalk_employee_comparisons",
@@ -222,6 +229,7 @@ for (const marker of [
 	"approve_dingtalk_employee_import",
 	"queue_approve_all_dingtalk_employee_imports",
 	"run_queued_dingtalk_employee_imports",
+	"run_queued_dingtalk_roster_initial_import",
 	"该记录来自全量员工档案，不属于钉钉待入职新员工，禁止写入员工主档",
 	"reject_dingtalk_employee_import",
 	"_roster_attachment_items",

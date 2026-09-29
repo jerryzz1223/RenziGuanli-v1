@@ -84,9 +84,12 @@ configure_web_bind() {
         echo "Invalid HRMS_SITE" >&2
         exit 1
     fi
-    local web_command="web: bench --site ${site} serve --port 8000 --noreload"
+    # This local Docker checkout bind-mounts the source tree. Let the web
+    # process reload changed Python rules so the versioned result refresh can
+    # run on the next request without another manual container restart.
+    local web_command="web: bench --site ${site} serve --port 8000"
     if bench serve --help 2>&1 | grep -q -- '--host'; then
-        web_command="web: bench --site ${site} serve --host 0.0.0.0 --port 8000 --noreload"
+        web_command="web: bench --site ${site} serve --host 0.0.0.0 --port 8000"
     fi
     if grep -qE '^web:' ./Procfile; then
         sed -i -E "s|^web:.*$|${web_command}|" ./Procfile

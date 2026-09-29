@@ -423,20 +423,22 @@ class AttendanceWeekendHoursPolicyTest(unittest.TestCase):
 		api._invalidate_monthly_final_after_source_change.assert_called_once()
 		self.assertEqual(api.recheck_attendance_policy("TEST", "2026-08")["changed_count"], 0)
 
-	def test_new_import_does_not_merge_back_unmatched_blank_employee(self):
+	def test_new_import_replaces_the_complete_prior_attendance_snapshot(self):
 		api = load_processing_center()
 		batch = SimpleNamespace(name="new", company="TEST", attendance_month="2026-08", source_type="attendance_draft")
 		prior = SimpleNamespace(name="old", company="TEST", attendance_month="2026-08", source_type="attendance_draft")
 		api._processing_meta = lambda _batch: {"merge_parent_batch": "old"}
 		api.frappe.db.exists = lambda *_args: True
 		api.frappe.get_doc = lambda *_args: prior
-		api._result_rows = lambda *_args: [{"employee_code": "NEW-001", "employee_name": "新员工", "original_value": {"rows": []}}]
+		api._result_rows = Mock(side_effect=AssertionError("a replacement draft must not read prior effective rows"))
 		api._approval_source_exclusion = lambda *_args: ""
 		result = api._merge_processed_rows(batch, {"processed_rows": [], "metrics": {}, "data_quality": {
 			"excluded_unmatched_blank_employee_codes": ["NEW-001"],
 		}})
 		self.assertEqual(result["processed_rows"], [])
-		self.assertEqual(result["merge"]["excluded_previous_rows"], 1)
+		self.assertEqual(result["merge"]["mode"], "latest_upload_replacement")
+		self.assertEqual(result["merge"]["replaced_previous_rows"], 0)
+		api._result_rows.assert_not_called()
 
 
 if __name__ == "__main__":

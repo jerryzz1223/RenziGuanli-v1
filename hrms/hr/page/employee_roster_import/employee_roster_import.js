@@ -72,8 +72,9 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		$(page.body).html(`
 			<div class="hrms-import-landing">
 				<div class="alert alert-info">
-					<strong>${__("新增与修改的分工：")}</strong>
-					${__("是否新增只看系统中是否已有该员工档案，与在职、待离职或离职无关。两边统一按“公司 + 公司工号”识别员工；在职/离职结论冲突时只提示人工核对，不自动覆盖。")}
+					<strong>${__("员工资料日常维护链路：")}</strong>
+					${__("在职初次建档与后续入职从钉钉同步；系统内补充和修正员工资料。Excel 仅用于钉钉未覆盖的历史档案补录或经审核的批量修正。是否新增只看系统中是否已有该员工档案；所有入口统一按“公司 + 公司工号”识别员工。")}
+					<button class="btn btn-primary btn-sm" data-action="go-dingtalk">${__("前往钉钉员工同步")}</button>
 				</div>
 				<div class="alert alert-secondary" data-source-balance>${__("正在读取钉钉与系统员工来源核对摘要...")}</div>
 				<div class="hrms-import-card">
@@ -85,15 +86,15 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 				</div>
 				<div class="hrms-import-card">
 					<div>
-						<div class="hrms-import-card__title"><span class="blue-dot"></span>${__("批量添加员工")}</div>
-						<p>${__("用于新增系统中还没有档案的员工，包括在职、待离职和离职员工。已存在的公司工号将跳过，不会覆盖原有资料。")}</p>
+						<div class="hrms-import-card__title"><span class="blue-dot"></span>${__("历史档案补录（例外）")}</div>
+						<p>${__("仅用于钉钉未覆盖、且有来源依据的历史员工档案。已存在的公司工号将跳过，不会覆盖原有资料。")}</p>
 					</div>
 					<button class="btn btn-primary" data-action="start-insert">${__("导入花名册")}</button>
 				</div>
 				<div class="hrms-import-card">
 					<div>
-						<div class="hrms-import-card__title"><span class="orange-dot"></span>${__("批量修改信息")}</div>
-						<p>${__("只用于更新、修改系统中已有档案的员工。找不到匹配员工时不会新增，会提示“未找到可更新的员工”。")}</p>
+						<div class="hrms-import-card__title"><span class="orange-dot"></span>${__("受控批量修正（例外）")}</div>
+						<p>${__("单人修改请进入员工档案。此处只处理经审核的已有员工批量修正；找不到对应公司工号时不会新增。")}</p>
 					</div>
 					<button class="btn btn-warning" data-action="start-update">${__("去修改信息")}</button>
 				</div>
@@ -114,14 +115,20 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			const target = $(page.body).find("[data-source-balance]");
 			if (!target.length) return;
 			if (!state.source_balance.has_snapshot) {
-				target.removeClass("alert-secondary").addClass("alert-warning").text(__("当前没有可用的钉钉在职快照，暂时无法进行跨来源核对。"));
+				const latest = state.source_balance.snapshot;
+				const detail = latest ? __("最新同步 {0}（{1}）；缺工号 {2} 人、重复工号 {3} 个。", [latest.sync_log, latest.status || __("未知状态"), state.source_balance.dingtalk_missing_code_count || 0, state.source_balance.dingtalk_duplicate_employee_codes?.length || 0]) : "";
+				target.removeClass("alert-secondary").addClass("alert-warning").text(`${__("当前没有可用的钉钉在职快照，暂时无法进行跨来源核对。")}${detail}`);
 				return;
 			}
 			const system_only = state.source_balance.current_not_in_dingtalk?.length || 0;
 			const status_conflicts = state.source_balance.left_in_dingtalk?.length || 0;
 			const dingtalk_only = state.source_balance.dingtalk_not_in_employee?.length || 0;
 			const missing_code = state.source_balance.dingtalk_missing_code_count || 0;
-			target.html(`${__("来源核对：系统当前员工未出现在钉钉 {0} 人；系统已离职但钉钉仍在职 {1} 人；钉钉在职但系统无档案 {2} 人；钉钉缺少公司工号 {3} 人。", [system_only, status_conflicts, dingtalk_only, missing_code])} <button class="btn btn-xs btn-default" data-action="view-source-balance">${__("查看人工核对明细")}</button>`);
+			const duplicate_code = state.source_balance.dingtalk_duplicate_employee_codes?.length || 0;
+			const snapshot_status = state.source_balance.snapshot?.status || "";
+			const snapshot_warning = snapshot_status !== "已完成" || missing_code || duplicate_code || state.source_balance.snapshot?.snapshot_row_count !== state.source_balance.snapshot?.records_received;
+			target.removeClass("alert-secondary alert-info alert-warning").addClass(snapshot_warning ? "alert-warning" : "alert-info");
+			target.html(`${snapshot_warning ? __("钉钉在职快照需人工核对（{0}）；", [snapshot_status || __("未知状态")]) : ""}${__("来源核对：系统当前员工未出现在钉钉 {0} 人；系统已离职但钉钉仍在职 {1} 人；钉钉在职但系统无档案 {2} 人；钉钉缺少公司工号 {3} 人；重复工号 {4} 个。", [system_only, status_conflicts, dingtalk_only, missing_code, duplicate_code])} <button class="btn btn-xs btn-default" data-action="view-source-balance">${__("查看人工核对明细")}</button>`);
 		}).catch(() => {
 			$(page.body).find("[data-source-balance]").text(__("来源核对摘要读取失败，请稍后刷新。"));
 		});
@@ -159,7 +166,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 				</div>
 				<div class="hrms-import-tips">
 					<h4>${__("温馨提示")}</h4>
-					<p>1. ${__("批量添加可导入在职、待离职和离职员工；批量修改只处理已存在的员工。上传后会先匹配表头，不会立即写入员工资料。")}</p>
+					<p>1. ${__("本入口用于钉钉未覆盖的历史补录或经审核的批量修正；日常新员工请走钉钉扫码入职，单人资料请在员工档案维护。上传后会先匹配表头，不会立即写入。")}</p>
 					<p>2. ${__("您可以用自有花名册导入，也可以")} <button class="btn btn-link btn-xs" data-action="download-template">${__("下载标准模板")}</button></p>
 				</div>
 				<div class="hrms-import-effects">
@@ -209,13 +216,8 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 						<span class="text-muted">${__("手动匹配字段")}</span>
 					</div>
 					<div class="form-group">
-						<label class="control-label">${__("重复员工更新策略")}</label>
-						<select class="form-control" data-match-by>
-							<option value="employee_code" ${state.match_by === "employee_code" ? "selected" : ""}>${__("按工号")}</option>
-							<option value="id_card" ${state.match_by === "id_card" ? "selected" : ""}>${__("按身份证")}</option>
-							<option value="phone" ${state.match_by === "phone" ? "selected" : ""}>${__("按手机号")}</option>
-							<option value="auto" ${state.match_by === "auto" ? "selected" : ""}>${__("工号/身份证/手机号自动匹配")}</option>
-						</select>
+						<label class="control-label">${__("员工匹配依据")}</label>
+						<div class="form-control-static">${__("按工号（同一公司内唯一）")}</div>
 					</div>
 					${
 						state.mode === "update"
@@ -666,12 +668,9 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		frappe.set_route("List", "Employee");
 	}
 
-	$(page.body).on("change", "[data-match-by]", function () {
-		state.match_by = this.value;
-	});
-
 	$(page.body).on("click", "[data-action]", function () {
 		const action = this.dataset.action;
+		if (action === "go-dingtalk") frappe.set_route("attendance-import-center", "dingtalk");
 		if (["start-insert", "start-update", "start-replace"].includes(action)) {
 			if (!require_import_permission()) return;
 			state.mode = { "start-insert": "insert", "start-update": "update", "start-replace": "replace" }[action];
