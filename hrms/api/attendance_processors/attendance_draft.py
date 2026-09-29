@@ -73,7 +73,7 @@ IDENTITY_FIELDS = {
 	"approval": ("关联审批单", "关联的审批单", "审批单", "approval"),
 }
 
-ATTENDANCE_POLICY_VERSION = 49
+ATTENDANCE_POLICY_VERSION = 50
 OUTSIDE_SHIFT_EXCEPTION_TOLERANCE_MINUTES = 30
 RESTDAY_INCIDENTAL_PUNCH_MAX_MINUTES = 120
 DEFAULT_CALENDAR_WEEKEND_MODE = "休息日加班口径"
@@ -2150,11 +2150,16 @@ def _aggregate_employee_rows(
 		_add_code(codes, "EMPLOYEE_CODE_MISSING")
 	if len({_name_key(value) for value in names}) > 1:
 		_add_code(codes, "EMPLOYEE_CODE_NAME_CONFLICT")
-	if len({_department_key(value) for value in departments}) > 1:
-		_add_code(codes, "EMPLOYEE_DEPARTMENT_CONFLICT")
 	name = next(iter(names), "")
 	department = next(iter(departments), "")
 	resolved_code, resolved_name, resolved_department, employee = _resolve_employee(raw_code, name, department, employee_index, codes)
+	if len({_department_key(value) for value in departments}) > 1 and not (
+		employee and all(
+			_department_matches_roster(value, employee["department"], employee.get("designation"))
+			for value in departments
+		)
+	):
+		_add_code(codes, "EMPLOYEE_DEPARTMENT_CONFLICT")
 	totals = {field: Decimal("0") for field in NUMERIC_FIELDS}
 	scheduled_deep_night_shifts = 0
 	source_deep_night_present = False
@@ -3291,13 +3296,15 @@ def normalize_department_name(value):
 
 
 def _department_key(value):
-	"""Treat a shared department name with 组/课/科 suffixes as one unit.
+	"""Treat a shared department name with 组/课/科 or 组长 suffixes as one unit.
 
 	DingTalk exports and the roster use both naming conventions (for example
 	设备组 and 设备课) for the same operational department.  Only normalize the
 	final organizational suffix; all other differences remain reviewable.
 	"""
 	key = re.sub(r"\s+", "", normalize_department_name(value)).casefold()
+	if key.endswith("组长") and len(key) > 3:
+		key = key[:-2]
 	return key[:-1] if len(key) > 1 and key[-1:] in {"组", "课", "科"} else key
 
 

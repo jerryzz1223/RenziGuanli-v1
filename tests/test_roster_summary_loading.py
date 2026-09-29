@@ -25,7 +25,7 @@ class RosterSummaryLoadingTests(unittest.TestCase):
                 {'custom_work_nature': '在职·试用期', 'date_of_joining': '2026-09-15', 'final_confirmation_date': ''},
                 {'custom_work_nature': '在职·试用期', 'date_of_joining': '2026-09-08', 'final_confirmation_date': '2026-09-20'},
                 {'custom_work_nature': '在职·试用期', 'date_of_joining': '2026-09-01', 'final_confirmation_date': '2026-09-20'},
-                {'custom_work_nature': '在职·试用期', 'date_of_joining': '2026-09-01', 'final_confirmation_date': '2026-09-15'},
+                {'custom_work_nature': '在职·试用期', 'date_of_joining': '2026-09-01', 'final_confirmation_date': '2026-09-14'},
                 *({'custom_work_nature': '离职', 'date_of_joining': '2020-01-01'} for _ in range(16)),
                 {'custom_work_nature': '', 'date_of_joining': '2020-01-01'},
             ]
@@ -57,7 +57,7 @@ class RosterSummaryLoadingTests(unittest.TestCase):
         self.assertNotIn('ignore_permissions', kwargs)
         self.assertEqual(kwargs['limit_page_length'], 0)
         self.assertEqual(kwargs['fields'], ['custom_work_nature', 'date_of_joining', 'final_confirmation_date'])
-        self.assertEqual([card['count'] for card in result], [202, 197, 1, 1, 1, 0, 0, 16])
+        self.assertEqual([card['count'] for card in result], [202, 197, 1, 1, 2, 0, 0, 16])
 
     def test_existing_callers_keep_five_cards(self):
         self.assertEqual(len(self.summary({'company': 'B'})), 7)

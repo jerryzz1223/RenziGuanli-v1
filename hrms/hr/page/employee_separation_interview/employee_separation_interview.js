@@ -18,6 +18,9 @@ class EmployeeSeparationInterviewPage {
 		this.wrapper = page.main[0];
 		this.rows = [];
 		this.company = "";
+		this.loaded = false;
+		this.pending_key = "";
+		this.request_id = 0;
 		this.bind_events();
 	}
 
@@ -69,25 +72,39 @@ class EmployeeSeparationInterviewPage {
 		this.wrapper.querySelector("[data-refresh]").addEventListener("click", () => this.refresh());
 	}
 
-	refresh() {
+	refresh(force = false) {
 		this.company = this.current_company();
 		const list = this.wrapper.querySelector("[data-list]");
 		const empty = this.wrapper.querySelector("[data-empty]");
 		if (!list || !empty) return;
-		list.innerHTML = `<div class="text-muted">${frappe.utils.escape_html(__("正在读取已审批离职申请……"))}</div>`;
-		empty.classList.add("hidden");
+		const search = this.wrapper.querySelector("[data-search]")?.value || "";
+		const key = JSON.stringify([this.company, search]);
+		if (!force && this.pending_key === key) return;
+		const request_id = ++this.request_id;
+		this.pending_key = key;
+		if (!this.loaded) {
+			list.innerHTML = `<div class="text-muted">${frappe.utils.escape_html(__("正在读取已审批离职申请……"))}</div>`;
+			empty.classList.add("hidden");
+		}
 		frappe.call({
 			method: "hrms.hr.page.employee_separation_interview.employee_separation_interview.get_employee_separation_interviews",
-			args: { company: this.company, search: this.wrapper.querySelector("[data-search]")?.value || "" },
+			args: { company: this.company, search },
 			callback: (response) => {
+				if (request_id !== this.request_id) return;
+				this.pending_key = "";
+				this.loaded = true;
+				empty.textContent = __("暂无已审批的离职申请。");
 				this.rows = response.message?.rows || [];
 				this.render_rows();
 			},
 			error: () => {
-				this.rows = [];
-				list.innerHTML = "";
-				empty.textContent = __("离职面谈读取失败，请检查离职审批权限后重试。");
-				empty.classList.remove("hidden");
+				if (request_id !== this.request_id) return;
+				this.pending_key = "";
+				if (!this.loaded) {
+					list.innerHTML = "";
+					empty.textContent = __("离职面谈读取失败，请检查离职审批权限后重试。");
+					empty.classList.remove("hidden");
+				} else frappe.show_alert?.({ message: __("刷新失败，已保留上次面谈记录。"), indicator: "orange" });
 			},
 		});
 	}
@@ -126,7 +143,7 @@ class EmployeeSeparationInterviewPage {
 					args: { separation_name: row.separation_name, exit_interview: values.exit_interview || "" },
 					freeze: true,
 					freeze_message: __("正在保存离职面谈……"),
-					callback: () => { dialog.hide(); this.refresh(); frappe.show_alert({ message: __("离职面谈已保存"), indicator: "green" }); },
+					callback: () => { dialog.hide(); this.refresh(true); frappe.show_alert({ message: __("离职面谈已保存"), indicator: "green" }); },
 				});
 			},
 		});

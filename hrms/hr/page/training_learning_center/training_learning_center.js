@@ -17,6 +17,7 @@ class TrainingLearningHome {
 		this.last_loaded_at = 0;
 		this.load_promise = null;
 		this.cache_ttl = 30_000;
+		this.loaded_company = null;
 	}
 
 	company() {
@@ -25,25 +26,44 @@ class TrainingLearningHome {
 
 	show(force = false) {
 		this.page.set_title(__("培训学习主页"));
-		if (!force && this.data && Date.now() - this.last_loaded_at < this.cache_ttl) {
-			this.render(this.data);
+		const company = this.company();
+		if (!force && this.data && this.loaded_company === company && Date.now() - this.last_loaded_at < this.cache_ttl) {
+			if (!this.wrapper.querySelector(".hrms-training-home-metrics")) this.render(this.data);
 			return Promise.resolve(this.data);
 		}
-		if (this.load_promise) return this.load_promise;
-		if (!this.data) this.wrapper.innerHTML = `<section class="hrms-training-home"><div class="hrms-training-home-state">${__("正在读取培训统计与近期安排…")}</div></section>`;
+		if (this.load_promise) {
+			return this.loading_company === company ? this.load_promise : this.load_promise.then(() => this.show(force));
+		}
+		if (this.loaded_company !== company) this.wrapper.innerHTML = `<section class="hrms-training-home"><div class="hrms-training-home-state">${__("正在读取培训统计与近期安排…")}</div></section>`;
+		this.loading_company = company;
+		const button = this.wrapper.querySelector("[data-training-home-refresh]");
+		if (button) {
+			button.disabled = true;
+			button.setAttribute("aria-busy", "true");
+		}
 		// The deployed Frappe version returns a jQuery Deferred from frappe.call.
 		// Normalize it before chaining so Promise.prototype.finally is available;
 		// otherwise the page-load hook throws after the route has changed and Desk
 		// leaves the previously visible page mounted under the new navigation shell.
 		this.load_promise = Promise.resolve(frappe.call({
 			method: "hrms.hr.doctype.training_program.training_program.get_training_learning_dashboard",
-			args: { company: this.company(), include_plan_management: 0 },
+			args: { company, include_plan_management: 0 },
 		})).then(({ message }) => {
+			if (company !== this.company()) return;
 			this.data = message || {};
+			this.loaded_company = company;
 			this.last_loaded_at = Date.now();
 			this.render(this.data);
 			return this.data;
-		}).catch(() => this.render_error()).finally(() => {
+		}).catch(() => {
+			if (company !== this.company()) return;
+			if (this.loaded_company !== company) this.render_error();
+			else frappe.show_alert?.({ message: __("刷新失败，已保留上次数据。"), indicator: "orange" });
+		}).finally(() => {
+			if (button && button.isConnected) {
+				button.disabled = false;
+				button.removeAttribute("aria-busy");
+			}
 			this.load_promise = null;
 		});
 		return this.load_promise;

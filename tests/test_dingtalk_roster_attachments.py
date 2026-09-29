@@ -159,6 +159,7 @@ class DingTalkRosterAttachmentTests(unittest.TestCase):
 		self.assertEqual(module._normalise_dingtalk_employee_value("gender", "男", select), "Male")
 		self.assertEqual(module._normalise_dingtalk_employee_value("custom_marital_status_text", "未婚", select), "未")
 		self.assertEqual(module._normalise_dingtalk_employee_value("custom_education_level", "初中及以下", select), "初中")
+		self.assertEqual(module._normalise_dingtalk_employee_value("custom_education_level", "小学", select), "小学")
 		self.assertEqual(module._normalise_dingtalk_employee_value("employment_type", "全职", select), "Full-time")
 		self.assertIsNone(module._normalise_dingtalk_employee_value("emergency_phone_number", "0", select))
 		self.assertEqual(module._normalise_dingtalk_employee_value("department", "设备组", select), "设备课")

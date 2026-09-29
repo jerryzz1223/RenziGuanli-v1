@@ -104,6 +104,43 @@ class AttendanceExclusionTest(TestCase):
         self.assertEqual([item["attendance_date"] for item in projected["attendance_details"]], ["2026-08-13"])
         self.assertEqual(self.proposed["actual_attendance_hours"], 24)
 
+    def test_select_all_excludes_each_pending_date_across_employee_record(self):
+        api = self.api
+        self.doc.exception_codes = '["CLOCK_IN_MISSING", "CLOCK_OUT_MISSING"]'
+        self.doc.as_dict = lambda: {
+            "name": "row-1", "company": "永新", "attendance_month": "2026-08", "source_type": "attendance_draft",
+            "employee_code": "1223", "employee_name": "陆体廷", "review_status": self.doc.review_status,
+            "eligible_for_downstream": self.doc.eligible_for_downstream, "processed_value_json": self.doc.processed_value_json,
+            "proposed_value_json": self.doc.proposed_value_json, "confirmed_value_json": self.doc.confirmed_value_json,
+            "original_value_json": "{}", "review_history_json": self.doc.review_history_json,
+            "exception_codes": self.doc.exception_codes,
+        }
+        index = RecordRow(self.doc.as_dict())
+        with (
+            patch.object(api, "_require_processing_manager"),
+            patch.object(api, "_require_company", side_effect=lambda value: value),
+            patch.object(api, "_require_month", side_effect=lambda value: value),
+            patch.object(api, "_require_processing_source_type", side_effect=lambda value: value),
+            patch.object(api, "_latest_batch", return_value=self.batch),
+            patch.object(api, "_attendance_shift_rule_bundle", return_value={"version": "rules-v1"}),
+            patch.object(api.frappe, "get_all", return_value=[index]),
+            patch.object(api.frappe, "get_doc", return_value=self.doc, create=True),
+            patch.object(api, "now_datetime", return_value=datetime(2026, 9, 29, 10, 0)),
+            patch.object(api, "_refresh_batch_review_status", return_value="待确认"),
+            patch.object(api, "_export_processed_result", return_value={}),
+            patch.object(api, "_save_batch_notes"),
+            patch.object(api, "_invalidate_monthly_final_after_source_change"),
+            patch.object(api.frappe.db, "commit", create=True),
+        ):
+            result = api.bulk_update_processing_records(
+                "永新", "2026-08", "attendance_draft", "[]", select_all_pending=1,
+                review_status="暂不计入", reason="本月全部异常日期不计入",
+                employee_code="12", employee_name="陆",
+            )
+        self.assertEqual(result["updated_exception_lines"], 2)
+        self.assertEqual(self.doc.eligible_for_downstream, 1)
+        self.assertEqual(api._attendance_downstream_values({"source_type": "attendance_draft", "attendance_month": "2026-08", "review_status": self.doc.review_status, "processed_value": json.loads(self.doc.processed_value_json), "proposed_value": self.proposed, "confirmed_value": json.loads(self.doc.confirmed_value_json)})["actual_attendance_hours"], 8)
+
     def test_legacy_exclusion_alias_is_limited_to_attendance_draft(self):
         api = self.api
         api.frappe.throw = lambda message: (_ for _ in ()).throw(ValueError(message))

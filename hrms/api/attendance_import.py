@@ -8,6 +8,7 @@ from io import BytesIO
 import frappe
 from frappe import _
 from frappe.utils import flt, getdate, now_datetime
+from hrms.api.monthly_standard_hours import monthly_standard_hours
 
 
 REQUIRED_ATTENDANCE_SHEETS = ["1.1每日统计", "1.2请假单", "1.3苹果树"]
@@ -2562,6 +2563,7 @@ def generate_monthly_attendance_summary(company: str, attendance_month: str):
 	_require_attendance_capability("attendance_final_lock")
 	company = _require_company(company)
 	_month_bounds(attendance_month)
+	company_standard_hours = monthly_standard_hours(company, attendance_month)
 	lock = _prepare_month_lock_for_generation(company, attendance_month)
 	attendance_lock_version = str(lock.active_version)
 	daily_rows = _prefer_manual_daily_rows(_get_month_records(DAY_CHECK_DOCTYPE, "attendance_date", attendance_month, company))
@@ -2576,7 +2578,7 @@ def generate_monthly_attendance_summary(company: str, attendance_month: str):
 		identity[key] = row
 		for alias in _person_keys(row):
 			person_aliases[alias] = key
-		summaries[key]["standard_hours"] += flt(row.standard_hours)
+		# Daily standard hours remain source facts; the monthly baseline is shared.
 		summaries[key]["actual_attendance_hours"] += flt(row.actual_attendance_hours)
 		summaries[key]["overtime_1_5_hours"] += flt(row.workday_overtime_hours)
 		summaries[key]["overtime_2_hours"] += flt(row.restday_overtime_hours)
@@ -2623,6 +2625,7 @@ def generate_monthly_attendance_summary(company: str, attendance_month: str):
 			existing_by_person[key] = row.name
 	created = []
 	for key, values in summaries.items():
+		values["standard_hours"] = company_standard_hours
 		source = identity[key]
 		employee = getattr(source, "employee", None)
 		date_of_joining = frappe.db.get_value("Employee", employee, "date_of_joining") if employee else None

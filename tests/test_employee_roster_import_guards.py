@@ -1,6 +1,7 @@
 """Focused import guards without requiring a running Frappe site."""
 
 import ast
+import re
 import types
 import unittest
 from collections import Counter
@@ -20,6 +21,48 @@ def load_functions(*names, **dependencies):
 
 
 class RosterImportGuardTests(unittest.TestCase):
+	def test_education_options_and_explicit_import_alias(self):
+		options = next(node.value for node in TREE.body if isinstance(node, ast.Assign)
+			and any(isinstance(target, ast.Name) and target.id == "EDUCATION_LEVEL_OPTIONS" for target in node.targets))
+		self.assertIn("小学", ast.literal_eval(options))
+		ns = load_functions("_normalise_import_value", _clean_import_value=lambda value: value,
+			_reverse_option_label=lambda value, _fieldname: str(value).strip())
+		field = {"fieldtype": "Select", "options": "小学\n初中"}
+		self.assertEqual(ns["_normalise_import_value"]("custom_education_level", "小学", field), "小学")
+		self.assertEqual(ns["_normalise_import_value"]("custom_education_level", "初中及以下", field), "初中")
+		self.assertEqual(ns["_normalise_import_value"]("custom_education_level", "高中", field), "高中")
+
+	def test_work_nature_trial_aliases_do_not_guess_other_values(self):
+		ns = load_functions("_normalise_work_nature_import_value", re=re)
+		for source in ("在职·试用", "在职·试用期", "正式·试用", "正式·试用期", "正式 ・ 试用期"):
+			with self.subTest(source=source):
+				self.assertEqual(ns["_normalise_work_nature_import_value"](source), "在职·试用期")
+		self.assertEqual(ns["_normalise_work_nature_import_value"]("正式·其他"), "正式·其他")
+
+	def test_roster_import_reports_normalised_values(self):
+		normalise = load_functions("_normalise_work_nature_import_value", re=re)["_normalise_work_nature_import_value"]
+		ns = load_functions(
+			"_row_to_employee_values",
+			_is_employee_import_deferred_placeholder=lambda _value: False,
+			_normalise_import_value=lambda _field, value, _metadata: {"初中及以下": "初中"}.get(value, value),
+			_excel_cell_reference=lambda *_args: "A2",
+			_is_blank_value=lambda value: value in (None, ""),
+			_is_employee_import_required_field=lambda *_args: False,
+			_normalise_work_nature_import_value=normalise,
+			_apply_identity_card_derivatives=lambda *_args: None,
+			_=lambda value: value,
+		)
+		fields = {name: {"fieldname": name} for name in ("custom_education_level", "custom_work_nature")}
+		matches = [{"fieldname": name, "column_index": index} for index, name in enumerate(fields)]
+		warnings = []
+		values, errors = ns["_row_to_employee_values"](["初中及以下", "正式·试用"], matches, fields, warnings, 2)
+		self.assertEqual(errors, [])
+		self.assertEqual(values, {"custom_education_level": "初中", "custom_work_nature": "在职·试用期"})
+		self.assertEqual(warnings, [
+			"第 2 行：学历“初中及以下”已匹配为“初中”。",
+			"第 2 行：工作性质“正式·试用”已匹配为“在职·试用期”。",
+		])
+
 	def test_approved_dingtalk_import_keeps_supplied_work_nature(self):
 		source = SOURCE.parents[2] / "hrms/overrides/employee_master.py"
 		function = next(

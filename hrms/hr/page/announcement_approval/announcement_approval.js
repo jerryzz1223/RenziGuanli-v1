@@ -7,19 +7,29 @@ frappe.pages["announcement-approval"].on_page_load = function (wrapper) {
 	const routeName = String((frappe.get_route?.() || [])[1] || "").trim();
 	let openedRoute = false;
 	let request_id = 0;
+	let loaded = false;
+	let load_promise = null;
 	page.set_primary_action(__("审批记录"), () => frappe.set_route("announcement-approval-records"), "list");
 
-	function load() {
+	function load(force = false) {
+		if (!force && load_promise) return load_promise;
 		const current_request_id = ++request_id;
-		list.innerHTML = '<div class="text-muted">正在加载审批公告…</div>';
-		hrms.announcement.call("hrms.api.announcement.list_announcements", { view: "approval" }).then((response) => {
+		if (!loaded) list.innerHTML = '<div class="text-muted">正在加载审批公告…</div>';
+		const request = Promise.resolve(hrms.announcement.call("hrms.api.announcement.list_announcements", { view: "approval" })).then((response) => {
 			if (current_request_id !== request_id) return;
 			const rows = response.message || [];
+			loaded = true;
 			list.innerHTML = rows.length ? rows.map((row) => `<article class="hrms-announcement-card"><div class="hrms-announcement-card__head"><div><h4><a data-open="${esc(row.name)}">${esc(row.announcement_number || "未编号")}</a>　${esc(row.subject)}</h4><p class="hrms-announcement-card__meta">发文者：${esc(row.issuer_name)}　发文单位：${esc(row.issuing_unit_name)}　${hrms.announcement.status(row.status)}</p><p class="hrms-announcement-card__meta">创建时间：${time(row.created_on)}　提交时间：${time(row.submitted_on)}</p></div><button class="btn btn-primary btn-sm" data-open="${esc(row.name)}">查看并处理</button></div><div class="hrms-announcement-card__files">附件：${hrms.announcement.files(row.files)}</div></article>`).join("") : '<div class="text-muted">无待审批记录。</div>';
 			list.querySelectorAll("[data-open]").forEach((node) => node.addEventListener("click", () => open_detail(node.dataset.open)));
 			if (routeName && !openedRoute) { openedRoute = true; open_detail(routeName); }
 			hrms.announcement.bind_file_links(list);
-		});
+		}).catch(() => {
+			if (current_request_id !== request_id) return;
+			if (!loaded) list.innerHTML = '<div class="alert alert-danger">审批公告加载失败，请重新打开页面后重试。</div>';
+			else frappe.show_alert?.({ message: __("刷新失败，已保留上次审批公告。"), indicator: "orange" });
+		}).finally(() => { if (load_promise === request) load_promise = null; });
+		load_promise = request;
+		return request;
 	}
 	function open_detail(name) {
 		hrms.announcement.call("hrms.api.announcement.get_announcement", { name }).then((response) => {
@@ -41,7 +51,7 @@ frappe.pages["announcement-approval"].on_page_load = function (wrapper) {
 			function review(decision, values) {
 				if (decision === "reject" && !String(values?.approval_comment || "").trim()) { frappe.msgprint(__("驳回时请填写审核意见。")); return; }
 				dialog.disable_primary_action();
-				hrms.announcement.call("hrms.api.announcement.review_announcement", { name, decision, approval_comment: values?.approval_comment || "", approver_name: values?.approver_name || "" }).then(() => { dialog.hide(); frappe.show_alert({ message: decision === "approve" ? __("公告已审核通过，已进入上传签字版") : __("公告已驳回"), indicator: decision === "approve" ? "green" : "orange" }); load(); }).finally(() => dialog.enable_primary_action());
+				hrms.announcement.call("hrms.api.announcement.review_announcement", { name, decision, approval_comment: values?.approval_comment || "", approver_name: values?.approver_name || "" }).then(() => { dialog.hide(); frappe.show_alert({ message: decision === "approve" ? __("公告已审核通过，已进入上传签字版") : __("公告已驳回"), indicator: decision === "approve" ? "green" : "orange" }); load(true); }).finally(() => dialog.enable_primary_action());
 			}
 		});
 	}

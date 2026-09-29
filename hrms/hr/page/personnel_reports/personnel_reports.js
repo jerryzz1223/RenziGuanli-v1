@@ -10,6 +10,7 @@ frappe.pages["personnel-reports"].on_page_load = function (wrapper) {
 		search: "",
 		collapsed: new Set(),
 		load_request_id: 0,
+		load_promise: null,
 	};
 
 	$(page.body).addClass("hrms-report-center");
@@ -27,15 +28,21 @@ frappe.pages["personnel-reports"].on_page_load = function (wrapper) {
 	add_page_menu_item(__("编辑分组"), () => frappe.set_route("List", "HRMS Employee Report"));
 
 	function load() {
+		if (state.load_promise) return state.load_promise;
 		const request_id = ++state.load_request_id;
-		$(page.body).html(`<div class="text-muted">${__("正在加载人事报表...")}</div>`);
-		return frappe
-			.call("hrms.api.employee_field_template.get_employee_report_center")
+		if (!state.groups.length) $(page.body).html(`<div class="text-muted">${__("正在加载人事报表...")}</div>`);
+		state.load_promise = Promise.resolve(frappe.call("hrms.api.employee_field_template.get_employee_report_center"))
 			.then((r) => {
 				if (request_id !== state.load_request_id) return;
 				state.groups = r.message?.groups || [];
 				render();
-			});
+			})
+			.catch(() => {
+				if (!state.groups.length) $(page.body).html(`<div class="alert alert-danger">${__("人事报表暂时无法读取，请重新打开页面后重试。")}</div>`);
+				else frappe.show_alert?.({ message: __("刷新失败，已保留上次报表。"), indicator: "orange" });
+			})
+			.finally(() => { state.load_promise = null; });
+		return state.load_promise;
 	}
 
 	function filtered_reports(reports) {

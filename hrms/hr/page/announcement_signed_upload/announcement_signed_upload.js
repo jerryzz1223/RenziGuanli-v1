@@ -6,6 +6,9 @@ frappe.pages["announcement-signed-upload"].on_page_load = function (wrapper) {
 	const time = (value) => esc(value || "—");
 	page.set_primary_action(__("签字版记录"), () => frappe.set_route("announcement-signed-records"), "list");
 	let openedRouteName = "";
+	let loaded = false;
+	let loadPromise = null;
+	let requestId = 0;
 
 	function open_route_target() {
 		const routeName = String((frappe.get_route?.() || [])[1] || "").trim();
@@ -16,15 +19,25 @@ frappe.pages["announcement-signed-upload"].on_page_load = function (wrapper) {
 		upload_signed(routeName);
 	}
 
-	function load() {
-		list.innerHTML = '<div class="text-muted">正在加载待签字公告…</div>';
-		hrms.announcement.call("hrms.api.announcement.list_announcements", { view: "sign" }).then((response) => {
+	function load(force = false) {
+		if (!force && loadPromise) return loadPromise;
+		const currentRequest = ++requestId;
+		if (!loaded) list.innerHTML = '<div class="text-muted">正在加载待签字公告…</div>';
+		const request = Promise.resolve(hrms.announcement.call("hrms.api.announcement.list_announcements", { view: "sign" })).then((response) => {
+			if (currentRequest !== requestId) return;
 			const rows = response.message || [];
+			loaded = true;
 			list.innerHTML = rows.length ? rows.map((row) => `<article class="hrms-announcement-card"><div class="hrms-announcement-card__head"><div><h4>${esc(row.announcement_number)}　${esc(row.subject)}</h4><p class="hrms-announcement-card__meta">${esc(row.issuing_unit_name)}　${hrms.announcement.status(row.status)}　签字状态：${esc(row.signature_status)}</p><p class="hrms-announcement-card__meta">创建时间：${time(row.created_on)}　审批时间：${time(row.reviewed_on)}　签字版上传时间：${time(row.signed_on)}</p></div><button class="btn btn-default btn-sm" data-open="${esc(row.name)}">查看</button></div><div class="hrms-announcement-card__files">${hrms.announcement.versions(row.versions || [], [], "download")}</div><div class="hrms-announcement-editor__actions"><button class="btn btn-primary btn-sm" data-signed-upload="${esc(row.name)}">上传签字版</button></div></article>`).join("") : '<div class="text-muted">暂无待上传签字版的公告。已上传记录请在“签字版记录”中查看。</div>';
 			list.querySelectorAll("[data-open]").forEach((node) => node.addEventListener("click", () => open_detail(node.dataset.open)));
 			list.querySelectorAll("[data-signed-upload]").forEach((node) => node.addEventListener("click", () => upload_signed(node.dataset.signedUpload)));
 			hrms.announcement.bind_file_links(list);
-		});
+		}).catch(() => {
+			if (currentRequest !== requestId) return;
+			if (!loaded) list.innerHTML = '<div class="alert alert-danger">待签字公告加载失败，请重新打开页面后重试。</div>';
+			else frappe.show_alert?.({ message: __("刷新失败，已保留上次公告。"), indicator: "orange" });
+		}).finally(() => { if (loadPromise === request) loadPromise = null; });
+		loadPromise = request;
+		return request;
 	}
 	function open_detail(name) {
 		hrms.announcement.call("hrms.api.announcement.get_announcement", { name }).then((response) => {
@@ -37,7 +50,7 @@ frappe.pages["announcement-signed-upload"].on_page_load = function (wrapper) {
 	}
 	function upload_signed(name) {
 		hrms.announcement.upload({ name, fieldname: "signed_attachment", accept: [".docx", ".doc", ".xlsx", ".xls", ".pdf", ".jpg", ".png"], on_success: (file) => {
-			hrms.announcement.call("hrms.api.announcement.upload_signed_announcement", { name, signed_file_url: file.file_url }).then(() => { frappe.show_alert({ message: __("签字版已归档，未签字版仍保留"), indicator: "green" }); load(); });
+			hrms.announcement.call("hrms.api.announcement.upload_signed_announcement", { name, signed_file_url: file.file_url }).then(() => { frappe.show_alert({ message: __("签字版已归档，未签字版仍保留"), indicator: "green" }); load(true); });
 		} });
 	}
 	load();

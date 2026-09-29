@@ -5,8 +5,12 @@ frappe.pages["hrms-workbench"].on_page_load = function (wrapper) {
 		single_column: true,
 	});
 
-	const view = new HRMSHome(page);
-	view.show();
+	wrapper.hrms_home = new HRMSHome(page);
+	wrapper.hrms_home.show();
+};
+
+frappe.pages["hrms-workbench"].on_page_show = function (wrapper) {
+	wrapper.hrms_home?.show();
 };
 
 const CHINA_PROVINCE_MAP_LAYOUT = [
@@ -27,19 +31,45 @@ class HRMSHome {
 	constructor(page) {
 		this.page = page;
 		this.wrapper = page.main[0];
+		this.data = null;
+		this.load_promise = null;
+		this.last_loaded_at = 0;
+		this.cache_ttl = 30_000;
 	}
 
 	show() {
 		this.page.set_title(__("系统主页"));
-		this.render_loading();
-		this.refresh();
+		if (!this.data) this.render_loading();
+		return this.refresh();
 	}
 
-	refresh() {
-		frappe
-			.call("hrms.hr.page.hrms_workbench.hrms_workbench.get_data")
-			.then((response) => this.render(response.message || {}))
-			.catch(() => this.render_error());
+	refresh(force = false) {
+		if (this.load_promise) return this.load_promise;
+		if (!force && this.data && Date.now() - this.last_loaded_at < this.cache_ttl) return Promise.resolve(this.data);
+		const button = this.wrapper.querySelector("[data-home-refresh]");
+		if (button) {
+			button.disabled = true;
+			button.setAttribute("aria-busy", "true");
+		}
+		this.load_promise = Promise.resolve(frappe.call("hrms.hr.page.hrms_workbench.hrms_workbench.get_data"))
+			.then((response) => {
+				this.data = response.message || {};
+				this.last_loaded_at = Date.now();
+				this.render(this.data);
+				return this.data;
+			})
+			.catch(() => {
+				if (!this.data) this.render_error();
+				else frappe.show_alert?.({ message: __("刷新失败，已保留上次数据。"), indicator: "orange" });
+			})
+			.finally(() => {
+				if (button && button.isConnected) {
+					button.disabled = false;
+					button.removeAttribute("aria-busy");
+				}
+				this.load_promise = null;
+			});
+		return this.load_promise;
 	}
 
 	render_loading() {
@@ -53,7 +83,7 @@ class HRMSHome {
 				<button type="button" class="btn btn-default" data-home-refresh>重新加载</button>
 			</section>
 		`;
-		this.wrapper.querySelector("[data-home-refresh]")?.addEventListener("click", () => this.refresh());
+		this.wrapper.querySelector("[data-home-refresh]")?.addEventListener("click", () => this.refresh(true));
 	}
 
 	render(data) {
@@ -239,7 +269,7 @@ class HRMSHome {
 	}
 
 	bind_events() {
-		this.wrapper.querySelectorAll("[data-home-refresh]").forEach((button) => button.addEventListener("click", () => this.refresh()));
+		this.wrapper.querySelectorAll("[data-home-refresh]").forEach((button) => button.addEventListener("click", () => this.refresh(true)));
 		this.wrapper.querySelectorAll("[data-route]").forEach((button) => {
 			button.addEventListener("click", () => {
 				const route = JSON.parse(button.dataset.route || "[]");

@@ -45,6 +45,7 @@ from hrms.api.attendance_processors.attendance_draft import (
 	_schedule_overtime_rule,
 )
 from hrms.api.attendance_processors.missed_punch import MissedPunchRules, precheck_missed_punch_structure, process_missed_punch_rows
+from hrms.api.monthly_standard_hours import monthly_standard_hours
 
 
 IMPORT_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
@@ -1611,9 +1612,9 @@ def _process_monthly_support_rows(batch):
 				exception_codes.append("EMPLOYEE_CODE_NAME_CONFLICT")
 			# Housing allowance, full-attendance and special-hours files are
 			# verified by employee identity plus their respective amount/hours.
-			# Source departments are helpful audit context, but historical labels
-			# must not block a payroll input when the roster has since moved the
-			# employee to another department.
+			# Source units such as a group and roster jobs such as its group leader
+			# are audit context here. A verified employee code and name do not need
+			# the source unit to equal the roster's parent department.
 			department = str(employee.get("department") or department).strip()
 		in_attendance_population = bool(code and code in attendance_codes) or bool(name and re.sub(r"\s+", "", str(name)) in attendance_names)
 		if attendance_people and not in_attendance_population:
@@ -6877,6 +6878,20 @@ FIRST_SIGNED_COLUMNS = (
 	("reunion_leave_hours", "团圆假(小时)"), ("employee_signature", "签名"), ("review_note", "备注"),
 )
 
+FIRST_SIGNED_LEAVE_FIELDS = (
+	"personal_leave_hours", "sick_leave_hours", "annual_leave_hours", "work_injury_hours",
+	"rest_arrangement_hours", "absence_hours", "reunion_leave_hours",
+)
+
+
+def _first_signed_visible_columns(rows):
+	"""Show a leave column only when someone has hours in the month."""
+	return tuple(
+		(field, label) for field, label in FIRST_SIGNED_COLUMNS
+		if field not in FIRST_SIGNED_LEAVE_FIELDS
+		or any(_as_number(row.get(field)) != 0 for row in rows)
+	)
+
 # A web edit is an explicit signed-final correction layer.  Rate-specific
 # special hours stay date-level because changing a monthly total would lose the
 # weekday/rest-day/holiday multiplier evidence used by both finance and payroll.
@@ -6886,7 +6901,7 @@ MONTHLY_FINAL_SCHEDULED_FIELDS = frozenset({"deep_night_shifts"})
 MONTHLY_FINAL_WEB_EDITABLE_FIELDS = tuple(
 	field
 	for field, _label in FINAL_SIGNED_COLUMNS
-	if field not in MONTHLY_FINAL_IDENTITY_FIELDS | MONTHLY_FINAL_SPECIAL_HOURS_FIELDS | MONTHLY_FINAL_SCHEDULED_FIELDS
+	if field not in MONTHLY_FINAL_IDENTITY_FIELDS | MONTHLY_FINAL_SPECIAL_HOURS_FIELDS | MONTHLY_FINAL_SCHEDULED_FIELDS | {"standard_hours"}
 )
 
 # The settings table stores visible Excel headings, while field keys remain
@@ -7023,10 +7038,11 @@ def _attendance_final_excel_config_hash() -> str:
 	return hashlib.sha256(_json(payload).encode()).hexdigest()
 
 
-# Version ten invalidates previous files and also fingerprints heading changes,
-# so an edited Settings table cannot accidentally keep an old export.
-MONTHLY_FINAL_LAYOUT_VERSION = 12
-FIRST_SIGNED_LAYOUT_VERSION = 2
+# Layout versions invalidate files generated with the former per-person baseline.
+MONTHLY_FINAL_LAYOUT_VERSION = 14
+FIRST_SIGNED_LAYOUT_VERSION = 5
+SHARED_STANDARD_FINAL_LAYOUT_VERSION = 13
+SHARED_STANDARD_FIRST_SIGNED_LAYOUT_VERSION = 5
 
 
 # The employee-facing file deliberately follows the paper confirmation form
@@ -7271,7 +7287,10 @@ def _approval_snapshot(company: str, attendance_month: str, finalization_inputs=
 	missing = [SOURCE_LABELS[source_type] for source_type, batch in batches.items() if not batch]
 	if missing:
 		return "", missing
-	return _monthly_snapshot_version(batches), []
+	# A calendar or standard-hours rule change requires a fresh approval.
+	standard = monthly_standard_hours(company, attendance_month)
+	material = f"{_monthly_snapshot_version(batches)}:shared-standard-v1:{standard}"
+	return hashlib.sha256(material.encode()).hexdigest()[:16], []
 
 
 def _monthly_final_approval_state(company: str, attendance_month: str, anchor_meta=None, finalization_inputs=None) -> dict[str, Any]:
@@ -7430,7 +7449,7 @@ def list_monthly_final_approval_history(company: str, attendance_month: str):
 	return {"items": items}
 
 
-def _monthly_final_rows(batches: dict[str, Any], employee_code: str = ""):
+def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared_standard_hours: bool = True, standard_hours_override: int | None = None):
 	"""Aggregate confirmed processing rows without recalculating their source facts."""
 	rows_by_employee = defaultdict(dict)
 	attendance_population = set()
@@ -7498,12 +7517,18 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = ""):
 					continue
 				field = MONTHLY_SUPPORT_SOURCE_CONFIG[source_type]["value_field"]
 				output[field] = _as_number(output.get(field)) + _as_number(values.get(field))
+	if shared_standard_hours:
+		attendance_batch = batches.get("attendance_draft")
+		if attendance_batch and getattr(attendance_batch, "attendance_month", None):
+			standard = standard_hours_override if standard_hours_override is not None else monthly_standard_hours(attendance_batch.company, attendance_batch.attendance_month)
+			for row in rows_by_employee.values():
+				row["standard_hours"] = standard
 	return sorted(rows_by_employee.values(), key=lambda row: (str(row.get("department") or ""), str(row.get("employee_code") or ""), str(row.get("employee_name") or "")))
 
 
-def _monthly_first_signed_rows(batches: dict[str, Any], employee_code: str = ""):
+def _monthly_first_signed_rows(batches: dict[str, Any], employee_code: str = "", shared_standard_hours: bool = True, standard_hours_override: int | None = None):
 	"""Build first-signature rows in the supplied narrow workbook's shape."""
-	rows = _monthly_final_rows(batches, employee_code=employee_code) if employee_code else _monthly_final_rows(batches)
+	rows = _monthly_final_rows(batches, employee_code=employee_code, shared_standard_hours=shared_standard_hours, standard_hours_override=standard_hours_override) if employee_code else _monthly_final_rows(batches, shared_standard_hours=shared_standard_hours, standard_hours_override=standard_hours_override)
 	company = next((batch.company for batch in batches.values() if batch), "")
 	joining_dates = {
 		str(employee.get("employee_code") or "").strip(): employee.get("date_of_joining") or ""
@@ -7512,6 +7537,8 @@ def _monthly_first_signed_rows(batches: dict[str, Any], employee_code: str = "")
 	for sequence, row in enumerate(rows, start=1):
 		row["sequence"] = sequence
 		row["date_of_joining"] = joining_dates.get(str(row.get("employee_code") or "").strip(), "")
+		late_count = _as_number(row.get("late_count"))
+		row["review_note"] = f"迟到{late_count:g}次" if late_count > 0 else ""
 		for field in ("special_workday_hours", "special_restday_hours", "special_holiday_hours"):
 			row.setdefault(field, "")
 	return rows
@@ -7863,6 +7890,10 @@ def _save_monthly_first_signed_confirmation_file(attendance_month: str, rows, da
 			cell.font = Font(name="宋体", size=11)
 		sheet.row_dimensions[excel_row].height = 31.5
 
+	visible_fields = {field for field, _label in _first_signed_visible_columns(rows)}
+	for column, field in enumerate(FIRST_SIGNED_LEAVE_FIELDS, start=18):
+		sheet.column_dimensions[get_column_letter(column)].hidden = field not in visible_fields
+
 	sheet.freeze_panes = "C5"
 	sheet.sheet_view.showGridLines = False
 	sheet.page_setup.orientation = "portrait"
@@ -7912,12 +7943,6 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 			sheet.merge_cells(start_row=2, start_column=form_start + start, end_row=3, end_column=form_start + start)
 		start = end
 
-	field_codes = [""] * len(excel_fields)
-	for field_index, code in {0: 1, 1: 2, 2: "  ", 3: 4, 5: 5, 6: 6, 42: 7, 43: 8, 44: 9, 45: 10, 47: 11, 48: 12, 50: 13, 51: 14, 53: 15, 54: 16, 55: 17, 56: 18, 57: 19, 58: 20}.items():
-		field_codes[field_index] = code
-	for column, code in enumerate(field_codes, start=form_start):
-		sheet.cell(row=4, column=column, value=code)
-
 	thin = Side(style="thin", color="000000")
 	blue_side = Side(style="medium", color="0000FF")
 	border = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -7949,7 +7974,8 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 	sheet.row_dimensions[1].height = 54.75
 	sheet.row_dimensions[2].height = 30
 	sheet.row_dimensions[3].height = 78
-	sheet.row_dimensions[4].height = 35.25
+	# Keep row 4 hidden so data rows and formulas retain their coordinates.
+	sheet.row_dimensions[4].hidden = True
 	second_signed_widths = {
 		"A": 2.5, "B": 3.75, "C": 6.125, "D": 7.0, "E": 6.5, "F": 9.625, "G": 5.375, "H": 6.5, "I": 8.375, "J": 6.375, "K": 5.5, "L": 5.875, "M": 7.375, "N": 6.0,
 		"P": 6.5, "Q": 5.875, "R": 5.75, "S": 5.875, "U": 5.25, "V": 4.875, "Z": 6.125, "AA": 5.625, "AB": 6.25, "AC": 6.125,
@@ -8048,6 +8074,7 @@ def _generate_first_signed_output(company: str, attendance_month: str, state: di
 		"file_name": file["file_name"],
 		"generated_on": now_datetime().isoformat(),
 		"employee_count": len(rows),
+		"standard_hours": rows[0]["standard_hours"],
 		"layout_version": FIRST_SIGNED_LAYOUT_VERSION,
 	}
 	_save_batch_notes(anchor_batch, {"first_signed_outputs": first_signed_outputs})
@@ -8114,6 +8141,7 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 		"approved_on": approval.get("reviewed_on", ""),
 		"approval_snapshot_version": approval.get("snapshot_version", ""),
 		"employee_count": len(rows),
+		"standard_hours": rows[0]["standard_hours"],
 		"layout_version": MONTHLY_FINAL_LAYOUT_VERSION,
 		"attendance_final_excel_config_hash": config_hash,
 	}
@@ -8153,8 +8181,14 @@ def get_monthly_final_preview(company: str, attendance_month: str, kind: str = "
 		if not legacy_matches:
 			return {"available": False, "stale": True, "reason": _("来源或人工处理已变化，请重新锁定并生成终稿后再查看。")}
 		preview_batches = legacy_batches
-	rows = (_monthly_first_signed_rows(preview_batches, employee_code=employee_code) if employee_code else _monthly_first_signed_rows(preview_batches)) if kind == "first_signed" else (_monthly_final_rows(preview_batches, employee_code=employee_code) if employee_code else _monthly_final_rows(preview_batches))
-	columns = FIRST_SIGNED_COLUMNS if kind == "first_signed" else FINAL_SIGNED_COLUMNS if kind == "signed" else FINAL_FINANCE_COLUMNS
+	if kind == "first_signed":
+		month_rows = _monthly_first_signed_rows(preview_batches, shared_standard_hours=cint(outputs.get("layout_version")) >= SHARED_STANDARD_FIRST_SIGNED_LAYOUT_VERSION, standard_hours_override=outputs.get("standard_hours"))
+		columns = _first_signed_visible_columns(month_rows)
+		rows = [row for row in month_rows if str(row.get("employee_code") or "").strip() == str(employee_code).strip()] if employee_code else month_rows
+	else:
+		shared_standard = cint(outputs.get("layout_version")) >= SHARED_STANDARD_FINAL_LAYOUT_VERSION
+		rows = _monthly_final_rows(preview_batches, employee_code=employee_code, shared_standard_hours=shared_standard, standard_hours_override=outputs.get("standard_hours")) if employee_code else _monthly_final_rows(preview_batches, shared_standard_hours=shared_standard, standard_hours_override=outputs.get("standard_hours"))
+		columns = FINAL_SIGNED_COLUMNS if kind == "signed" else FINAL_FINANCE_COLUMNS
 	return {
 		"available": True,
 		"kind": kind,

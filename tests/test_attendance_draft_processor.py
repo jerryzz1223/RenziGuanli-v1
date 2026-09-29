@@ -2355,6 +2355,39 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(row["review_status"], "无需审核")
 		self.assertTrue(row["eligible_for_downstream"])
 
+	def test_parent_department_and_roster_group_do_not_conflict_for_same_code(self):
+		rows = [
+			{"姓名": "陆体廷", "工号": "1223", "日期": f"26-08-{day:02d}", "实际部门": department,
+			 "班次": "白班", "标准工时": 8, "实际出勤": 8, "source_file": "sample.xlsx",
+			 "source_sheet": "每日统计", "source_row": day + 2}
+			for day, department in ((4, "工程课"), (5, "模具组"))
+		]
+		roster = [{"employee_code": "1223", "employee_name": "陆体廷", "department": "工程课", "designation": "模具组长"}]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-08", employee_directory=roster)["processed_rows"][0]
+		self.assertNotIn("EMPLOYEE_DEPARTMENT_CONFLICT", row["exception_codes"])
+		self.assertNotIn("EMPLOYEE_DEPARTMENT_MISMATCH", row["exception_codes"])
+		self.assertEqual(row["employee_code"], "1223")
+
+	def test_group_name_matches_roster_group_leader_department(self):
+		rows = [{"姓名": "张三", "工号": "E-001", "日期": "26-08-04", "实际部门": "品管组",
+			"班次": "白班", "标准工时": 8, "实际出勤": 8,
+			"source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": 3}]
+		roster = [{"employee_code": "E-001", "employee_name": "张三", "department": "品管组长"}]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-08", employee_directory=roster)["processed_rows"][0]
+		self.assertNotIn("EMPLOYEE_DEPARTMENT_MISMATCH", row["exception_codes"])
+		self.assertEqual(row["employee_code"], "E-001")
+
+	def test_unrelated_group_still_conflicts_with_parent_department(self):
+		rows = [
+			{"姓名": "张三", "工号": "E-001", "日期": f"26-08-{day:02d}", "实际部门": department,
+			 "班次": "白班", "标准工时": 8, "实际出勤": 8, "source_file": "sample.xlsx",
+			 "source_sheet": "每日统计", "source_row": day + 2}
+			for day, department in ((4, "工程课"), (5, "品保组"))
+		]
+		roster = [{"employee_code": "E-001", "employee_name": "张三", "department": "工程课", "designation": "模具组长"}]
+		row = processor.process_attendance_draft_rows(rows, attendance_month="2026-08", employee_directory=roster)["processed_rows"][0]
+		self.assertIn("EMPLOYEE_DEPARTMENT_CONFLICT", row["exception_codes"])
+
 	def test_different_department_and_designation_still_require_review(self):
 		rows = [{
 			"姓名": "张三", "工号": "E-001", "日期": "26-08-04", "实际部门": "品保课", "班次": "白班", "标准工时": 8,

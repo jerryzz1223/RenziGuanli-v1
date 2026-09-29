@@ -6,6 +6,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import load_workbook
 
@@ -19,7 +20,7 @@ def load_processing_api():
 	frappe._ = lambda value, *args: value
 	frappe.whitelist = lambda function=None: function or (lambda decorated: decorated)
 	frappe.throw = lambda message, *args, **kwargs: (_ for _ in ()).throw(RuntimeError(message))
-	frappe.db = types.SimpleNamespace()
+	frappe.db = types.SimpleNamespace(get_value=lambda *args, **kwargs: None)
 	frappe.get_all = lambda *args, **kwargs: []
 	frappe.get_doc = lambda *args, **kwargs: None
 	frappe.get_roles = lambda *args, **kwargs: []
@@ -65,6 +66,24 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 	def setUpClass(cls):
 		cls.api = load_processing_api()
 
+	def test_monthly_final_uses_one_calendar_standard_for_different_source_totals(self):
+		api = self.api
+		attendance = types.SimpleNamespace(source_type="attendance_draft", company="测试公司", attendance_month="2026-07")
+		records = [
+			{"source_type": "attendance_draft", "eligible_for_downstream": True, "employee_code": code,
+			 "processed_value": {"employee_code": code, "employee_name": code, "standard_hours": source_hours}}
+			for code, source_hours in (("E-001", 160), ("E-002", 176))
+		]
+		frappe = sys.modules["frappe"]
+		with patch.object(api, "_result_rows", return_value=records), patch.object(frappe.db, "get_value", return_value=None, create=True):
+			rows = api._monthly_final_rows({"attendance_draft": attendance})
+			legacy = api._monthly_final_rows({"attendance_draft": attendance}, shared_standard_hours=False)
+			locked = api._monthly_final_rows({"attendance_draft": attendance}, standard_hours_override=168)
+		self.assertEqual([row["standard_hours"] for row in rows], [184, 184])
+		self.assertEqual([row["standard_hours"] for row in legacy], [160, 176])
+		self.assertEqual([row["standard_hours"] for row in locked], [168, 168])
+		self.assertNotIn("standard_hours", api.MONTHLY_FINAL_WEB_EDITABLE_FIELDS)
+
 	def test_rows_use_attendance_population_and_keep_missing_card_amount(self):
 		api = self.api
 		attendance = types.SimpleNamespace(source_type="attendance_draft", company="测试公司")
@@ -94,6 +113,16 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(rows[0]["date_of_joining"], "2008-06-16")
 		self.assertEqual(rows[0]["red_apple_amount"], 5)
 		self.assertEqual(rows[0]["special_workday_hours"], 2)
+
+	def test_first_signed_remark_only_shows_monthly_late_count(self):
+		api = self.api
+		monthly_rows = [
+			{"employee_code": "E-001", "late_count": 2, "review_note": "2026-07-01迟到30分钟；2026-07-08迟到15分钟"},
+			{"employee_code": "E-002", "late_count": 0, "review_note": "来源处理明细"},
+		]
+		with patch.object(api, "_monthly_final_rows", return_value=monthly_rows), patch.object(api, "_employee_directory", return_value=[]):
+			rows = api._monthly_first_signed_rows({"attendance_draft": types.SimpleNamespace(company="测试公司")})
+		self.assertEqual([row["review_note"] for row in rows], ["迟到2次", ""])
 
 	def test_confirmed_special_hours_override_same_day_derived_from_attendance(self):
 		api = self.api
@@ -146,6 +175,7 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 				"sequence": 1, "department": "工程课", "employee_name": "张三", "employee_code": "E-001",
 				"date_of_joining": "2008-06-16", "standard_hours": 176, "actual_attendance_hours": 168,
 				"special_workday_hours": 2, "workday_overtime_hours": 2, "large_night_shifts": 1, "absence_hours": 0,
+				"review_note": "迟到2次",
 			}], [daily_row])
 		finally:
 			sys.modules["frappe.utils.file_manager"].save_file = api_save_file
@@ -171,7 +201,59 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(sheet["I5"].value, 2)
 		self.assertIsNone(sheet["J5"].value)
 		self.assertIsNone(sheet["K5"].value)
+		self.assertEqual(sheet["Z5"].value, "迟到2次")
 		self.assertEqual(sheet.max_column, 29)
+		self.assertTrue(all(sheet.column_dimensions[column].hidden for column in "RSTUVWX"))
+		self.assertFalse(sheet.column_dimensions["Y"].hidden)
+
+	def test_leave_columns_follow_monthly_values_for_excel_and_preview(self):
+		api = self.api
+		rows = [
+			{"employee_code": "E-001", "personal_leave_hours": 0, "sick_leave_hours": None},
+			{"employee_code": "E-002", "sick_leave_hours": 8, "reunion_leave_hours": 4},
+		]
+		visible_fields = [field for field, _label in api._first_signed_visible_columns(rows)]
+		self.assertNotIn("personal_leave_hours", visible_fields)
+		self.assertIn("sick_leave_hours", visible_fields)
+		self.assertIn("reunion_leave_hours", visible_fields)
+		self.assertIn("employee_signature", visible_fields)
+
+		captured = {}
+		file_manager = sys.modules["frappe.utils.file_manager"]
+		old_save_file = file_manager.save_file
+		file_manager.save_file = lambda name, content, *args, **kwargs: (captured.update(content=content) or types.SimpleNamespace(file_url="/private/files/first-signed.xlsx", file_name=name))
+		try:
+			api._save_monthly_first_signed_confirmation_file("2026-07", rows)
+		finally:
+			file_manager.save_file = old_save_file
+		sheet = load_workbook(io.BytesIO(captured["content"]))["工时汇总"]
+		self.assertTrue(sheet.column_dimensions["R"].hidden)
+		self.assertFalse(sheet.column_dimensions["S"].hidden)
+		self.assertTrue(all(sheet.column_dimensions[column].hidden for column in "TUVW"))
+		self.assertFalse(sheet.column_dimensions["X"].hidden)
+		self.assertEqual(sheet["S6"].value, 8)
+		self.assertEqual(sheet["X6"].value, 4)
+
+	def test_employee_preview_uses_whole_month_to_choose_columns(self):
+		api = self.api
+		batch = types.SimpleNamespace(company="测试公司")
+		rows = [
+			{"employee_code": "E-001", "sick_leave_hours": 0},
+			{"employee_code": "E-002", "sick_leave_hours": 8},
+		]
+		with (
+			patch.object(api, "_require_processing_manager"),
+			patch.object(api, "_require_company", side_effect=lambda value: value),
+			patch.object(api, "_require_month", side_effect=lambda value: value),
+			patch.object(api, "_latest_batch", return_value=batch),
+			patch.object(api, "_processing_meta", return_value={"first_signed_outputs": {"locked_snapshot_version": "snapshot"}}),
+			patch.object(api, "_first_signed_snapshot_batches", return_value={"attendance_draft": batch}),
+			patch.object(api, "_monthly_snapshot_version", return_value="snapshot"),
+			patch.object(api, "_monthly_first_signed_rows", return_value=rows),
+		):
+			preview = api.get_monthly_final_preview("测试公司", "2026-07", "first_signed", "E-001")
+		self.assertEqual([row["employee_code"] for row in preview["rows"]], ["E-001"])
+		self.assertIn("sick_leave_hours", [column["field"] for column in preview["columns"]])
 
 	def test_daily_projection_exports_calculated_and_confirmed_overtime_separately(self):
 		api = self.api
@@ -252,8 +334,8 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(sheet["BJ5"].value, "2026-07-01迟到30分钟（半小时以内）")
 		self.assertEqual(sheet["X5"].value, 40)
 		self.assertEqual(sheet["AJ5"].value, "=J5+K5")
-		self.assertEqual(sheet["AR4"].value, 7)
-		self.assertEqual(sheet["BH4"].value, 20)
+		self.assertTrue(sheet.row_dimensions[4].hidden)
+		self.assertTrue(all(sheet.cell(row=4, column=column).value is None for column in range(2, sheet.max_column + 1)))
 		self.assertEqual(sheet.freeze_panes, "J4")
 		self.assertEqual(sheet["R10"].value, "审核：")
 		self.assertEqual(sheet["AS10"].value, "审核：")

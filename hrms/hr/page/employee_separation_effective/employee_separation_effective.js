@@ -30,6 +30,9 @@ class EmployeeSeparationEffectivePage {
 		this.wrapper = page.main[0];
 		this.rows = [];
 		this.company = "";
+		this.loaded = false;
+		this.pending_key = "";
+		this.request_id = 0;
 		this.bind_events();
 	}
 
@@ -60,20 +63,29 @@ class EmployeeSeparationEffectivePage {
 		});
 	}
 
-	refresh() {
+	refresh(force = false) {
 		this.company = this.current_company();
 		const search = this.wrapper.querySelector("[data-search]")?.value || "";
+		const key = JSON.stringify([this.company, search]);
+		if (!force && this.pending_key === key) return;
+		const request_id = ++this.request_id;
+		this.pending_key = key;
 		const list = this.wrapper.querySelector("[data-list]");
-		list.innerHTML = `<div class="text-muted">${frappe.utils.escape_html(__("正在读取待办理实际离职记录……"))}</div>`;
+		if (!this.loaded) list.innerHTML = `<div class="text-muted">${frappe.utils.escape_html(__("正在读取待办理实际离职记录……"))}</div>`;
 		frappe.call({
 			method: "hrms.hr.page.employee_separation_effective.employee_separation_effective.get_pending_employee_separations",
 			args: { company: this.company, search },
 			callback: (response) => {
+				if (request_id !== this.request_id) return;
+				this.pending_key = "";
+				this.loaded = true;
 				this.rows = response.message?.rows || [];
 				this.render_rows();
 			},
 			error: () => {
-				list.innerHTML = "";
+				if (request_id !== this.request_id) return;
+				this.pending_key = "";
+				if (!this.loaded) list.innerHTML = "";
 				frappe.msgprint(__("实际离职记录读取失败，请检查权限后重试。"));
 			},
 		});
@@ -90,7 +102,7 @@ class EmployeeSeparationEffectivePage {
 			freeze_message: __("正在保存实际离职时间……"),
 			callback: () => {
 				frappe.show_alert({ message: __("实际离职时间已保存"), indicator: "green" });
-				this.refresh();
+				this.refresh(true);
 			},
 		});
 	}

@@ -15,6 +15,9 @@ frappe.pages["hrms-data-operations"].on_page_load = function (wrapper) {
 		expandedModules: new Set(),
 		preview: null,
 		overviewError: "",
+		loaded: false,
+		loadPromise: null,
+		loadRequestId: 0,
 	};
 
 	function escape(value) {
@@ -286,8 +289,11 @@ frappe.pages["hrms-data-operations"].on_page_load = function (wrapper) {
 	}
 
 	function loadContext(company, cleanupMonth = state.cleanupMonth) {
+		const requestId = ++state.loadRequestId;
+		state.loadPromise = null;
 		$(page.body).html(`<div class="text-muted">${__("正在读取公司数据空间…")}</div>`);
 		return frappe.call("hrms.api.data_operations.get_company_data_management_context", { company, cleanup_month: cleanupMonth }).then((response) => {
+			if (requestId !== state.loadRequestId) return;
 			state.context = response.message || {};
 			state.company = state.context.company || "";
 			state.cleanupMonth = state.context.cleanup_month || cleanupMonth;
@@ -298,22 +304,38 @@ frappe.pages["hrms-data-operations"].on_page_load = function (wrapper) {
 	}
 
 	function loadAll() {
-		$(page.body).html(`<div class="text-muted">${__("正在读取数据处理状态…")}</div>`);
+		if (state.loadPromise) return state.loadPromise;
+		const requestId = ++state.loadRequestId;
+		if (!state.loaded) $(page.body).html(`<div class="text-muted">${__("正在读取数据处理状态…")}</div>`);
 		const currentCompany = window.hrmsCompanyContext?.getCurrentCompany?.() || "";
-		return Promise.allSettled([
+		const request = Promise.allSettled([
 			frappe.call("hrms.api.data_operations.get_data_operations_overview"),
 			frappe.call("hrms.api.data_operations.get_company_data_management_context", { company: currentCompany, cleanup_month: state.cleanupMonth }),
 		]).then(([overviewResult, contextResult]) => {
+			if (requestId !== state.loadRequestId) return;
 			if (contextResult.status !== "fulfilled") throw contextResult.reason;
+			const previousCompany = state.company;
+			const previousMonth = state.cleanupMonth;
 			state.overview = overviewResult.status === "fulfilled" ? overviewResult.value.message || {} : {};
 			state.overviewError = overviewResult.status === "fulfilled" ? "" : __("后台队列状态暂时不可用，不影响公司与数据空间管理。");
 			state.context = contextResult.value.message || {};
 			state.company = state.context.company || "";
 			state.cleanupMonth = state.context.cleanup_month || state.cleanupMonth;
-			state.selected.clear();
+			if (previousCompany !== state.company || previousMonth !== state.cleanupMonth) state.selected.clear();
+			else {
+				const available = new Set((state.context.modules || []).filter((module) => module.monthly_supported).map((module) => module.key));
+				state.selected = new Set([...state.selected].filter((key) => available.has(key)));
+			}
 			state.preview = null;
+			state.loaded = true;
 			render();
-		});
+		}).catch(() => {
+			if (requestId !== state.loadRequestId) return;
+			if (!state.loaded) $(page.body).html(`<div class="alert alert-danger">${__("数据处理状态加载失败，请点击刷新重试。")}</div>`);
+			else frappe.show_alert?.({ message: __("刷新失败，已保留上次数据。"), indicator: "orange" });
+		}).finally(() => { if (state.loadPromise === request) state.loadPromise = null; });
+		state.loadPromise = request;
+		return request;
 	}
 
 	loadAll();

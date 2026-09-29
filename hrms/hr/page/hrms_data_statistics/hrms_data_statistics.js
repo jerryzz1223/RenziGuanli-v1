@@ -10,7 +10,7 @@ frappe.pages["hrms-data-statistics"].on_page_load = function (wrapper) {
 		title: __("数据统计"),
 		single_column: true,
 	});
-	page.set_primary_action(__("刷新数据"), () => load(), "refresh");
+	page.set_primary_action(__("刷新数据"), () => load(state.month, true), "refresh");
 
 	const state = {
 		data: null,
@@ -21,6 +21,13 @@ frappe.pages["hrms-data-statistics"].on_page_load = function (wrapper) {
 		operatorSearch: "",
 		activity: null,
 		activityType: "all",
+		loadRequestId: 0,
+		loadPromise: null,
+		loadingKey: "",
+		loadedKey: "",
+		loadedAt: 0,
+		activityRequestId: 0,
+		operatorRequestId: 0,
 	};
 	const escape = (value) => frappe.utils.escape_html(value == null ? "" : String(value));
 	const person = (label, account, emptyLabel = __("未记录")) => label || account
@@ -255,6 +262,7 @@ frappe.pages["hrms-data-statistics"].on_page_load = function (wrapper) {
 			loadActivity(button.dataset.personUser, button.dataset.openPersonForm);
 		}));
 		root.querySelector("[data-close-activity]")?.addEventListener("click", () => {
+			state.activityRequestId++;
 			state.activity = null;
 			state.activityType = "all";
 			render();
@@ -283,33 +291,56 @@ frappe.pages["hrms-data-statistics"].on_page_load = function (wrapper) {
 		}));
 	}
 
-	function load(month = state.month) {
-		$(page.body).html(`<div class="text-muted">${__("正在汇总操作员审计数据…")}</div>`);
+	function load(month = state.month, force = false) {
 		const company = window.hrmsCompanyContext?.getCurrentCompany?.() || "";
-		return Promise.all([
+		const key = JSON.stringify([month || "", company]);
+		if (state.loadPromise && state.loadingKey === key) return state.loadPromise;
+		if (!force && state.data && state.loadedKey === key && Date.now() - state.loadedAt < 30_000) return Promise.resolve(state.data);
+		const requestId = ++state.loadRequestId;
+		state.activityRequestId++;
+		state.operatorRequestId++;
+		state.loadingKey = key;
+		if (!state.data) $(page.body).html(`<div class="text-muted">${__("正在汇总操作员审计数据…")}</div>`);
+		const request = Promise.all([
 			frappe.call("hrms.api.data_statistics.get_hrms_data_statistics", { month: month || undefined, company }),
 			frappe.call("hrms.api.data_statistics.get_hrms_operator_statistics", { month: month || undefined, company }),
 		]).then(([dataResponse, operatorResponse]) => {
+			if (requestId !== state.loadRequestId) return;
 			state.data = dataResponse.message || {};
 			state.month = state.data.activity_month || month || "";
+			state.loadedKey = JSON.stringify([state.month, company]);
+			state.loadedAt = Date.now();
 			state.operatorData = operatorResponse.message || { people: [], forms: [], summary: {} };
 			state.activity = null;
 			state.activityType = "all";
 			render();
-		}).catch(() => $(page.body).html(`<div class="alert alert-danger">${__("操作审计数据加载失败，请确认当前账户拥有系统管理员权限。")}</div>`));
+		}).catch(() => {
+			if (requestId === state.loadRequestId && !state.data) $(page.body).html(`<div class="alert alert-danger">${__("操作审计数据加载失败，请确认当前账户拥有系统管理员权限。")}</div>`);
+			else if (requestId === state.loadRequestId) frappe.show_alert?.({ message: __("刷新失败，已保留上次统计。"), indicator: "orange" });
+		}).finally(() => {
+			if (state.loadPromise === request) state.loadPromise = null;
+		});
+		state.loadPromise = request;
+		return request;
 	}
 
 	function loadOperators() {
 		const company = window.hrmsCompanyContext?.getCurrentCompany?.() || "";
+		const requestId = ++state.operatorRequestId;
 		return frappe.call("hrms.api.data_statistics.get_hrms_operator_statistics", { company, month: state.month || undefined }).then((response) => {
+			if (requestId !== state.operatorRequestId) return;
 			state.operatorData = response.message || { people: [], summary: {} };
 			render();
-		}).catch(() => $(page.body).html(`<div class="alert alert-danger">${__("人员操作记录加载失败，请确认当前账户拥有系统管理员权限。")}</div>`));
+		}).catch(() => {
+			if (requestId === state.operatorRequestId && !state.operatorData) $(page.body).html(`<div class="alert alert-danger">${__("人员操作记录加载失败，请确认当前账户拥有系统管理员权限。")}</div>`);
+		});
 	}
 
 	function loadActivity(user, doctype, start = 0, append = false, operationType = state.activityType) {
 		const company = window.hrmsCompanyContext?.getCurrentCompany?.() || "";
+		const requestId = ++state.activityRequestId;
 		return frappe.call("hrms.api.data_statistics.get_hrms_operator_activity", { user, doctype, company, month: state.month || undefined, operation_type: operationType, start }).then((response) => {
+			if (requestId !== state.activityRequestId) return;
 			const next = response.message || {};
 			if (append && state.activity) next.events = [...state.activity.events, ...(next.events || [])];
 			state.activity = next;
@@ -317,11 +348,13 @@ frappe.pages["hrms-data-statistics"].on_page_load = function (wrapper) {
 		});
 	}
 
+	wrapper.hrms_data_statistics = { refresh: load };
 	load();
 };
 
-frappe.pages["hrms-data-statistics"].on_page_show = function () {
+frappe.pages["hrms-data-statistics"].on_page_show = function (wrapper) {
 	set_data_statistics_layout(true);
+	wrapper.hrms_data_statistics?.refresh();
 };
 
 frappe.pages["hrms-data-statistics"].on_page_hide = function () {

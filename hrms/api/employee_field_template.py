@@ -46,6 +46,7 @@ CHINA_ETHNICITY_VALUES = (
 	"独龙族", "鄂伦春族", "赫哲族", "门巴族", "珞巴族", "基诺族",
 )
 EDUCATION_LEVEL_OPTIONS = (
+	"小学",
 	"初中",
 	"高中",
 	"中专",
@@ -3722,15 +3723,9 @@ def _get_probation_age_days(row, today):
 def _is_mature_probation_employee(row, today):
 	if row.get("custom_work_nature") != "在职·试用期":
 		return False
-	if (_get_probation_age_days(row, today) or 0) < 15:
-		return False
-	confirmation_date = row.get("final_confirmation_date")
-	if not confirmation_date:
-		return True
-	try:
-		return today < frappe.utils.getdate(confirmation_date)
-	except Exception:
-		return False
+	# Until the saved work nature changes, an overdue confirmation date must not
+	# make a trial employee disappear from every roster card.
+	return (_get_probation_age_days(row, today) or 0) >= 15
 
 
 def _get_probation_card_label(row, today):
@@ -5444,6 +5439,9 @@ def _normalise_import_value(fieldname, value, field):
 	if fieldname == "custom_work_nature":
 		return str(value).strip()
 
+	if fieldname == "custom_education_level":
+		return _reverse_option_label("初中" if str(value).strip() == "初中及以下" else value, fieldname)
+
 	if fieldname == "gender":
 		return _normalise_gender_value(value)
 
@@ -5742,6 +5740,8 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 				)
 		if value is not None:
 			values[fieldname] = value
+			if fieldname == "custom_education_level" and str(raw_value).strip() != str(value).strip():
+				warnings.append(_("第 {0} 行：学历“{1}”已匹配为“{2}”。").format(row_index or "", raw_value, value))
 
 	# A result-page correction may target a field that was not present in the
 	# uploaded headers. Apply it as a one-time override so the user can repair
@@ -5753,15 +5753,22 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 		value = _normalise_import_value(fieldname, raw_value, field)
 		if value is not None:
 			values[fieldname] = value
+			if fieldname == "custom_education_level" and str(raw_value).strip() != str(value).strip():
+				warnings.append(_("第 {0} 行：学历“{1}”已匹配为“{2}”。").format(row_index or "", raw_value, value))
 
 	if values.get("first_name") and not values.get("employee_name"):
 		values["employee_name"] = values["first_name"]
 	if values.get("employee_name") and not values.get("first_name"):
 		values["first_name"] = values["employee_name"]
 	if values.get("custom_work_nature"):
-		values["custom_work_nature"] = _normalise_work_nature_import_value(
-			values["custom_work_nature"], values.get("custom_is_confirmed")
-		)
+		source_nature = values["custom_work_nature"]
+		values["custom_work_nature"] = _normalise_work_nature_import_value(source_nature, values.get("custom_is_confirmed"))
+		if source_nature != values["custom_work_nature"]:
+			warnings.append(
+				_("第 {0} 行：工作性质“{1}”已匹配为“{2}”。").format(
+					row_index or "", source_nature, values["custom_work_nature"]
+				)
+			)
 	_apply_identity_card_derivatives(values, warnings, row_index)
 	return values, errors
 
@@ -5784,10 +5791,10 @@ def _apply_employee_roster_insert_defaults(values, warnings, row_index, fields_b
 
 def _normalise_work_nature_import_value(value, is_confirmed=None):
 	"""Accept legacy spreadsheet labels while persisting one of the five form values."""
-	compact_value = str(value or "").replace(" ", "").replace("·", "").strip()
+	compact_value = re.sub(r"[\s·・•]", "", str(value or ""))
 	if compact_value in {"在职", "正式", "在职正式"}:
 		return "在职·试用期" if is_confirmed == "否" else "在职·正式"
-	if compact_value in {"试用", "试用期", "在职试用期"}:
+	if compact_value in {"试用", "试用期", "在职试用", "在职试用期", "正式试用", "正式试用期"}:
 		return "在职·试用期"
 	if compact_value in {"退休返聘", "返聘"}:
 		return "退休返聘"

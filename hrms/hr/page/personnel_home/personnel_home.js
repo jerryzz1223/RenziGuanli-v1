@@ -31,20 +31,32 @@ class PersonnelHome {
 	show(force = false) {
 		this.page.set_title(__("人事首页"));
 		if (!force && this.data && Date.now() - this.last_loaded_at < this.cache_ttl) {
-			this.render(this.data);
+			if (!this.wrapper.querySelector(".personnel-home__analytics")) this.render(this.data);
 			return Promise.resolve(this.data);
 		}
 		if (this.load_promise) return this.load_promise;
 		if (!this.data) this.wrapper.innerHTML = '<section class="personnel-home personnel-home--state">正在加载人事数据…</section>';
-		this.load_promise = frappe.call("hrms.hr.page.personnel_home.personnel_home.get_data")
+		const button = this.wrapper.querySelector("[data-personnel-refresh]");
+		if (button) {
+			button.disabled = true;
+			button.setAttribute("aria-busy", "true");
+		}
+		this.load_promise = Promise.resolve(frappe.call("hrms.hr.page.personnel_home.personnel_home.get_data"))
 			.then((response) => {
 				this.data = response.message || {};
 				this.last_loaded_at = Date.now();
 				this.render(this.data);
 				return this.data;
 			})
-			.catch(() => this.render_error())
+			.catch(() => {
+				if (!this.data) this.render_error();
+				else frappe.show_alert?.({ message: __("刷新失败，已保留上次数据。"), indicator: "orange" });
+			})
 			.finally(() => {
+				if (button && button.isConnected) {
+					button.disabled = false;
+					button.removeAttribute("aria-busy");
+				}
 				this.load_promise = null;
 			});
 		return this.load_promise;
@@ -159,9 +171,17 @@ class PersonnelHome {
 		const host = this.wrapper.querySelector("[data-province-map]");
 		if (!host) return;
 		try {
-			const response = await fetch("/assets/hrms/data/china-provinces.geojson");
-			if (!response.ok) throw new Error("map data unavailable");
-			const geojson = this.decode_geojson(await response.json());
+			if (!this.province_map_promise) {
+				this.province_map_promise = fetch("/assets/hrms/data/china-provinces.geojson")
+					.then((response) => {
+						if (!response.ok) throw new Error("map data unavailable");
+						return response.json();
+					})
+					.then((geojson) => this.decode_geojson(geojson))
+					.catch((error) => { this.province_map_promise = null; throw error; });
+			}
+			const geojson = await this.province_map_promise;
+			if (this.wrapper.querySelector("[data-province-map]") !== host) return;
 			const bounds = this.map_bounds(geojson.features);
 			const max = Math.max(...Array.from(this.nativePlaceCounts.values()), 0);
 			const paths = geojson.features.map((feature) => {
@@ -189,7 +209,7 @@ class PersonnelHome {
 				});
 			});
 		} catch (error) {
-			host.innerHTML = '<span>省级地图资源暂时无法加载，请刷新后重试。</span>';
+			if (this.wrapper.querySelector("[data-province-map]") === host) host.innerHTML = '<span>省级地图资源暂时无法加载，请刷新后重试。</span>';
 		}
 	}
 

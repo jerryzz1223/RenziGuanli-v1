@@ -4,9 +4,9 @@ frappe.pages["company-management"].on_page_load = function (wrapper) {
 		title: __("公司管理"),
 		single_column: true,
 	});
-	page.set_primary_action(__("刷新"), () => load(), "refresh");
+	page.set_primary_action(__("刷新"), () => load(true), "refresh");
 
-	const state = { companies: [] };
+	const state = { companies: [], loaded: false, loaded_at: 0, load_promise: null };
 
 	function escape(value) {
 		return frappe.utils.escape_html(value == null ? "" : String(value));
@@ -82,14 +82,28 @@ frappe.pages["company-management"].on_page_load = function (wrapper) {
 		});
 	}
 
-	function load() {
-		$(page.body).html(`<div class="text-muted">${__("正在读取公司数据情况…")}</div>`);
-		return frappe.call("hrms.api.data_operations.get_company_data_management_context", { company: "" }).then((response) => {
+	function load(force = false) {
+		if (!force && state.loaded && Date.now() - state.loaded_at < 30_000) return Promise.resolve(state.companies);
+		if (state.load_promise) return state.load_promise;
+		if (!state.loaded) $(page.body).html(`<div class="text-muted">${__("正在读取公司数据情况…")}</div>`);
+		state.load_promise = Promise.resolve(frappe.call("hrms.api.data_operations.get_company_data_management_context", { company: "" })).then((response) => {
 			state.companies = response.message?.companies || [];
 			state.companies.sort((left, right) => (left.scope === "primary" ? -1 : right.scope === "primary" ? 1 : companyLabel(left).localeCompare(companyLabel(right), "zh-CN")));
+			state.loaded = true;
+			state.loaded_at = Date.now();
 			render();
-		});
+			return state.companies;
+		}).catch(() => {
+			if (!state.loaded) $(page.body).html(`<div class="alert alert-danger">${__("公司数据暂时无法读取，请点击刷新重试。")}</div>`);
+			else frappe.show_alert?.({ message: __("刷新失败，已保留上次公司数据。"), indicator: "orange" });
+		}).finally(() => { state.load_promise = null; });
+		return state.load_promise;
 	}
 
+	wrapper.company_management = { refresh: load };
 	load();
+};
+
+frappe.pages["company-management"].on_page_show = function (wrapper) {
+	wrapper.company_management?.refresh();
 };

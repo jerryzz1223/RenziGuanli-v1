@@ -914,6 +914,36 @@ class AppleTreeProcessorContractTest(unittest.TestCase):
 			result = center._process_monthly_support_rows(batch)
 		self.assertFalse(any("EMPLOYEE_DEPARTMENT_MISMATCH" in row["exception_codes"] for row in result["processed_rows"]))
 
+	def test_monthly_support_group_label_matches_without_parent_department(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		roster = [{"employee_code": "E-001", "employee_name": "张三", "department": "工程课", "designation": "模具组长"}]
+		for source_type in center.MONTHLY_SUPPORT_SOURCE_TYPES:
+			with self.subTest(source_type=source_type):
+				batch = SimpleNamespace(source_type=source_type, attendance_month="2026-08", company="永新")
+				raw = {"employee_code": "E-001", "employee_name": "张三", "department": "模具组",
+					"source_file": "source.xlsx", "source_sheet": "8月", "source_row": 3, "source_id": "8月:3"}
+				if source_type == "special_hours":
+					raw["special_hours_days"] = [{"day": 4, "hours": 1}]
+				else:
+					raw[center.MONTHLY_SUPPORT_SOURCE_CONFIG[source_type]["value_field"]] = 200
+				with patch.object(center, "_read_monthly_support_rows", return_value=([raw], [])), patch.object(center, "_employee_directory", return_value=roster), patch.object(center, "_latest_batch", return_value=None):
+					result = center._process_monthly_support_rows(batch)
+				row = result["processed_rows"][0]
+				self.assertEqual(row["exception_codes"], [])
+				self.assertEqual(row["employee_code"], "E-001")
+				self.assertEqual(row["department"], "工程课")
+				self.assertEqual(row["original_data"]["department"], "模具组")
+
+	def test_monthly_support_group_label_does_not_hide_name_conflict(self):
+		center, _file_manager, _frappe_modules = processing_center_module()
+		batch = SimpleNamespace(source_type="housing_allowance", attendance_month="2026-08", company="永新")
+		raw = {"employee_code": "E-001", "employee_name": "李四", "department": "模具组",
+			"housing_allowance": 200, "source_file": "source.xlsx", "source_sheet": "8月", "source_row": 3, "source_id": "8月:3"}
+		roster = [{"employee_code": "E-001", "employee_name": "张三", "department": "工程课", "designation": "模具组长"}]
+		with patch.object(center, "_read_monthly_support_rows", return_value=([raw], [])), patch.object(center, "_employee_directory", return_value=roster), patch.object(center, "_latest_batch", return_value=None):
+			result = center._process_monthly_support_rows(batch)
+		self.assertIn("EMPLOYEE_CODE_NAME_CONFLICT", result["processed_rows"][0]["exception_codes"])
+
 	def test_monthly_finance_file_uses_the_compact_confirmation_layout(self):
 		if load_workbook is None:
 			self.skipTest("openpyxl is unavailable")

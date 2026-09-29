@@ -6,12 +6,16 @@ frappe.pages["announcement-signed-records"].on_page_load = function (wrapper) {
 	const time = (value) => esc(value || "—");
 	const routeName = String((frappe.get_route?.() || [])[1] || "").trim();
 	let openedRoute = false;
+	let loaded = false;
+	let loadPromise = null;
 	page.set_secondary_action(__("返回上传签字版"), () => frappe.set_route("announcement-signed-upload"), "left");
 
 	function load() {
-		list.innerHTML = '<div class="text-muted">正在加载签字版记录…</div>';
-		hrms.announcement.call("hrms.api.announcement.list_announcements", { view: "signed_records", sort_field: "signed_on", sort_order: "desc" }).then((response) => {
+		if (loadPromise) return loadPromise;
+		if (!loaded) list.innerHTML = '<div class="text-muted">正在加载签字版记录…</div>';
+		const request = Promise.resolve(hrms.announcement.call("hrms.api.announcement.list_announcements", { view: "signed_records", sort_field: "signed_on", sort_order: "desc" })).then((response) => {
 			const rows = response.message || [];
+			loaded = true;
 			const body = rows.length ? rows.map((row) => `<tr><td>${esc(row.announcement_number || "—")}</td><td>${esc(row.subject || "—")}</td><td>${esc(row.signed_by_name || "—")}</td><td>${time(row.signed_on)}</td><td>${time(row.reviewed_on)}</td><td>${hrms.announcement.versions(row.versions || [], [], "download")}</td><td><button type="button" class="btn btn-default btn-xs" data-signed-open="${esc(row.name)}">查看</button></td></tr>`).join("") : '<tr><td class="hrms-announcement-table__empty" colspan="7">暂无签字版记录。</td></tr>';
 			list.innerHTML = `<div class="table-responsive hrms-announcement-approval-history"><table class="table table-bordered table-hover"><thead><tr><th>公告编号</th><th>主旨</th><th>签字上传人</th><th>签字版上传时间</th><th>审批时间</th><th>签字版文件</th><th>操作</th></tr></thead><tbody>${body}</tbody></table></div><p class="text-muted hrms-announcement-table__summary">共 ${rows.length} 条签字版记录</p>`;
 			list.querySelectorAll("[data-signed-open]").forEach((button) => button.addEventListener("click", () => open_detail(button.dataset.signedOpen)));
@@ -20,7 +24,12 @@ frappe.pages["announcement-signed-records"].on_page_load = function (wrapper) {
 				openedRoute = true;
 				if (rows.some((row) => row.name === routeName)) open_detail(routeName);
 			}
-		});
+		}).catch(() => {
+			if (!loaded) list.innerHTML = '<div class="alert alert-danger">签字版记录加载失败，请重新打开页面后重试。</div>';
+			else frappe.show_alert?.({ message: __("刷新失败，已保留上次签字版记录。"), indicator: "orange" });
+		}).finally(() => { if (loadPromise === request) loadPromise = null; });
+		loadPromise = request;
+		return request;
 	}
 
 	function open_detail(name) {

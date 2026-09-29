@@ -42,7 +42,7 @@ mustInclude(list, "format_roster_work_nature", "花名册必须显示表单保�
 mustInclude(list, "custom_work_nature", "花名册必须按工作性质字段筛选。");
 mustInclude(list, 'return filters;', "三个入职阶段必须统一匹配试用期工作性质。");
 mustInclude(list, 'filters = { custom_work_nature: "在职·试用期", date_of_joining: date_filter }', "三个入职阶段必须统一匹配试用期工作性质。");
-mustInclude(list, 'filters._hrms_probation_stage = stage', "15日以上试用期必须启用转正日期逻辑判断。");
+mustInclude(list, 'filters._hrms_probation_stage = stage', "15日以上试用期必须启用服务端分栏判断。");
 mustInclude(list, "state.request_id !== request_id", "工作性质卡片的数据请求必须避开原生列表的切换时序。");
 mustInclude(list, "frappe.route_options", "花名册卡片必须使用 Frappe 路由筛选。");
 mustInclude(list, "build_roster_route_options", "花名册卡片必须统一构建路由筛选条件。");

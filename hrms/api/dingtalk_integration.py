@@ -1053,7 +1053,7 @@ def _normalise_dingtalk_employee_value(fieldname, value, meta_field):
 	if fieldname == "custom_education_level":
 		value = {
 			"1": "高中", "2": "中专", "3": "大专", "4": "本科", "5": "研究生", "8": "初中",
-			"小学": "初中", "初中及以下": "初中", "硕士": "研究生", "博士": "研究生",
+			"初中及以下": "初中", "硕士": "研究生", "博士": "研究生",
 		}.get(value, value)
 	if fieldname == "employment_type":
 		value = {
