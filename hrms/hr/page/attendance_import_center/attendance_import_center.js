@@ -71,7 +71,6 @@ class AttendanceImportCenter {
 			{ key: "missing_card", label: "忘打卡" },
 		];
 		this.final_required_sources = [
-			{ key: "daily_closure", label: "日考勤修改后校验", kind: "日考勤闭环" },
 			{ key: "attendance_draft", label: "考勤初稿", kind: "主加工结果" },
 			{ key: "apple_tree", label: "苹果树", kind: "主加工结果" },
 			{ key: "missing_card", label: "忘打卡", kind: "主加工结果" },
@@ -756,7 +755,7 @@ class AttendanceImportCenter {
 			"无需审核": "is-confirmed",
 			"待审核": "is-warning",
 			"已通过": "is-confirmed",
-			"暂不计入": "is-warning",
+			"暂不计入": "is-rejected",
 			"已驳回": "is-rejected",
 			"已处理异常": "is-confirmed",
 		}[normalized] || "is-neutral";
@@ -764,7 +763,7 @@ class AttendanceImportCenter {
 			"无需审核": "正常（自动计入）",
 			"待审核": "待处理异常",
 			"已通过": "已处理并计入",
-			"暂不计入": "暂不计入下游（待复核）",
+			"暂不计入": "已处理，不计入",
 			"已驳回": "已处理，不计入",
 			"已处理异常": "已处理异常",
 		}[normalized] || normalized;
@@ -1390,7 +1389,7 @@ class AttendanceImportCenter {
 		return lines.map((line) => {
 			const originalFlags = (line.exception_codes || []).map(sourceExceptionLabel).join("、") || __("待人工确认");
 			const resolved = line.resolved || line.review_status === "已处理异常";
-			const flags = resolved ? __("已处理（原异常：{0}）", [originalFlags]) : originalFlags;
+			const flags = line.review_status === "暂不计入" ? __("该日期不计入下游（原异常：{0}）", [originalFlags]) : resolved ? __("已处理（原异常：{0}）", [originalFlags]) : originalFlags;
 				const restdayWithoutOvertime = (line.exception_codes || []).includes("RESTDAY_CLOCKED_WITHOUT_OVERTIME");
 				const restdayWithoutApproval = (line.exception_codes || []).includes("RESTDAY_CLOCKED_WITHOUT_APPROVAL");
 				const restdayPunchMismatch = (line.exception_codes || []).includes("RESTDAY_PUNCH_APPROVAL_MISMATCH");
@@ -1549,7 +1548,7 @@ class AttendanceImportCenter {
 			: isMissedPunch ? this.render_missed_punch_summary(meta.result_summary || {}) : "";
 		return `
 			<div class="hrms-attendance-section">
-				<div class="hrms-attendance-list-head"><div><h3>${this.escape(resultTitle)}</h3><small>${this.escape(resultDescription)}</small></div><div>${resultSummary}${isAttendanceDraft ? `<button class="btn btn-default btn-sm" data-open-draft-bulk-exclusion>${this.escape(__("批量暂不计入下游"))}</button>` : ""}<button class="btn btn-default btn-sm" data-download-processing-result ${canDownload ? "" : "disabled"}>${this.escape(__(isMonthlySupport ? "下载导入校验结果" : "下载最新加工结果"))}</button>${!isMonthlySupport ? `<button class="btn btn-default btn-sm" data-download-processing-result-without-logo ${canDownload ? "" : "disabled"}>${this.escape(__("下载无 Logo 版本"))}</button>` : ""}</div></div>
+				<div class="hrms-attendance-list-head"><div><h3>${this.escape(resultTitle)}</h3><small>${this.escape(resultDescription)}</small></div><div>${resultSummary}${isAttendanceDraft ? `<button class="btn btn-default btn-sm" data-open-draft-bulk-exclusion>${this.escape(__("批量不计入下游"))}</button>` : ""}<button class="btn btn-default btn-sm" data-download-processing-result ${canDownload ? "" : "disabled"}>${this.escape(__(isMonthlySupport ? "下载导入校验结果" : "下载最新加工结果"))}</button>${!isMonthlySupport ? `<button class="btn btn-default btn-sm" data-download-processing-result-without-logo ${canDownload ? "" : "disabled"}>${this.escape(__("下载无 Logo 版本"))}</button>` : ""}</div></div>
 				<div class="hrms-attendance-result-controls">${this.render_processing_source_tabs()}</div>
 				${meta.error ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("接口未就绪"))}</strong><span>${this.escape(meta.error)}</span></div>` : ""}
 				${!loading && isMonthlySupport && importErrorCount ? `<div class="hrms-attendance-api-notice"><strong>${this.escape(__("发现 {0} 条导入错误", [importErrorCount]))}</strong><span>${this.escape(__("若工号显示为日期、金额显示为部门，请重新上传原文件生成新批次；真实数据错误可在本页手动修改并留痕。错误记录不会进入月度终稿。"))}</span></div>` : ""}
@@ -1650,10 +1649,15 @@ class AttendanceImportCenter {
 
 	show_bulk_processing_dialog(sourceType) {
 		const selectAllPending = this.select_all_filtered_exceptions;
-		const recordIds = selectAllPending
+		const selectionKeys = selectAllPending
 			? []
 			: [...this.selected_exception_record_ids].filter((recordId) => this.exception_page_record_ids.has(recordId));
-		const selectedCount = selectAllPending ? this.filtered_pending_exception_count : recordIds.length;
+		const dailyRecordIds = sourceType === "attendance_draft" ? selectionKeys.map((key) => {
+			const [record_id, daily_record_id] = JSON.parse(key);
+			return { record_id, daily_record_id };
+		}) : [];
+		const recordIds = sourceType === "attendance_draft" ? [...new Set(dailyRecordIds.map((item) => item.record_id))] : selectionKeys;
+		const selectedCount = selectAllPending ? this.filtered_pending_exception_count : selectionKeys.length;
 		if (!sourceType) {
 			frappe.msgprint(__("请先选择一个来源，再批量处理该来源的异常。"));
 			return;
@@ -1662,11 +1666,12 @@ class AttendanceImportCenter {
 			frappe.msgprint(__("请先勾选需要处理的异常记录。"));
 			return;
 		}
-		const decisions = [
-			...(sourceType === "attendance_draft" ? [{ label: __("试验阶段暂不计入下游（待复核）"), review_status: "暂不计入" }] : []),
-			{ label: __("确认并按缺勤规则计薪（通过）"), review_status: "已通过" },
-			{ label: __("批量标记为不计入下游（驳回）"), review_status: "已驳回" },
-			{ label: __("批量保留待审核"), review_status: "待审核" },
+		const decisions = sourceType === "attendance_draft"
+			? [{ label: __("不计入下游（完成处理）"), review_status: "已驳回" }]
+			: [
+				{ label: __("确认并按缺勤规则计薪（通过）"), review_status: "已通过" },
+				{ label: __("批量标记为不计入下游（驳回）"), review_status: "已驳回" },
+				{ label: __("批量保留待审核"), review_status: "待审核" },
 		];
 		const statusForLabel = (label) => decisions.find((item) => item.label === label)?.review_status;
 		const dialog = new frappe.ui.Dialog({
@@ -1675,7 +1680,7 @@ class AttendanceImportCenter {
 				{ fieldtype: "HTML", options: `<div class="hrms-attendance-dialog-note">${this.escape((selectAllPending
 					? __("本次将处理当前筛选来源下全部 {0} 条待处理异常（含其他页面）。", [selectedCount])
 					: __("本次只处理当前第 {0} 页已勾选的 {1} 条记录。", [this.exception_page, selectedCount])) + (sourceType === "attendance_draft"
-						? __("选择“暂不计入”后，这些员工暂不进入本月终稿与薪资试算；原始考勤事实不变，可后续复核。选择“通过”则继续按既有缺勤规则计算。")
+						? __("选择“不计入下游”后，只排除所选异常日期；该员工其他日期仍可进入下游。处理完成的日期不会阻止终稿生成，原始考勤事实保留追溯。")
 						: __("系统不会擅自修改加工数据。")) + __("本次决定、原因、操作人和时间会逐条留痕。"))}</div>` },
 				{ fieldtype: "Select", fieldname: "decision", label: __("批量处理方式"), options: decisions.map((item) => item.label).join("\n"), default: decisions[0].label, reqd: 1 },
 				{ fieldtype: "Small Text", fieldname: "reason", label: __("处理原因"), reqd: 1 },
@@ -1694,6 +1699,7 @@ class AttendanceImportCenter {
 						attendance_month: this.attendance_month,
 						source_type: sourceType,
 						record_ids: JSON.stringify(recordIds),
+						daily_record_ids: JSON.stringify(dailyRecordIds),
 						select_all_pending: selectAllPending ? 1 : 0,
 						page_start: (this.exception_page - 1) * this.exception_page_size,
 						page_length: this.exception_page_size,
@@ -1710,8 +1716,9 @@ class AttendanceImportCenter {
 								this.selected_exception_record_ids.clear();
 								this.select_all_filtered_exceptions = false;
 								frappe.show_alert({ message: sourceType === "attendance_draft"
-									? __("已处理 {0} 位员工，覆盖 {1} 条异常日期。", [data.updated_rows || 0, data.updated_exception_lines || 0])
+									? __("已处理 {0} 位员工的 {1} 条异常日期，其他日期保留。", [data.updated_rows || 0, data.updated_exception_lines || 0])
 									: __("已批量处理 {0} 条记录。", [data.updated_rows || selectedCount]), indicator: "green" });
+								if (sourceType === "attendance_draft" && reviewStatus === "已驳回") this.exception_processing_status_filter = "pending";
 								const scrollPosition = this.capture_exception_scroll_position();
 								this.load_processing_batch({ rerender_active: false, on_loaded: () => this.load_processing_exceptions({ preserveScroll: scrollPosition }) });
 						},
@@ -2054,7 +2061,7 @@ class AttendanceImportCenter {
 
 	show_processing_record_dialog(record) {
 		const dailyLines = record.source_type === "attendance_draft" ? this.attendance_exception_lines(record) : [];
-		if (record.review_status !== "暂不计入" && dailyLines.some((line) => (line.exception_codes || []).some((code) => ["RESTDAY_CLOCKED_WITHOUT_OVERTIME", "RESTDAY_CLOCKED_WITHOUT_APPROVAL", "RESTDAY_PUNCH_APPROVAL_MISMATCH"].includes(code)))) {
+		if (!["暂不计入", "已驳回"].includes(record.review_status) && dailyLines.some((line) => (line.exception_codes || []).some((code) => ["RESTDAY_CLOCKED_WITHOUT_OVERTIME", "RESTDAY_CLOCKED_WITHOUT_APPROVAL", "RESTDAY_PUNCH_APPROVAL_MISMATCH"].includes(code)))) {
 			const dailyDialog = new frappe.ui.Dialog({
 				title: __("按日期处理：{0} {1}", [record.employee_code || "", record.employee_name || ""]),
 				fields: [{
@@ -2090,7 +2097,7 @@ class AttendanceImportCenter {
 		const dialog = new frappe.ui.Dialog({
 			title: __(resolvedRecord ? "查看/更正记录：{0} {1}" : "处理异常：{0} {1}", [record.employee_code || "", record.employee_name || ""]),
 			fields: [
-				{ fieldtype: "HTML", fieldname: "trace", options: `<div class="hrms-attendance-dialog-note"><strong>${this.escape(__("问题日期：{0}", [this.attendance_exception_date_text(record)]))}</strong><br><strong>${this.escape(__("问题：{0}", [this.exception_label_text(record)]))}</strong><br>${this.escape(record.exception_detail || record.exception_message || "")}${record.source_type === "attendance_draft" && this.attendance_exception_lines(record).length ? `<div class="hrms-attendance-exception-lines">${this.render_attendance_exception_lines(this.attendance_exception_lines(record), "", false)}</div>` : ""}<br><br>${resolvedRecord ? this.escape(__("该记录已处理；如需更正，请选择具体字段并填写原因，系统会新增审计记录。")) + "<br><br>" : ""}${this.escape(__("来源：{0} / {1} / 第 {2} 行 / {3}", [record.source_file || "--", record.source_sheet || "--", record.source_row || "--", record.source_id || record.name || "--"]))}</div>` },
+				{ fieldtype: "HTML", fieldname: "trace", options: `<div class="hrms-attendance-dialog-note"><strong>${this.escape(__("问题日期：{0}", [this.attendance_exception_date_text(record)]))}</strong><br><strong>${this.escape(__("问题：{0}", [this.exception_label_text(record)]))}</strong><br>${this.escape(record.exception_detail || record.exception_message || "")}${record.source_type === "attendance_draft" && this.attendance_exception_lines(record).length ? `<div class="hrms-attendance-exception-lines">${this.render_attendance_exception_lines(this.attendance_exception_lines(record), "", false)}</div>` : ""}<br><br>${resolvedRecord ? this.escape(__("该记录已处理；可更改处理决定或调整具体字段，填写原因后会新增审计记录。")) + "<br><br>" : ""}${this.escape(__("来源：{0} / {1} / 第 {2} 行 / {3}", [record.source_file || "--", record.source_sheet || "--", record.source_row || "--", record.source_id || record.name || "--"]))}</div>` },
 				{ fieldtype: "Select", fieldname: "review_solution", label: __("处理方案"), options: [__("请选择处理方案")].concat(reviewOptions.map((option) => option.label)).join("\n"), onchange: () => {
 					const option = reviewOptionForLabel(dialog.get_value("review_solution"));
 					if (!option) return;
@@ -2099,9 +2106,9 @@ class AttendanceImportCenter {
 					dialog.set_value("review_status", option.review_status);
 					dialog.set_value("reason", option.reason);
 				} },
-				{ fieldtype: "Select", fieldname: "target_field", label: __("调整字段"), options: fieldOptions.join("\n"), reqd: 1 },
+				{ fieldtype: "Select", fieldname: "target_field", label: __("调整字段"), options: fieldOptions.join("\n"), default: fieldOptions[0], reqd: 1 },
 				{ fieldtype: "Data", fieldname: "new_value", label: __("新值（仅调整数据时填写）") },
-				{ fieldtype: "Select", fieldname: "review_status", label: __("处理结果"), options: [__("待审核"), ...(record.source_type === "attendance_draft" ? [__("暂不计入")] : []), __("已通过"), __("已驳回")].join("\n"), default: ["待审核", "暂不计入", "已通过", "已驳回"].includes(record.review_status) ? record.review_status : __("已通过"), reqd: 1 },
+				{ fieldtype: "Select", fieldname: "review_status", label: __("处理结果"), options: [__("待审核"), __("已通过"), __("已驳回")].join("\n"), default: record.review_status === "暂不计入" ? __("已驳回") : ["待审核", "已通过", "已驳回"].includes(record.review_status) ? record.review_status : __("已通过"), reqd: 1 },
 				{ fieldtype: "Small Text", fieldname: "reason", label: __("调整原因"), reqd: 1 },
 			],
 			primary_action_label: __("提交调整并留痕"),
@@ -2121,7 +2128,7 @@ class AttendanceImportCenter {
 					{
 						freeze: true,
 						freeze_message: __("正在记录原值、新值和调整原因..."),
-						on_success: () => { dialog.hide(); this.load_processing_results(); },
+						on_success: () => { dialog.hide(); if (this.active_view === "exceptions") { if (values.review_status === "已驳回") this.exception_processing_status_filter = "pending"; this.load_processing_exceptions(); } else this.load_processing_results(); },
 					},
 				);
 			},
@@ -2229,7 +2236,12 @@ class AttendanceImportCenter {
 						return;
 					}
 					this.filtered_pending_exception_count = Number(data.filtered_pending_count || 0);
-					this.exception_page_record_ids = new Set((data.review_rows || []).map((row) => row.record_id || row.source_id || row.name).filter(Boolean));
+					this.exception_page_record_ids = new Set((data.review_rows || []).flatMap((row) => {
+						const recordId = row.record_id || row.source_id || row.name;
+						return row.source_type === "attendance_draft"
+							? (row.daily_pending_exception_lines || []).map((line) => JSON.stringify([recordId, line.daily_record_id]))
+							: [recordId];
+					}).filter(Boolean));
 					body.innerHTML = this.render_processing_exceptions(data.review_rows || [], false, "", data);
 					this.bind_processing_exception_events();
 					this.restore_exception_scroll_position(preserveScroll);
@@ -2383,19 +2395,20 @@ class AttendanceImportCenter {
 		const renderRow = (row) => {
 			const recordId = row.record_id || row.source_id || row.name || "";
 			const dailyLines = row.source_type === "attendance_draft" ? this.attendance_exception_lines(row) : [];
+			const selectionKey = dailyLines.length ? JSON.stringify([recordId, dailyLines[0].daily_record_id]) : recordId;
 			const pendingDailyLines = row.source_type === "attendance_draft" ? (row.daily_pending_exception_lines || dailyLines.filter((line) => !line.resolved && line.review_status !== "已处理异常")) : [];
 			const hasPending = row.source_type === "attendance_draft" ? pendingDailyLines.length > 0 : row.review_status === "待审核";
 			const issueCell = dailyLines.length
 				? this.render_attendance_exception_lines(dailyLines, recordId)
 				: `<strong>${this.escape(__("问题日期：{0}", [this.attendance_exception_date_text(row)]))}</strong><br><strong>${this.escape(__("问题：{0}", [this.exception_label_text(row)]))}</strong><br><small>${this.escape(row.exception_detail || row.exception_message || "")}</small>`;
-			const operation = row.source_type === "attendance_draft" && dailyLines.length && row.review_status !== "暂不计入"
+			const operation = row.source_type === "attendance_draft" && dailyLines.length && hasPending
 				? `<small>${this.escape(__("本行对应一条日期记录"))}</small>`
-				: `<button class="btn btn-default btn-xs" data-edit-exception="${this.escape(row.record_id || row.source_id || row.name || "")}" data-exception-source-type="${this.escape(row.source_type || "")}">${this.escape(__(row.review_status === "暂不计入" ? "重新审核" : "处理异常"))}</button>`;
+				: `<button class="btn btn-default btn-xs" data-edit-exception="${this.escape(row.record_id || row.source_id || row.name || "")}" data-exception-source-type="${this.escape(row.source_type || "")}">${this.escape(__(row.source_type === "attendance_draft" && !hasPending || ["暂不计入", "已驳回"].includes(row.review_status) ? "查看/更正记录" : "处理异常"))}</button>`;
 			const statusCell = row.source_type === "attendance_draft" && dailyLines.length
-				? `${this.render_attendance_daily_statuses(dailyLines)}${row.review_status === "暂不计入" ? `<small>${this.escape(`${row.reviewer || "--"} ${row.reviewed_on || ""}`)}<br>${this.escape(row.review_note || "")}</small>` : ""}`
+				? `${this.render_attendance_daily_statuses(dailyLines)}${dailyLines[0].resolved ? `<small>${this.escape(`${dailyLines[0].reviewer || row.reviewer || "--"} ${dailyLines[0].reviewed_on || row.reviewed_on || ""}`)}<br>${this.escape(dailyLines[0].review_note || row.review_note || "")}</small>` : ""}`
 				: `${this.review_status_badge(row.review_status || "待审核")}<br><small>${this.escape(`${row.reviewer || "--"} ${row.reviewed_on || ""}`)}</small><br><small>${this.escape(row.review_note || "")}</small>`;
 			return `<tr class="${hasPending ? "is-pending" : "is-resolved"}" data-exception-table-row="1"${dailyLines.length ? ` data-exception-daily-record="${this.escape(dailyLines[0].daily_record_id || dailyLines[0].attendance_date || "")}"` : ""}>
-				<td><input type="checkbox" data-exception-record-select="${this.escape(recordId)}" ${canBulkProcess && recordId && hasPending ? "" : "disabled"} ${this.select_all_filtered_exceptions && hasPending ? "checked" : ""} title="${this.escape(canBulkProcess ? (hasPending ? __("选择后可批量处理") : __("已处理异常仅保留查看")) : __("请先按来源筛选，再进行批量处理"))}"></td>
+				<td><input type="checkbox" data-exception-record-select="${this.escape(selectionKey)}" ${canBulkProcess && recordId && hasPending ? "" : "disabled"} ${this.select_all_filtered_exceptions && hasPending ? "checked" : ""} title="${this.escape(canBulkProcess ? (hasPending ? __("选择后可批量处理") : __("已处理异常仅保留查看")) : __("请先按来源筛选，再进行批量处理"))}"></td>
 				<td>${this.escape(row.employee_name || "--")}</td>
 				<td>${this.escape(row.employee_code || "--")}</td>
 				<td>${this.escape(row.department || "--")}</td>
@@ -3112,14 +3125,13 @@ class AttendanceImportCenter {
 		const supplied = new Map((batch.first_signed_inputs || []).map((item) => [item.source_type || item.key, item]));
 		const slots = new Map((batch.slots || []).map((slot) => [slot.source_type, slot]));
 		return [
-			{ key: "daily_closure", label: "日考勤修改后校验" },
 			{ key: "attendance_draft", label: "考勤初稿" },
 			{ key: "missing_card", label: "忘打卡" },
 		].map((source) => {
 			const external = supplied.get(source.key);
 			const slot = slots.get(source.key);
-			const status = external?.status || slot?.status || (source.key === "daily_closure" ? "待处理" : "未就绪");
-			return { ...source, ...(external || {}), ready: Boolean(external?.ready ?? (source.key === "daily_closure" ? batch.daily_workflow?.ready : slot?.status === "已确认")), status };
+			const status = external?.status || slot?.status || "未就绪";
+			return { ...source, ...(external || {}), ready: Boolean(external?.ready ?? (slot?.status === "已确认")), status };
 		});
 	}
 

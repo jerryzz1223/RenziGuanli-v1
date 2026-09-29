@@ -152,7 +152,7 @@ for (const marker of [
 	"update_special_hours_manual_entry",
 	"bulk_update_processing_records",
 	"查看/更正记录",
-	"该记录已处理；如需更正",
+	"该记录已处理；可更改处理决定或调整具体字段",
 	"list_processing_exceptions",
 	"export_processing_exceptions",
 	"data-export-processing-exceptions",

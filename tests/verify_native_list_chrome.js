@@ -41,7 +41,7 @@ for (const marker of [
 
 includes(css, "body.hrms-native-list-chrome-clean", "CSS must prevent native controls flashing before removal");
 includes(css, ".hrms-parent-return-action", "Parent return action must have stable styling");
-includes(hooks, "hrms_home_redirect_v6.js?v=20260926-native-list-chrome-v1", "Shared shell cache key must change");
+includes(hooks, "hrms_home_redirect_v6.js?v=20260929-attendance-parent-return-v1", "Shared shell cache key must change");
 includes(hooks, "hrms_top_nav.css?v=20260926-native-list-chrome-v1", "Shared shell CSS cache key must change");
 
 console.log("PASS: HRMS native lists remove duplicate Frappe chrome and child pages provide a parent return action.");

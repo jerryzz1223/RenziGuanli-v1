@@ -1044,6 +1044,9 @@
 	}
 
 	function parent_return_target(module, route, slug) {
+		if (route_to_slug(module.route) === "attendance-import-center" && slug.indexOf("attendance-import-center/") === 0) {
+			return module.items.find(function (item) { return item.type === "link" && item.label === "主页"; });
+		}
 		var parent = separation_breadcrumb_parent(route) || BREADCRUMB_PARENT_OVERRIDES[slug];
 		if (!parent && route[0] === "Form") parent = find_sidebar_item(module, slug);
 		return parent?.route ? parent : { label: module.label, route: module.route, slug: route_to_slug(module.route) };
@@ -1052,13 +1055,13 @@
 	function render_parent_return_action(module, route, slug, page) {
 		var existing = page?.querySelector(".hrms-parent-return-action");
 		var module_slug = route_to_slug(module.route);
-		if (!page || slug === module_slug || slug === "hrms-workbench") {
+		var target = parent_return_target(module, route, slug);
+		if (!page || slug === module_slug || slug === target?.slug || slug === "hrms-workbench") {
 			existing?.remove();
 			return;
 		}
 		var actions = page.querySelector(".page-head .page-actions");
 		if (!actions) return;
-		var target = parent_return_target(module, route, slug);
 		var button = existing || document.createElement("button");
 		button.type = "button";
 		button.className = "btn btn-default btn-sm hrms-parent-return-action";

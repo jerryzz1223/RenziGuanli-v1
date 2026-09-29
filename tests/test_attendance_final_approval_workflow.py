@@ -1,4 +1,5 @@
 import ast
+import types
 import unittest
 from pathlib import Path
 
@@ -42,6 +43,40 @@ class AttendanceFinalApprovalWorkflowTests(unittest.TestCase):
 		self.assertIn('_require_processing_manager("attendance_final_lock")', generate)
 		self.assertIn("approved_for_current_snapshot", generate)
 		self.assertIn("尚未审批通过，不能锁定生成", generate)
+
+	def test_confirmed_monthly_sources_are_ready_with_separate_daily_review_pending(self):
+		main_sources = ("attendance_draft", "apple_tree", "missing_card")
+		support_sources = ("housing_allowance", "full_attendance", "special_hours")
+		labels = {source: source for source in main_sources + support_sources}
+		batch = types.SimpleNamespace(
+			name="confirmed-batch", status="已确认", source_file="source.xlsx",
+			imported_by="reviewer", imported_on="2026-09-29", creation="2026-09-29",
+		)
+		namespace = {
+		"SOURCE_TYPES": main_sources,
+		"FIRST_SIGNED_SOURCE_TYPES": ("attendance_draft", "missing_card"),
+		"MONTHLY_SUPPORT_SOURCE_TYPES": support_sources,
+		"SOURCE_LABELS": labels,
+		"MONTHLY_SUPPORT_SOURCE_CONFIG": {source: {"description": ""} for source in support_sources},
+		"PROCESSING_RECORD_DOCTYPE": "processing record",
+		"_latest_batch": lambda *_args: batch,
+		"_processing_meta": lambda *_args: {"monthly_support_precheck": {"record_count": 1}},
+		"_result_rows": lambda *_args: [],
+		"_user_display_name": lambda value: value,
+		"_daily_month_workflow": lambda *_args: {"required": True, "ready": False},
+		"frappe": types.SimpleNamespace(db=types.SimpleNamespace(count=lambda *_args: 1)),
+		"cint": int,
+		"Path": Path,
+	}
+		for name in ("_finalization_inputs", "_first_signed_inputs"):
+			exec(self.functions[name], namespace)
+		slots = [{"source_type": source, "status": "已确认"} for source in main_sources]
+		final_inputs = namespace["_finalization_inputs"]("永新", "2026-08", slots)
+		first_signed_inputs = namespace["_first_signed_inputs"]("永新", "2026-08", slots)
+		self.assertEqual([item["source_type"] for item in final_inputs], list(main_sources + support_sources))
+		self.assertTrue(all(item["ready"] for item in final_inputs))
+		self.assertEqual([item["source_type"] for item in first_signed_inputs], list(("attendance_draft", "missing_card")))
+		self.assertTrue(all(item["ready"] for item in first_signed_inputs))
 
 	def test_source_changes_invalidate_prior_approval(self):
 		invalidate = self.functions["_invalidate_monthly_final_after_source_change"]

@@ -2381,21 +2381,39 @@ def _serialize_record(record, current_shift_rule_version: str | None = None, *, 
 		# The parent document status is only a database queue roll-up. Keep fixed
 		# dates in a read-only history projection so the operator can still see
 		# what was changed, while pending dates remain independently actionable.
+		parent_decision = result.get("review_status")
+		parent_resolved = parent_decision in {"暂不计入", "已驳回"}
+		excluded_keys = _excluded_attendance_daily_keys(result, values)
+		exclusion_reviews = {
+			_daily_line_key(entry["original_value"]): entry
+			for entry in result["review_history"]
+			if isinstance(entry, dict) and str(entry.get("field_name") or "").startswith("__daily_exclusion__:")
+			and isinstance(entry.get("original_value"), dict)
+		}
 		pending_lines = [
-			{**line, "daily_record_id": _daily_line_key(line), "review_status": "暂不计入" if result.get("review_status") == "暂不计入" else "待审核", "resolved": result.get("review_status") == "暂不计入"}
+			{**line, "daily_record_id": _daily_line_key(line), "review_status": "暂不计入" if _daily_line_key(line) in excluded_keys else parent_decision if parent_resolved else "待审核", "resolved": parent_resolved or _daily_line_key(line) in excluded_keys,
+			 "reviewer": exclusion_reviews.get(_daily_line_key(line), {}).get("reviewer") or result.get("reviewer"),
+			 "reviewed_on": exclusion_reviews.get(_daily_line_key(line), {}).get("reviewed_on") or result.get("reviewed_on"),
+			 "review_note": exclusion_reviews.get(_daily_line_key(line), {}).get("reason") or result.get("review_note")}
 			for line in result["daily_exception_lines"]
 		]
 		resolved_lines = [
 			{**line, "daily_record_id": _daily_line_key(line), "review_status": "已处理异常", "resolved": True}
 			for line in _daily_resolved_exception_lines(values)
 		]
+		resolved_lines.extend(
+			{**entry["original_value"], "daily_record_id": key, "review_status": "暂不计入", "resolved": True,
+			 "reviewer": entry.get("reviewer"), "reviewed_on": entry.get("reviewed_on"), "review_note": entry.get("reason")}
+			for key, entry in exclusion_reviews.items()
+		)
 		pending_keys = {_daily_line_key(line) for line in pending_lines}
-		result["daily_pending_exception_lines"] = [] if result.get("review_status") == "暂不计入" else pending_lines
+		result["daily_pending_exception_lines"] = [line for line in pending_lines if not line["resolved"]]
 		result["daily_exception_lines"] = pending_lines + [
 			line for line in resolved_lines if _daily_line_key(line) not in pending_keys
 		]
 		result["daily_exception_lines"].sort(key=lambda line: (str(line.get("attendance_date") or ""), str(line.get("source_row") or "")))
 		result["daily_pending_exception_lines"].sort(key=lambda line: (str(line.get("attendance_date") or ""), str(line.get("source_row") or "")))
+		result["eligible_for_downstream"] = _attendance_row_has_downstream_dates(result)
 	return result
 
 
@@ -2421,7 +2439,7 @@ def _exception_queue_payload(record: dict[str, Any]) -> dict[str, Any]:
 def _processing_result_table_payload(record: dict[str, Any]) -> dict[str, Any]:
 	"""Compact a result row for the paged table; full values load on demand."""
 	result = dict(record)
-	values = _effective_result_values(result)
+	values = _attendance_downstream_values(result) if result.get("source_type") == "attendance_draft" and _excluded_attendance_daily_keys(result) else _effective_result_values(result)
 	for fieldname in (
 		"original_value", "processed_value", "proposed_value", "confirmed_value",
 		"review_history", "result_summary", "daily_attendance_details",
@@ -2529,6 +2547,60 @@ def _daily_source_key(source_row: Any, source_file: Any = "", source_sheet: Any 
 def _daily_line_key(line: dict[str, Any]) -> str:
 	return _daily_source_key(
 		line.get("source_row"), line.get("source_file"), line.get("source_sheet"), line.get("attendance_date")
+	)
+
+
+def _excluded_attendance_daily_keys(row: dict[str, Any], values: dict[str, Any] | None = None) -> set[str]:
+	"""Resolve dated exclusions, including the old bulk deferrals, without dropping a whole employee."""
+	values = values if values is not None else _effective_result_values(row)
+	keys = {str(key) for key in values.get("_excluded_attendance_daily_keys", []) if str(key)}
+	if row.get("review_status") == "暂不计入":
+		keys.update(_daily_line_key(line) for line in _active_attendance_exception_lines(values, row.get("exception_codes") or []))
+	return keys
+
+
+def _attendance_downstream_values(row: dict[str, Any]) -> dict[str, Any]:
+	"""Subtract excluded dates from the saved month, preserving its other daily facts."""
+	values = _effective_result_values(row)
+	keys = _excluded_attendance_daily_keys(row, values)
+	if not keys:
+		return values
+	values = deepcopy_json(values)
+	details = [item for item in values.get("attendance_details") or [] if isinstance(item, dict)]
+	excluded = [item for item in details if _daily_line_key(item) in keys]
+	if len(excluded) != len(keys):
+		frappe.throw(_("排除日期与原始考勤明细不一致，请先重新识别来源后重试。"))
+	for field, _label in ATTENDANCE_DRAFT_RESULT_COLUMNS:
+		if field in {"department", "employee_name", "employee_code", "attendance_note", "leave_hours", "deep_night_shifts"}:
+			continue
+		if field in values:
+			values[field] = round(_as_number(values[field]) - sum(_as_number(item.get(field)) for item in excluded), 4)
+	for field, detail_field in (("leave_hours", "leave_hours"), ("special_hours", "special_workday_hours")):
+		if field in values:
+			values[field] = round(_as_number(values[field]) - sum(_as_number(item.get(detail_field)) for item in excluded), 4)
+	if "deep_night_shifts" in values:
+		values["deep_night_shifts"] = round(_as_number(values["deep_night_shifts"]) - sum(
+			_as_number(item.get("deep_night_shifts")) if _as_number(item.get("deep_night_shifts")) else int(bool(item.get("is_production_deep_night_shift")))
+			for item in excluded
+		), 4)
+	values["attendance_details"] = [item for item in details if _daily_line_key(item) not in keys]
+	values["special_hours_days"] = [item for item in values.get("special_hours_days") or []
+		if f"{row.get('attendance_month')}" + f"-{int(item.get('day') or 0):02d}" not in {str(day.get("attendance_date")) for day in excluded}]
+	values["source_row_count"] = max(0, int(values.get("source_row_count") or len(details)) - len(excluded))
+	return values
+
+
+def _attendance_row_has_downstream_dates(row: dict[str, Any]) -> bool:
+	if row.get("source_type") != "attendance_draft":
+		return bool(row.get("eligible_for_downstream"))
+	values = _effective_result_values(row)
+	keys = _excluded_attendance_daily_keys(row, values)
+	if not keys:
+		return bool(row.get("eligible_for_downstream"))
+	if row.get("review_status") == "待审核":
+		return False
+	return _confirmed_downstream_eligible(values) and any(
+		isinstance(item, dict) and _daily_line_key(item) not in keys for item in values.get("attendance_details") or []
 	)
 
 
@@ -2974,7 +3046,7 @@ def _export_processed_result(batch, include_logo: bool = True) -> dict[str, str]
 	sheet.append(headers)
 	for index, row in enumerate(rows, start=1):
 		if batch.source_type == "attendance_draft":
-			values = _effective_result_values(row)
+			values = _attendance_downstream_values(row)
 			sheet.append([
 				index,
 				*[values.get(field, "") for field, _label in ATTENDANCE_DRAFT_RESULT_COLUMNS],
@@ -3080,19 +3152,22 @@ def _pending_attendance_exception_line_count(batch) -> int:
 	rows = frappe.get_all(
 		PROCESSING_RECORD_DOCTYPE,
 		filters={"import_batch": batch.name},
-		fields=["processed_value_json", "proposed_value_json", "confirmed_value_json", "exception_codes"],
+		fields=["processed_value_json", "proposed_value_json", "confirmed_value_json", "exception_codes", "review_status"],
 		order_by="modified desc",
 		limit_page_length=5000,
 	)
 	count = 0
 	for row in rows:
+		if row.get("review_status") in {"暂不计入", "已驳回"}:
+			continue
 		values = _effective_result_values({
 			"processed_value": _loads(row.get("processed_value_json"), {}),
 			"proposed_value": _loads(row.get("proposed_value_json"), {}),
 			"confirmed_value": _loads(row.get("confirmed_value_json"), None),
 		})
 		lines = _active_attendance_exception_lines(values, _loads(row.get("exception_codes"), []))
-		count += len(lines)
+		excluded_keys = _excluded_attendance_daily_keys({"review_status": row.get("review_status"), "exception_codes": _loads(row.get("exception_codes"), [])}, values)
+		count += sum(_daily_line_key(line) not in excluded_keys for line in lines)
 	return count
 
 
@@ -3253,6 +3328,25 @@ def _monthly_final_employee_recognition(company: str, attendance_month: str) -> 
 		for record in records
 		if record.get("eligible_for_downstream") and (key := employee_key(record))
 	}
+	# Historic date selections were saved under an employee-level deferral. Only
+	# inspect those records here; the ordinary dashboard path remains lightweight.
+	if batch:
+		legacy_rows = frappe.get_all(
+			PROCESSING_RECORD_DOCTYPE,
+			filters={"import_batch": batch.name, "review_status": "暂不计入"},
+			fields=["employee_code", "employee_name", "source_type", "review_status", "eligible_for_downstream", "processed_value_json", "proposed_value_json", "confirmed_value_json", "exception_codes"],
+			limit_page_length=5000,
+		)
+		for legacy in legacy_rows:
+			projection = {
+				**legacy,
+				"processed_value": _loads(legacy.get("processed_value_json"), {}),
+				"proposed_value": _loads(legacy.get("proposed_value_json"), {}),
+				"confirmed_value": _loads(legacy.get("confirmed_value_json"), None),
+				"exception_codes": _loads(legacy.get("exception_codes"), []),
+			}
+			if _attendance_row_has_downstream_dates(projection) and (key := employee_key(legacy)):
+				successful_people.add(key)
 	roster_people = {
 		str(employee.get("custom_employee_code") or "").strip()
 		for employee in frappe.get_all(
@@ -3895,7 +3989,11 @@ def get_processing_record(company: str, attendance_month: str, source_type: str,
 def update_processing_record(company: str, attendance_month: str, source_type: str, record_id: str, field_name: str, original_value: str = "", new_value: str = "", review_status: str = "待审核", reason: str = ""):
 	_require_processing_manager()
 	company, attendance_month, source_type = _require_company(company), _require_month(attendance_month), _require_processing_source_type(source_type)
-	if review_status not in ({"待审核", "已通过", "已驳回", "暂不计入"} if source_type == "attendance_draft" else {"待审核", "已通过", "已驳回"}):
+	# Historic clients called this decision "temporary".  The user's decision is
+	# final for this source: exclude it from downstream and leave an audit trail.
+	if source_type == "attendance_draft" and review_status == "暂不计入":
+		review_status = "已驳回"
+	if review_status not in {"待审核", "已通过", "已驳回"}:
 		frappe.throw(_("处理结果无效。"))
 	if not (reason or "").strip():
 		frappe.throw(_("人工调整必须填写原因。"))
@@ -4748,6 +4846,82 @@ def review_attendance_draft_daily_exception(
 	return result
 
 
+def _bulk_exclude_attendance_daily_lines(batch, daily_record_ids, select_all_pending, reason, employee_code, employee_name):
+	"""Finish selected dated alerts while retaining every other date for finalization."""
+	if isinstance(daily_record_ids, str):
+		daily_record_ids = _loads(daily_record_ids, [])
+	if not isinstance(daily_record_ids, list):
+		frappe.throw(_("请选择具体异常日期。"))
+	shift_version = _attendance_shift_rule_bundle(batch.company)["version"]
+	index_rows = frappe.get_all(
+		PROCESSING_RECORD_DOCTYPE, filters={"import_batch": batch.name},
+		fields=["name", "company", "attendance_month", "source_type", "employee_code", "employee_name", "department", "processed_value_json", "exception_codes", "review_status", "proposed_value_json", "confirmed_value_json"],
+		limit_page_length=5000,
+	)
+	by_id = {row.name: row for row in index_rows}
+	selected = defaultdict(set)
+	if cint(select_all_pending):
+		code_filter = re.sub(r"\s+", "", str(employee_code or "").casefold())
+		name_filter = re.sub(r"\s+", "", str(employee_name or "").casefold())
+		for row in index_rows:
+			if code_filter and code_filter not in re.sub(r"\s+", "", str(row.employee_code or "").casefold()):
+				continue
+			if name_filter and name_filter not in re.sub(r"\s+", "", str(row.employee_name or "").casefold()):
+				continue
+			for line in _serialize_record(row, shift_version, hydrate_daily_details=False).get("daily_pending_exception_lines") or []:
+				selected[row.name].add(_daily_line_key(line))
+	else:
+		if len(daily_record_ids) > 500:
+			frappe.throw(_("一次最多处理 500 条异常日期。"))
+		for item in daily_record_ids:
+			if not isinstance(item, dict):
+				frappe.throw(_("异常日期选择无效，请刷新后重试。"))
+			record_id = str(item.get("record_id") or "").strip()
+			line_id = str(item.get("daily_record_id") or "").strip()
+			if not record_id or not line_id or record_id not in by_id:
+				frappe.throw(_("所选异常日期不属于当前来源，请刷新后重试。"))
+			selected[record_id].add(line_id)
+	if not selected or sum(map(len, selected.values())) > 500:
+		frappe.throw(_("请选择 1 至 500 条待处理异常日期。"))
+	processed_at = now_datetime()
+	for record_id, keys in selected.items():
+		doc = frappe.get_doc(PROCESSING_RECORD_DOCTYPE, record_id)
+		serialized = _serialize_record(doc.as_dict(), shift_version, hydrate_daily_details=False)
+		pending = {_daily_line_key(line): line for line in serialized.get("daily_pending_exception_lines") or []}
+		if not keys.issubset(pending):
+			frappe.throw(_("异常日期已变化，请刷新页面后重试。"))
+		confirmed = _loads(doc.confirmed_value_json, None) or _loads(doc.proposed_value_json, {})
+		if not isinstance(confirmed, dict):
+			frappe.throw(_("考勤明细无效，请重新识别来源。"))
+		excluded = _excluded_attendance_daily_keys(serialized, confirmed) | keys
+		details = [item for item in confirmed.get("attendance_details") or [] if isinstance(item, dict)]
+		if not excluded.issubset({_daily_line_key(item) for item in details}):
+			frappe.throw(_("所选异常日期无法对应原始考勤明细，请重新识别来源。"))
+		confirmed["_excluded_attendance_daily_keys"] = sorted(excluded)
+		history = _loads(doc.review_history_json, [])
+		for key in sorted(keys):
+			line = pending[key]
+			history.append({"field_name": f"__daily_exclusion__:{key}", "old_value": "待审核", "new_value": "不计入下游", "original_value": deepcopy_json(line), "reason": reason.strip(), "review_status": "暂不计入", "reviewer": frappe.session.user, "reviewed_on": processed_at.isoformat(), "attendance_date": line.get("attendance_date"), "source_row": line.get("source_row"), "source_file": line.get("source_file"), "source_sheet": line.get("source_sheet")})
+		remaining = set(pending) - keys
+		all_daily_codes = {code for line in serialized.get("daily_exception_lines") or [] for code in line.get("exception_codes") or []}
+		remaining_non_daily = set(_loads(doc.exception_codes, [])) - all_daily_codes - NON_BLOCKING_ATTENDANCE_EVENT_CODES
+		doc.confirmed_value_json = _json(confirmed)
+		doc.processed_value_json = _json({**_loads(doc.processed_value_json, {}), **confirmed})
+		doc.review_history_json = _json(history)
+		doc.review_status = "待审核" if remaining or remaining_non_daily else "已通过"
+		doc.eligible_for_downstream = int(not remaining and not remaining_non_daily and any(_daily_line_key(item) not in excluded for item in details) and _confirmed_downstream_eligible(confirmed))
+		doc.reviewer = frappe.session.user
+		doc.reviewed_on = processed_at
+		doc.review_note = reason.strip()
+		doc.save(ignore_permissions=True)
+	batch_status = _refresh_batch_review_status(batch)
+	processed_result = _export_processed_result(batch)
+	_invalidate_monthly_final_after_source_change(batch, "daily_date_exclusion")
+	_save_batch_notes(batch, {"processed_result": processed_result, "processed_result_refreshed_on": processed_at.isoformat(), "processed_result_refresh_reason": "daily_date_exclusion"})
+	frappe.db.commit()
+	return {"batch": batch.name, "source_type": "attendance_draft", "updated_rows": len(selected), "updated_exception_lines": sum(map(len, selected.values())), "batch_status": batch_status, "processed_result": processed_result}
+
+
 @frappe.whitelist()
 def bulk_update_processing_records(
 	company: str,
@@ -4761,6 +4935,7 @@ def bulk_update_processing_records(
 	reason: str = "",
 	employee_code: str = "",
 	employee_name: str = "",
+	daily_record_ids: str | list[dict[str, str]] = "",
 ):
 	"""Apply one reviewed decision to explicitly selected exception records.
 
@@ -4770,7 +4945,9 @@ def bulk_update_processing_records(
 	"""
 	_require_processing_manager()
 	company, attendance_month, source_type = _require_company(company), _require_month(attendance_month), _require_processing_source_type(source_type)
-	if review_status not in ({"待审核", "已通过", "已驳回", "暂不计入"} if source_type == "attendance_draft" else {"待审核", "已通过", "已驳回"}):
+	if source_type == "attendance_draft" and review_status == "暂不计入":
+		review_status = "已驳回"
+	if review_status not in {"待审核", "已通过", "已驳回"}:
 		frappe.throw(_("处理结果无效。"))
 	if not (reason or "").strip():
 		frappe.throw(_("批量处理必须填写原因。"))
@@ -4780,11 +4957,13 @@ def bulk_update_processing_records(
 	if not isinstance(record_ids, list):
 		frappe.throw(_("请选择要批量处理的记录。"))
 	record_ids = list(dict.fromkeys(str(record_id).strip() for record_id in record_ids if str(record_id).strip()))
-	if not select_all_pending and not record_ids:
+	if not select_all_pending and not record_ids and not (source_type == "attendance_draft" and review_status == "已驳回"):
 		frappe.throw(_("请选择至少一条异常记录。"))
 	batch = _latest_batch(company, attendance_month, source_type)
 	if not batch:
 		frappe.throw(_("尚未上传该来源文件。"))
+	if source_type == "attendance_draft" and review_status == "已驳回":
+		return _bulk_exclude_attendance_daily_lines(batch, daily_record_ids, select_all_pending, reason, employee_code, employee_name)
 	shift_rule_version = _attendance_shift_rule_bundle(company)["version"] if source_type == "attendance_draft" else None
 	if select_all_pending:
 		# A source-filtered all-selection is resolved on the server at submit time,
@@ -4857,7 +5036,7 @@ def bulk_update_processing_records(
 		any({"RESTDAY_CLOCKED_WITHOUT_APPROVAL", "HOLIDAY_CLOCKED_WITHOUT_APPROVAL"} & set(line.get("exception_codes") or []) for line in draft_pending_lines[row.name]) for row in rows
 	):
 		frappe.throw(_("所选记录包含周末或节假日打卡缺加班单的日期，请先逐日补充审批，不能批量确认通过。"))
-	if (source_type != "attendance_draft" or review_status != "暂不计入") and any(row.review_status != "待审核" for row in rows):
+	if source_type != "attendance_draft" and any(row.review_status != "待审核" for row in rows):
 		frappe.throw(_("所选记录已经处理。若需更正，请逐条使用“查看/更正记录”。"))
 
 	processed_at = now_datetime()
@@ -6600,16 +6779,6 @@ def upsert_department_mapping(
 def _finalization_inputs(company, attendance_month, slots):
 	by_source = {slot["source_type"]: slot for slot in slots}
 	inputs = []
-	daily_workflow = _daily_month_workflow(company, attendance_month)
-	inputs.append({
-		"key": "daily_closure",
-		"source_type": "daily_closure",
-		"label": "日考勤修改后校验",
-		"kind": "日考勤闭环",
-		"status": "已锁定" if daily_workflow["ready"] and daily_workflow["required"] else "无需启用" if not daily_workflow["required"] else "待处理",
-		"ready": bool(daily_workflow["ready"]),
-		"daily_workflow": daily_workflow,
-	})
 	for source_type in SOURCE_TYPES:
 		slot = by_source.get(source_type)
 		# Confirmation is the final decision for a main source.  Rows that remain
@@ -6656,15 +6825,6 @@ def _first_signed_inputs(company, attendance_month, slots):
 	"""Build the narrower gate for the first-signature attendance form."""
 	by_source = {slot["source_type"]: slot for slot in slots}
 	inputs = []
-	daily_workflow = _daily_month_workflow(company, attendance_month)
-	inputs.append({
-		"key": "daily_closure",
-		"source_type": "daily_closure",
-		"label": "日考勤修改后校验",
-		"status": "已锁定" if daily_workflow["ready"] and daily_workflow["required"] else "无需启用" if not daily_workflow["required"] else "待处理",
-		"ready": bool(daily_workflow["ready"]),
-		"daily_workflow": daily_workflow,
-	})
 	for source_type in FIRST_SIGNED_SOURCE_TYPES:
 		slot = by_source.get(source_type)
 		ready = bool(slot and slot["status"] == "已确认")
@@ -7279,9 +7439,9 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = ""):
 			continue
 		records = _result_rows(batch, 5000, employee_code=employee_code) if employee_code else _result_rows(batch, 5000)
 		for record in records:
-			if not record.get("eligible_for_downstream"):
+			if not _attendance_row_has_downstream_dates(record):
 				continue
-			values = _effective_result_values(record)
+			values = _attendance_downstream_values(record) if source_type == "attendance_draft" else _effective_result_values(record)
 			code = str(values.get("employee_code") or record.get("employee_code") or "").strip()
 			name = str(values.get("employee_name") or record.get("employee_name") or "").strip()
 			if not code and not name:
@@ -7364,9 +7524,10 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 		return []
 	items = []
 	for record in _result_rows(batch, 5000):
-		if not record.get("eligible_for_downstream"):
+		if not _attendance_row_has_downstream_dates(record):
 			continue
-		values = _effective_result_values(record)
+		values = _attendance_downstream_values(record)
+		excluded_keys = _excluded_attendance_daily_keys(record)
 		details_by_key = {
 			_daily_source_key(item.get("source_row"), item.get("source_file"), item.get("source_sheet"), item.get("attendance_date")): item
 			for item in values.get("attendance_details") or [] if isinstance(item, dict)
@@ -7384,6 +7545,8 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 				raw.get("source_row") or raw.get("_source_row"), raw.get("source_file") or record.get("source_file"),
 				raw.get("source_sheet") or record.get("source_sheet"), _daily_attendance_date(pick("日期", "考勤日期")),
 			)
+			if detail_key in excluded_keys:
+				continue
 			detail = details_by_key.get(detail_key, {})
 			# Weekday overtime comes only from the DingTalk export.  Punches and special
 			# hours may validate it, but must not synthesize a value for older batches.
@@ -7897,9 +8060,6 @@ def generate_first_signed_file(company: str, attendance_month: str, snapshot_ver
 	_require_processing_manager()
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
 	state = get_processing_batch(company, attendance_month)
-	daily_workflow = state.get("daily_workflow") or {}
-	if daily_workflow.get("required") and not daily_workflow.get("ready"):
-		return {"blocked": True, "reason": _("请先完成日考勤修改后校验和每日锁定。"), "daily_workflow": daily_workflow}
 	result = _generate_first_signed_output(company, attendance_month, state)
 	if not result.get("blocked"):
 		frappe.db.commit()
@@ -7911,9 +8071,6 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 	_require_processing_manager("attendance_final_lock")
 	company, attendance_month = _require_company(company), _require_month(attendance_month)
 	state = get_processing_batch(company, attendance_month)
-	daily_workflow = state.get("daily_workflow") or {}
-	if daily_workflow.get("required") and not daily_workflow.get("ready"):
-		return {"blocked": True, "reason": _("请先完成日考勤修改后校验和每日锁定。"), "daily_workflow": daily_workflow}
 	readiness = state["finalization_inputs"]
 	blocked = [item for item in readiness if not item["ready"]]
 	if blocked:
