@@ -45,7 +45,6 @@ from hrms.api.attendance_processors.attendance_draft import (
 	_schedule_overtime_rule,
 )
 from hrms.api.attendance_processors.missed_punch import MissedPunchRules, precheck_missed_punch_structure, process_missed_punch_rows
-from hrms.api.monthly_standard_hours import monthly_standard_hours
 
 
 IMPORT_BATCH_DOCTYPE = "HRMS Attendance Import Batch"
@@ -6901,7 +6900,7 @@ MONTHLY_FINAL_SCHEDULED_FIELDS = frozenset({"deep_night_shifts"})
 MONTHLY_FINAL_WEB_EDITABLE_FIELDS = tuple(
 	field
 	for field, _label in FINAL_SIGNED_COLUMNS
-	if field not in MONTHLY_FINAL_IDENTITY_FIELDS | MONTHLY_FINAL_SPECIAL_HOURS_FIELDS | MONTHLY_FINAL_SCHEDULED_FIELDS | {"standard_hours"}
+	if field not in MONTHLY_FINAL_IDENTITY_FIELDS | MONTHLY_FINAL_SPECIAL_HOURS_FIELDS | MONTHLY_FINAL_SCHEDULED_FIELDS
 )
 
 # The settings table stores visible Excel headings, while field keys remain
@@ -7038,11 +7037,12 @@ def _attendance_final_excel_config_hash() -> str:
 	return hashlib.sha256(_json(payload).encode()).hexdigest()
 
 
-# Layout versions invalidate files generated with the former per-person baseline.
-MONTHLY_FINAL_LAYOUT_VERSION = 14
-FIRST_SIGNED_LAYOUT_VERSION = 5
-SHARED_STANDARD_FINAL_LAYOUT_VERSION = 13
-SHARED_STANDARD_FIRST_SIGNED_LAYOUT_VERSION = 5
+# New files use each employee's reviewed daily standard-hours total. Keep the
+# shared-standard versions identifiable so their locked previews stay unchanged.
+MONTHLY_FINAL_LAYOUT_VERSION = 15
+FIRST_SIGNED_LAYOUT_VERSION = 6
+SHARED_STANDARD_FINAL_LAYOUT_VERSIONS = frozenset({13, 14})
+SHARED_STANDARD_FIRST_SIGNED_LAYOUT_VERSIONS = frozenset({5})
 
 
 # The employee-facing file deliberately follows the paper confirmation form
@@ -7287,10 +7287,7 @@ def _approval_snapshot(company: str, attendance_month: str, finalization_inputs=
 	missing = [SOURCE_LABELS[source_type] for source_type, batch in batches.items() if not batch]
 	if missing:
 		return "", missing
-	# A calendar or standard-hours rule change requires a fresh approval.
-	standard = monthly_standard_hours(company, attendance_month)
-	material = f"{_monthly_snapshot_version(batches)}:shared-standard-v1:{standard}"
-	return hashlib.sha256(material.encode()).hexdigest()[:16], []
+	return _monthly_snapshot_version(batches), []
 
 
 def _monthly_final_approval_state(company: str, attendance_month: str, anchor_meta=None, finalization_inputs=None) -> dict[str, Any]:
@@ -7449,7 +7446,7 @@ def list_monthly_final_approval_history(company: str, attendance_month: str):
 	return {"items": items}
 
 
-def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared_standard_hours: bool = True, standard_hours_override: int | None = None):
+def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared_standard_hours: bool = False, standard_hours_override: int | None = None):
 	"""Aggregate confirmed processing rows without recalculating their source facts."""
 	rows_by_employee = defaultdict(dict)
 	attendance_population = set()
@@ -7517,16 +7514,14 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 					continue
 				field = MONTHLY_SUPPORT_SOURCE_CONFIG[source_type]["value_field"]
 				output[field] = _as_number(output.get(field)) + _as_number(values.get(field))
-	if shared_standard_hours:
-		attendance_batch = batches.get("attendance_draft")
-		if attendance_batch and getattr(attendance_batch, "attendance_month", None):
-			standard = standard_hours_override if standard_hours_override is not None else monthly_standard_hours(attendance_batch.company, attendance_batch.attendance_month)
-			for row in rows_by_employee.values():
-				row["standard_hours"] = standard
+	if shared_standard_hours and standard_hours_override is not None:
+		# Historical shared-standard files retain their stored display value.
+		for row in rows_by_employee.values():
+			row["standard_hours"] = standard_hours_override
 	return sorted(rows_by_employee.values(), key=lambda row: (str(row.get("department") or ""), str(row.get("employee_code") or ""), str(row.get("employee_name") or "")))
 
 
-def _monthly_first_signed_rows(batches: dict[str, Any], employee_code: str = "", shared_standard_hours: bool = True, standard_hours_override: int | None = None):
+def _monthly_first_signed_rows(batches: dict[str, Any], employee_code: str = "", shared_standard_hours: bool = False, standard_hours_override: int | None = None):
 	"""Build first-signature rows in the supplied narrow workbook's shape."""
 	rows = _monthly_final_rows(batches, employee_code=employee_code, shared_standard_hours=shared_standard_hours, standard_hours_override=standard_hours_override) if employee_code else _monthly_final_rows(batches, shared_standard_hours=shared_standard_hours, standard_hours_override=standard_hours_override)
 	company = next((batch.company for batch in batches.values() if batch), "")
@@ -8074,7 +8069,6 @@ def _generate_first_signed_output(company: str, attendance_month: str, state: di
 		"file_name": file["file_name"],
 		"generated_on": now_datetime().isoformat(),
 		"employee_count": len(rows),
-		"standard_hours": rows[0]["standard_hours"],
 		"layout_version": FIRST_SIGNED_LAYOUT_VERSION,
 	}
 	_save_batch_notes(anchor_batch, {"first_signed_outputs": first_signed_outputs})
@@ -8141,7 +8135,6 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 		"approved_on": approval.get("reviewed_on", ""),
 		"approval_snapshot_version": approval.get("snapshot_version", ""),
 		"employee_count": len(rows),
-		"standard_hours": rows[0]["standard_hours"],
 		"layout_version": MONTHLY_FINAL_LAYOUT_VERSION,
 		"attendance_final_excel_config_hash": config_hash,
 	}
@@ -8182,11 +8175,11 @@ def get_monthly_final_preview(company: str, attendance_month: str, kind: str = "
 			return {"available": False, "stale": True, "reason": _("来源或人工处理已变化，请重新锁定并生成终稿后再查看。")}
 		preview_batches = legacy_batches
 	if kind == "first_signed":
-		month_rows = _monthly_first_signed_rows(preview_batches, shared_standard_hours=cint(outputs.get("layout_version")) >= SHARED_STANDARD_FIRST_SIGNED_LAYOUT_VERSION, standard_hours_override=outputs.get("standard_hours"))
+		month_rows = _monthly_first_signed_rows(preview_batches, shared_standard_hours=cint(outputs.get("layout_version")) in SHARED_STANDARD_FIRST_SIGNED_LAYOUT_VERSIONS, standard_hours_override=outputs.get("standard_hours"))
 		columns = _first_signed_visible_columns(month_rows)
 		rows = [row for row in month_rows if str(row.get("employee_code") or "").strip() == str(employee_code).strip()] if employee_code else month_rows
 	else:
-		shared_standard = cint(outputs.get("layout_version")) >= SHARED_STANDARD_FINAL_LAYOUT_VERSION
+		shared_standard = cint(outputs.get("layout_version")) in SHARED_STANDARD_FINAL_LAYOUT_VERSIONS
 		rows = _monthly_final_rows(preview_batches, employee_code=employee_code, shared_standard_hours=shared_standard, standard_hours_override=outputs.get("standard_hours")) if employee_code else _monthly_final_rows(preview_batches, shared_standard_hours=shared_standard, standard_hours_override=outputs.get("standard_hours"))
 		columns = FINAL_SIGNED_COLUMNS if kind == "signed" else FINAL_FINANCE_COLUMNS
 	return {

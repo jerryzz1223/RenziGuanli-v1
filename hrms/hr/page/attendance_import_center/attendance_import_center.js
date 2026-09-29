@@ -3195,7 +3195,6 @@ class AttendanceImportCenter {
 		return `<section class="hrms-attendance-section">
 			<div class="hrms-attendance-list-head"><div><h3>${this.escape(__("月度终稿"))}</h3></div><div>${approvalActions}<button class="btn btn-primary btn-sm" data-hrms-capability="attendance_final_lock" data-generate-final ${ready ? "" : "disabled"}>${this.escape(__("锁定并生成三个版本"))}</button></div></div>
 			<div class="hrms-attendance-api-notice"><strong>${this.escape(__("月考勤审核：{0}", [approvalStatus]))}</strong><span>${this.escape(approvalHint)}</span></div>
-			<div class="hrms-attendance-process-footnote">${this.escape(__("月标准工时按公司节假日日历工作日数 × 8 小时统一计算；未配置日历时按周一至周五。每日标准工时保留钉钉原值用于逐日核对，已锁定旧版按原快照查看。"))}</div>
 			<section class="hrms-attendance-final-checklist"><div class="hrms-attendance-final-recognition">${recognitionCards.map(([label, count]) => `<div><strong>${this.escape(__("{0} 人", [count || 0]))}</strong><span>${this.escape(__(label))}</span></div>`).join("")}</div></section>
 			<div class="hrms-attendance-final-grid"><article><strong>${this.escape(__("一次签字版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="first_signed" ${firstSignedOutputs.file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button><button class="btn btn-default btn-sm" data-download-final="first_signed" ${firstSignedOutputs.file_url ? "" : "disabled"}>${this.escape(__("下载一次签字版"))}</button></article><article><strong>${this.escape(__("第二次员工签字版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="signed" ${secondSignedFileUrl ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-edit-final="signed" ${secondSignedFileUrl ? "" : "disabled"}>${this.escape(__("网页编辑"))}</button> <button class="btn btn-default btn-sm" data-download-final="signed" ${secondSignedFileUrl ? "" : "disabled"}>${this.escape(__("下载第二次员工签字版"))}</button></article><article><strong>${this.escape(__("财务版"))}</strong><button class="btn btn-default btn-sm" data-preview-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("网页查看"))}</button> <button class="btn btn-default btn-sm" data-edit-final="signed" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("网页编辑"))}</button> <button class="btn btn-default btn-sm" data-download-final="finance" ${outputs.finance_file_url ? "" : "disabled"}>${this.escape(__("下载财务版"))}</button></article></div><div class="hrms-attendance-process-footnote">${this.escape(__(outputs.locked_version ? `当前锁定版本：${outputs.locked_version}` : "尚未生成锁定版本。"))}</div>
 		</section>`;
@@ -4015,7 +4014,6 @@ class AttendanceImportCenter {
 			{ label: "锁定本月考勤", action: "lock-month" },
 			{ label: "解锁本月考勤", action: "unlock-month" },
 		]);
-		this.body().insertAdjacentHTML("beforeend", `<div class="hrms-attendance-process-footnote">${this.escape(__("月标准工时按公司节假日日历工作日数 × 8 小时统一计算；未配置日历时按周一至周五。每日标准工时仍保留来源原值。"))}</div>`);
 		this.bind_action_bar();
 		if (!this.ensure_company()) return;
 		frappe.call({

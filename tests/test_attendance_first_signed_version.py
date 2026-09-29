@@ -20,7 +20,7 @@ def load_processing_api():
 	frappe._ = lambda value, *args: value
 	frappe.whitelist = lambda function=None: function or (lambda decorated: decorated)
 	frappe.throw = lambda message, *args, **kwargs: (_ for _ in ()).throw(RuntimeError(message))
-	frappe.db = types.SimpleNamespace(get_value=lambda *args, **kwargs: None)
+	frappe.db = types.SimpleNamespace()
 	frappe.get_all = lambda *args, **kwargs: []
 	frappe.get_doc = lambda *args, **kwargs: None
 	frappe.get_roles = lambda *args, **kwargs: []
@@ -66,23 +66,20 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 	def setUpClass(cls):
 		cls.api = load_processing_api()
 
-	def test_monthly_final_uses_one_calendar_standard_for_different_source_totals(self):
+	def test_monthly_final_keeps_reviewed_employee_standard_hours(self):
 		api = self.api
-		attendance = types.SimpleNamespace(source_type="attendance_draft", company="测试公司", attendance_month="2026-07")
+		attendance = types.SimpleNamespace(source_type="attendance_draft", company="测试公司", attendance_month="2026-08")
 		records = [
 			{"source_type": "attendance_draft", "eligible_for_downstream": True, "employee_code": code,
 			 "processed_value": {"employee_code": code, "employee_name": code, "standard_hours": source_hours}}
-			for code, source_hours in (("E-001", 160), ("E-002", 176))
+			for code, source_hours in (("E-001", 160), ("E-002", 48))
 		]
-		frappe = sys.modules["frappe"]
-		with patch.object(api, "_result_rows", return_value=records), patch.object(frappe.db, "get_value", return_value=None, create=True):
+		with patch.object(api, "_result_rows", return_value=records):
 			rows = api._monthly_final_rows({"attendance_draft": attendance})
-			legacy = api._monthly_final_rows({"attendance_draft": attendance}, shared_standard_hours=False)
-			locked = api._monthly_final_rows({"attendance_draft": attendance}, standard_hours_override=168)
-		self.assertEqual([row["standard_hours"] for row in rows], [184, 184])
-		self.assertEqual([row["standard_hours"] for row in legacy], [160, 176])
-		self.assertEqual([row["standard_hours"] for row in locked], [168, 168])
-		self.assertNotIn("standard_hours", api.MONTHLY_FINAL_WEB_EDITABLE_FIELDS)
+			historical = api._monthly_final_rows({"attendance_draft": attendance}, shared_standard_hours=True, standard_hours_override=168)
+		self.assertEqual([row["standard_hours"] for row in rows], [160, 48])
+		self.assertEqual([row["standard_hours"] for row in historical], [168, 168])
+		self.assertIn("standard_hours", api.MONTHLY_FINAL_WEB_EDITABLE_FIELDS)
 
 	def test_rows_use_attendance_population_and_keep_missing_card_amount(self):
 		api = self.api
