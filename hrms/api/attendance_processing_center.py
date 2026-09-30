@@ -2584,7 +2584,7 @@ def _pending_attendance_daily_keys(row: dict[str, Any], values: dict[str, Any] |
 
 
 def _attendance_downstream_values(row: dict[str, Any], *, exclude_pending_dates: bool = False) -> dict[str, Any]:
-	"""Subtract excluded dates from the saved month, preserving its other daily facts."""
+	"""Subtract excluded dates' settlement facts while keeping scheduled standard hours."""
 	values = _effective_result_values(row)
 	keys = _excluded_attendance_daily_keys(row, values)
 	if exclude_pending_dates:
@@ -2597,7 +2597,7 @@ def _attendance_downstream_values(row: dict[str, Any], *, exclude_pending_dates:
 	if len(excluded) != len(keys):
 		frappe.throw(_("排除日期与原始考勤明细不一致，请先重新识别来源后重试。"))
 	for field, _label in ATTENDANCE_DRAFT_RESULT_COLUMNS:
-		if field in {"department", "employee_name", "employee_code", "attendance_note", "leave_hours", "deep_night_shifts"}:
+		if field in {"department", "employee_name", "employee_code", "attendance_note", "leave_hours", "deep_night_shifts", "standard_hours"}:
 			continue
 		if field in values:
 			values[field] = round(_as_number(values[field]) - sum(_as_number(item.get(field)) for item in excluded), 4)
@@ -2614,6 +2614,27 @@ def _attendance_downstream_values(row: dict[str, Any], *, exclude_pending_dates:
 		if f"{row.get('attendance_month')}" + f"-{int(item.get('day') or 0):02d}" not in {str(day.get("attendance_date")) for day in excluded}]
 	values["source_row_count"] = max(0, int(values.get("source_row_count") or len(details)) - len(excluded))
 	return values
+
+
+def _signed_standard_hours_from_daily_source(row: dict[str, Any]) -> float | None:
+	"""Sum the same dated standard-hour cells shown in the first signed detail sheet."""
+	month = str(row.get("attendance_month") or "")
+	if not re.fullmatch(r"\d{4}-\d{2}", month):
+		return None
+	rows = _effective_daily_source_rows(row)
+	if not rows:
+		return None
+	total = 0.0
+	has_standard_cell = False
+	for daily in rows:
+		if _daily_attendance_date(daily.get("日期") or daily.get("考勤日期"))[:7] != month:
+			continue
+		for alias in ATTENDANCE_NUMERIC_FIELDS["standard_hours"]:
+			if daily.get(alias) not in (None, ""):
+				has_standard_cell = True
+				total += _as_number(daily[alias])
+				break
+	return round(total, 4) if has_standard_cell else None
 
 
 def _attendance_row_has_downstream_dates(row: dict[str, Any]) -> bool:
@@ -7097,10 +7118,10 @@ def _attendance_final_excel_config_hash() -> str:
 	return hashlib.sha256(_json(payload).encode()).hexdigest()
 
 
-# New files use each employee's reviewed daily standard-hours total. Keep the
+# New files use each employee's dated daily standard-hours total. Keep the
 # shared-standard versions identifiable so their locked previews stay unchanged.
-MONTHLY_FINAL_LAYOUT_VERSION = 20
-FIRST_SIGNED_LAYOUT_VERSION = 8
+MONTHLY_FINAL_LAYOUT_VERSION = 21
+FIRST_SIGNED_LAYOUT_VERSION = 9
 APPLE_REWARD_AMOUNT_PER_APPLE = 5
 SHARED_STANDARD_FINAL_LAYOUT_VERSIONS = frozenset({13, 14})
 SHARED_STANDARD_FIRST_SIGNED_LAYOUT_VERSIONS = frozenset({5})
@@ -7544,6 +7565,9 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 				output["eligible_for_downstream"] = bool(record.get("eligible_for_downstream"))
 				for field, _label in ATTENDANCE_DRAFT_RESULT_COLUMNS:
 					output[field] = values.get(field, output.get(field, 0))
+				daily_standard_hours = _signed_standard_hours_from_daily_source(record)
+				if daily_standard_hours is not None:
+					output["standard_hours"] = daily_standard_hours
 				derived_special_entries = values.get("special_hours_days") or []
 				if monthly_special_hours_source:
 					for field in ("special_hours", "special_workday_hours", "special_restday_hours", "special_holiday_hours"):
@@ -7558,7 +7582,7 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 						output[field] = values.get(field)
 				pending_dates = len(_pending_attendance_daily_keys(record))
 				if pending_dates or not output["eligible_for_downstream"]:
-					status_note = f"考勤初稿{output['attendance_review_status']}；{pending_dates}条待审核考勤日期未计入本次汇总，请核对原始记录" if pending_dates else f"考勤初稿{output['attendance_review_status']}（是否计入下游：否），请核对原始记录"
+					status_note = f"考勤初稿{output['attendance_review_status']}；{pending_dates}条待审核日期的考勤结算项未计入，标准工时按每日明细汇总，请核对原始记录" if pending_dates else f"考勤初稿{output['attendance_review_status']}（是否计入下游：否），请核对原始记录"
 					output["review_note"] = "；".join(filter(None, (str(output.get("review_note") or "").strip(), status_note)))
 			elif source_type == "missing_card":
 				if values.get("included", True):
@@ -7659,7 +7683,7 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 				raw.get("source_sheet") or record.get("source_sheet"), _daily_attendance_date(pick("日期", "考勤日期")),
 			)
 			detail = details_by_key.get(detail_key, {})
-			date_review_note = "待审核，本次汇总未计入" if detail_key in pending_keys or _daily_attendance_date(pick("日期", "考勤日期")) in pending_dates else "已标记不计入本次汇总" if detail_key in excluded_keys else ""
+			date_review_note = "待审核，考勤结算项未计入；标准工时计入" if detail_key in pending_keys or _daily_attendance_date(pick("日期", "考勤日期")) in pending_dates else "已标记考勤结算项不计入；标准工时计入" if detail_key in excluded_keys else ""
 			# Weekday overtime comes only from the DingTalk export.  Punches and special
 			# hours may validate it, but must not synthesize a value for older batches.
 			calculated_workday_overtime = detail.get("calculated_workday_overtime_hours")

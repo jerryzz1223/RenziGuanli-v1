@@ -42,6 +42,30 @@ class EmployeeRosterExportFormatTests(unittest.TestCase):
         self.assertEqual([header for _fieldname, header in columns], expected)
         self.assertEqual(len({fieldname for fieldname, _header in columns}), 37)
 
+    def test_reference_export_keeps_missing_historical_columns_without_querying_them(self):
+        tree = ast.parse(SOURCE.read_text())
+        columns = ast.literal_eval(next(
+            node.value for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "EMPLOYEE_REFERENCE_EXPORT_COLUMNS" for target in node.targets)
+        ))
+        missing = {"custom_education_category", "custom_study_mode", "custom_probation_months"}
+        scope = load_functions(
+            "_get_reference_roster_export_fields", "_get_employee_export_query_fields",
+            namespace={
+                "EMPLOYEE_REFERENCE_EXPORT_COLUMNS": columns,
+                "_get_employee_meta_field_map": lambda: {
+                    fieldname: True for fieldname, _header in columns if fieldname not in missing
+                },
+            },
+        )
+        selected, allowed = scope["_get_reference_roster_export_fields"]()
+        query_fields = scope["_get_employee_export_query_fields"](selected, allowed)
+        self.assertEqual(len(selected), 37)
+        self.assertEqual([allowed[fieldname]["field_label"] for fieldname in selected], [header for _, header in columns])
+        self.assertEqual(set(selected) - set(query_fields), missing)
+        self.assertEqual(len(query_fields), 34)
+
     def test_current_roster_filters_reach_export_query(self):
         scope = load_functions(
             "_build_employee_roster_filters",

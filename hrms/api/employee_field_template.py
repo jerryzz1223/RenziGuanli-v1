@@ -6414,14 +6414,16 @@ def _get_allowed_export_fields(fields):
 
 def _get_reference_roster_export_fields():
 	meta_fields = _get_employee_meta_field_map()
-	missing = [header for fieldname, header in EMPLOYEE_REFERENCE_EXPORT_COLUMNS if fieldname not in meta_fields]
-	if missing:
-		frappe.throw(_("对照花名册字段在当前站点不存在：{0}").format("、".join(missing)))
 	selected_fields = [fieldname for fieldname, _header in EMPLOYEE_REFERENCE_EXPORT_COLUMNS]
 	allowed_fields = {
-		fieldname: {"field_label": header} for fieldname, header in EMPLOYEE_REFERENCE_EXPORT_COLUMNS
+		fieldname: {"field_label": header, "missing": fieldname not in meta_fields}
+		for fieldname, header in EMPLOYEE_REFERENCE_EXPORT_COLUMNS
 	}
 	return selected_fields, allowed_fields
+
+
+def _get_employee_export_query_fields(selected_fields, allowed_fields):
+	return [fieldname for fieldname in selected_fields if not allowed_fields[fieldname].get("missing")]
 
 
 def _parse_selected_fields(fields, allowed_fields):
@@ -6518,7 +6520,12 @@ def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tab
 
 	main_headers = [allowed_fields[fieldname]["field_label"] for fieldname in selected_fields]
 	main_rows = [main_headers]
-	employees = frappe.get_all(EMPLOYEE_DOCTYPE, filters=filters, fields=selected_fields, order_by="modified desc")
+	employees = frappe.get_all(
+		EMPLOYEE_DOCTYPE,
+		filters=filters,
+		fields=_get_employee_export_query_fields(selected_fields, allowed_fields),
+		order_by="modified desc",
+	)
 	department_names = _get_department_display_names([employee.get("department") for employee in employees])
 	for employee in employees:
 		main_rows.append(

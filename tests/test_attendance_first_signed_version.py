@@ -240,11 +240,33 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 			rows = api._monthly_final_rows({"attendance_draft": batch})
 			daily = api._monthly_first_signed_daily_rows({"attendance_draft": batch})
 		self.assertEqual(len(rows), 1)
-		self.assertEqual((rows[0]["standard_hours"], rows[0]["actual_attendance_hours"]), (8, 8))
-		self.assertIn("1条待审核考勤日期未计入本次汇总", rows[0]["review_note"])
+		self.assertEqual((rows[0]["standard_hours"], rows[0]["actual_attendance_hours"]), (16, 8))
+		self.assertIn("1条待审核日期的考勤结算项未计入，标准工时按每日明细汇总", rows[0]["review_note"])
 		self.assertEqual([row[2] for row in daily], ["26-08-01 星期六", "26-08-02 星期六"])
-		self.assertIn("待审核，本次汇总未计入", daily[0][-1])
+		self.assertIn("待审核，考勤结算项未计入；标准工时计入", daily[0][-1])
 		self.assertNotIn("待审核", daily[1][-1])
+
+	def test_signed_standard_hours_reconciles_saved_month_with_daily_source(self):
+		api = self.api
+		batch = types.SimpleNamespace(source_type="attendance_draft", company="测试公司", attendance_month="2026-08")
+		record = {
+			"source_type": "attendance_draft", "attendance_month": "2026-08",
+			"employee_code": "260816", "employee_name": "王玉丹", "department": "品保课",
+			"review_status": "待审核", "eligible_for_downstream": False,
+			"processed_value": {"standard_hours": 32, "actual_attendance_hours": 32,
+				"attendance_details": [{"attendance_date": "2026-08-25", "source_row": 25,
+					"standard_hours": 8, "actual_attendance_hours": 8}],
+				"exception_lines": [{"attendance_date": "2026-08-25", "source_row": 25}]},
+			"original_value": {"rows": [
+				{"姓名": "王玉丹", "工号": "260816", "日期": f"26-08-{day:02d}",
+				 "标准工时": "8", "source_row": day}
+				for day in (3, 4, 25)
+			] + [{"姓名": "王玉丹", "工号": "260816", "日期": "26-09-01", "标准工时": "8", "source_row": 32}]},
+		}
+		with patch.object(api, "_result_rows", return_value=[record]), patch.object(api, "_employee_directory", return_value=[]):
+			rows = api._monthly_final_rows({"attendance_draft": batch})
+		self.assertEqual(rows[0]["standard_hours"], 24)
+		self.assertEqual(rows[0]["actual_attendance_hours"], 24)
 
 	def test_old_second_signed_output_requires_regeneration_before_preview(self):
 		api = self.api

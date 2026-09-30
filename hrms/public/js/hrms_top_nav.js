@@ -202,11 +202,6 @@
 			roles: HR_SETTINGS_MANAGER_ROLES,
 		},
 		{
-			label: "社保个税",
-			description: "社保、公积金及个人所得税服务",
-			route: "/desk/tax-&-benefits",
-		},
-		{
 			label: "电子合同（未开放）",
 			description: "高效签约服务暂未开放",
 			unavailable: true,

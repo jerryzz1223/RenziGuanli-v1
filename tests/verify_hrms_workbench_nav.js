@@ -73,7 +73,7 @@ if (!topNavCssVersion || topNavCssVersion < "20260903f") {
 	throw new Error("The top navigation CSS cache version must change when its desktop layout is corrected.");
 }
 
-if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260930-approval-center-v1")) {
+if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260930-remove-more-tax-v1")) {
 	throw new Error("The top navigation JavaScript cache version must change when route-transition behavior changes.");
 }
 
@@ -139,10 +139,16 @@ for (const marker of ["hrms-top-module-nav__brand-logo", "hrms-top-module-nav__b
 	}
 }
 
-for (const marker of ['label: "社保个税"', 'label: "电子合同（未开放）"', 'action: "data-operations"', 'hrms-top-module-nav__more-caret', 'hrms-top-module-nav__menu-list', 'function positionMenu()']) {
+for (const marker of ['label: "电子合同（未开放）"', 'action: "data-operations"', 'hrms-top-module-nav__more-caret', 'hrms-top-module-nav__menu-list', 'function positionMenu()']) {
 	if (!topNavSource.includes(marker)) {
 		throw new Error(`More/account navigation is missing marker: ${marker}`);
 	}
+}
+if (topNavSource.includes('label: "社保个税"')) {
+	throw new Error("Social security and tax must be accessed from Payroll, not More.");
+}
+if (!topNavSource.includes('"tax-&-benefits"')) {
+	throw new Error("Payroll must still own the social security and tax route.");
 }
 
 if (!topNavCssSource.includes(".hrms-top-module-nav__more.is-open .hrms-top-module-nav__menu")) {
