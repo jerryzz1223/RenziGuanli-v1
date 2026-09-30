@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
+import types
 from io import BytesIO
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -35,6 +38,48 @@ def _minimal_workbook():
 
 
 class TestExportWatermark(unittest.TestCase):
+	def test_configured_export_and_print_are_independent(self):
+		from openpyxl import Workbook
+
+		settings = types.ModuleType("hrms.utils.export_watermark_settings")
+		options = {"export": False, "print": False, "text": "测试水印", "opacity": 12}
+		settings.get_export_watermark_options = lambda key: options.copy()
+		with patch.dict(sys.modules, {"hrms.utils.export_watermark_settings": settings}):
+			plain = BytesIO()
+			WATERMARK.save_workbook_with_logo_watermark(Workbook(), plain, export_key="roster")
+			with ZipFile(BytesIO(plain.getvalue())) as archive:
+				self.assertNotIn(WATERMARK._WATERMARK_MEDIA_PATH, archive.namelist())
+				self.assertNotIn(b"picture", archive.read("xl/worksheets/sheet1.xml"))
+
+			options.update(export=True, print=False)
+			screen_only = BytesIO()
+			WATERMARK.save_workbook_with_logo_watermark(Workbook(), screen_only, export_key="roster")
+			with ZipFile(BytesIO(screen_only.getvalue())) as archive:
+				self.assertIn(WATERMARK._WATERMARK_MEDIA_PATH, archive.namelist())
+				self.assertNotIn(b"<headerFooter>", archive.read("xl/worksheets/sheet1.xml"))
+
+			options.update(export=True, print=True)
+			marked = BytesIO()
+			WATERMARK.save_workbook_with_logo_watermark(Workbook(), marked, export_key="roster")
+			with ZipFile(BytesIO(marked.getvalue())) as archive:
+				self.assertIn(WATERMARK._WATERMARK_MEDIA_PATH, archive.namelist())
+				sheet = archive.read("xl/worksheets/sheet1.xml")
+				self.assertIn(b"picture", sheet)
+				header = ElementTree.fromstring(sheet).find(f"{{{WATERMARK._SPREADSHEET_NAMESPACE}}}headerFooter/{{{WATERMARK._SPREADSHEET_NAMESPACE}}}oddHeader")
+				self.assertIn("测试水印", header.text)
+
+	def test_print_header_escapes_excel_format_character(self):
+		from openpyxl import Workbook
+
+		settings = types.ModuleType("hrms.utils.export_watermark_settings")
+		settings.get_export_watermark_options = lambda key: {"export": False, "print": True, "text": "A&B", "opacity": 20}
+		with patch.dict(sys.modules, {"hrms.utils.export_watermark_settings": settings}):
+			output = BytesIO()
+			WATERMARK.save_workbook_with_logo_watermark(Workbook(), output, export_key="roster")
+			with ZipFile(BytesIO(output.getvalue())) as archive:
+				sheet = archive.read("xl/worksheets/sheet1.xml")
+				self.assertIn(b"A&amp;&amp;B", sheet)
+
 	def test_background_relationship_is_valid_with_header_comments(self):
 		namespace = WATERMARK._DOCUMENT_RELATIONSHIPS_NAMESPACE
 		content = (

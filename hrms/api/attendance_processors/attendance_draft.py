@@ -2248,6 +2248,11 @@ def _aggregate_employee_rows(
 			# next-month row change the current month's attendance or payroll totals.
 			row_numbers = {fieldname: Decimal("0") for fieldname in NUMERIC_FIELDS}
 		if employment_scope == "out_of_scope":
+			# The signed workbook displays every dated source standard-hour value,
+			# including rows before joining or after leaving. Keep other attendance
+			# and payroll facts outside the employment period excluded.
+			if not is_supplemental_boundary_review:
+				totals["standard_hours"] += raw_numbers["standard_hours"]
 			if shift:
 				data_quality_events.append(_data_quality_event(
 					"OUTSIDE_EMPLOYMENT_PERIOD", parsed_date, row_number, employment_scope_reason,

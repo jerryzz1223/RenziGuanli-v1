@@ -238,8 +238,8 @@ for (const marker of [
 ]) {
 	mustInclude(dingtalkIntegration, marker, `DingTalk employee approval is missing marker: ${marker}`);
 }
-if (!/def sync_new_employees_from_dingtalk\([\s\S]{0,320}return _sync_preentry_employees\(company\)/.test(dingtalkIntegration)) {
-	throw new Error("The new-employee action must stay scoped to DingTalk pre-entry employees.");
+if (!/def sync_new_employees_from_dingtalk\([\s\S]{0,320}_sync_preentry_employees\(company\)[\s\S]{0,120}_sync_preentry_onjob_transitions\(company\)/.test(dingtalkIntegration)) {
+	throw new Error("The new-employee action must refresh pre-entry and previously pending employees who moved on-job.");
 }
 const fullRosterBody = dingtalkIntegration.match(/def _sync_all_employee_rosters\([\s\S]*?\n\n@frappe\.whitelist\(\)/)?.[0] || "";
 if (!fullRosterBody.includes("_fetch_dingtalk_onjob_userids") || fullRosterBody.includes("_fetch_dingtalk_preentry_userids")) {
@@ -256,10 +256,10 @@ for (const marker of ["import_status", "mapped_values_json", "approved_by", "app
 
 const employeeList = read("hrms/public/js/erpnext/employee_list.js");
 for (const marker of [
-	"正在拉取并匹配钉钉待入职新员工",
+	"正在核对钉钉待入职及转在职新员工",
 	"一键审批并导入全部",
 	"queue_approve_all_dingtalk_employee_imports",
-	'source_type: "preentry,manual_new_employee"',
+	'source_type: "preentry,manual_new_employee,onjob_new_employee"',
 	"钉钉同步记录",
 	"open_dingtalk_employee_sync_records",
 	"list_dingtalk_employee_sync_records",

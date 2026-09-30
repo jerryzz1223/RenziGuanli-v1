@@ -657,16 +657,16 @@ def _read_plan(file_url, profile):
 	missing_required = [column["label"] for column in profile["columns"] if column.get("required") and column["key"] not in mapping]
 	rows = []
 	for row_number, values in enumerate(sheet.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
-		raw = {
-			f"{index}:{_normalise_text(header) or '未命名列'}": _normalise_text(values[index - 1] if len(values) >= index else "")
-			for index, header in enumerate(headers, start=1)
-		}
 		normalized = {key: _normalise_text(values[column_index - 1] if len(values) >= column_index else "") for key, column_index in mapping.items()}
 		if not any(normalized.values()):
 			continue
 		identity_keys = profile.get("row_identity_keys") or []
 		if identity_keys and not any(normalized.get(key) for key in identity_keys):
 			continue
+		raw = {
+			f"{index}:{_normalise_text(header) or '未命名列'}": _normalise_text(values[index - 1] if len(values) >= index else "")
+			for index, header in enumerate(headers, start=1)
+		}
 		rows.append({"row_number": row_number, "raw": raw, "normalized": normalized})
 	return {
 		"sheet_name": sheet.title,
@@ -838,6 +838,20 @@ def _normalise_reward_punishment_data(data, company):
 
 def _validate_rows(profile, company, plan):
 	result = []
+	# Monthly source sheets repeat the same employee and department across many
+	# rows. Reuse lookups only within this validation run so the next preview or
+	# import still reads current master data.
+	code_matches = {}
+	name_matches = {}
+	department_matches = {}
+	employee_departments = {}
+	department_names_match = {}
+
+	def cached(cache, key, lookup):
+		if key not in cache:
+			cache[key] = lookup()
+		return cache[key]
+
 	for item in plan["rows"]:
 		data = item["normalized"]
 		prevalidation_errors = []
@@ -845,16 +859,21 @@ def _validate_rows(profile, company, plan):
 			prevalidation_errors = _normalise_reward_punishment_data(data, company)
 		errors = [_("缺少必填值：{0}").format(column["label"]) for column in profile["columns"] if column.get("required") and not data.get(column["key"])]
 		errors = prevalidation_errors + errors
-		employee = _employee_by_code(company, data.get("employee_code")) or _employee_by_name(company, data.get("employee_name"))
+		code = data.get("employee_code")
+		name = data.get("employee_name")
+		employee = cached(code_matches, code, lambda: _employee_by_code(company, code)) if code else ""
+		if not employee and name:
+			employee = cached(name_matches, name, lambda: _employee_by_name(company, name))
 		if data.get("employee_code") and not employee:
 			errors.append(_("未匹配到当前公司在职员工工号：{0}").format(data["employee_code"]))
-		department = _department_exists(company, data.get("department"))
+		department_name = data.get("department")
+		department = cached(department_matches, department_name, lambda: _department_exists(company, department_name)) if department_name else ""
 		if data.get("department") and not department and employee:
 			# Employee was resolved within the selected company. Use its existing
 			# Department link when the spreadsheet provides the same business name,
 			# even if legacy Department.company metadata is inconsistent.
-			current_department = frappe.db.get_value("Employee", employee, "department")
-			if _matches_department_display_name(current_department, data.get("department")):
+			current_department = cached(employee_departments, employee, lambda: frappe.db.get_value("Employee", employee, "department"))
+			if cached(department_names_match, (current_department, department_name), lambda: _matches_department_display_name(current_department, department_name)):
 				department = current_department
 		if data.get("department") and not department:
 			errors.append(_("未匹配到当前公司部门：{0}").format(data["department"]))
@@ -914,7 +933,7 @@ def create_form_import_template_file(template_key: str):
 	data_sheet.freeze_panes = "A2"
 	data_sheet.auto_filter.ref = f"A1:{data_sheet.cell(row=1, column=len(headers)).column_letter}2"
 	output = BytesIO()
-	save_workbook_with_logo_watermark(workbook, output)
+	save_workbook_with_logo_watermark(workbook, output, export_key="form_import_template")
 	filename = f"{profile['label']}导入模板.xlsx"
 	file_doc = frappe.get_doc({"doctype": "File", "file_name": filename, "content": output.getvalue(), "is_private": 0}).insert(ignore_permissions=True)
 	return {"file_url": file_doc.file_url, "file_name": filename}

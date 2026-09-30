@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../hrms/public/js/hrms_top_nav.js'), 'utf8');
-const navigate = source.slice(source.indexOf('\tfunction navigate(route) {'), source.indexOf('\n\tfunction openSettingsModule('));
+const navigate = source.slice(source.indexOf('\tfunction navigate(route) {'), source.indexOf('\n\tfunction currentUserId('));
 const render = source.slice(source.indexOf('\tfunction render() {'), source.indexOf('\n\tfunction scheduleRender()'));
 const affects = source.slice(source.indexOf('\tfunction affectsNavigationShell('), source.indexOf('\n\tnew MutationObserver((mutations)'));
 const routeCalls = [], routeEvents = [];
@@ -51,3 +51,19 @@ assert.equal(context.affectsNavigationShell({target: plainNode, addedNodes: [{no
 assert.equal(context.affectsNavigationShell({target: {...plainNode, closest: () => ({})}, addedNodes: [], removedNodes: []}), true);
 assert.equal(context.affectsNavigationShell({target: plainNode, addedNodes: [], removedNodes: [{...plainNode, matches: () => true}]}), true);
 console.log('Navigation runtime: router-safe top-nav transitions, unchanged DOM reuse, module/user changes and targeted mutation handling passed.');
+
+const shellSource = fs.readFileSync(path.join(__dirname, '../hrms/public/js/hrms_home_redirect_v6.js'), 'utf8');
+const shellNavigation = shellSource.slice(shellSource.indexOf('\tfunction route_to_parts(route) {'), shellSource.indexOf('\n\t// Sidebar order is a personal display preference.'));
+const shellRoutes = [], shellEvents = [];
+const shellContext = {
+ window: {frappe: {}, location: {href: ''}, dispatchEvent: event => shellEvents.push(event)},
+ frappe: {set_route: (...parts) => shellRoutes.push(parts)},
+ route_to_slug: route => route.replace('/desk/', ''),
+ hrms_expected_route_slug: '',
+};
+vm.createContext(shellContext);
+vm.runInContext(shellNavigation, shellContext);
+shellContext.navigate_hrms_sidebar('/desk/personnel-home', 'personnel-home');
+assert.deepEqual(shellRoutes, [['personnel-home']], 'sidebar must ask the Desk router to navigate once');
+assert.equal(shellEvents.length, 0, 'sidebar must not announce a second, premature route change');
+assert.equal(shellContext.hrms_expected_route_slug, 'personnel-home');

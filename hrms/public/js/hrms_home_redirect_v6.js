@@ -260,11 +260,10 @@
 		},
 		{
 			label: "开发与配置",
-			route: "/desk/hrms-developer-center",
+			route: "/desk/hrms-model-center",
 			icon: "开",
 			contextual: true,
 			keys: [
-				"hrms-developer-center",
 				"hrms-model-center",
 				"doctype",
 				"page",
@@ -279,14 +278,15 @@
 				"hrms-payroll-field-mapping",
 				"hrms-dingtalk-settings",
 				"hrms-data-operations",
+				"navbar-settings",
 			],
 			items: [
-				{ type: "link", label: "开发与配置总览", route: "/desk/hrms-developer-center", slug: "hrms-developer-center" },
 				{
 					type: "section",
 					label: "业务配置",
 					children: [
-						{ label: "员工字段与导入导出", route: "/desk/hr-settings-center", slug: "hr-settings-center" },
+						{ label: "品牌外观", route: "/desk/navbar-settings", slug: "navbar-settings", roles: ["System Manager"] },
+						{ label: "员工属性设置", route: "/desk/staff-attribute-settings", slug: "staff-attribute-settings" },
 						{ label: "人资表单审批矩阵", route: "/desk/hrms-form-approval-matrix", slug: "hrms-form-approval-matrix" },
 						{ label: "考勤自定义规则", route: "/desk/hrms-attendance-custom-rule", slug: "hrms-attendance-custom-rule" },
 						{ label: "薪资计算规则", route: "/desk/hrms-payroll-rule", slug: "hrms-payroll-rule" },
@@ -1095,12 +1095,9 @@
 
 	function announce_hrms_route_change(route) {
 		hrms_expected_route_slug = route_to_slug(route);
-		window.dispatchEvent(
-			new CustomEvent("hrms:route-change", {
-				detail: { route: route, slug: hrms_expected_route_slug },
-			}),
-		);
-		schedule_hrms_ui_rules(0);
+		// Frappe emits the real router change after the target page is mounted.
+		// Refreshing the shell before set_route made one click render twice and
+		// could also refresh a still-active attendance or payroll page.
 	}
 
 	function navigate_hrms_sidebar(route, item_slug) {
@@ -1108,6 +1105,10 @@
 		// silently close a menu they intentionally left open.
 		if (window.frappe && frappe.set_route && route.indexOf("/desk/") === 0) {
 			announce_hrms_route_change(route);
+			if (item_slug === "navbar-settings") {
+				frappe.set_route("Form", "Navbar Settings", "Navbar Settings");
+				return;
+			}
 			var separation_list_route = route.split("?")[0].replace(/\/$/, "");
 			if (separation_list_route === "/desk/employee-separation" || separation_list_route === "/desk/employee-separation/view/list") {
 				window.hrmsSeparationListView = item_slug === "employee-separation-application" ? "application" : "approval";

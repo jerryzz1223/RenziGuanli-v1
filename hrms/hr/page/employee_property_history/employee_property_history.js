@@ -48,7 +48,7 @@ class EmployeePropertyHistoryPage {
 
 	is_active() {
 		const container = this.wrapper.closest(".page-container");
-		return !container || container.classList.contains("active");
+		return !container || container.getClientRects().length > 0;
 	}
 
 	activate(initial = false) {

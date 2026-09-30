@@ -41,6 +41,85 @@ def load_module():
 
 
 class DingTalkRosterAttachmentTests(unittest.TestCase):
+	def test_onjob_transition_with_missing_required_fields_stays_unmatched(self):
+		module = load_module()
+
+		class ImportDoc(dict):
+			def save(self, **_kwargs):
+				pass
+
+		module.frappe.get_all = lambda *_args, **_kwargs: ["RAW-1"]
+		module.frappe.db = types.SimpleNamespace(get_value=lambda *_args, **_kwargs: None)
+		module.frappe.new_doc = lambda *_args: ImportDoc()
+		module._dingtalk_employee_mapping = lambda *_args: ({"custom_employee_code": "4018", "employee_name": "测试"}, {})
+		module._dingtalk_employee_match = lambda *_args: {"status": "待审批", "reason": "", "employee": ""}
+		module._dingtalk_new_employee_validation_issues = lambda *_args: ["缺少部门", "缺少入职日期"]
+		module.now_datetime = lambda: "2026-09-30"
+		source = {"source_type": module.DINGTALK_ONJOB_NEW_EMPLOYEE_SOURCE_TYPE, "name": "RAW-1"}
+		result = module._stage_dingtalk_employee_import(
+			{"dingtalk_userid": "USER-1", "raw": {"userid": "USER-1"}},
+			"永新", types.SimpleNamespace(name="SYNC-1"), types.SimpleNamespace(**source, get=source.get),
+		)
+		self.assertEqual(result["import_status"], "待匹配")
+		self.assertIn("缺少部门", result["error_message"])
+
+	def test_pending_preentry_reappears_with_current_onjob_department(self):
+		module = load_module()
+		old = types.SimpleNamespace(name="PRE-1", dingtalk_userid="USER-1", import_status="待匹配", error_message="")
+		old_doc = types.SimpleNamespace(import_status="待匹配", error_message="", save=lambda **_kwargs: None)
+		staged = []
+		module._require_api_sync_enabled = lambda company: company
+		module.frappe.get_all = lambda doctype, **_kwargs: (
+			["RAW-1"] if doctype == module.DINGTALK_RAW_RECORD_DOCTYPE else
+			["999"] if doctype == "Employee" else [old]
+		)
+		module.frappe.get_doc = lambda *_args: old_doc
+		module._fetch_dingtalk_onjob_userids = lambda: ["USER-1", "OTHER"]
+		module._fetch_dingtalk_preentry_details = lambda ids: {
+			"USER-1": {"raw": {"userid": "USER-1", "department": "设备课"}, "department_name": "设备课", "employee_code": ""},
+			"OTHER": {"raw": {"userid": "OTHER"}, "employee_code": "999"},
+		}
+		module._new_sync_log = lambda *_args, **_kwargs: types.SimpleNamespace(name="SYNC-1")
+		module.upsert_raw_record = lambda source, userid, raw, *_args, **_kwargs: types.SimpleNamespace(
+			name="ONJOB-RAW", source_type=source, raw=raw
+		)
+		module._stage_dingtalk_employee_import = lambda user, *_args: (
+			staged.append(user.copy()) or types.SimpleNamespace(name="ONJOB-IMPORT", import_status="待审批")
+		)
+		module._finish_sync_log = lambda *_args, **_kwargs: None
+
+		result = module._sync_preentry_onjob_transitions("永新")
+
+		self.assertEqual(result["onjob_pending_approval"], 1)
+		self.assertEqual(result["onjob_received"], 2)
+		self.assertEqual(staged[0]["raw"]["department"], "设备课")
+		self.assertEqual(old_doc.import_status, "无变更")
+		self.assertIn("ONJOB-IMPORT", old_doc.error_message)
+		old.import_status, old.error_message = old_doc.import_status, old_doc.error_message
+		module._sync_preentry_onjob_transitions("永新")
+		self.assertEqual(len(staged), 2, "待审批资料在转正后再次修改时仍可重新拉取")
+
+	def test_onjob_candidate_without_prior_preentry_id_is_visible_for_review(self):
+		module = load_module()
+		module._require_api_sync_enabled = lambda company: company
+		module.frappe.get_all = lambda doctype, **_kwargs: []
+		module._fetch_dingtalk_onjob_userids = lambda: ["NEW-ONJOB-ID"]
+		module._fetch_dingtalk_preentry_details = lambda ids: {
+			"NEW-ONJOB-ID": {"raw": {"userid": "NEW-ONJOB-ID"}, "employee_code": ""}
+		}
+		module._new_sync_log = lambda *_args, **_kwargs: types.SimpleNamespace(name="SYNC-2")
+		module.upsert_raw_record = lambda *_args, **_kwargs: types.SimpleNamespace(name="RAW-2")
+		staged = []
+		module._stage_dingtalk_employee_import = lambda user, *_args: (
+			staged.append(user.copy()) or types.SimpleNamespace(name="IMPORT-2", import_status="待匹配")
+		)
+		module._finish_sync_log = lambda *_args, **_kwargs: None
+
+		result = module._sync_preentry_onjob_transitions("永新")
+		self.assertEqual(result["onjob_transition_count"], 1)
+		self.assertEqual(result["onjob_pending_match"], 1)
+		self.assertEqual(staged[0]["dingtalk_userid"], "NEW-ONJOB-ID")
+
 	def test_each_full_roster_pull_gets_its_own_review_row(self):
 		module = load_module()
 

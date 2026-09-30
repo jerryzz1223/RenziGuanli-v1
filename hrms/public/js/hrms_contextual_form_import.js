@@ -26,6 +26,8 @@
 		performance_summary: "performance_approve", system_feedback: "permission_management",
 	};
 	let listImportAttachTimers = [];
+	let templatesPromise = null;
+	let templatesLoadedAt = 0;
 
 	function current_company() {
 		return window.hrmsCompanyContext?.getCurrentCompany?.() || frappe.defaults?.get_user_default?.("Company") || "";
@@ -44,8 +46,15 @@
 	}
 
 	function get_template(template_key) {
-		return frappe.call({ method: `${API}.list_form_import_templates` }).then((response) => {
-			const template = (response.message || []).find((item) => item.key === template_key);
+		if (!templatesPromise || (templatesLoadedAt && Date.now() - templatesLoadedAt > 30_000)) {
+			templatesLoadedAt = 0;
+			templatesPromise = Promise.resolve()
+				.then(() => frappe.call({ method: `${API}.list_form_import_templates` }))
+				.then((response) => { templatesLoadedAt = Date.now(); return response.message || []; })
+				.catch((error) => { templatesPromise = null; throw error; });
+		}
+		return templatesPromise.then((templates) => {
+			const template = templates.find((item) => item.key === template_key);
 			if (!template) frappe.throw(__("未找到对应的表单模板"));
 			return template;
 		});

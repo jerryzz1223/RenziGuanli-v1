@@ -2274,7 +2274,7 @@ def create_payroll_formula_template_file(company: str):
 		cell.fill = fill
 		cell.font = Font(bold=True)
 	output = BytesIO()
-	save_workbook_with_logo_watermark(workbook, output)
+	save_workbook_with_logo_watermark(workbook, output, export_key="payroll_formula_template")
 	file_doc = save_file(f"{company}-计薪公式导入模板-{datetime.today().strftime('%Y%m%d%H%M%S')}.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file_doc.file_url, "file_name": file_doc.file_name}
 
@@ -5215,7 +5215,7 @@ def create_payroll_data_closure_template_file():
 		mapping_sheet.column_dimensions[mapping_sheet.cell(1, width_index).column_letter].width = width
 
 	output = BytesIO()
-	save_workbook_with_logo_watermark(workbook, output)
+	save_workbook_with_logo_watermark(workbook, output, export_key="payroll_closure_template")
 	file_doc = save_file(
 		f"薪资数据闭环导入模板-{datetime.today().strftime('%Y%m%d%H%M%S')}.xlsx",
 		output.getvalue(),
@@ -5268,7 +5268,7 @@ def create_employee_salary_change_template_file():
 	notes.column_dimensions["B"].width = 88
 
 	output = BytesIO()
-	save_workbook_with_logo_watermark(workbook, output)
+	save_workbook_with_logo_watermark(workbook, output, export_key="salary_change_template")
 	file_doc = save_file(
 		f"员工薪资异动导入模板-{datetime.today().strftime('%Y%m%d%H%M%S')}.xlsx",
 		output.getvalue(),
@@ -5326,7 +5326,7 @@ def create_housing_allowance_base_data_template_file(company: str, payroll_month
 	notes.column_dimensions["B"].width = 96
 
 	output = BytesIO()
-	save_workbook_with_logo_watermark(workbook, output)
+	save_workbook_with_logo_watermark(workbook, output, export_key="housing_allowance_template")
 	file_doc = save_file(
 		f"{payroll_month}-住房补贴一阶数据模板-{datetime.today().strftime('%Y%m%d%H%M%S')}.xlsx",
 		output.getvalue(),
@@ -6612,7 +6612,7 @@ def download_payroll_source_signature_sheet(batch_name: str, company: str, payro
 	output = BytesIO()
 	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
-	save_workbook_with_logo_watermark(workbook, output)
+	save_workbook_with_logo_watermark(workbook, output, export_key="payroll_signature_department" if department_export else "payroll_signature_personal")
 	# Source labels such as “证书/多能工津贴” are valid on screen but `/` is a
 	# path separator.  Sanitise only the saved filename, never the displayed
 	# source name or the signature sheet title.

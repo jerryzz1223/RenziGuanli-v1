@@ -13,7 +13,8 @@ from collections import defaultdict
 from datetime import date, datetime
 from io import BytesIO
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 
 
 RELATIONSHIP_CATEGORIES = (
@@ -176,7 +177,7 @@ def parse_employee_relationship_workbook(content):
 				errors.append(
 					f"关系大类“{relationship or '空'}”不在允许范围：{'、'.join(RELATIONSHIP_CATEGORIES)}"
 				)
-			if a_name and b_name and a_name == b_name and a_department == b_department:
+			if a_name and b_name and a_name == b_name and a_department == b_department and not (a_code and b_code and a_code != b_code):
 				errors.append("员工一与员工二疑似为同一人")
 			row = {
 				"source_sheet": sheet.title,
@@ -199,3 +200,43 @@ def parse_employee_relationship_workbook(content):
 	if not rows:
 		raise ValueError("人员关系工作表中未读取到数据行")
 	return {"sheet_names": parsed_sheets, "rows": rows}
+
+
+def build_employee_relationship_workbook(rows):
+	"""Build the supplied two-sheet layout with company codes for safe re-import."""
+	workbook = Workbook()
+	workbook.remove(workbook.active)
+	headers = {
+		"B": "籍贯", "C": "部门", "D": "姓名", "E": "聘用日期", "F": "性别", "G": "年龄",
+		"H": "部门", "I": "姓名", "J": "聘用日期", "K": "性别", "L": "年龄",
+		"M": "关系", "N": "更新人员/时间", "O": "员工一工号", "P": "员工二工号",
+	}
+	for status, title in (("在职", "人员关系表——在职"), ("离职", "人员关系表—离职")):
+		sheet = workbook.create_sheet(title)
+		sheet["B1"] = "人员关系表"
+		sheet["B1"].font = Font(size=16, bold=True)
+		for column, label in headers.items():
+			cell = sheet[f"{column}3"]
+			cell.value = "姓名（离职）" if status == "离职" and column == "I" else label
+			cell.font = Font(bold=True, color="FFFFFF")
+			cell.fill = PatternFill("solid", fgColor="28634E")
+			cell.alignment = Alignment(vertical="center")
+			sheet.column_dimensions[column].width = 20 if column in ("B", "N") else 17
+		sheet.column_dimensions["D"].width = 16
+		sheet.column_dimensions["I"].width = 16
+		sheet.row_dimensions[3].height = 24
+		sheet.freeze_panes = "D4"
+		for index, row in enumerate((item for item in rows if item["source_status"] == status), start=4):
+			for column, field in (
+				("B", "native_place"), ("C", "employee_a_department"), ("D", "employee_a_name"),
+				("E", "employee_a_joining"), ("F", "employee_a_gender"), ("G", "employee_a_age"),
+				("H", "employee_b_department"), ("I", "employee_b_name"), ("J", "employee_b_joining"),
+				("K", "employee_b_gender"), ("L", "employee_b_age"), ("M", "relationship"),
+				("N", "updated_by_on"), ("O", "employee_a_code"), ("P", "employee_b_code"),
+			):
+				sheet[f"{column}{index}"] = text(row.get(field))
+			sheet.row_dimensions[index].height = 21
+		last_row = max(4, sheet.max_row)
+		sheet.auto_filter.ref = f"B3:P{last_row}"
+		sheet.sheet_view.showGridLines = False
+	return workbook

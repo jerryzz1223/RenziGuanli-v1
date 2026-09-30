@@ -1149,7 +1149,7 @@ def create_attendance_import_template_file(template_key: str):
 		_add_legacy_template_sheets(workbook)
 
 	output = BytesIO()
-	save_workbook_with_logo_watermark(workbook, output)
+	save_workbook_with_logo_watermark(workbook, output, export_key="attendance_template")
 	filename = f"{template['label']}导入模板.xlsx"
 	file_doc = frappe.get_doc({"doctype": "File", "file_name": filename, "content": output.getvalue(), "is_private": 0}).insert(ignore_permissions=True)
 	return {"file_url": file_doc.file_url, "file_name": filename, "template_key": template_key}
@@ -1426,7 +1426,7 @@ def download_attendance_export(company: str, attendance_month: str, export_profi
 			_add_monthly_attendance_export_sheet(workbook, sheet_key, attendance_month, monthly_rows)
 
 	output = BytesIO()
-	save_workbook_with_logo_watermark(workbook, output)
+	save_workbook_with_logo_watermark(workbook, output, export_key=f"attendance_export_{export_profile}")
 	filename = f"{attendance_month}_{profile['label']}.xlsx"
 	file_doc = frappe.get_doc({"doctype": "File", "file_name": filename, "content": output.getvalue(), "is_private": 0}).insert(ignore_permissions=True)
 	return {

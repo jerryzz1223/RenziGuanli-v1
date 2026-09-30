@@ -6,7 +6,6 @@ const hooksPath = path.join(root, "hrms", "hooks.py");
 const redirectPath = path.join(root, "hrms", "public", "js", "hrms_home_redirect_v6.js");
 const topNavPath = path.join(root, "hrms", "public", "js", "hrms_top_nav.js");
 const topNavCssPath = path.join(root, "hrms", "public", "css", "hrms_top_nav.css");
-const settingsCenterPath = path.join(root, "hrms", "hr", "page", "hr_settings_center", "hr_settings_center.js");
 const personnelWorkspacePath = path.join(root, "hrms", "hr", "workspace", "personnel", "personnel.json");
 const personnelSidebarPath = path.join(root, "hrms", "workspace_sidebar", "personnel.json");
 const hrSetupWorkspacePath = path.join(root, "hrms", "hr", "workspace", "hr_setup", "hr_setup.json");
@@ -16,7 +15,6 @@ const hooks = fs.readFileSync(hooksPath, "utf8");
 const redirect = fs.readFileSync(redirectPath, "utf8");
 const topNav = fs.readFileSync(topNavPath, "utf8");
 const topNavCss = fs.readFileSync(topNavCssPath, "utf8");
-const settingsCenter = fs.readFileSync(settingsCenterPath, "utf8");
 const personnelWorkspace = JSON.parse(fs.readFileSync(personnelWorkspacePath, "utf8"));
 const personnelSidebar = JSON.parse(fs.readFileSync(personnelSidebarPath, "utf8"));
 const hrSetupWorkspace = JSON.parse(fs.readFileSync(hrSetupWorkspacePath, "utf8"));
@@ -46,7 +44,6 @@ for (const marker of [
 	"个人资料",
 	"修改密码",
 	"账户与权限",
-	"设置中心",
 	"退出登录",
 	"frappe.set_route(\"Form\", \"User\"",
 	"frappe.set_route(\"hrms-access-center\")",
@@ -65,10 +62,6 @@ for (const marker of [
 	mustInclude(topNavCss, marker, `Account menu CSS is missing ${marker}`);
 }
 
-for (const marker of ["账户与权限", "进入账户与权限中心", "角色分配", "数据范围", "角色业务权限"]) {
-	mustInclude(settingsCenter, marker, `Settings center must expose user permission management: ${marker}`);
-}
-
 for (const obsolete of [
 	'{ label: "用户管理", action: "users"',
 	'{ label: "角色管理", action: "roles"',
@@ -77,7 +70,7 @@ for (const obsolete of [
 	'data-doctype="Role"',
 	'data-doctype="User Permission"',
 ]) {
-	if (topNav.includes(obsolete) || settingsCenter.includes(obsolete)) {
+	if (topNav.includes(obsolete)) {
 		throw new Error(`Duplicate account or role entry must be removed: ${obsolete}`);
 	}
 }
@@ -90,9 +83,8 @@ for (const marker of [
 	"rolesTab.hidden = true",
 	"rolesPanel.hidden = true",
 	".form-tabs",
-	"20260914-hide-native-user-roles-v1",
 ]) {
-	const source = marker.startsWith("20260914") ? hooks : topNav;
+	const source = topNav;
 	mustInclude(source, marker, `Native User role editor must stay hidden: ${marker}`);
 }
 
@@ -100,20 +92,22 @@ if (hooks.includes('"User": "public/js/user.js"')) {
 	throw new Error("Unused User doctype_js registration must be removed.");
 }
 
-const moreItemsMatch = topNav.match(/const\s+moreItems\s*=\s*\[([\s\S]*?)\];/);
-if (moreItemsMatch && moreItemsMatch[1].includes("设置中心")) {
-	throw new Error("设置中心 must live in the account menu, not the top 更多 menu.");
+if (topNav.includes("/desk/hr-settings-center")) {
+	throw new Error("Retired settings center must not appear in navigation.");
 }
 
-for (const [label, source] of [
-	["人事侧栏脚本", redirect],
-	["人事 Workspace", JSON.stringify(personnelWorkspace)],
-	["人事 Workspace Sidebar", JSON.stringify(personnelSidebar)],
-	["工作台 Workspace", JSON.stringify(hrSetupWorkspace)],
-	["工作台 Workspace Sidebar", JSON.stringify(hrSetupSidebar)],
+if (!redirect.includes('route: "/desk/staff-attribute-settings"')) {
+	throw new Error("Staff attribute settings must remain available through HR navigation.");
+}
+for (const source of [
+	redirect,
+	JSON.stringify(personnelWorkspace),
+	JSON.stringify(personnelSidebar),
+	JSON.stringify(hrSetupWorkspace),
+	JSON.stringify(hrSetupSidebar),
 ]) {
-	if (source.includes('"label":"员工属性设置"') || source.includes('"label": "员工属性设置"') || source.includes('label: "员工属性设置"')) {
-		throw new Error(`${label} must not expose 员工属性设置 as a left/workspace entry.`);
+	if (source.includes("hr-settings-center")) {
+		throw new Error("Retired settings center must not remain in navigation or workspaces.");
 	}
 }
 
@@ -125,4 +119,4 @@ for (const [label, pattern] of [
 	mustMatch(hooks, pattern, `Asset version must be cache-busted for ${label}.`);
 }
 
-console.log("User account menu and settings center permissions entry are wired.");
+console.log("User account menu and retired settings route verified.");

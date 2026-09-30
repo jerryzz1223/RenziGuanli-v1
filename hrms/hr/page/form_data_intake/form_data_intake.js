@@ -36,7 +36,7 @@ class FormDataIntake {
 
 	is_active() {
 		const container = this.wrapper.closest(".page-container");
-		return !container || container.classList.contains("active");
+		return !container || container.getClientRects().length > 0;
 	}
 
 	activate(initial = false) {
@@ -143,7 +143,11 @@ class FormDataIntake {
 		this.wrapper.querySelectorAll("[data-select]").forEach((button) => button.addEventListener("click", () => { this.selected = this.templates.find((item) => item.key === button.dataset.select); this.file_url = ""; this.preview = null; this.render(); }));
 		this.wrapper.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", () => {
 			const route = button.dataset.route || "/desk/form-data-intake";
-			window.location.assign(route);
+			if (route.startsWith("/desk/") && !route.includes("?")) {
+				frappe.set_route(...route.slice(6).split("/").filter(Boolean));
+			} else {
+				window.location.assign(route);
+			}
 		}));
 		this.wrapper.querySelectorAll("[data-download]").forEach((button) => button.addEventListener("click", () => this.download_template(button.dataset.download)));
 		this.wrapper.querySelectorAll("[data-upload]").forEach((button) => button.addEventListener("click", () => this.open_uploader()));

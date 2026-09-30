@@ -148,18 +148,6 @@ PERSONNEL_PAGE_DEFINITIONS = [
 		"roles": HR_SETTINGS_PAGE_ROLES,
 	},
 	{
-		"name": "hr-settings-center",
-		"title": "设置中心",
-		"icon": "settings",
-		"roles": HR_SETTINGS_PAGE_ROLES,
-	},
-	{
-		"name": "hrms-developer-center",
-		"title": "开发中心",
-		"icon": "code",
-		"roles": HRMS_DEVELOPER_PAGE_ROLES,
-	},
-	{
 		"name": "hrms-access-center",
 		"title": "账户与权限中心",
 		"icon": "key",
@@ -200,13 +188,13 @@ LEGACY_PERSONNEL_PAGE_SLUGS = {
 	"employee-property-history": "employee-property-hi",
 	"employee-duty-change": "employee-transfer-fo",
 }
-RETIRED_PERSONNEL_PAGE_NAMES = {"employee-form-entry"}
+RETIRED_PERSONNEL_PAGE_NAMES = {"employee-form-entry", "hr-settings-center", "hrms-developer-center"}
 
 
 def _require_hr_settings_manager():
 	"""Protect schema/configuration changes from ordinary HR users.
 
-	The settings centre is deliberately a business-admin surface.  Creating or
+	Employee field configuration is deliberately a business-admin surface. Creating or
 	changing fields ultimately writes Custom Field and Property Setter records,
 	so hiding the navigation link alone is not a sufficient control.
 	"""
@@ -2088,7 +2076,7 @@ def _make_employee_workbook(fields):
 	enum_sheet.column_dimensions["B"].width = 80
 
 	output = BytesIO()
-	save_workbook_with_logo_watermark(workbook, output)
+	save_workbook_with_logo_watermark(workbook, output, export_key="roster_template")
 	return output.getvalue()
 
 
@@ -2489,25 +2477,6 @@ def get_employee_field_center():
 	return _get_employee_field_center_payload()
 
 
-@frappe.whitelist()
-def get_hr_settings_center():
-	_require_hr_settings_manager()
-	field_center = _get_employee_field_center_payload()
-	return {
-		"modules": [
-			{"label": "字段管理中心", "key": "field-center", "count": len(field_center["fields"])},
-			{"label": "员工属性设置", "key": "staff-attributes", "count": len(field_center["fields"])},
-			{"label": "字段别名配置", "key": "field-aliases", "count": len(field_center["import_mappings"])},
-			{"label": "导入映射设置", "key": "import-mapping", "count": len(field_center["import_mappings"])},
-			{"label": "详情资料块设置", "key": "detail-blocks", "count": len(field_center["detail_blocks"])},
-			{"label": "导出模板设置", "key": "export-templates", "count": len(field_center["export_templates"])},
-			{"label": "基础资料设置", "key": "base-data", "count": len(field_center["base_data_modules"])},
-			{"label": "多行记录类型", "key": "record-types", "count": len(field_center["record_types"])},
-		],
-		"field_center": field_center,
-	}
-
-
 def _employee_codes_for_links(employee_links):
 	"""Map internal Employee Link values to the only public employee identifier."""
 	employee_links = sorted({str(value or "").strip() for value in employee_links if value})
@@ -2724,216 +2693,6 @@ def _configuration_record_count(doctype):
 	return frappe.db.count(doctype)
 
 
-FIELD_RUNTIME_REFERENCES = {
-	"employment_type": {
-		"meaning": "员工工作性质，统一显示为在职·正式、在职·试用期、退休返聘、待离职、离职五类。",
-		"scope": "员工档案、招聘职位、薪资条件和合同规则可按此字段引用。",
-		"managed_by": "引用“工作性质（Employment Type）”基础字典；新增值后即可选择。",
-	},
-	"department": {
-		"meaning": "员工当前组织归属。",
-		"scope": "员工档案、组织架构、审批、招聘与数据权限。",
-		"managed_by": "引用“部门”基础字典；组织调整请走人事异动。",
-	},
-	"designation": {
-		"meaning": "员工当前岗位/职位。",
-		"scope": "员工档案、招聘、任职异动和人事报表。",
-		"managed_by": "引用“岗位（Designation）”基础字典。",
-	},
-	"grade": {
-		"meaning": "员工等级或职级。",
-		"scope": "员工档案、薪资定级和人事统计。",
-		"managed_by": "引用“职级（Employee Grade）”基础字典。",
-	},
-	"company": {
-		"meaning": "员工数据所属公司。",
-		"scope": "权限、部门、考勤、薪资和报表的数据隔离边界。",
-		"managed_by": "引用“公司”基础字典；不可当作一般分类随意修改。",
-	},
-}
-
-# Only these small controlled dictionaries are previewed in the developer
-# centre. Other Link fields can point at Employee, User, Account, etc.;
-# rendering their values here would be both noisy and an unnecessary data
-# exposure on a configuration page.
-DEVELOPER_CENTER_PREVIEW_DICTIONARIES = {
-	"Company",
-	"Branch",
-	"Department",
-	"Designation",
-	"Employee Grade",
-	"Employment Type",
-}
-
-
-def _field_runtime_reference(field):
-	"""Describe a field in business language and expose its actual UI reach."""
-	field = dict(field)
-	fieldname = field.get("fieldname")
-	known_reference = FIELD_RUNTIME_REFERENCES.get(fieldname, {})
-	used_in = []
-	if field.get("form_visible"):
-		used_in.append("员工档案")
-	if field.get("detail_visible"):
-		used_in.append("档案详情")
-	if field.get("roster_visible"):
-		used_in.append("员工花名册")
-	if field.get("import_enabled"):
-		used_in.append("花名册导入")
-	if field.get("export_enabled"):
-		used_in.append("花名册导出")
-
-	fieldtype = field.get("fieldtype") or "Data"
-	options = [option.strip() for option in str(field.get("options") or "").splitlines() if option.strip()]
-	if fieldtype == "Link":
-		value_source = "引用基础字典：{0}".format(field.get("options") or "未配置引用对象")
-		allowed_values = (
-			_get_base_data_value_samples(field.get("options"), limit=6)
-			if field.get("options") in DEVELOPER_CENTER_PREVIEW_DICTIONARIES
-			else []
-		)
-	elif fieldtype == "Select":
-		value_source = "固定选项"
-		allowed_values = [_display_option(option) for option in options]
-	else:
-		value_source = "自由录入"
-		allowed_values = []
-
-	return {
-		"field_label": field.get("field_label"),
-		"fieldname": fieldname,
-		"fieldtype": fieldtype,
-		"category": field.get("category"),
-		"source": field.get("source"),
-		"description": field.get("description") or "未补充业务说明",
-		"meaning": known_reference.get("meaning") or field.get("description") or "员工档案业务字段。",
-		"scope": known_reference.get("scope") or "、".join(used_in) or "当前未在员工前台展示",
-		"managed_by": known_reference.get("managed_by") or value_source,
-		"value_source": value_source,
-		"allowed_values": allowed_values,
-		"used_in": used_in,
-		"enabled": field.get("enabled"),
-	}
-
-
-def _get_hrms_developer_field_catalog():
-	field_center = _get_employee_field_center_payload()
-	fields = [_field_runtime_reference(field) for field in field_center["fields"] if field.get("enabled")]
-	fields.sort(key=lambda field: (field["category"] or "", field["field_label"] or ""))
-	return fields
-
-
-@frappe.whitelist()
-def get_hrms_developer_configuration_map():
-	"""Describe the supported no-code controls and their real runtime consumers."""
-	_require_system_manager()
-	definitions = [
-		{
-			"key": "employee-fields",
-			"category": "员工档案",
-			"label": "员工字段、导入导出与详情资料块",
-			"doctype": TEMPLATE_DOCTYPE,
-			"purpose": "控制员工字段显示、别名、导入映射、导出模板和详情资料块。",
-			"where_used": "员工档案详情、员工花名册导入、导出和人事报表。",
-			"storage": "HRMS Employee Field Template 与受控 Custom Field",
-			"manage_route": "hr-settings-center",
-			"verify_route": "employee-detail",
-			"test_hint": "修改后打开员工档案、导入预览和导出模板，确认同一字段配置同时生效。",
-		},
-		{
-			"key": "workflow",
-			"category": "审批流程",
-			"label": "工作流与审批状态",
-			"doctype": "Workflow",
-			"purpose": "配置单据状态、允许执行转换的角色以及审批动作。",
-			"where_used": "启用了工作流的请假、人事、薪资等业务单据。",
-			"storage": "Workflow / Workflow State / Workflow Transition",
-			"manage_route": "List/Workflow",
-			"verify_route": "List/Workflow",
-			"test_hint": "使用申请人与审批人两个测试账户提交同一业务单据，验证状态和按钮随角色变化。",
-		},
-		{
-			"key": "form-approval-matrix",
-			"category": "导入审批",
-			"label": "人资表单审批矩阵",
-			"doctype": "HRMS Form Approval Matrix",
-			"purpose": "按导入表单类型和业务条件确定审批步骤与审批角色。",
-			"where_used": "人资表单导入中心；保存和提交导入批次时由 form_data_intake.py 读取。",
-			"storage": "HRMS Form Approval Matrix",
-			"manage_route": "List/HRMS Form Approval Matrix",
-			"verify_route": "form-data-intake",
-			"test_hint": "新建导入批次并进入提交预览，检查生成的审批步骤是否与矩阵一致。",
-		},
-		{
-			"key": "attendance-rules",
-			"category": "考勤规则",
-			"label": "考勤自定义规则",
-			"doctype": "HRMS Attendance Custom Rule",
-			"purpose": "配置考勤导入时的匹配、校验、异常识别和处理规则。",
-			"where_used": "考勤导入中心；attendance_import.py 在预检和入库时读取。",
-			"storage": "HRMS Attendance Custom Rule",
-			"manage_route": "List/HRMS Attendance Custom Rule",
-			"verify_route": "attendance-import-center",
-			"test_hint": "上传同一份考勤样例做预检，比较修改前后的命中规则和异常结果。",
-		},
-		{
-			"key": "payroll-rules",
-			"category": "薪资规则",
-			"label": "薪资计算规则",
-			"doctype": "HRMS Payroll Rule",
-			"purpose": "配置全勤、加班、夜班、福利资格和结算参数。",
-			"where_used": "薪资输入中心；payroll_input.py 计算与校验薪资输入记录时读取。",
-			"storage": "HRMS Payroll Rule（按公司隔离）",
-			"manage_route": "List/HRMS Payroll Rule",
-			"verify_route": "payroll-input-center",
-			"test_hint": "在薪资输入中心运行规则预览，确认计算明细引用了当前公司的规则版本。",
-		},
-		{
-			"key": "payroll-mapping",
-			"category": "薪资导入",
-			"label": "薪资字段映射",
-			"doctype": "HRMS Payroll Field Mapping",
-			"purpose": "把外部薪资列名映射为系统字段，控制导入识别方式。",
-			"where_used": "薪资输入中心的文件预览与导入；payroll_input.py 读取。",
-			"storage": "HRMS Payroll Field Mapping",
-			"manage_route": "List/HRMS Payroll Field Mapping",
-			"verify_route": "payroll-input-center",
-			"test_hint": "用固定样例文件执行预览，检查原始列是否映射到预期系统字段。",
-		},
-		{
-			"key": "dingtalk",
-			"category": "系统集成",
-			"label": "钉钉连接与同步设置",
-			"doctype": "HRMS DingTalk Settings",
-			"purpose": "配置钉钉应用身份、同步开关和网关参数。",
-			"where_used": "钉钉员工同步、考勤同步和网关接口；dingtalk_integration.py 与 dingtalk_employee_gateway.py 读取。",
-			"storage": "HRMS DingTalk Settings（单例配置）",
-			"manage_route": "Form/HRMS DingTalk Settings/HRMS DingTalk Settings",
-			"verify_route": "attendance-import-center/dingtalk",
-			"test_hint": "先执行连接测试和预览同步；确认成功后再开启正式同步，避免直接写入错误数据。",
-		},
-	]
-	for item in definitions:
-		item["record_count"] = _configuration_record_count(item["doctype"])
-		item["status"] = "已接入业务" if item["record_count"] else "已接入，尚未配置记录"
-	return {
-		"items": definitions,
-		"field_catalog": _get_hrms_developer_field_catalog(),
-		"base_dictionaries": _get_base_data_module_summaries(),
-		"boundary": {
-			"no_code": "字段显示与映射、基础字典取值、已有规则参数、工作流、角色权限和用户数据范围可在系统内修改。",
-			"requires_code": "新增计算算法、外部协议、新数据关系或绕过现有规则引擎的行为仍需代码、迁移和回归测试。",
-		},
-	}
-
-
-@frappe.whitelist()
-def create_employment_type_from_developer_center(employee_type_name: str):
-	"""Reject ad-hoc public work-nature values; the five labels are fixed."""
-	_require_system_manager()
-	frappe.throw(_("工作性质固定为在职·正式、在职·试用期、退休返聘、待离职、离职五类，不能新增其他取值。"))
-
-
 def _model_catalog_record_count(doctype):
 	"""Return a safe catalogue count without making the guide depend on optional modules."""
 	if not frappe.db.exists("DocType", doctype):
@@ -3060,7 +2819,7 @@ def get_hrms_model_governance_catalog():
 			"usage": "已接入业务",
 			"purpose": "控制员工字段的显示、中文名称、必填、导入导出和详情资料块。",
 			"where_used": "员工档案详情、花名册导入导出和人事报表。",
-			"manage_route": "hr-settings-center",
+			"manage_route": "staff-attribute-settings",
 			"manage_label": "管理员工字段",
 			"safe_change": "这里是员工字段的首选入口，保存后由现有业务页面读取。",
 			"risk": "低",
@@ -4389,7 +4148,7 @@ def _get_configured_detail_block_records(doc):
 				items,
 				None,
 				"在字段中心配置",
-				"hr-settings-center",
+				"staff-attribute-settings",
 			)
 		)
 	return records_by_tab
@@ -6177,6 +5936,8 @@ def _employee_roster_mandatory_field_errors(values, action, mode, row_index, fie
 	deferred_fields = values.get("_employee_import_deferred_fields") or set()
 	errors = []
 	for fieldname, meta_field in meta_fields.items():
+		if fieldname in EMPLOYEE_INTERNAL_FIELDNAMES:
+			continue
 		if not meta_field.get("reqd"):
 			continue
 		deferred = fieldname in deferred_fields
@@ -6612,7 +6373,7 @@ def _make_employee_roster_failure_workbook(failed_rows):
 	_write_sheet_rows(sheet, rows)
 
 	output = BytesIO()
-	save_workbook_with_logo_watermark(workbook, output)
+	save_workbook_with_logo_watermark(workbook, output, export_key="roster_failed")
 	return output.getvalue()
 
 
@@ -6743,7 +6504,7 @@ def _format_employee_export_value(fieldname, value, department_names):
 	return value
 
 
-def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tables, filters=None):
+def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tables, filters=None, export_key="roster"):
 	from openpyxl import Workbook
 	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
@@ -6815,7 +6576,7 @@ def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tab
 		_write_sheet_rows(sheet, rows)
 
 	output = BytesIO()
-	save_workbook_with_logo_watermark(workbook, output)
+	save_workbook_with_logo_watermark(workbook, output, export_key=export_key)
 	return output.getvalue()
 
 
@@ -6992,6 +6753,7 @@ def download_employee_report(report_id: str):
 			allowed_fields,
 			report["tables"],
 			report.get("filters") or {},
+			"employee_report",
 		),
 	)
 

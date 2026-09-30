@@ -32,6 +32,7 @@ class EmployeeRelationshipPage {
 	show() {
 		this.page.set_title(__("员工关系"));
 		this.page.add_inner_button(__("导入人员关系表"), () => this.open_import_dialog());
+		this.page.add_inner_button(__("导出人员关系表"), () => this.open_export_dialog());
 		this.render_shell();
 		this.bind_events();
 		this.load_relationships();
@@ -285,6 +286,25 @@ class EmployeeRelationshipPage {
 
 	relationship_categories() {
 		return ["直系亲属", "旁系亲属", "姻亲", "男女朋友", "同学", "前同事", "朋友", "同村", "其他"];
+	}
+
+	open_export_dialog() {
+		const dialog = new frappe.ui.Dialog({
+			title: __("导出人员关系表"),
+			fields: [
+				{ fieldname: "company", fieldtype: "Link", options: "Company", label: __("公司"), reqd: 1, default: frappe.defaults.get_user_default("Company") || "" },
+				{ fieldtype: "HTML", options: `<p class="text-muted">${frappe.utils.escape_html(__("按在职、离职两张工作表导出，并附公司工号供回导匹配。"))}</p>` },
+			],
+			primary_action_label: __("导出 Excel"),
+			primary_action: () => {
+				const values = dialog.get_values();
+				if (!values) return;
+				const url = `/api/method/hrms.hr.page.employee_relationship.employee_relationship.export_employee_relationships?company=${encodeURIComponent(values.company)}`;
+				window.open(url, "_blank");
+				dialog.hide();
+			},
+		});
+		dialog.show();
 	}
 
 	open_import_dialog() {

@@ -184,7 +184,8 @@ def workbook_bytes(company, state=None):
 			sheet.column_dimensions[get_column_letter(col)].width = 24
 	info.column_dimensions["B"].width = 110
 	stream = io.BytesIO()
-	book.save(stream)
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+	save_workbook_with_logo_watermark(book, stream, export_key="organization_configuration")
 	return stream.getvalue()
 
 

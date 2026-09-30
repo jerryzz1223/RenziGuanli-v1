@@ -2211,6 +2211,20 @@ class AttendanceDraftProcessorContractTest(unittest.TestCase):
 		self.assertEqual(result["data_quality"]["employment_scope_excluded_rows"], 2)
 		self.assertEqual(row["processed_value"]["employment_scope_summary"], {"in_scope_rows": 1, "out_of_scope_rows": 2, "unknown_scope_rows": 0})
 
+	def test_standard_hours_sum_all_dated_detail_even_before_joining(self):
+		rows = [
+			{"姓名": "张三", "工号": "E-001", "日期": day, "日期类型": "工作日", "实际部门": "工程课",
+			 "班次": "白班 08:00-17:00", "标准工时": 8, "实际出勤（小时）": actual,
+			 "source_file": "sample.xlsx", "source_sheet": "每日统计", "source_row": index}
+			for index, (day, actual) in enumerate((("26-08-03", 0), ("26-08-04", 0), ("26-08-05", 8)), start=3)
+		]
+		roster = [{"employee_code": "E-001", "employee_name": "张三", "department": "工程课", "date_of_joining": "2026-08-05"}]
+		result = processor.process_attendance_draft_rows(rows, attendance_month="2026-08", employee_directory=roster)
+		value = result["processed_rows"][0]["processed_value"]
+		self.assertEqual(value["standard_hours"], 24)
+		self.assertEqual(value["actual_attendance_hours"], 8)
+		self.assertEqual(value["employment_scope_summary"]["out_of_scope_rows"], 2)
+
 	def test_employee_joining_after_attendance_month_is_removed_from_processed_results(self):
 		rows = [{
 			"姓名": "王涛", "工号": "E-009", "日期": "26-07-08", "日期类型": "工作日", "实际部门": "工程课",

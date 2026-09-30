@@ -183,6 +183,7 @@ class RosterImportGuardTests(unittest.TestCase):
 	def test_required_employee_fields_cannot_be_deferred_or_cleared_on_replace(self):
 		ns = load_functions(
 			"_employee_roster_mandatory_field_errors",
+			EMPLOYEE_INTERNAL_FIELDNAMES={"naming_series", "employee_number", "custom_roster_excluded"},
 			EMPLOYEE_FALLBACK_DATE_OF_BIRTH="1905-01-01",
 			_is_blank_value=lambda value: value in (None, ""),
 			_field_error=lambda row, field, message, suggestion: {
@@ -208,6 +209,8 @@ class RosterImportGuardTests(unittest.TestCase):
 		self.assertEqual(check({"date_of_birth": "1992-03-04"}, "update", "replace", 8, field, meta), [])
 		self.assertEqual(check({"date_of_birth": "1905-01-01"}, "update", "merge", 8, field, meta)[0]["message"],
 			"出生日期是系统占位值")
+		meta["naming_series"] = {"reqd": 1, "label": "Series"}
+		self.assertEqual(check({"date_of_birth": "1992-03-04", "gender": "Male"}, "insert", "merge", 9, field, meta), [])
 
 	def test_approved_dingtalk_import_keeps_supplied_work_nature(self):
 		source = SOURCE.parents[2] / "hrms/overrides/employee_master.py"
@@ -327,6 +330,7 @@ class RosterImportGuardTests(unittest.TestCase):
 			"_dedupe_import_errors",
 			EMPLOYEE_DUPLICATE_MATCH_FIELDS={"employee_code": ("custom_employee_code",)},
 			EMPLOYEE_DOCTYPE="Employee",
+			EMPLOYEE_INTERNAL_FIELDNAMES={"naming_series", "employee_number", "custom_roster_excluded"},
 			_apply_manual_header_mappings=lambda value, _mappings: value,
 			_get_uploaded_roster_context=lambda _url: context,
 			_get_employee_meta_field_map=lambda: {"custom_employee_code": {}},
@@ -369,6 +373,7 @@ class RosterImportGuardTests(unittest.TestCase):
 			"_dedupe_import_errors",
 			EMPLOYEE_DUPLICATE_MATCH_FIELDS={"employee_code": ("custom_employee_code",)},
 			EMPLOYEE_DOCTYPE="Employee",
+			EMPLOYEE_INTERNAL_FIELDNAMES={"naming_series", "employee_number", "custom_roster_excluded"},
 			_apply_manual_header_mappings=lambda value, _mappings: value,
 			_get_uploaded_roster_context=lambda _url: context,
 			_get_employee_meta_field_map=lambda: {"custom_employee_code": {}},

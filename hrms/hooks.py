@@ -28,9 +28,9 @@ add_to_apps_screen = [
 app_include_js = [
 	"hrms.bundle.js",
 	"/assets/hrms/js/hrms_capability_ui.js?v=20260928-attendance-final-approval-v1",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260930-approval-center-v1",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260930-approval-center-v1",
-	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260930-remove-developer-v1-branding-v2",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260930-remove-developer-v1",
+	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260930-template-cache-v1",
 	"/assets/hrms/js/hrms_file_uploader.js?v=20260912a",
 	"/assets/hrms/js/hrms_entry.js?v=20260929-mute-desk-sounds-v1",
 	"/assets/hrms/js/hrms_employee_registration_entry.js?v=20260915-qr-entry-v1",
@@ -39,7 +39,7 @@ app_include_js = [
 ]
 app_include_css = [
 	"hrms.bundle.css",
-	"/assets/hrms/css/hrms_top_nav.css?v=20260926-native-list-chrome-v1",
+	"/assets/hrms/css/hrms_top_nav.css?v=20260930-remove-settings-v1",
 	"/assets/hrms/css/hrms_training_learning.css?v=20260929-session-rosters-v16",
 	"/assets/hrms/css/hrms_entry.css?v=20260912-intranet-entry-v1",
 	"/assets/hrms/css/hrms_loading.css?v=20260928-branded-freeze-v1",

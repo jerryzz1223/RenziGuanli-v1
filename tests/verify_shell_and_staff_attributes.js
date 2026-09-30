@@ -11,8 +11,6 @@ const personnelPath = path.join(root, "hrms", "hr", "workspace", "personnel", "p
 const personnelSidebarPath = path.join(root, "hrms", "workspace_sidebar", "personnel.json");
 const pageJsonPath = path.join(root, "hrms", "hr", "page", "staff_attribute_settings", "staff_attribute_settings.json");
 const pageJsPath = path.join(root, "hrms", "hr", "page", "staff_attribute_settings", "staff_attribute_settings.js");
-const settingsCenterJsonPath = path.join(root, "hrms", "hr", "page", "hr_settings_center", "hr_settings_center.json");
-const settingsCenterJsPath = path.join(root, "hrms", "hr", "page", "hr_settings_center", "hr_settings_center.js");
 const topNavJsPath = path.join(root, "hrms", "public", "js", "hrms_top_nav.js");
 
 const redirect = fs.readFileSync(redirectPath, "utf8");
@@ -183,60 +181,12 @@ for (const marker of [
 if (!fs.existsSync(pageJsonPath) || !fs.existsSync(pageJsPath)) {
 	throw new Error("员工属性设置 must be a real Frappe Page with JSON and JS assets.");
 }
-if (!fs.existsSync(settingsCenterJsonPath) || !fs.existsSync(settingsCenterJsPath)) {
-	throw new Error("设置中心 must be a real Frappe Page with JSON and JS assets.");
-}
-
 const pageJson = JSON.parse(fs.readFileSync(pageJsonPath, "utf8"));
 const pageJs = fs.readFileSync(pageJsPath, "utf8");
-const settingsCenterJson = JSON.parse(fs.readFileSync(settingsCenterJsonPath, "utf8"));
-const settingsCenterJs = fs.readFileSync(settingsCenterJsPath, "utf8");
 
 if (pageJson.name !== "staff-attribute-settings" || pageJson.title !== "员工属性设置") {
 	throw new Error("员工属性设置 Page route/title is incorrect.");
 }
-if (settingsCenterJson.name !== "hr-settings-center" || settingsCenterJson.title !== "设置中心") {
-	throw new Error("设置中心 Page route/title is incorrect.");
-}
-
-for (const marker of [
-	"设置中心",
-	"/desk/hr-settings-center",
-	"hr-settings-center",
-]) {
-	mustInclude(topNavJs, marker, `Top account menu must expose 设置中心: ${marker}`);
-}
-
-for (const marker of [
-	"frappe.pages[\"hr-settings-center\"]",
-	"字段管理中心",
-	"员工属性设置",
-	"字段别名配置",
-	"导入映射设置",
-	"详情资料块设置",
-	"导出模板设置",
-	"基础资料设置",
-	"多行记录类型",
-	"hrms.api.employee_field_template.get_hr_settings_center",
-	"hrms.api.employee_field_template.save_employee_field_center",
-	"aliases",
-	"import_enabled",
-	"export_enabled",
-	"form_visible",
-	"detail_visible",
-	"detail_block",
-	"record_type",
-]) {
-	mustInclude(settingsCenterJs, marker, `设置中心 Page is missing behavior marker: ${marker}`);
-}
-
-for (const marker of [
-	"frappe.set_route(\"hr-settings-center\")",
-	"员工属性设置已迁移到设置中心",
-]) {
-	mustInclude(pageJs, marker, `旧员工属性设置入口 must route to 设置中心: ${marker}`);
-}
-
 for (const marker of [
 	"frappe.pages[\"staff-attribute-settings\"]",
 	"frappe.ui.make_app_page",
@@ -280,7 +230,7 @@ for (const [label, items] of [
 	["人事 sidebar", personnelSidebar.items],
 ]) {
 	if (items.some((item) => item.label === "员工属性设置" && item.link_to === "staff-attribute-settings")) {
-		throw new Error(`${label} must not expose 员工属性设置 directly; use 设置中心 instead.`);
+		throw new Error(`${label} must not expose 员工属性设置 directly in workspace navigation.`);
 	}
 }
 

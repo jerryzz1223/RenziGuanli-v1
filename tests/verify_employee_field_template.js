@@ -12,14 +12,6 @@ const settingsPagePath = path.join(
 	"staff_attribute_settings",
 	"staff_attribute_settings.js",
 );
-const settingsCenterPath = path.join(
-	root,
-	"hrms",
-	"hr",
-	"page",
-	"hr_settings_center",
-	"hr_settings_center.js",
-);
 const employeeFormPath = path.join(root, "hrms", "public", "js", "erpnext", "employee.js");
 const employeeTabMigrationPath = path.join(
 	root,
@@ -63,7 +55,6 @@ const templateJson = JSON.parse(read(templateJsonPath));
 const itemJson = JSON.parse(read(itemJsonPath));
 const api = read(apiPath);
 const settingsPage = read(settingsPagePath);
-const settingsCenter = read(settingsCenterPath);
 const employeeForm = read(employeeFormPath);
 const employeeTabMigration = read(employeeTabMigrationPath);
 const employeeFormCss = read(employeeFormCssPath);
@@ -119,7 +110,6 @@ for (const marker of [
 	"download_employee_import_template",
 	"get_employee_import_export_schema",
 	"get_employee_field_center",
-	"get_hr_settings_center",
 	"save_employee_field_center",
 	"_field_aliases_for_row",
 	"_template_row_bool",
@@ -211,23 +201,6 @@ if (!importValueNormaliser.includes('if fieldname == "custom_ethnicity":') || !i
 
 if (api.includes('"fieldtype": "Autocomplete",')) {
 	throw new Error("Frappe does not support Autocomplete employee custom fields; use Select.");
-}
-
-for (const marker of [
-	"frappe.pages[\"hr-settings-center\"]",
-	"字段管理中心",
-	"字段别名配置",
-	"导入映射设置",
-	"详情资料块设置",
-	"save_employee_field_center",
-	"aliases",
-	"import_enabled",
-	"export_enabled",
-	"form_visible",
-	"detail_visible",
-	"detail_block",
-]) {
-	mustInclude(settingsCenter, marker, `设置中心 must expose field governance behavior: ${marker}`);
 }
 
 for (const marker of [

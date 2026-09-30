@@ -468,7 +468,7 @@ def export_compensation_register(company: str, start_date: str, end_date: str, s
 	sheet.sheet_view.showGridLines = False
 
 	output = BytesIO()
-	save_workbook_with_logo_watermark(workbook, output)
+	save_workbook_with_logo_watermark(workbook, output, export_key="compensation_register")
 	filename = f'工资社保汇总_{start:%Y%m%d}-{end:%Y%m%d}.xlsx'
 	file_doc = frappe.get_doc({'doctype': 'File', 'file_name': filename, 'content': output.getvalue(), 'is_private': 1}).insert(ignore_permissions=True)
 	return {'file_url': file_doc.file_url, 'file_name': filename, 'row_count': len(rows)}

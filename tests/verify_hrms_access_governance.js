@@ -8,7 +8,6 @@ const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const api = read("hrms/api/employee_field_template.py");
 const accessPage = read("hrms/hr/page/hrms_access_center/hrms_access_center.js");
 const accessPageStyles = read("hrms/hr/page/hrms_access_center/hrms_access_center.css");
-const developerPage = read("hrms/hr/page/hrms_developer_center/hrms_developer_center.js");
 const modelPage = read("hrms/hr/page/hrms_model_center/hrms_model_center.js");
 const sidebarShell = read("hrms/public/js/hrms_home_redirect_v6.js");
 const accessControl = read("hrms/access_control.py");
@@ -173,22 +172,10 @@ for (const marker of [
 }
 
 for (const marker of [
-	"get_hrms_developer_configuration_map",
-	"字段字典与引用范围",
-	"打开生效位置",
-	"如何验证",
-	"仍然需要代码和迁移",
-	'frappe.set_route("List", this.dataset.dictionary)',
-]) {
-	assert(developerPage.includes(marker), `Developer configuration map contract missing: ${marker}`);
-}
-
-for (const marker of [
 	'label: "账户与权限"',
 	'label: "账户、权限与角色"',
 	'label: "安全审计"',
 	'label: "开发与配置"',
-	'label: "开发与配置总览"',
 	'label: "基础模型管理"',
 	'label: "全部底层模型（谨慎）"',
 	'label: "业务配置"',

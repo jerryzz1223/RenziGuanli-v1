@@ -42,12 +42,6 @@ frappe.pages["staff-attribute-settings"].on_page_load = function (wrapper) {
 
 	page.set_primary_action(__("添加属性字段"), () => open_field_dialog(), "add");
 	$(page.body).addClass("hrms-staff-attribute-page");
-	$(page.body).prepend(
-		`<div class="alert alert-info">${__("员工属性设置已迁移到设置中心，请在“设置中心 / 员工属性设置”中统一维护。")}</div>`,
-	);
-	setTimeout(() => {
-		frappe.set_route("hr-settings-center");
-	}, 50);
 
 	function load_template() {
 		state.loading = true;

@@ -39,15 +39,15 @@
 	const CONTEXTUAL_ADMIN_PAGES = {
 		doctype: {
 			title: "数据模型管理",
-			description: "用于新建独立业务单据和字段结构。员工属性请回设置中心维护。",
-			parent: "开发中心",
-			route: "hrms-developer-center",
+			description: "用于新建独立业务单据和字段结构。员工属性请在员工属性设置中维护。",
+			parent: "基础模型管理",
+			route: "hrms-model-center",
 		},
 		page: {
 			title: "页面与工作区管理",
 			description: "用于维护页面和导航。业务入口应优先指向对应的业务中心。",
-			parent: "开发中心",
-			route: "hrms-developer-center",
+			parent: "基础模型管理",
+			route: "hrms-model-center",
 		},
 		"permission-manager": {
 			title: "权限矩阵",
@@ -521,11 +521,6 @@
 		window.location.href = route;
 	}
 
-	function openSettingsModule(module) {
-		window.sessionStorage.setItem("hrms_settings_center_active_module", module);
-		navigate("/desk/hr-settings-center");
-	}
-
 	function currentUserId() {
 		// The session is the authority for profile navigation. accountInfo is
 		// loaded asynchronously and can briefly belong to an earlier Desk session.
@@ -606,9 +601,7 @@
 	function accountAction(action) {
 		const user = currentUserId();
 		const requiredRoles = {
-			settings: HR_SETTINGS_MANAGER_ROLES,
 			"user-permissions": SYSTEM_ADMIN_ROLES,
-			"developer-tools": SYSTEM_ADMIN_ROLES,
 			"data-operations": SYSTEM_ADMIN_ROLES,
 		};
 		if (requiredRoles[action] && !hasAnyRole(requiredRoles[action])) {
@@ -623,20 +616,12 @@
 			window.location.href = "/update-password";
 			return;
 		}
-		if (action === "settings") {
-			openSettingsModule("字段管理中心");
-			return;
-		}
 		if (action === "branding" && window.frappe?.set_route) {
 			frappe.set_route("Form", "Navbar Settings", "Navbar Settings");
 			return;
 		}
 		if (action === "user-permissions") {
 			frappe.set_route("hrms-access-center");
-			return;
-		}
-		if (action === "developer-tools" && window.frappe?.set_route) {
-			frappe.set_route("hrms-developer-center");
 			return;
 		}
 		if (action === "data-operations" && window.frappe?.set_route) {
@@ -850,10 +835,8 @@
 		[
 			{ label: "个人资料", action: "profile" },
 			{ label: "修改密码", action: "change-password" },
-			{ label: "设置中心", action: "settings", roles: HR_SETTINGS_MANAGER_ROLES },
 			{ label: "品牌外观", action: "branding", roles: SYSTEM_ADMIN_ROLES },
 			{ label: "账户与权限", action: "user-permissions", roles: SYSTEM_ADMIN_ROLES },
-			{ label: "开发工具（开发环境）", action: "developer-tools", roles: SYSTEM_ADMIN_ROLES },
 			{ label: "数据处理中心", action: "data-operations", roles: SYSTEM_ADMIN_ROLES },
 			{ label: "退出登录", action: "logout", danger: true },
 		]

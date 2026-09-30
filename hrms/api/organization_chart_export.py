@@ -322,7 +322,8 @@ def workbook_bytes(root, stamp, split_departments=True, report=None):
 				yield from departments(child)
 		for node in departments(root):
 			_diagram(book,node,node.get("name") or "课室",stamp)
-	output=BytesIO();book.save(output)
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+	output=BytesIO();save_workbook_with_logo_watermark(book, output, export_key="organization_chart")
 	return output.getvalue(),book.sheetnames
 
 

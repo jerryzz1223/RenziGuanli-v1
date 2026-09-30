@@ -260,7 +260,7 @@ def download_cross_department_support_template():
 	sheet.freeze_panes = "A3"
 	sheet.auto_filter.ref = f"A2:I2"
 	output = BytesIO()
-	save_workbook_with_logo_watermark(workbook, output)
+	save_workbook_with_logo_watermark(workbook, output, export_key="support_template")
 	filename = "跨部门支援名单导入模板.xlsx"
 	file_doc = frappe.get_doc({"doctype": "File", "file_name": filename, "content": output.getvalue(), "is_private": 0}).insert(ignore_permissions=True)
 	return {"file_url": file_doc.file_url, "file_name": filename}

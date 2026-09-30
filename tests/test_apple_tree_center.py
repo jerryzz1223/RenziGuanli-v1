@@ -284,6 +284,7 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 			"end_date": "str",
 			"department": "str",
 			"designation": "str",
+			"include_records": "int",
 		})
 
 	def test_data_filters_annual_records_by_department_and_designation(self):
@@ -406,6 +407,10 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 		self.assertEqual(result["available_years"], [2026, 2025])
 		self.assertEqual(result["records"][0]["reward_item"], "月度考勤终稿")
 		self.assertEqual(result["records"][0]["approval_status"], "已锁定")
+		summary_only = center.get_data(year="2026", month="2026-09", company="永新", include_records="0")
+		self.assertEqual(summary_only["records"], [])
+		self.assertFalse(summary_only["records_included"])
+		self.assertEqual(summary_only["summary"], result["summary"])
 
 	def test_statistics_only_history_takes_precedence_for_its_month(self):
 		center = apple_tree_center_module()

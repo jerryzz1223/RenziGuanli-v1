@@ -204,7 +204,8 @@ def download_training_roster_template():
 	instructions.append(["学时、成绩、等级/结果、是否补训、备注均可留空，保存上课后仍可继续补录。"])
 	instructions.append(["出席状态可填写：出席、缺席；是否补训可填写：是、否。"])
 	output = BytesIO()
-	workbook.save(output)
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+	save_workbook_with_logo_watermark(workbook, output, export_key="training_template")
 	frappe.response["filename"] = "参训员工导入基础模板.xlsx"
 	frappe.response["filecontent"] = output.getvalue()
 	frappe.response["type"] = "binary"

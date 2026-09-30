@@ -739,7 +739,8 @@ def download_history_import_template():
 	"""Download the maintained Apple-tree workbook layout without creating File rows."""
 	frappe.only_for(("System Manager", "HR Manager"))
 	output = BytesIO()
-	_build_history_import_template().save(output)
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+	save_workbook_with_logo_watermark(_build_history_import_template(), output, export_key="apple_tree_template")
 	frappe.local.response.filename = "苹果树合计填写模板.xlsx"
 	frappe.local.response.filecontent = output.getvalue()
 	frappe.local.response.type = "binary"
@@ -875,7 +876,8 @@ def download_export(view: str = "annual-summary", year: str = "", month: str = "
 		title = f"{period} 苹果树{view_label}"
 		filename = f"苹果树统计_{period}_{view_label}.xlsx"
 	output = BytesIO()
-	_build_export_workbook(view, data, title, column_filters, sort_key, sort_order).save(output)
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+	save_workbook_with_logo_watermark(_build_export_workbook(view, data, title, column_filters, sort_key, sort_order), output, export_key="apple_tree")
 	frappe.local.response.filename = re.sub(r'[\\/:*?"<>|]', "_", filename)
 	frappe.local.response.filecontent = output.getvalue()
 	frappe.local.response.type = "binary"
@@ -1083,7 +1085,7 @@ def get_person_detail(person: str, year: str = "", company: str = "", month: str
 
 
 @frappe.whitelist()
-def get_data(year: str = "", month: str = "", search: str = "", company: str = "", start_date: str = "", end_date: str = "", department: str = "", designation: str = ""):
+def get_data(year: str = "", month: str = "", search: str = "", company: str = "", start_date: str = "", end_date: str = "", department: str = "", designation: str = "", include_records: int = 1):
 	"""Return a permission-aware Apple-tree statistical view.
 
 	The active monthly attendance final is the canonical source for the annual
@@ -1098,6 +1100,7 @@ def get_data(year: str = "", month: str = "", search: str = "", company: str = "
 	company = str(company or default_company or "").strip()
 	department = str(department or "").strip()
 	designation = str(designation or "").strip()
+	include_records = bool(int(include_records or 0))
 	if not company:
 		frappe.throw("请先选择公司后再查看苹果树统计。")
 	available_months = frappe.get_list(
@@ -1168,6 +1171,7 @@ def get_data(year: str = "", month: str = "", search: str = "", company: str = "
 		"summary": summary,
 		"people": people,
 		"months": months,
-		"records": records,
+		"records": records if include_records else [],
+		"records_included": bool(include_records),
 		"notice": "统计范围为当前公司。已锁定并生成的考勤处理终稿自动显示在本页；没有该终稿的月份沿用历史导入或旧版月度终稿。历史导入不修改考勤终稿或薪资。" + (" 自定义日期范围内，历史导入按奖/惩日期精确统计；月度考勤终稿仅在范围完整覆盖该月时纳入。" if custom_start else "") + (" 当前筛选结果超过 10000 条，请缩小年份、月份或日期范围。" if len(records) >= MAX_VISIBLE_RECORDS else ""),
 	}

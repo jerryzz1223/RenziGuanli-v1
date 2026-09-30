@@ -191,7 +191,7 @@ for (const marker of [
 for (const marker of [
 	"frappe.pages[\"employee-roster-import\"]",
 	"手动匹配字段",
-	"导入映射设置",
+	"如果表头没有自动匹配，请在下方手动匹配员工字段。",
 	"添加员工及修改信息",
 	"比对并选择",
 	"保留系统值",
@@ -387,8 +387,6 @@ if (importJs.includes("下一步将接入批量写入员工资料。当前已完
 for (const marker of [
 	"frappe.pages[\"employee-roster-export\"]",
 	"get_employee_import_export_schema",
-	"导出模板设置",
-	"保存导出模板",
 	"员工属性",
 	"全部员工",
 	"当前筛选结果",

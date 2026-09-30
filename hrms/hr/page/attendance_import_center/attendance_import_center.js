@@ -177,7 +177,7 @@ class AttendanceImportCenter {
 
 	is_active() {
 		const container = this.wrapper.closest(".page-container");
-		return !container || container.classList.contains("active");
+		return !container || container.getClientRects().length > 0;
 	}
 
 	activate(initial = false) {
@@ -3174,7 +3174,7 @@ class AttendanceImportCenter {
 		const recognitionCards = [
 			["初稿识别员工", recognition.draft_recognized_employee_count, "按初稿唯一工号汇总"],
 			["花名册员工", recognition.roster_employee_count, "已填工号，可参与匹配"],
-			["成功识别员工", recognition.successful_employee_count, "已通过校验，可进入终稿"],
+			["全月审核通过员工", recognition.successful_employee_count, "待审核人员的其他考勤日期也列在签字版，待审日期不计入汇总"],
 		];
 		const approvalActions = [
 			`<button class="btn btn-default btn-sm" data-hrms-capability="attendance_import_submit" data-submit-final-approval ${submitApprovalDisabled ? "disabled" : ""}>${this.escape(__(submitApprovalLabel))}</button>`,

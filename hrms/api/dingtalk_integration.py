@@ -44,6 +44,7 @@ DINGTALK_STORAGE_FILE_INFO_PATH = "/v1.0/storage/spaces/{space_id}/dentries/{fil
 DINGTALK_STORAGE_DOWNLOAD_INFO_PATH = "/v1.0/storage/spaces/{space_id}/dentries/{file_id}/downloadInfos/query"
 DINGTALK_EMPLOYEE_ROSTER_SOURCE_TYPE = "employee_roster"
 DINGTALK_MANUAL_NEW_EMPLOYEE_SOURCE_TYPE = "manual_new_employee"
+DINGTALK_ONJOB_NEW_EMPLOYEE_SOURCE_TYPE = "onjob_new_employee"
 DINGTALK_COMPARISON_PROTECTED_FIELDS = {"company", "status", "custom_employee_code"}
 DINGTALK_EMPLOYEE_VALUE_ALIASES = {
 	"department": {"设备组": "设备课"},
@@ -1335,6 +1336,11 @@ def _stage_dingtalk_employee_import(user, company, sync_log, raw_record):
 		elif match.get("status") == "待审批":
 			match["status"] = "待匹配"
 			match["reason"] = "全量在职档案的公司工号未在系统中找到；不得从全量比对创建员工，请走待入职新成员流程"
+	elif raw_record and raw_record.get("source_type") == DINGTALK_ONJOB_NEW_EMPLOYEE_SOURCE_TYPE and match.get("status") == "待审批" and not match.get("employee"):
+		issues = _dingtalk_new_employee_validation_issues(values)
+		if issues:
+			match["status"] = "待匹配"
+			match["reason"] = "；".join(issues)
 	payload = user.get("raw") or user
 	payload_hash = _payload_hash(payload)
 	source_type = raw_record.get("source_type") if raw_record else ""
@@ -1777,9 +1783,93 @@ def sync_preentry_employees_from_dingtalk(company: str = ""):
 
 @frappe.whitelist()
 def sync_new_employees_from_dingtalk(company: str = ""):
-	"""Pull only pending-onboarding employees into the new-hire approval pool."""
+	"""Refresh pre-entry records and compare the current on-job roster by company code."""
 	_require_dingtalk_employee_import_approver()
-	return _sync_preentry_employees(company)
+	result = _sync_preentry_employees(company)
+	transition = _sync_preentry_onjob_transitions(company)
+	result.update(transition)
+	return result
+
+
+def _sync_preentry_onjob_transitions(company):
+	"""Stage on-job people without a company-code Employee match for review."""
+	company = _require_api_sync_enabled(company)
+	onjob_userids = _fetch_dingtalk_onjob_userids()
+	if not onjob_userids:
+		return {"onjob_received": 0, "onjob_transition_count": 0, "onjob_pending_approval": 0, "onjob_pending_match": 0, "onjob_failed": 0}
+	details = _fetch_dingtalk_preentry_details(onjob_userids)
+	employee_codes = {
+		str(code).strip()
+		for code in frappe.get_all("Employee", filters={"company": company}, pluck="custom_employee_code", limit_page_length=0)
+		if str(code or "").strip()
+	}
+	candidate_ids = [
+		userid for userid in onjob_userids
+		if userid not in details or not str(details[userid].get("employee_code") or "").strip()
+		or str(details[userid]["employee_code"]).strip() not in employee_codes
+	]
+	preentry_sources = frappe.get_all(
+		DINGTALK_RAW_RECORD_DOCTYPE,
+		filters={"company": company, "source_type": DINGTALK_PREENTRY_SOURCE_TYPE},
+		pluck="name",
+		limit_page_length=0,
+	)
+	old_imports = frappe.get_all(
+		DINGTALK_EMPLOYEE_IMPORT_DOCTYPE,
+		filters={
+			"company": company,
+			"source_record": ["in", preentry_sources or ["__no_preentry_source__"]],
+			"import_status": ["in", ["待审批", "待匹配", "冲突", "无变更"]],
+		},
+		fields=["name", "dingtalk_userid", "import_status", "error_message"],
+		limit_page_length=0,
+	)
+	old_by_userid = {}
+	for row in old_imports:
+		if row.import_status == "无变更" and not str(row.error_message or "").startswith("已转入在职阶段，"):
+			continue
+		old_by_userid.setdefault(str(row.dingtalk_userid or "").strip(), []).append(row.name)
+	old_by_userid.pop("", None)
+	if not candidate_ids:
+		return {"onjob_received": len(onjob_userids), "onjob_transition_count": 0, "onjob_pending_approval": 0, "onjob_pending_match": 0, "onjob_failed": 0}
+	log = _new_sync_log("入职转在职同步", company=company)
+	pending_approval = pending_match = failed = 0
+	errors = []
+	for userid in candidate_ids:
+		try:
+			user = details.get(userid)
+			if not user:
+				frappe.throw(_("钉钉在职花名册未返回该员工详情。"))
+			user["dingtalk_userid"] = userid
+			user["external_id"] = userid
+			raw_record = upsert_raw_record(
+				DINGTALK_ONJOB_NEW_EMPLOYEE_SOURCE_TYPE, userid, user["raw"], log.name,
+				company=company, dingtalk_userid=userid,
+			)
+			import_doc = _stage_dingtalk_employee_import(user, company, log, raw_record)
+			if import_doc.import_status == "待审批":
+				pending_approval += 1
+			elif import_doc.import_status in ("待匹配", "冲突"):
+				pending_match += 1
+			for old_name in old_by_userid.get(userid, []):
+				if old_name == import_doc.name:
+					continue
+				old_doc = frappe.get_doc(DINGTALK_EMPLOYEE_IMPORT_DOCTYPE, old_name)
+				old_doc.import_status = "无变更"
+				old_doc.error_message = "已转入在职阶段，最新资料见 {0}".format(import_doc.name)
+				old_doc.save(ignore_permissions=True)
+		except Exception as exc:
+			failed += 1
+			if len(errors) < 10:
+				errors.append("{0}: {1}".format(userid, exc))
+	_finish_sync_log(log, "已完成" if not failed else "部分失败", len(candidate_ids), 0, len(candidate_ids) - failed, failed, "\n".join(errors))
+	return {
+		"onjob_received": len(onjob_userids),
+		"onjob_transition_count": len(candidate_ids),
+		"onjob_pending_approval": pending_approval,
+		"onjob_pending_match": pending_match,
+		"onjob_failed": failed,
+	}
 
 
 @frappe.whitelist()
@@ -1900,7 +1990,7 @@ def _approve_dingtalk_employee_import(import_name: str, approval_note: str = "",
 		if import_doc.source_record
 		else ""
 	)
-	if source_type not in {DINGTALK_PREENTRY_SOURCE_TYPE, DINGTALK_MANUAL_NEW_EMPLOYEE_SOURCE_TYPE}:
+	if source_type not in {DINGTALK_PREENTRY_SOURCE_TYPE, DINGTALK_MANUAL_NEW_EMPLOYEE_SOURCE_TYPE, DINGTALK_ONJOB_NEW_EMPLOYEE_SOURCE_TYPE}:
 		frappe.throw(_("该记录来自全量员工档案，不属于钉钉待入职新员工，禁止写入员工主档。"))
 	if import_doc.import_status != "待审批":
 		frappe.throw(_("当前记录状态为“{0}”，不能重复审批。" ).format(import_doc.import_status))

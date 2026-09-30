@@ -82,7 +82,6 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 				<div class="hrms-export-note">
 					<span class="text-danger">*</span> ${__("选择需要导出的字段，已勾选的必选字段不可取消。")}
 					<span class="text-muted ml-2">${__("字段来源于员工属性设置，禁用字段不会出现在导出范围内。")}</span>
-					<span class="text-muted ml-2">${__("导出模板设置位于设置中心，可保存导出模板。")}</span>
 					<button class="btn btn-default btn-sm ml-2" data-action="select-basic">${__("按基础花名册选列")}</button>
 				</div>
 				<div class="hrms-export-layout">

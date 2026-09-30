@@ -30,7 +30,8 @@ assert(api.includes('"department_name": department'), "Form imports must resolve
 assert(api.includes("Spreadsheet templates use the human-facing department name"), "Department display-name matching must remain documented in the import contract.");
 assert(api.includes("def _department_display_name(department):"), "Imports must expose a business-facing Department name without Frappe's suffix.");
 assert(api.includes("def _matches_department_display_name(department, business_name):"), "Imports must verify business department names against the employee's current department link.");
-assert(api.includes("current_department = frappe.db.get_value(\"Employee\", employee, \"department\")"), "Employee-linked department fallback is required for legacy Department metadata.");
+assert(api.includes('frappe.db.get_value("Employee", employee, "department")'), "Employee-linked department fallback is required for legacy Department metadata.");
+assert(page.includes('frappe.set_route(...route.slice(6).split("/").filter(Boolean))'), "Desk form entries must reuse the router instead of reloading the whole page.");
 assert(api.includes("签核型表单"));
 assert(page.includes("create_form_import_template_file"));
 assert(page.includes("preview_form_import"));

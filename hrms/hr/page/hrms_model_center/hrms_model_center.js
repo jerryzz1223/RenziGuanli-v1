@@ -14,11 +14,9 @@ frappe.pages["hrms-model-center"].on_page_load = function (wrapper) {
 	let query = "";
 
 	if (!isSystemManager()) {
-		$(page.body).html(`<div class="alert alert-danger">${__("基础模型管理仅对系统管理员开放。日常人资配置请使用设置中心。")}</div>`);
+		$(page.body).html(`<div class="alert alert-danger">${__("基础模型管理仅对系统管理员开放。")}</div>`);
 		return;
 	}
-
-	page.set_primary_action(__("返回开发与配置"), () => route("hrms-developer-center"), "left");
 
 	function risk_class(risk) {
 		if (risk === "低") return "green";

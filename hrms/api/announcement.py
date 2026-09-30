@@ -458,7 +458,8 @@ def download_announcement_directory_export(
 	sheet.sheet_view.showGridLines = False
 
 	output = io.BytesIO()
-	workbook.save(output)
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+	save_workbook_with_logo_watermark(workbook, output, export_key="announcement_directory")
 	provide_binary_file("公告目录", "xlsx", output.getvalue())
 
 
@@ -909,5 +910,6 @@ def _build_xlsx(context):
 	sheet.page_margins.bottom = 0.35
 	sheet.print_area = "B1:U18"
 	buffer = io.BytesIO()
-	book.save(buffer)
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+	save_workbook_with_logo_watermark(book, buffer, export_key="announcement_template")
 	return buffer.getvalue()

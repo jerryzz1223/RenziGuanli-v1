@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
+import types
 import unittest
 from io import BytesIO
 from pathlib import Path
@@ -80,8 +82,10 @@ class AttendanceExceptionExportTest(unittest.TestCase):
 	def test_exception_export_is_saved_without_watermark_media(self):
 		book = self.module._build_processing_exception_export_workbook([])
 		output = BytesIO()
-
-		self.module._save_processing_exception_export_workbook(book, output)
+		watermark = types.ModuleType("hrms.utils.export_watermark")
+		watermark.save_workbook_with_logo_watermark = lambda workbook, target, **kwargs: workbook.save(target)
+		with patch.dict(sys.modules, {"hrms.utils.export_watermark": watermark}):
+			self.module._save_processing_exception_export_workbook(book, output)
 
 		with ZipFile(BytesIO(output.getvalue())) as workbook:
 			names = workbook.namelist()

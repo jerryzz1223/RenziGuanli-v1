@@ -92,6 +92,39 @@ class EmployeeRelationshipWorkbookImportTest(unittest.TestCase):
 		self.assertEqual(len(conflicts), 1)
 		self.assertEqual(conflicts[0]["categories"], ["旁系亲属", "朋友"])
 
+	def test_export_preserves_source_layout_and_round_trips_codes(self):
+		rows = [
+			{
+				"source_status": status, "native_place": "河南", "employee_a_department": "连续课",
+				"employee_a_name": "张三", "employee_a_joining": "2024-01-01", "employee_a_gender": "男",
+				"employee_a_age": 30, "employee_a_code": "A001", "employee_b_department": "品管课",
+				"employee_b_name": "李四", "employee_b_joining": "2024-02-01", "employee_b_gender": "女",
+				"employee_b_age": 28, "employee_b_code": "B002", "relationship": "朋友", "updated_by_on": "HR / 2026-09-30",
+			}
+			for status in ("在职", "离职")
+		]
+		content = workbook_bytes(IMPORTER.build_employee_relationship_workbook(rows))
+		parsed = IMPORTER.parse_employee_relationship_workbook(content)
+		self.assertEqual(parsed["sheet_names"], ["人员关系表——在职", "人员关系表—离职"])
+		self.assertEqual([row["source_row"] for row in parsed["rows"]], [4, 4])
+		self.assertEqual([row["employee_a_identity"] for row in parsed["rows"]], ["工号:A001"] * 2)
+		self.assertTrue(all(not row["errors"] for row in parsed["rows"]))
+		from openpyxl import load_workbook
+		book = load_workbook(io.BytesIO(content), read_only=True)
+		self.assertEqual(book.worksheets[0]["B3"].value, "籍贯")
+		self.assertEqual(book.worksheets[0]["M3"].value, "关系")
+		self.assertEqual(book.worksheets[1]["I3"].value, "姓名（离职）")
+		self.assertEqual(book.worksheets[0]["O4"].value, "A001")
+
+	def test_distinct_company_codes_disambiguate_same_name_and_department(self):
+		row = {
+			"source_status": "在职", "employee_a_name": "张三", "employee_b_name": "张三",
+			"employee_a_department": "连续课", "employee_b_department": "连续课",
+			"employee_a_code": "A001", "employee_b_code": "A002", "relationship": "同学",
+		}
+		parsed = IMPORTER.parse_employee_relationship_workbook(workbook_bytes(IMPORTER.build_employee_relationship_workbook([row])))
+		self.assertEqual(parsed["rows"][0]["errors"], [])
+
 
 if __name__ == "__main__":
 	unittest.main()

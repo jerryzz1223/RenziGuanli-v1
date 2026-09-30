@@ -365,7 +365,7 @@ for (let index = 1; index < monthlyFinalSections.length; index += 1) {
 		throw new Error("Monthly final page must render attendance summary, supplemental sources, then monthly finalization.");
 	}
 }
-for (const marker of ["employee_recognition", "初稿识别员工", "花名册员工", "成功识别员工", "hrms-attendance-final-recognition"]) {
+for (const marker of ["employee_recognition", "初稿识别员工", "花名册员工", "全月审核通过员工", "hrms-attendance-final-recognition"]) {
 	mustInclude(attendancePageJs, marker, `Monthly final must display employee-recognition statistics: ${marker}`);
 }
 for (const hiddenReadinessMarker of ["hrms-attendance-final-readiness", "来源完备性 / 锁定快照"]) {

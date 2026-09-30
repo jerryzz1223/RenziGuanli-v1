@@ -377,7 +377,7 @@ class StandingPayTests(unittest.TestCase):
         payroll._safe_fields = lambda _doctype, fields: fields
         payroll._salary_contribution_defaults = lambda row, effective: {'employment_stage': '正式'}
         watermark = ModuleType('hrms.utils.export_watermark')
-        watermark.save_workbook_with_logo_watermark = lambda workbook, output: workbook.save(output)
+        watermark.save_workbook_with_logo_watermark = lambda workbook, output, **kwargs: workbook.save(output)
         with patch.dict(sys.modules, {'hrms.utils.export_watermark': watermark}):
             result = self.api.export_compensation_register(
                 'ACME', '2026-01-01', '2026-08-10',

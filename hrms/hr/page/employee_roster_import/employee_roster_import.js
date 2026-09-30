@@ -208,8 +208,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 					</div>
 					${missing.length ? `<div class="alert alert-warning">${__("缺失字段：")} ${missing.map((field) => frappe.utils.escape_html(field.field_label)).join("、")}</div>` : ""}
 					<div class="alert alert-info">
-						${__("如果表头没有自动匹配，可以进入导入映射设置维护字段别名，或后续使用手动匹配字段。")}
-						<button class="btn btn-link btn-xs" data-route="hr-settings-center">${__("导入映射设置")}</button>
+						${__("如果表头没有自动匹配，请在下方手动匹配员工字段。")}
 						<span class="text-muted">${__("手动匹配字段")}</span>
 					</div>
 					<div class="form-group">

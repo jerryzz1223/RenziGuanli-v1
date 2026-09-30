@@ -2559,10 +2559,36 @@ def _excluded_attendance_daily_keys(row: dict[str, Any], values: dict[str, Any] 
 	return keys
 
 
-def _attendance_downstream_values(row: dict[str, Any]) -> dict[str, Any]:
+def _pending_attendance_daily_keys(row: dict[str, Any], values: dict[str, Any] | None = None) -> set[str]:
+	"""Find dated rows awaiting review; a parent queue status is not a month exclusion."""
+	if row.get("review_status") != "待审核":
+		return set()
+	values = values if values is not None else _effective_result_values(row)
+	details = [item for item in values.get("attendance_details") or [] if isinstance(item, dict)]
+	by_key = {_daily_line_key(item) for item in details}
+	by_date = defaultdict(list)
+	for item in details:
+		by_date[str(item.get("attendance_date") or "")].append(_daily_line_key(item))
+	pending = set()
+	for line in row.get("daily_pending_exception_lines") or _active_attendance_exception_lines(values, row.get("exception_codes") or []):
+		if not isinstance(line, dict):
+			continue
+		key = _daily_line_key(line)
+		if key in by_key:
+			pending.add(key)
+		else:
+			date_matches = by_date.get(str(line.get("attendance_date") or ""), [])
+			if len(date_matches) == 1:
+				pending.add(date_matches[0])
+	return pending - _excluded_attendance_daily_keys(row, values)
+
+
+def _attendance_downstream_values(row: dict[str, Any], *, exclude_pending_dates: bool = False) -> dict[str, Any]:
 	"""Subtract excluded dates from the saved month, preserving its other daily facts."""
 	values = _effective_result_values(row)
 	keys = _excluded_attendance_daily_keys(row, values)
+	if exclude_pending_dates:
+		keys |= _pending_attendance_daily_keys(row, values)
 	if not keys:
 		return values
 	values = deepcopy_json(values)
@@ -2602,6 +2628,17 @@ def _attendance_row_has_downstream_dates(row: dict[str, Any]) -> bool:
 	return _confirmed_downstream_eligible(values) and any(
 		isinstance(item, dict) and _daily_line_key(item) not in keys for item in values.get("attendance_details") or []
 	)
+
+
+def _attendance_row_has_report_dates(row: dict[str, Any]) -> bool:
+	"""Keep employees with monthly attendance visible even while review is pending."""
+	values = _effective_result_values(row)
+	if values.get("attendance_details") or _as_number(values.get("source_row_count")) > 0:
+		return True
+	if _effective_daily_source_rows(row):
+		return True
+	# Older confirmed batches did not always retain their dated detail projection.
+	return _attendance_row_has_downstream_dates(row)
 
 
 def _apply_daily_exception_decisions(row: dict[str, Any], decisions: dict[str, dict[str, bool]]) -> dict[str, Any]:
@@ -3153,7 +3190,7 @@ def _export_processed_result(batch, include_logo: bool = True) -> dict[str, str]
 			sheet.column_dimensions[column_letter].width = width
 	output = BytesIO()
 	if include_logo:
-		save_workbook_with_logo_watermark(book, output)
+		save_workbook_with_logo_watermark(book, output, export_key=f"attendance_processing_{batch.source_type}")
 	else:
 		book.save(output)
 	logo_suffix = "" if include_logo else "_无Logo"
@@ -5710,8 +5747,9 @@ def _build_processing_exception_export_workbook(rows: list[dict[str, Any]]):
 
 
 def _save_processing_exception_export_workbook(book, output) -> None:
-	"""Save the review-oriented exception detail without a brand watermark."""
-	book.save(output)
+	"""Save the review-oriented exception detail using its own watermark switch."""
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+	save_workbook_with_logo_watermark(book, output, export_key="attendance_exceptions")
 
 
 def _require_current_exception_export_projection(records: list[dict[str, Any]]) -> None:
@@ -6880,7 +6918,7 @@ FINAL_FINANCE_COLUMNS = (
 	("restday_overtime_hours", "休息日加班（含特殊工时）"), ("holiday_overtime_hours", "节假日加班（含特殊工时）"),
 	("deep_night_shifts", "深夜班"), ("large_night_shifts", "大夜班"), ("small_night_shifts", "小夜班"),
 	("absence_hours", "旷工"), ("green_apple_amount", "绿苹果金额"), ("red_apple_amount", "红苹果金额"), ("housing_allowance", "住房补贴"),
-	("full_attendance_award", "全勤奖"),
+	("full_attendance_award", "全勤奖"), ("review_note", "备注"),
 )
 
 # The first-signature form intentionally mirrors the narrow ``工时汇总`` sheet
@@ -7061,8 +7099,8 @@ def _attendance_final_excel_config_hash() -> str:
 
 # New files use each employee's reviewed daily standard-hours total. Keep the
 # shared-standard versions identifiable so their locked previews stay unchanged.
-MONTHLY_FINAL_LAYOUT_VERSION = 18
-FIRST_SIGNED_LAYOUT_VERSION = 7
+MONTHLY_FINAL_LAYOUT_VERSION = 20
+FIRST_SIGNED_LAYOUT_VERSION = 8
 APPLE_REWARD_AMOUNT_PER_APPLE = 5
 SHARED_STANDARD_FINAL_LAYOUT_VERSIONS = frozenset({13, 14})
 SHARED_STANDARD_FIRST_SIGNED_LAYOUT_VERSIONS = frozenset({5})
@@ -7482,9 +7520,9 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 			continue
 		records = _result_rows(batch, 5000, employee_code=employee_code) if employee_code else _result_rows(batch, 5000)
 		for record in records:
-			if not _attendance_row_has_downstream_dates(record):
+			if not (_attendance_row_has_report_dates(record) if source_type == "attendance_draft" else _attendance_row_has_downstream_dates(record)):
 				continue
-			values = _attendance_downstream_values(record) if source_type == "attendance_draft" else _effective_result_values(record)
+			values = _attendance_downstream_values(record, exclude_pending_dates=True) if source_type == "attendance_draft" else _effective_result_values(record)
 			code = str(values.get("employee_code") or record.get("employee_code") or "").strip()
 			name = str(values.get("employee_name") or record.get("employee_name") or "").strip()
 			if not code and not name:
@@ -7502,6 +7540,8 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 			output.setdefault("employee_name", name)
 			output.setdefault("department", values.get("department") or record.get("department") or "")
 			if source_type == "attendance_draft":
+				output["attendance_review_status"] = record.get("review_status") or "无需审核"
+				output["eligible_for_downstream"] = bool(record.get("eligible_for_downstream"))
 				for field, _label in ATTENDANCE_DRAFT_RESULT_COLUMNS:
 					output[field] = values.get(field, output.get(field, 0))
 				derived_special_entries = values.get("special_hours_days") or []
@@ -7516,6 +7556,10 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 				for field in ("green_apple_amount", "red_apple_amount", "housing_allowance", "full_attendance_award", "employee_signature", "review_note", "signed_final_override"):
 					if field in values:
 						output[field] = values.get(field)
+				pending_dates = len(_pending_attendance_daily_keys(record))
+				if pending_dates or not output["eligible_for_downstream"]:
+					status_note = f"考勤初稿{output['attendance_review_status']}；{pending_dates}条待审核考勤日期未计入本次汇总，请核对原始记录" if pending_dates else f"考勤初稿{output['attendance_review_status']}（是否计入下游：否），请核对原始记录"
+					output["review_note"] = "；".join(filter(None, (str(output.get("review_note") or "").strip(), status_note)))
 			elif source_type == "missing_card":
 				if values.get("included", True):
 					output["missing_card_count"] = _as_number(output.get("missing_card_count")) + 1
@@ -7557,22 +7601,24 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 		# Historical shared-standard files retain their stored display value.
 		for row in rows_by_employee.values():
 			row["standard_hours"] = standard_hours_override
+	company = next((batch.company for batch in batches.values() if batch), "")
+	joining_dates = {
+		str(employee.get("employee_code") or "").strip(): employee.get("date_of_joining") or ""
+		for employee in _employee_directory(company)
+	}
+	for row in rows_by_employee.values():
+		row["date_of_joining"] = joining_dates.get(str(row.get("employee_code") or "").strip(), "")
 	return sorted(rows_by_employee.values(), key=lambda row: (str(row.get("department") or ""), str(row.get("employee_code") or ""), str(row.get("employee_name") or "")))
 
 
 def _monthly_first_signed_rows(batches: dict[str, Any], employee_code: str = "", shared_standard_hours: bool = False, standard_hours_override: int | None = None):
 	"""Build first-signature rows in the supplied narrow workbook's shape."""
 	rows = _monthly_final_rows(batches, employee_code=employee_code, shared_standard_hours=shared_standard_hours, standard_hours_override=standard_hours_override) if employee_code else _monthly_final_rows(batches, shared_standard_hours=shared_standard_hours, standard_hours_override=standard_hours_override)
-	company = next((batch.company for batch in batches.values() if batch), "")
-	joining_dates = {
-		str(employee.get("employee_code") or "").strip(): employee.get("date_of_joining") or ""
-		for employee in _employee_directory(company)
-	}
 	for sequence, row in enumerate(rows, start=1):
 		row["sequence"] = sequence
-		row["date_of_joining"] = joining_dates.get(str(row.get("employee_code") or "").strip(), "")
 		late_count = _as_number(row.get("late_count"))
-		row["review_note"] = f"迟到{late_count:g}次" if late_count > 0 else ""
+		status_note = row.get("review_note") if not row.get("eligible_for_downstream", True) else ""
+		row["review_note"] = "；".join(filter(None, (f"迟到{late_count:g}次" if late_count > 0 else "", status_note)))
 		for field in ("special_workday_hours", "special_restday_hours", "special_holiday_hours"):
 			row.setdefault(field, "")
 	return rows
@@ -7585,10 +7631,16 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 		return []
 	items = []
 	for record in _result_rows(batch, 5000):
-		if not _attendance_row_has_downstream_dates(record):
+		if not _attendance_row_has_report_dates(record):
 			continue
-		values = _attendance_downstream_values(record)
+		values = _effective_result_values(record)
 		excluded_keys = _excluded_attendance_daily_keys(record)
+		pending_keys = _pending_attendance_daily_keys(record, values)
+		pending_dates = {
+			str(item.get("attendance_date") or "")
+			for item in values.get("attendance_details") or []
+			if isinstance(item, dict) and _daily_line_key(item) in pending_keys
+		}
 		details_by_key = {
 			_daily_source_key(item.get("source_row"), item.get("source_file"), item.get("source_sheet"), item.get("attendance_date")): item
 			for item in values.get("attendance_details") or [] if isinstance(item, dict)
@@ -7606,9 +7658,8 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 				raw.get("source_row") or raw.get("_source_row"), raw.get("source_file") or record.get("source_file"),
 				raw.get("source_sheet") or record.get("source_sheet"), _daily_attendance_date(pick("日期", "考勤日期")),
 			)
-			if detail_key in excluded_keys:
-				continue
 			detail = details_by_key.get(detail_key, {})
+			date_review_note = "待审核，本次汇总未计入" if detail_key in pending_keys or _daily_attendance_date(pick("日期", "考勤日期")) in pending_dates else "已标记不计入本次汇总" if detail_key in excluded_keys else ""
 			# Weekday overtime comes only from the DingTalk export.  Punches and special
 			# hours may validate it, but must not synthesize a value for older batches.
 			calculated_workday_overtime = detail.get("calculated_workday_overtime_hours")
@@ -7633,7 +7684,8 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 				pick("婚假"), pick("丧假"), pick("公假"), pick("产假"), pick("团圆假"), pick("旷工"),
 				pick("上班未打卡次数", "上班缺卡"), pick("下班未打卡次数", "下班缺卡"), detail.get("late_count", pick("迟到次数")), pick("早退次数"),
 				detail.get("scheduled_start", ""), detail.get("scheduled_end", ""), detail.get("raw_outside_shift_hours", 0),
-				detail.get("confirmed_overtime_hours", 0), detail.get("overtime_approval_status", ""), detail.get("attendance_note", ""),
+				detail.get("confirmed_overtime_hours", 0), detail.get("overtime_approval_status", ""),
+				"；".join(filter(None, (str(detail.get("attendance_note") or "").strip(), date_review_note))),
 			])
 	return items
 
@@ -7671,7 +7723,7 @@ def _save_monthly_final_file(attendance_month: str, title: str, columns, rows):
 		sheet.column_dimensions[column[0].column_letter].width = min(max(max(len(str(cell.value or "")) for cell in column) + 2, 12), 24)
 	sheet.freeze_panes = "A2"
 	output = BytesIO()
-	save_workbook_with_logo_watermark(book, output)
+	save_workbook_with_logo_watermark(book, output, export_key="attendance_final")
 	file = save_file(f"{attendance_month}_{title}.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
 
@@ -7786,7 +7838,7 @@ def _save_monthly_finance_confirmation_file(attendance_month: str, rows):
 	sheet.freeze_panes = "A5"
 	sheet.sheet_view.showGridLines = False
 	output = BytesIO()
-	save_workbook_with_logo_watermark(book, output)
+	save_workbook_with_logo_watermark(book, output, export_key="attendance_finance")
 	file = save_file(f"{attendance_month}_财务版.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
 
@@ -7934,7 +7986,7 @@ def _save_monthly_first_signed_confirmation_file(attendance_month: str, rows, da
 	sheet.page_setup.paperSize = sheet.PAPERSIZE_A4
 	sheet.print_area = "B2:Z" + str(max(4, len(rows) + 4))
 	output = BytesIO()
-	save_workbook_with_logo_watermark(book, output)
+	save_workbook_with_logo_watermark(book, output, export_key="attendance_first_signed")
 	file = save_file(f"{attendance_month}_一次签字版.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
 
@@ -8026,7 +8078,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 		workday, restday, holiday = (_as_number(row.get("workday_overtime_hours")), _as_number(row.get("restday_overtime_hours")), _as_number(row.get("holiday_overtime_hours")))
 		personal, sick, annual, injury, rest, absence = (_as_number(row.get("personal_leave_hours")), _as_number(row.get("sick_leave_hours")), _as_number(row.get("annual_leave_hours")), _as_number(row.get("work_injury_hours")), _as_number(row.get("rest_arrangement_hours")), _as_number(row.get("absence_hours")))
 		bereavement, marriage, reunion = (_as_number(row.get("bereavement_leave_hours")), _as_number(row.get("marriage_leave_half_days")), _as_number(row.get("reunion_leave_hours")))
-		values = [excel_row - 4, _display_department(row.get("department")), row.get("employee_code") or "", row.get("employee_name") or "", "", standard, actual,
+		values = [excel_row - 4, _display_department(row.get("department")), row.get("employee_code") or "", row.get("employee_name") or "", row.get("date_of_joining") or "", standard, actual,
 			f"=H{excel_row}-Q{excel_row}/2-R{excel_row}-S{excel_row}-V{excel_row}-W{excel_row}", special["special_workday_hours"], workday, special["special_restday_hours"], restday, special["special_holiday_hours"], holiday,
 			personal, sick, annual, injury, rest, absence, bereavement, marriage, reunion, 0,
 			f"=Q{excel_row}*0.5", f"=R{excel_row}", f"=S{excel_row}", f"=V{excel_row}", f"=W{excel_row}", f"=Q{excel_row}*0.5", f"=P{excel_row}", f"=X{excel_row}", f"=T{excel_row}",
@@ -8080,7 +8132,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 	sheet.page_margins.right = 0
 	sheet.print_area = f"A1:BL{footer_row}"
 	output = BytesIO()
-	save_workbook_with_logo_watermark(book, output)
+	save_workbook_with_logo_watermark(book, output, export_key="attendance_second_signed")
 	file = save_file(f"{attendance_month}_第二次员工签字版.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
 

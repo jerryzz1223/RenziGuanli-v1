@@ -34,7 +34,7 @@ def load_processing_api():
 	file_manager = types.ModuleType("frappe.utils.file_manager")
 	export_watermark = types.ModuleType("hrms.utils.export_watermark")
 	file_manager.save_file = lambda *args, **kwargs: types.SimpleNamespace(file_url="/private/files/first-signed.xlsx", file_name=args[0])
-	export_watermark.save_workbook_with_logo_watermark = lambda book, output: book.save(output)
+	export_watermark.save_workbook_with_logo_watermark = lambda book, output, **kwargs: book.save(output)
 	frappe_utils.file_manager = file_manager
 	hrms = types.ModuleType("hrms")
 	hrms.__path__ = [str(ROOT / "hrms")]
@@ -135,10 +135,13 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 				record("E-001", "missing_card", {"included": False, "red_apples": 2, "amount": 10}, False),
 			],
 		}
-		with patch.object(api, "_result_rows", side_effect=lambda batch, *_args, **_kwargs: records[batch.source_type]):
+		with patch.object(api, "_result_rows", side_effect=lambda batch, *_args, **_kwargs: records[batch.source_type]), patch.object(
+			api, "_employee_directory", side_effect=lambda company: [{"employee_code": "E-001", "date_of_joining": "2008-06-16"}] if company == "测试公司" else []
+		):
 			rows = api._monthly_final_rows(batches)
 		self.assertEqual(len(rows), 1)
 		self.assertEqual(rows[0]["employee_code"], "E-001")
+		self.assertEqual(rows[0]["date_of_joining"], "2008-06-16")
 		self.assertEqual(rows[0]["green_apples"], 3)
 		self.assertEqual(rows[0]["red_apples"], 4)
 		self.assertEqual(rows[0]["missing_card_count"], 1)
@@ -154,6 +157,7 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		)):
 			api._save_monthly_signed_confirmation_file("2026-08", rows)
 		sheet = load_workbook(io.BytesIO(captured["content"]))["第二次员工签字版"]
+		self.assertEqual(sheet["F5"].value, "2008-06-16")
 		self.assertEqual(sheet["BE2"].value, "忘打卡次数")
 		self.assertEqual(sheet["BE5"].value, 1)
 		self.assertEqual(sheet["BE5"].number_format, "0")
@@ -162,6 +166,85 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(sheet["BF5"].value, 15)
 		self.assertEqual(sheet["BG5"].value, 20)
 		self.assertEqual(sheet["BE6"].value, "=SUM(BE5:BE5)")
+
+	def test_signed_reports_keep_attendance_people_while_review_is_pending(self):
+		api = self.api
+		batches = {
+			kind: types.SimpleNamespace(source_type=kind, company="测试公司", attendance_month="2026-08")
+			for kind in ("attendance_draft", "apple_tree")
+		}
+		attendance_rows = [
+			{
+				"source_type": "attendance_draft", "employee_code": code, "employee_name": code,
+				"department": "工程课", "review_status": status, "eligible_for_downstream": eligible,
+				"processed_value": {"standard_hours": 168, "actual_attendance_hours": 160,
+					"source_row_count": 31, "review_note": "来源备注" if code == "E-002" else ""},
+			}
+			for code, status, eligible in (("E-001", "无需审核", True), ("E-002", "待审核", False))
+		]
+		attendance_rows[1]["original_value"] = {"rows": [{"姓名": "E-002", "工号": "E-002", "日期": "26-08-01 星期六", "source_row": 5}]}
+		apple_rows = [
+			{"source_type": "apple_tree", "employee_code": code, "employee_name": code,
+			 "eligible_for_downstream": True, "processed_value": {"苹果类型": "绿苹果", "有效苹果数": 3}}
+			for code in ("E-002", "E-999")
+		]
+		with patch.object(api, "_result_rows", side_effect=lambda batch, *_args, **_kwargs:
+			attendance_rows if batch.source_type == "attendance_draft" else apple_rows), patch.object(
+			api, "_employee_directory", return_value=[]
+		):
+			rows = api._monthly_final_rows(batches)
+			first_rows = api._monthly_first_signed_rows(batches)
+			daily_rows = api._monthly_first_signed_daily_rows(batches)
+		self.assertEqual([row["employee_code"] for row in rows], ["E-001", "E-002"])
+		self.assertEqual(rows[0].get("green_apple_amount", 0), 0)
+		self.assertEqual(rows[1]["green_apple_amount"], 15)
+		self.assertFalse(rows[1]["eligible_for_downstream"])
+		self.assertIn("考勤初稿待审核（是否计入下游：否）", rows[1]["review_note"])
+		self.assertIn("考勤初稿待审核（是否计入下游：否）", first_rows[1]["review_note"])
+		self.assertEqual([row[1] for row in daily_rows], ["E-002"])
+		captured = {}
+		file_manager = sys.modules["frappe.utils.file_manager"]
+		with patch.object(file_manager, "save_file", side_effect=lambda name, content, *args, **kwargs: (
+			captured.update({name: content}) or types.SimpleNamespace(file_url=f"/private/files/{name}", file_name=name)
+		)):
+			api._save_monthly_signed_confirmation_file("2026-08", rows)
+			api._save_monthly_finance_confirmation_file("2026-08", rows)
+		signed = load_workbook(io.BytesIO(captured["2026-08_第二次员工签字版.xlsx"]), data_only=False).active
+		finance = load_workbook(io.BytesIO(captured["2026-08_财务版.xlsx"]), data_only=False).active
+		self.assertEqual([signed[f"D{row}"].value for row in (5, 6)], ["E-001", "E-002"])
+		self.assertIn("考勤初稿待审核", signed["BK6"].value)
+		self.assertIn("考勤初稿待审核", finance["S6"].value)
+
+	def test_pending_attendance_date_excludes_only_that_date(self):
+		api = self.api
+		batch = types.SimpleNamespace(source_type="attendance_draft", company="测试公司", attendance_month="2026-08")
+		details = [
+			{"attendance_date": f"2026-08-0{day}", "source_row": day + 4,
+			 "standard_hours": 8, "actual_attendance_hours": 8}
+			for day in (1, 2)
+		]
+		record = {
+			"source_type": "attendance_draft", "attendance_month": "2026-08",
+			"employee_code": "E-002", "employee_name": "张三", "department": "工程课",
+			"review_status": "待审核", "eligible_for_downstream": False,
+			"exception_codes": ["LATE"],
+			"processed_value": {"standard_hours": 16, "actual_attendance_hours": 16,
+				"source_row_count": 2, "attendance_details": details,
+				"exception_lines": [{**details[0], "exception_codes": ["LATE"]}]},
+			"original_value": {"rows": [
+				{"姓名": "张三", "工号": "E-002", "日期": f"26-08-0{day} 星期六", "source_row": day + 4}
+				for day in (1, 2)
+			]},
+		}
+		with patch.object(api, "_result_rows", return_value=[record]), patch.object(api, "_employee_directory", return_value=[]):
+			rows = api._monthly_final_rows({"attendance_draft": batch})
+			daily = api._monthly_first_signed_daily_rows({"attendance_draft": batch})
+		self.assertEqual(len(rows), 1)
+		self.assertEqual((rows[0]["standard_hours"], rows[0]["actual_attendance_hours"]), (8, 8))
+		self.assertIn("1条待审核考勤日期未计入本次汇总", rows[0]["review_note"])
+		self.assertEqual([row[2] for row in daily], ["26-08-01 星期六", "26-08-02 星期六"])
+		self.assertIn("待审核，本次汇总未计入", daily[0][-1])
+		self.assertNotIn("待审核", daily[1][-1])
 
 	def test_old_second_signed_output_requires_regeneration_before_preview(self):
 		api = self.api

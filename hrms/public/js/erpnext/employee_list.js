@@ -377,6 +377,7 @@
 		const source_labels = {
 			preentry: "待入职同步",
 			manual_new_employee: "手动新员工同步",
+			onjob_new_employee: "待入职转在职同步",
 			employee_roster: "全量花名册比对",
 		};
 
@@ -431,20 +432,22 @@
 			method: "hrms.api.dingtalk_integration.sync_new_employees_from_dingtalk",
 			args: { company },
 			freeze: true,
-			freeze_message: __("正在拉取并匹配钉钉待入职新员工…"),
+			freeze_message: __("正在核对钉钉待入职及转在职新员工…"),
 		}).then((response) => {
 			const result = response.message || {};
 			const message = __(
-				"钉钉新员工同步完成：拉取待入职 {0}，待审批 {1}，待匹配 {2}，无变更 {3}，失败 {4}",
+				"钉钉新员工同步完成：拉取待入职 {0}，在职名单 {1}，需核对 {2}，待审批 {3}，待匹配 {4}，无变更 {5}，失败 {6}",
 				[
 					result.received || 0,
-					result.pending_approval || 0,
-					(result.pending_match || 0) + (result.conflicts || 0),
+					result.onjob_received || 0,
+					result.onjob_transition_count || 0,
+					(result.pending_approval || 0) + (result.onjob_pending_approval || 0),
+					(result.pending_match || 0) + (result.conflicts || 0) + (result.onjob_pending_match || 0),
 					result.unchanged || 0,
-					result.failed || 0,
+					(result.failed || 0) + (result.onjob_failed || 0),
 				],
 			);
-			frappe.show_alert({ message, indicator: result.failed ? "red" : result.pending_approval || result.pending_match || result.conflicts ? "orange" : "green" });
+			frappe.show_alert({ message, indicator: result.failed || result.onjob_failed ? "red" : result.pending_approval || result.pending_match || result.conflicts || result.onjob_pending_approval || result.onjob_pending_match ? "orange" : "green" });
 			listview.refresh();
 		});
 	}
@@ -471,7 +474,7 @@
 			wrapper.innerHTML = `<div class="text-muted">${__("正在加载钉钉待审数据…")}</div>`;
 			frappe.call({
 				method: "hrms.api.dingtalk_integration.list_dingtalk_employee_imports",
-				args: { company, import_status: options.import_status || "", source_type: "preentry,manual_new_employee", page_length: 1000 },
+				args: { company, import_status: options.import_status || "", source_type: "preentry,manual_new_employee,onjob_new_employee", page_length: 1000 },
 			}).then((response) => {
 				const rows = response.message || [];
 				if (!rows.length) {
@@ -527,7 +530,7 @@
 		function queue_all_dingtalk_imports() {
 			frappe.call({
 				method: "hrms.api.dingtalk_integration.queue_approve_all_dingtalk_employee_imports",
-				args: { company, source_type: "preentry,manual_new_employee" },
+				args: { company, source_type: "preentry,manual_new_employee,onjob_new_employee" },
 				freeze: true,
 				freeze_message: __("正在提交钉钉员工及附件一键导入任务…"),
 			}).then((response) => {

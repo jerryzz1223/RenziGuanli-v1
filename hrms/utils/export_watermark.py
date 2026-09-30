@@ -1,4 +1,4 @@
-"""Brand every generated XLSX workbook with the Yongxin logo watermark."""
+"""Add configured screen and print watermarks to generated XLSX workbooks."""
 
 from __future__ import annotations
 
@@ -14,23 +14,69 @@ _DOCUMENT_RELATIONSHIPS_NAMESPACE = "http://schemas.openxmlformats.org/officeDoc
 _WATERMARK_MEDIA_PATH = "xl/media/hrms-yongxin-watermark.png"
 
 
-def save_workbook_with_logo_watermark(workbook, output) -> None:
-	"""Save an openpyxl workbook with a non-editable sheet-background logo.
+def save_workbook_with_logo_watermark(workbook, output, export_key=None) -> None:
+	"""Save a workbook with a configured screen background and optional print header.
 
-	An XLSX background image is the closest spreadsheet equivalent of a watermark:
-	it stays behind cells, does not change the workbook's data or layout, and is
-	preserved when the downloaded file is opened in Excel or WPS.
+	The background remains behind cell values and does not enter print output.
+	An enabled print watermark uses the repeating Excel page header.
 	"""
-	workbook.save(output)
+	if export_key:
+		from hrms.utils.export_watermark_settings import get_export_watermark_options
+
+		options = get_export_watermark_options(export_key)
+		if options["print"]:
+			shade = round(255 - options["opacity"] * 2)
+			color = f"{shade:02X}" * 3
+			for sheet in workbook:
+				# Excel uses & as a header-format command prefix.
+				sheet.oddHeader.center.text = options["text"].replace("&", "&&")
+				sheet.oddHeader.center.size = 18
+				sheet.oddHeader.center.color = color
+		workbook.save(output)
+		if not options["export"]:
+			return
+		image = _render_text_watermark(options["text"], options["opacity"])
+	else:
+		# Existing callers keep their current logo until assigned an export key.
+		workbook.save(output)
+		image = None
 	output.seek(0)
-	watermarked_content = _add_logo_watermark(output.read())
+	watermarked_content = _add_logo_watermark(output.read(), image)
 	output.seek(0)
 	output.truncate(0)
 	output.write(watermarked_content)
 
 
-def _add_logo_watermark(content: bytes) -> bytes:
-	"""Attach the bundled Yongxin mark as a background picture to every sheet."""
+def _render_text_watermark(label: str, opacity: int) -> bytes:
+	from PIL import Image, ImageDraw, ImageFont
+
+	canvas = Image.new("RGBA", (1200, 500), (255, 255, 255, 0))
+	font = None
+	for path in (
+		"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+		"/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+		"/usr/share/fonts/truetype/arphic/uming.ttc",
+		"/System/Library/Fonts/PingFang.ttc",
+		"/System/Library/Fonts/STHeiti Medium.ttc",
+		"/System/Library/Fonts/Supplemental/Songti.ttc",
+	):
+		if Path(path).is_file():
+			font = ImageFont.truetype(path, 62)
+			break
+	if font is None:
+		font = ImageFont.load_default()
+	draw = ImageDraw.Draw(canvas)
+	box = draw.textbbox((0, 0), label, font=font)
+	width = box[2] - box[0]
+	height = box[3] - box[1]
+	draw.text(((1200 - width) / 2, (500 - height) / 2), label, font=font, fill=(90, 90, 90, round(255 * opacity / 100)))
+	result = BytesIO()
+	canvas.save(result, "PNG")
+	return result.getvalue()
+
+
+def _add_logo_watermark(content: bytes, image: bytes | None = None) -> bytes:
+	"""Attach a background picture to every worksheet in an XLSX package."""
 	with ZipFile(BytesIO(content)) as source:
 		worksheet_paths = [
 			info.filename
@@ -46,10 +92,12 @@ def _add_logo_watermark(content: bytes) -> bytes:
 
 	# Keep the desk/navigation logo unchanged.  Exports use a dedicated, pale
 	# bitmap so values remain legible when Excel repeats it as a sheet background.
-	logo_path = Path(__file__).resolve().parents[1] / "public" / "images" / "yongxin-brand-watermark.png"
-	if not logo_path.is_file():
-		return content
-	files[_WATERMARK_MEDIA_PATH] = logo_path.read_bytes()
+	if image is None:
+		logo_path = Path(__file__).resolve().parents[1] / "public" / "images" / "yongxin-brand-watermark.png"
+		if not logo_path.is_file():
+			return content
+		image = logo_path.read_bytes()
+	files[_WATERMARK_MEDIA_PATH] = image
 	files["[Content_Types].xml"] = _ensure_png_content_type(files["[Content_Types].xml"])
 
 	for worksheet_path in worksheet_paths:

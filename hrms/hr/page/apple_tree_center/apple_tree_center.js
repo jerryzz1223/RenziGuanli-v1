@@ -26,6 +26,11 @@ class AppleTreeCenter {
 		this.personRouteFilterKey = "";
 		this.table = { page: 1, pageSize: 20, sortKey: "green_apples", sortOrder: "desc", filters: {} };
 		this.requestId = 0;
+		this.lastLoadedKey = "";
+		this.lastLoadedAt = 0;
+		this.loadingKey = "";
+		this.loadPromise = null;
+		this.cacheTtl = 30_000;
 		this.view = this.viewFromRoute();
 	}
 
@@ -91,7 +96,7 @@ class AppleTreeCenter {
 			const person = String(route[2] || "");
 			const year = /^\d{4}$/.test(String(route[3] || "")) ? String(route[3]) : this.year;
 			const filters = this.routeFilters();
-			const filterKey = JSON.stringify(filters);
+			const filterKey = JSON.stringify([this.company(), filters]);
 			if (nextView !== this.view || person !== this.activePerson || year !== this.year || filterKey !== this.personRouteFilterKey || (!this.personData && !this.personRequestKey)) {
 				this.view = nextView;
 				this.activePerson = person;
@@ -117,13 +122,18 @@ class AppleTreeCenter {
 			this.department = filters.department;
 			this.designation = filters.designation;
 		}
-		if (nextView === this.view) return;
+		if (nextView === this.view) {
+			if (this.data && (this.data.filters?.company !== this.company() || Date.now() - this.lastLoadedAt >= this.cacheTtl)) this.load();
+			return;
+		}
 		this.view = nextView;
 		this.activePerson = "";
 		this.requestId++;
 		this.personRequestKey = "";
-		if (this.data && String(this.data.filters?.year) === this.year) this.render();
-		else {
+		if (this.data && this.data.filters?.company === this.company() && String(this.data.filters?.year) === this.year) {
+			if (nextView === "monthly-detail" && this.data.records_included === false) this.load();
+			else this.render();
+		} else {
 			this.month = "";
 			this.resetTable();
 			this.load();
@@ -138,16 +148,32 @@ class AppleTreeCenter {
 		return window.hrmsCompanyContext?.getCurrentCompany?.() || frappe.defaults?.get_user_default?.("Company") || "";
 	}
 
-	load() {
+	load(force = false) {
 		if (this.view === "person") return this.loadPerson();
+		const company = this.company();
+		const key = JSON.stringify([company, this.view, this.year, this.month, this.search, this.startDate, this.endDate, this.department, this.designation]);
+		if (!force && this.data && key === this.lastLoadedKey && Date.now() - this.lastLoadedAt < this.cacheTtl) {
+			this.render();
+			return Promise.resolve(this.data);
+		}
+		if (!force && this.loadPromise && key === this.loadingKey) return this.loadPromise;
 		const requestId = ++this.requestId;
-		this.wrapper.innerHTML = `<section class="apple-tree-center apple-tree-center--state">${__("正在加载苹果树统计...")}</section>`;
-		return frappe.call({
+		this.loadingKey = key;
+		if (!this.data || this.data.filters?.company !== company) {
+			this.wrapper.innerHTML = `<section class="apple-tree-center apple-tree-center--state" aria-busy="true">${__("正在加载苹果树统计...")}</section>`;
+		} else {
+			this.wrapper.classList?.add("apple-tree-center--loading");
+			this.wrapper.setAttribute?.("aria-busy", "true");
+		}
+		this.loadPromise = Promise.resolve().then(() => frappe.call({
 			method: "hrms.hr.page.apple_tree_center.apple_tree_center.get_data",
-			args: { year: this.year, month: this.month, search: this.search, company: this.company(), start_date: this.startDate, end_date: this.endDate, department: this.department, designation: this.designation },
-		}).then((response) => {
+			timeout: 45000,
+			args: { year: this.year, month: this.month, search: this.search, company, start_date: this.startDate, end_date: this.endDate, department: this.department, designation: this.designation, include_records: this.view === "monthly-detail" ? 1 : 0 },
+		})).then((response) => {
 			if (requestId !== this.requestId) return;
 			this.data = response.message || {};
+			this.lastLoadedKey = key;
+			this.lastLoadedAt = Date.now();
 			this.year = this.data.filters?.year || this.year;
 			this.month = this.data.filters?.month || this.month;
 			this.startDate = this.data.filters?.start_date || "";
@@ -156,11 +182,23 @@ class AppleTreeCenter {
 			this.designation = this.data.filters?.designation || this.designation;
 			if (this.activePerson && !(this.data.people || []).some((person) => this.personKey(person) === this.activePerson)) this.activePerson = "";
 			this.render();
+			return this.data;
 		}).catch(() => {
 			if (requestId !== this.requestId) return;
-			this.wrapper.innerHTML = `<section class="apple-tree-center apple-tree-center--state"><p>${__("苹果树统计暂时无法读取。")}</p><button class="btn btn-default" data-apple-refresh>${__("重新加载")}</button></section>`;
-			this.wrapper.querySelector("[data-apple-refresh]")?.addEventListener("click", () => this.load());
+			if (this.data && this.data.filters?.company === company) {
+				frappe.show_alert?.({ message: __("刷新失败，已保留上次数据。"), indicator: "orange" });
+			} else {
+				this.wrapper.innerHTML = `<section class="apple-tree-center apple-tree-center--state"><p>${__("苹果树统计暂时无法读取。")}</p><button class="btn btn-default" data-apple-refresh>${__("重新加载")}</button></section>`;
+				this.wrapper.querySelector("[data-apple-refresh]")?.addEventListener("click", () => this.load(true));
+			}
+		}).finally(() => {
+			if (requestId !== this.requestId) return;
+			this.wrapper.classList?.remove("apple-tree-center--loading");
+			this.wrapper.removeAttribute?.("aria-busy");
+			this.loadPromise = null;
+			this.loadingKey = "";
 		});
+		return this.loadPromise;
 	}
 
 	personKey(person) {
@@ -325,8 +363,13 @@ class AppleTreeCenter {
 		if (!records.length) return `<p class="apple-tree-center__empty">${__("当前筛选条件下没有苹果树记录。")}</p>`;
 		const columns = this.monthlyDetailColumns();
 		const rows = this.monthlyDetailRows();
+		const pageCount = Math.max(1, Math.ceil(rows.length / this.table.pageSize));
+		const page = Math.min(this.table.page, pageCount);
+		this.table.page = page;
+		const start = (page - 1) * this.table.pageSize;
+		const visibleRows = rows.slice(start, start + this.table.pageSize);
 		const direction = (key) => this.table.sortKey === key ? (this.table.sortOrder === "asc" ? "↑" : "↓") : "↕";
-		return `<div class="apple-tree-center__table-wrap"><table class="table apple-tree-center__monthly-table"><thead><tr>${columns.map((column) => `<th><button class="apple-tree-center__sort" data-apple-table-sort="${column.key}">${column.label}<span>${direction(column.key)}</span></button></th>`).join("")}</tr><tr class="apple-tree-center__filter-row">${columns.map((column) => `<th><input class="form-control input-xs" data-apple-table-filter="${column.key}" value="${this.escape(this.table.filters[column.key])}" placeholder="${__("搜索")}"></th>`).join("")}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr><td>${this.escape(this.monthlyDetailValue(row, "attendance_month"))}</td><td>${this.escape(row.department)}</td><td><a class="apple-tree-center__name-link" href="${this.personUrl(this.personKey(row))}" data-apple-person="${this.escape(this.personKey(row))}">${this.escape(row.employee_name)}</a></td><td>${this.escape(row.employee_code)}</td><td>${this.number(row.green_apples)}</td><td>${this.number(row.red_apples)}</td><td>${this.number(row.reward_amount)}</td><td>${this.escape(row.reward_item)}</td><td>${this.escape(this.monthlyDetailValue(row, "final_status"))}</td></tr>`).join("") : `<tr><td class="apple-tree-center__empty-cell" colspan="${columns.length}">${__("没有符合列筛选条件的明细记录。")}</td></tr>`}</tbody></table></div>`;
+		return `<div class="apple-tree-center__table-wrap"><table class="table apple-tree-center__monthly-table"><thead><tr>${columns.map((column) => `<th><button class="apple-tree-center__sort" data-apple-table-sort="${column.key}">${column.label}<span>${direction(column.key)}</span></button></th>`).join("")}</tr><tr class="apple-tree-center__filter-row">${columns.map((column) => `<th><input class="form-control input-xs" data-apple-table-filter="${column.key}" value="${this.escape(this.table.filters[column.key])}" placeholder="${__("搜索")}"></th>`).join("")}</tr></thead><tbody>${visibleRows.length ? visibleRows.map((row) => `<tr><td>${this.escape(this.monthlyDetailValue(row, "attendance_month"))}</td><td>${this.escape(row.department)}</td><td><a class="apple-tree-center__name-link" href="${this.personUrl(this.personKey(row))}" data-apple-person="${this.escape(this.personKey(row))}">${this.escape(row.employee_name)}</a></td><td>${this.escape(row.employee_code)}</td><td>${this.number(row.green_apples)}</td><td>${this.number(row.red_apples)}</td><td>${this.number(row.reward_amount)}</td><td>${this.escape(row.reward_item)}</td><td>${this.escape(this.monthlyDetailValue(row, "final_status"))}</td></tr>`).join("") : `<tr><td class="apple-tree-center__empty-cell" colspan="${columns.length}">${__("没有符合列筛选条件的明细记录。")}</td></tr>`}</tbody></table></div>${this.tablePager(rows.length, page)}`;
 	}
 
 	loadPerson() {
@@ -597,7 +640,7 @@ class AppleTreeCenter {
 				this.year = String(result.attendance_month || this.year).slice(0, 4);
 				this.month = result.attendance_month || "";
 				this.resetTable();
-				await this.load();
+				await this.load(true);
 			} finally {
 				busy = false;
 				dialog.get_primary_btn().prop("disabled", false);
@@ -607,7 +650,7 @@ class AppleTreeCenter {
 	}
 
 	bind() {
-		this.wrapper.querySelector("[data-apple-refresh]")?.addEventListener("click", () => this.load());
+		this.wrapper.querySelector("[data-apple-refresh]")?.addEventListener("click", () => this.load(true));
 		this.wrapper.querySelector("[data-apple-export]")?.addEventListener("click", () => this.exportCurrentView());
 		this.wrapper.querySelector("[data-apple-history-import]")?.addEventListener("click", () => this.openHistoryImport());
 		this.wrapper.querySelectorAll("[data-apple-view]").forEach((button) => button.addEventListener("click", () => this.setView(button.dataset.appleView)));

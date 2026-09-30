@@ -112,7 +112,8 @@ def export_separation_records(
 	sheet.sheet_view.showGridLines = False
 
 	output = BytesIO()
-	workbook.save(output)
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+	save_workbook_with_logo_watermark(workbook, output, export_key="separation")
 	period = _export_period_label(start_date, end_date, year, month)
 	filename = re.sub(r'[\\/:*?"<>|]', "_", f"离职记录_{period}.xlsx")
 	frappe.local.response.filename = filename

@@ -1,6 +1,7 @@
 import json
 from collections import Counter, defaultdict
 from html import escape
+from io import BytesIO
 from zipfile import BadZipFile
 
 import frappe
@@ -8,6 +9,7 @@ from frappe import _
 
 from hrms.hr.employee_relationship_importer import (
 	RELATIONSHIP_CATEGORIES,
+	build_employee_relationship_workbook,
 	parse_employee_relationship_workbook,
 	preview_token,
 	source_pair_key,
@@ -83,6 +85,65 @@ def _employee_directory(company):
 		row["employee_code"] = text(row.get("custom_employee_code"))
 		row["department_display"] = _department_display(row.get("department"))
 	return rows
+
+
+@frappe.whitelist()
+def export_employee_relationships(company: str):
+	"""Export one company's relationships in the supplied two-sheet format."""
+	_require_relationship_permission("read")
+	company = _company(company)
+	frappe.has_permission("Employee", "read", throw=True)
+	meta = frappe.get_meta("Employee")
+	if not meta.has_field("custom_employee_code"):
+		frappe.throw(_("员工主档尚未配置公司工号字段，不能导出员工关系。"))
+	fields = ["name", "employee_name", "custom_employee_code", "department", "status", "gender", "date_of_joining"]
+	fields += [field for field in ("custom_native_place", "custom_age") if meta.has_field(field)]
+	employees = {
+		row.name: row for row in frappe.get_list(
+			"Employee", filters={"company": company}, fields=fields, limit_page_length=0
+		)
+	}
+	relationships = frappe.get_list(
+		DOCTYPENAME,
+		filters={"company": company},
+		fields=["employee_a", "employee_b", "relationship", "modified_by", "modified"],
+		order_by="name asc",
+		limit_page_length=0,
+	)
+	rows = []
+	for relationship in relationships:
+		first = employees.get(relationship.employee_a)
+		second = employees.get(relationship.employee_b)
+		if not first or not second:
+			frappe.throw(_("存在员工不属于所选公司的关系，无法安全导出。"))
+		if not first.custom_employee_code or not second.custom_employee_code:
+			frappe.throw(_("关系中的员工缺少公司工号，请先完善员工主档后导出。"))
+		if first.status != "Active" and second.status == "Active":
+			first, second = second, first
+		rows.append({
+			"source_status": "在职" if first.status == second.status == "Active" else "离职",
+			"native_place": first.get("custom_native_place"),
+			"employee_a_department": _department_display(first.department),
+			"employee_a_name": first.employee_name,
+			"employee_a_joining": first.date_of_joining,
+			"employee_a_gender": first.gender,
+			"employee_a_age": first.get("custom_age"),
+			"employee_a_code": first.custom_employee_code,
+			"employee_b_department": _department_display(second.department),
+			"employee_b_name": second.employee_name,
+			"employee_b_joining": second.date_of_joining,
+			"employee_b_gender": second.gender,
+			"employee_b_age": second.get("custom_age"),
+			"employee_b_code": second.custom_employee_code,
+			"relationship": relationship.relationship,
+			"updated_by_on": " / ".join(filter(None, (text(relationship.modified_by), text(relationship.modified)))),
+		})
+	output = BytesIO()
+	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
+	save_workbook_with_logo_watermark(build_employee_relationship_workbook(rows), output)
+	frappe.local.response.filename = "人员关系表.xlsx"
+	frappe.local.response.filecontent = output.getvalue()
+	frappe.local.response.type = "binary"
 
 
 def _source_identities(rows):

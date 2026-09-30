@@ -2063,7 +2063,7 @@ def export_organization_chart_excel(company: str | None = None):
 	_refresh_organization_export_summary(sheet, get_organization_report(payload.get("company")), copy, Alignment, Border, Font, Side)
 
 	output = BytesIO()
-	save_workbook_with_logo_watermark(book, output)
+	save_workbook_with_logo_watermark(book, output, export_key="organization_chart")
 	company_label = _get_company_label(payload.get("company")) or YONGXIN_COMPANY_NAME
 	file = save_file(f"{company_label}_组织架构图.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
