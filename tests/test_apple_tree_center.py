@@ -9,6 +9,7 @@ from io import BytesIO
 from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).parents[1] / "hrms" / "hr" / "page" / "apple_tree_center" / "apple_tree_center.py"
@@ -31,6 +32,9 @@ def apple_tree_center_module():
 		module = importlib.util.module_from_spec(spec)
 		sys.modules[spec.name] = module
 		spec.loader.exec_module(module)
+		module._original_locked_processing_month_records = module._locked_processing_month_records
+		module._available_processing_months = lambda _company: set()
+		module._locked_processing_month_records = lambda _company, _month: []
 		return module
 	finally:
 		for name, old_module in previous.items():
@@ -231,7 +235,7 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 		self.assertEqual(calls[0], {
 			"person": "001", "year": "2026", "company": "永新", "month": "2026-06", "search": "张三",
 			"start_date": "2026-06-01", "end_date": "2026-06-30",
-			"detail_start_date": "2026-06-10", "detail_end_date": "2026-06-18", "detail_search": "保养Y",
+			"detail_start_date": "2026-06-10", "detail_end_date": "2026-06-18", "detail_search": "保养Y", "detail_item": "",
 		})
 
 	def test_quarters_select_only_the_three_months_in_the_chosen_year(self):
@@ -416,3 +420,39 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 		result = center.get_data(year="2026", month="2026-06", company="永新")
 		self.assertEqual(result["summary"]["net_apples"], 6)
 		self.assertIn("不修改考勤终稿或薪资", result["notice"])
+
+	def test_locked_processing_final_is_visible_and_supersedes_history_for_its_month(self):
+		center = apple_tree_center_module()
+		center.frappe.get_list = lambda *_args, **_kwargs: []
+		center._available_processing_months = lambda _company: {"2026-09"}
+		center._available_history_months = lambda _company: {"2026-09"}
+		center._locked_processing_month_records = lambda _company, _month: [{
+			"attendance_month": "2026-09", "employee_code": "001", "employee_name": "张三",
+			"green_apples": 3, "red_apples": 1, "green_apple_amount": 15,
+			"red_apple_amount": 5, "lock_status": "已锁定",
+		}]
+		center._list_history_month_records = lambda *_args, **_kwargs: self.fail("已锁定终稿不应被历史导入覆盖")
+		result = center.get_data(year="2026", company="永新")
+		self.assertEqual(result["summary"]["green_apples"], 3)
+		self.assertEqual(result["summary"]["reward_amount"], 10)
+		self.assertEqual(result["records"][0]["reward_item"], "月度考勤终稿")
+
+	def test_reward_item_category_uses_existing_project_path(self):
+		center = apple_tree_center_module()
+		self.assertEqual(center._reward_item_category("连续课/绿苹果/保养/保养员，1人4颗"), "连续课/绿苹果/保养")
+		self.assertEqual(center._reward_item_category("手工补录，原因说明"), "手工补录")
+
+	def test_locked_processing_reader_uses_signed_preview_rows(self):
+		center = apple_tree_center_module()
+		preview_module = ModuleType("hrms.api.attendance_processing_center")
+		preview_module.get_monthly_final_preview = lambda company, month, kind: {
+			"available": True, "locked_snapshot_version": "abc", "rows": [
+				{"employee_code": "001", "green_apples": 4, "red_apples": 1},
+				{"employee_code": "", "green_apples": 9},
+			],
+		}
+		with patch.dict(sys.modules, {"hrms.api.attendance_processing_center": preview_module}):
+			rows = center._original_locked_processing_month_records("永新", "2026-09")
+		self.assertEqual(len(rows), 1)
+		self.assertEqual(rows[0]["attendance_lock_version"], "处理终稿:abc")
+		self.assertEqual(rows[0]["lock_status"], "已锁定")

@@ -73,7 +73,7 @@ if (!topNavCssVersion || topNavCssVersion < "20260903f") {
 	throw new Error("The top navigation CSS cache version must change when its desktop layout is corrected.");
 }
 
-if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260928-navbar-route-refresh-v1")) {
+if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260930-approval-center-v1")) {
 	throw new Error("The top navigation JavaScript cache version must change when route-transition behavior changes.");
 }
 

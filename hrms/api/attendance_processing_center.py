@@ -2924,6 +2924,26 @@ def _apple_tree_summary(rows: list[dict[str, Any]]) -> dict[str, int | float]:
 	return summary
 
 
+def _processing_batch_summary(batch) -> dict[str, int | float]:
+	"""Summarize the effective source batch, independently of the visible page."""
+	records = frappe.get_all(
+		PROCESSING_RECORD_DOCTYPE,
+		filters={"import_batch": batch.name},
+		fields=["processed_value_json", "proposed_value_json", "confirmed_value_json", "eligible_for_downstream"],
+		limit_page_length=0,
+	)
+	rows = [
+		{
+			"processed_value": _loads(record.get("processed_value_json"), {}),
+			"proposed_value": _loads(record.get("proposed_value_json"), {}),
+			"confirmed_value": _loads(record.get("confirmed_value_json"), None),
+			"eligible_for_downstream": bool(cint(record.get("eligible_for_downstream"))),
+		}
+		for record in records
+	]
+	return _missed_punch_summary(rows) if batch.source_type == "missing_card" else _apple_tree_summary(rows)
+
+
 def _apple_tree_result_values(row: dict[str, Any], raw: dict[str, Any] | None = None) -> dict[str, Any]:
 	"""Project current and legacy Apple-tree records into one visible layout."""
 	raw = raw or row.get("original_value") or {}
@@ -3254,7 +3274,7 @@ def _invalidate_monthly_final_after_source_change(batch, reason: str):
 		return
 	anchor_meta = _processing_meta(anchor)
 	updates = {}
-	if batch.source_type in FIRST_SIGNED_SOURCE_TYPES:
+	if batch.source_type in (*FIRST_SIGNED_SOURCE_TYPES, "special_hours"):
 		updates.update({
 			"first_signed_outputs": {},
 			"first_signed_source_data_change": {
@@ -3791,7 +3811,7 @@ def list_processing_results(
 			page_start=page_start,
 			record_filters=record_filters,
 		)
-	result_summary = _missed_punch_summary(rows) if source_type == "missing_card" else _apple_tree_summary(rows) if source_type == "apple_tree" else {}
+	result_summary = _processing_batch_summary(batch) if source_type in {"missing_card", "apple_tree"} else {}
 	table_rows = [_processing_result_table_payload(row) for row in rows]
 	return {
 		"batch": batch.name,
@@ -6849,6 +6869,7 @@ FINAL_SIGNED_COLUMNS = (
 	("personal_leave_hours", "事假"), ("sick_leave_hours", "病假"), ("annual_leave_hours", "特休"),
 	("work_injury_hours", "工伤"), ("rest_arrangement_hours", "排休"), ("absence_hours", "旷工"),
 	("clock_in_missing_count", "上班漏打卡"), ("clock_out_missing_count", "下班漏打卡"),
+	("missing_card_count", "忘打卡次数"),
 	("green_apple_amount", "绿苹果金额"), ("red_apple_amount", "红苹果金额"),
 	("housing_allowance", "住房补贴"), ("full_attendance_award", "全勤奖"),
 	("employee_signature", "员工签字"), ("review_note", "备注"),
@@ -6896,11 +6917,11 @@ def _first_signed_visible_columns(rows):
 # weekday/rest-day/holiday multiplier evidence used by both finance and payroll.
 MONTHLY_FINAL_IDENTITY_FIELDS = frozenset({"employee_code", "employee_name", "department"})
 MONTHLY_FINAL_SPECIAL_HOURS_FIELDS = frozenset({"special_workday_hours", "special_restday_hours", "special_holiday_hours"})
-MONTHLY_FINAL_SCHEDULED_FIELDS = frozenset({"deep_night_shifts"})
+MONTHLY_FINAL_READ_ONLY_FIELDS = frozenset({"deep_night_shifts", "missing_card_count"})
 MONTHLY_FINAL_WEB_EDITABLE_FIELDS = tuple(
 	field
 	for field, _label in FINAL_SIGNED_COLUMNS
-	if field not in MONTHLY_FINAL_IDENTITY_FIELDS | MONTHLY_FINAL_SPECIAL_HOURS_FIELDS | MONTHLY_FINAL_SCHEDULED_FIELDS
+	if field not in MONTHLY_FINAL_IDENTITY_FIELDS | MONTHLY_FINAL_SPECIAL_HOURS_FIELDS | MONTHLY_FINAL_READ_ONLY_FIELDS
 )
 
 # The settings table stores visible Excel headings, while field keys remain
@@ -6962,8 +6983,9 @@ SIGNED_FINAL_FIELD_LAYOUT = (
 	("proposal_bonus", "提案改善奖金", "", "人工填写"),
 	("cross_department_support", "跨部门支援奖", "", "人工填写"),
 	("maintenance_bonus", "保养奖励", "", "人工填写"),
-	("green_apple_amount", "绿\n苹\n果", "", "来源字段"),
-	("red_apple_amount", "红苹果\n（包含忘打卡）", "", "来源字段"),
+	("missing_card_count", "忘打卡次数", "", "来源字段"),
+	("green_apple_amount", "绿苹果金额\n（元）", "", "来源字段"),
+	("red_apple_amount", "红苹果金额\n（含忘打卡，元）", "", "来源字段"),
 	("housing_allowance", "住房\n补贴", "", "来源字段"),
 	("full_attendance_award", "全勤\n（含迟到）", "", "来源字段"),
 	("employee_signature", "签名", "", "人工填写"),
@@ -7039,8 +7061,9 @@ def _attendance_final_excel_config_hash() -> str:
 
 # New files use each employee's reviewed daily standard-hours total. Keep the
 # shared-standard versions identifiable so their locked previews stay unchanged.
-MONTHLY_FINAL_LAYOUT_VERSION = 15
-FIRST_SIGNED_LAYOUT_VERSION = 6
+MONTHLY_FINAL_LAYOUT_VERSION = 18
+FIRST_SIGNED_LAYOUT_VERSION = 7
+APPLE_REWARD_AMOUNT_PER_APPLE = 5
 SHARED_STANDARD_FINAL_LAYOUT_VERSIONS = frozenset({13, 14})
 SHARED_STANDARD_FIRST_SIGNED_LAYOUT_VERSIONS = frozenset({5})
 
@@ -7450,6 +7473,10 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 	"""Aggregate confirmed processing rows without recalculating their source facts."""
 	rows_by_employee = defaultdict(dict)
 	attendance_population = set()
+	# A confirmed monthly special-hours grid owns the whole month. Blank cells
+	# mean no registered hours; attendance-derived shift estimates must not fill
+	# those dates (or employees omitted from that grid) back in.
+	monthly_special_hours_source = bool(batches.get("special_hours"))
 	for source_type, batch in sorted(batches.items(), key=lambda item: item[0] != "attendance_draft"):
 		if not batch:
 			continue
@@ -7478,7 +7505,11 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 				for field, _label in ATTENDANCE_DRAFT_RESULT_COLUMNS:
 					output[field] = values.get(field, output.get(field, 0))
 				derived_special_entries = values.get("special_hours_days") or []
-				if derived_special_entries:
+				if monthly_special_hours_source:
+					for field in ("special_hours", "special_workday_hours", "special_restday_hours", "special_holiday_hours"):
+						output[field] = 0.0
+					output["special_hours_days"] = []
+				elif derived_special_entries:
 					output["special_hours_days"] = _merge_special_hours_entries([], derived_special_entries)
 					output["special_hours"] = sum(_as_number(entry.get("hours")) for entry in output["special_hours_days"])
 					output.update(_special_hours_breakdown(output["special_hours_days"], batch.attendance_month, batch.company))
@@ -7486,21 +7517,29 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 					if field in values:
 						output[field] = values.get(field)
 			elif source_type == "missing_card":
+				if values.get("included", True):
+					output["missing_card_count"] = _as_number(output.get("missing_card_count")) + 1
 				output["red_apples"] = _as_number(output.get("red_apples")) + _as_number(values.get("red_apples"))
 				if not output.get("signed_final_override"):
 					output["red_apple_amount"] = _as_number(output.get("red_apple_amount")) + _as_number(values.get("amount"))
 			elif source_type == "apple_tree":
+				# The source owns the apple count; both signed forms and payroll
+				# require its monetary value under the five-yuan-per-apple rule.
 				apple_count = _as_number(values.get("有效苹果数"))
 				if "绿" in str(values.get("苹果类型") or ""):
 					output["green_apples"] = _as_number(output.get("green_apples")) + apple_count
+					if not output.get("signed_final_override"):
+						output["green_apple_amount"] = _as_number(output.get("green_apple_amount")) + apple_count * APPLE_REWARD_AMOUNT_PER_APPLE
 				elif "红" in str(values.get("苹果类型") or ""):
 					output["red_apples"] = _as_number(output.get("red_apples")) + apple_count
+					if not output.get("signed_final_override"):
+						output["red_apple_amount"] = _as_number(output.get("red_apple_amount")) + apple_count * APPLE_REWARD_AMOUNT_PER_APPLE
 			elif source_type == "special_hours":
 				# The grid supplies a dated value for every entry.  Retain the total
 				# for audit, but pass the rate-specific values to the final calculator.
-				# A confirmed monthly entry overrides the attendance-derived value for
-				# the same date so the 17:00-18:00 rule can never be paid twice.
-				merged_entries = _merge_special_hours_entries(output.get("special_hours_days"), values.get("special_hours_days"))
+				# The whole confirmed grid replaces attendance-derived special hours,
+				# including dates left blank in the grid.
+				merged_entries = _merge_special_hours_entries([], values.get("special_hours_days"))
 				output["special_hours_days"] = merged_entries
 				output["special_hours"] = (
 					sum(_as_number(entry.get("hours")) for entry in merged_entries)
@@ -7975,7 +8014,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 		"A": 2.5, "B": 3.75, "C": 6.125, "D": 7.0, "E": 6.5, "F": 9.625, "G": 5.375, "H": 6.5, "I": 8.375, "J": 6.375, "K": 5.5, "L": 5.875, "M": 7.375, "N": 6.0,
 		"P": 6.5, "Q": 5.875, "R": 5.75, "S": 5.875, "U": 5.25, "V": 4.875, "Z": 6.125, "AA": 5.625, "AB": 6.25, "AC": 6.125,
 		"AE": 6.75, "AF": 5.375, "AH": 5.25, "AI": 6.25, "AJ": 5.75, "AK": 5.625, "AN": 6.5, "AP": 13.75, "AR": 5.625, "AS": 6.0, "AT": 6.875, "AU": 7.25, "AV": 13.75, "AW": 6.125,
-		"AX": 6.625, "AY": 5.125, "AZ": 5.125, "BA": 5.125, "BB": 6.125, "BC": 5.375, "BD": 5.125, "BE": 8.0, "BF": 5.625, "BG": 7.5, "BH": 7.375, "BI": 11.625, "BJ": 8.0, "BK": 13.75,
+		"AX": 6.625, "AY": 5.125, "AZ": 5.125, "BA": 5.125, "BB": 6.125, "BC": 5.375, "BD": 5.125, "BE": 8.0, "BF": 8.0, "BG": 8.5, "BH": 7.5, "BI": 7.375, "BJ": 11.625, "BK": 8.0, "BL": 13.75,
 	}
 	for column, width in second_signed_widths.items():
 		sheet.column_dimensions[column].width = width
@@ -7993,13 +8032,16 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 			f"=Q{excel_row}*0.5", f"=R{excel_row}", f"=S{excel_row}", f"=V{excel_row}", f"=W{excel_row}", f"=Q{excel_row}*0.5", f"=P{excel_row}", f"=X{excel_row}", f"=T{excel_row}",
 			f"=I{excel_row}+Z{excel_row}+AA{excel_row}+AC{excel_row}+AD{excel_row}+AB{excel_row}", f"=J{excel_row}+K{excel_row}", f"=L{excel_row}+M{excel_row}", f"=N{excel_row}+O{excel_row}", f"=AH{excel_row}", f"=AE{excel_row}+AG{excel_row}+AF{excel_row}", 0,
 			f"=IF(AM{excel_row}-AJ{excel_row}>0,AM{excel_row}-AJ{excel_row},0)", f"=IF(AN{excel_row}-AK{excel_row}>0,AN{excel_row}-AK{excel_row},0)", f"=AI{excel_row}+AM{excel_row}+AN{excel_row}-AP{excel_row}-AQ{excel_row}", f"=G{excel_row}-AR{excel_row}", f"=IF(AJ{excel_row}-AM{excel_row}>0,AJ{excel_row}-AM{excel_row},0)", f"=IF(AK{excel_row}-AN{excel_row}>0,AK{excel_row}-AN{excel_row},0)", f"=AI{excel_row}+AM{excel_row}+AN{excel_row}", f"=AL{excel_row}",
-			_as_number(row.get("deep_night_shifts")), _as_number(row.get("large_night_shifts")), _as_number(row.get("small_night_shifts")), absence, 0, 0, 0, _as_number(row.get("green_apple_amount")), _as_number(row.get("red_apple_amount")), _as_number(row.get("housing_allowance")), _as_number(row.get("full_attendance_award")), row.get("employee_signature") or "", row.get("review_note") or ""]
+			_as_number(row.get("deep_night_shifts")), _as_number(row.get("large_night_shifts")), _as_number(row.get("small_night_shifts")), absence, 0, 0, 0, _as_number(row.get("missing_card_count")), _as_number(row.get("green_apple_amount")), _as_number(row.get("red_apple_amount")), _as_number(row.get("housing_allowance")), _as_number(row.get("full_attendance_award")), row.get("employee_signature") or "", row.get("review_note") or ""]
 		for column, value in enumerate(values, start=form_start):
 			cell = sheet.cell(row=excel_row, column=column, value=value)
 			cell.border = border
 			cell.alignment = Alignment(horizontal="center" if column not in {3, 5, form_end - 1, form_end} else "left", vertical="center", wrap_text=True)
 			cell.font = Font(name="宋体", size=10)
-			if 7 <= column <= form_end - 2: cell.number_format = "0.0"
+			if column == 57:
+				cell.number_format = "0"
+			elif 7 <= column <= form_end - 2:
+				cell.number_format = "0.0"
 		sheet.row_dimensions[excel_row].height = 36
 
 	# The second-signature source has a fixed total line followed by the four
@@ -8013,14 +8055,14 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 		cell.border = border
 		cell.font = Font(name="宋体", size=10, bold=True)
 		cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-	for column in (10, 11, 12, 13, 34, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60):
+	for column in (10, 11, 12, 13, 34, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61):
 		letter = get_column_letter(column)
 		sheet[f"{letter}{total_row}"] = f"=SUM({letter}5:{letter}{total_row - 1})"
 	sheet[f"AH{total_row}"] = f"=T{total_row}"
 	sheet.row_dimensions[total_row].height = 36
 	footer_row = total_row + 4
 	for coordinate, value in {
-		f"R{footer_row}": "审核：", f"AS{footer_row}": "审核：", f"BA{footer_row}": "复核：", f"BH{footer_row}": "制表：李微微2026.6.11",
+		f"R{footer_row}": "审核：", f"AS{footer_row}": "审核：", f"BA{footer_row}": "复核：", f"BI{footer_row}": "制表：李微微2026.6.11",
 	}.items():
 		cell = sheet[coordinate]
 		cell.value = value
@@ -8036,7 +8078,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 	sheet.page_setup.orientation = "landscape"
 	sheet.page_margins.left = 0
 	sheet.page_margins.right = 0
-	sheet.print_area = f"A1:BK{footer_row}"
+	sheet.print_area = f"A1:BL{footer_row}"
 	output = BytesIO()
 	save_workbook_with_logo_watermark(book, output)
 	file = save_file(f"{attendance_month}_第二次员工签字版.xlsx", output.getvalue(), None, None, is_private=1)
@@ -8162,6 +8204,10 @@ def get_monthly_final_preview(company: str, attendance_month: str, kind: str = "
 	outputs = (_processing_meta(anchor).get("first_signed_outputs", {}) if kind == "first_signed" else get_locked_final_outputs(company, attendance_month))
 	if not outputs.get("locked_snapshot_version"):
 		return {"available": False, "reason": _("请先生成第一次签字版。") if kind == "first_signed" else _("请先锁定并生成月度终稿。")}
+	if kind == "first_signed" and cint(outputs.get("layout_version")) < FIRST_SIGNED_LAYOUT_VERSION:
+		return {"available": False, "stale": True, "reason": _("特殊工时汇总规则已更新，请重新生成第一次签字版。")}
+	if kind != "first_signed" and cint(outputs.get("layout_version")) < MONTHLY_FINAL_LAYOUT_VERSION:
+		return {"available": False, "stale": True, "reason": _("终稿计算规则已更新，请重新锁定并生成第二次签字版和财务版。")}
 	batches = (_first_signed_snapshot_batches(company, attendance_month) if kind == "first_signed" else _final_snapshot_batches(company, attendance_month))
 	if any(not batch for batch in batches.values()):
 		return {"available": False, "reason": _("第一次签字版来源不完整，无法提供预览。") if kind == "first_signed" else _("终稿来源不完整，无法提供预览。")}

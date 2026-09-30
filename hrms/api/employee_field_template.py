@@ -716,6 +716,49 @@ EMPLOYEE_BASIC_TEMPLATE_COLUMNS = (
 	("custom_housing_fund", "保险-公积金"),
 )
 
+# The supplied 37-column roster is still used for side-by-side personnel
+# checks. Its three historical fields remain on Employee as hidden fields;
+# exporting them does not make them editable in the current import template.
+EMPLOYEE_REFERENCE_EXPORT_COLUMNS = (
+	("custom_roster_sequence", "序号"),
+	("custom_employee_code", "工号 *"),
+	("first_name", "姓名 *"),
+	("department", "部门 *"),
+	("date_of_joining", "入职日期 *"),
+	("cell_number", "手机号码 *"),
+	("custom_id_type", "证件类型"),
+	("passport_number", "证件号码"),
+	("permanent_address", "户籍地址"),
+	("custom_native_place", "籍贯"),
+	("designation", "岗位 *"),
+	("custom_work_nature", "工作性质"),
+	("custom_direct_indirect", "直间接"),
+	("custom_ethnicity", "民族"),
+	("custom_marital_status_text", "婚姻状况"),
+	("date_of_birth", "出生年月"),
+	("custom_age", "年龄"),
+	("gender", "性别"),
+	("custom_education_category", "学历类别"),
+	("custom_study_mode", "学习形式"),
+	("custom_education_level", "学历"),
+	("custom_graduation_school", "毕业院校"),
+	("custom_major", "科系"),
+	("current_address", "当前地址"),
+	("custom_transport", "交通工具"),
+	("person_to_be_contacted", "紧急联系"),
+	("emergency_phone_number", "紧急联系人电话"),
+	("custom_probation_months", "试用期"),
+	("final_confirmation_date", "转正日期"),
+	("custom_is_confirmed", "是否转正"),
+	("custom_contract_sign_date", "合同-签订日期"),
+	("custom_contract_no", "合同-合同编号"),
+	("custom_contract_sign_count", "合同-签订次数"),
+	("contract_end_date", "合同-结束月份"),
+	("custom_social_insurance", "保险-社保"),
+	("custom_medical_insurance", "保险-医保"),
+	("custom_housing_fund", "保险-公积金"),
+)
+
 HEADER_FIELD_ALIASES = {
 	**{header.removesuffix(" *"): fieldname for fieldname, header in EMPLOYEE_BASIC_TEMPLATE_COLUMNS},
 	"员工编号": "custom_employee_code",
@@ -866,7 +909,7 @@ NON_CONFIGURABLE_FIELDNAMES = {
 
 # Frappe implementation fields are not personnel data.  The company work
 # number is the only employee identifier exposed to HR users.
-EMPLOYEE_INTERNAL_FIELDNAMES = {"naming_series", "employee_number"}
+EMPLOYEE_INTERNAL_FIELDNAMES = {"naming_series", "employee_number", "custom_roster_excluded"}
 
 DEFAULT_FIELD_CATEGORY_BY_SECTION = {
 	"basic_details_tab": "个人信息",
@@ -2601,7 +2644,7 @@ def get_hrms_access_center():
 	accounts = []
 	for user in users:
 		roles = roles_by_user.get(user.name, [])
-		access_tier = get_hrms_access_tier_for_roles(roles)
+		access_tier = "full" if user.name == "Administrator" else get_hrms_access_tier_for_roles(roles)
 		data_scopes = permissions_by_user.get(user.name, [])
 		business_scopes = _business_user_permissions(data_scopes)
 		accounts.append(
@@ -2615,7 +2658,7 @@ def get_hrms_access_center():
 				"assigned_role_labels": [role_labels.get(role, _(role)) for role in roles],
 				"access_tier": access_tier,
 				"access_tier_label": ACCESS_TIER_BY_KEY[access_tier]["label"],
-				"attendance_final_approve": int(user.name == "Administrator" or ATTENDANCE_FINAL_APPROVER_ROLE in roles),
+				"attendance_final_approve": int(user.name == "Administrator" or access_tier == "full" or ATTENDANCE_FINAL_APPROVER_ROLE in roles),
 				"role_count": len(roles),
 				"data_scope_count": len(data_scopes),
 				"data_scopes": business_scopes,
@@ -3302,6 +3345,7 @@ def get_employee_import_export_schema():
 	doc = _get_template_doc()
 	import_fields = _get_employee_import_fields(doc)
 	fields = _get_employee_export_fields(doc)
+	export_fieldnames = {field["fieldname"] for field in fields}
 	categories = []
 	for category in EMPLOYEE_TEMPLATE_CATEGORIES:
 		category_fields = [field for field in fields if field["category"] == category]
@@ -3311,6 +3355,10 @@ def get_employee_import_export_schema():
 		"fields": fields,
 		"import_fields": import_fields,
 		"export_fields": fields,
+		"basic_export_fields": [
+			fieldname for fieldname, _header in EMPLOYEE_BASIC_TEMPLATE_COLUMNS if fieldname in export_fieldnames
+		],
+		"reference_export_headers": [header for _fieldname, header in EMPLOYEE_REFERENCE_EXPORT_COLUMNS],
 		"categories": categories,
 		"multi_record_categories": MULTI_RECORD_EXPORT_CATEGORIES,
 	}
@@ -3575,6 +3623,11 @@ def _build_employee_roster_filters(filters=None):
 		"designation",
 		"company",
 		"branch",
+		"employee_name",
+		"custom_employee_code",
+		"cell_number",
+		"contract_end_date",
+		"relieving_date",
 	}
 	employee_filters = {}
 
@@ -3589,6 +3642,8 @@ def _build_employee_roster_filters(filters=None):
 		default_company = frappe.defaults.get_user_default("Company")
 		if default_company:
 			employee_filters["company"] = default_company
+	if "custom_roster_excluded" in meta_fields:
+		employee_filters["custom_roster_excluded"] = 0
 
 	return employee_filters
 
@@ -5673,7 +5728,7 @@ def _find_existing_employee_by_strategy(values, meta_fields, match_by="employee_
 	return None
 
 
-def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=None, row_overrides=None):
+def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=None, row_overrides=None, replace_blank=False, allow_sparse_required=False):
 	values = {}
 	errors = []
 	row_overrides = row_overrides if isinstance(row_overrides, dict) else {}
@@ -5688,12 +5743,19 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 			continue
 		matched_fieldnames.add(fieldname)
 		raw_value = row_overrides[fieldname] if fieldname in row_overrides else row[column_index]
+		if allow_sparse_required and fieldname in row_overrides and _is_blank_value(raw_value):
+			# Empty cells in an add/update workbook are sparse. An explicit blank
+			# entered in the comparison editor means clear this selected field.
+			values[fieldname] = None
+			continue
 		if _is_employee_import_deferred_placeholder(raw_value) and _can_defer_employee_import_field(fieldname):
 			values.setdefault("_employee_import_deferred_fields", set()).add(fieldname)
+			if replace_blank:
+				values[fieldname] = None
 			continue
 		value = _normalise_import_value(fieldname, raw_value, field)
 		excel_cell = _excel_cell_reference(row_index, column_index)
-		if _is_blank_value(raw_value) and _is_employee_import_required_field(fieldname, field):
+		if _is_blank_value(raw_value) and _is_employee_import_required_field(fieldname, field) and not allow_sparse_required:
 			errors.append(
 				_field_error(
 					row_index,
@@ -5738,7 +5800,7 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 						raw_value,
 					)
 				)
-		if value is not None:
+		if value is not None or (replace_blank and _is_blank_value(raw_value)):
 			values[fieldname] = value
 			if fieldname == "custom_education_level" and str(raw_value).strip() != str(value).strip():
 				warnings.append(_("第 {0} 行：学历“{1}”已匹配为“{2}”。").format(row_index or "", raw_value, value))
@@ -5750,6 +5812,9 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 		if fieldname in matched_fieldnames or fieldname not in fields_by_name:
 			continue
 		field = fields_by_name[fieldname]
+		if allow_sparse_required and _is_blank_value(raw_value):
+			values[fieldname] = None
+			continue
 		value = _normalise_import_value(fieldname, raw_value, field)
 		if value is not None:
 			values[fieldname] = value
@@ -5780,13 +5845,6 @@ def _apply_employee_roster_insert_defaults(values, warnings, row_index, fields_b
 	values["create_user_permission"] = 0
 	if not values.get("status"):
 		values["status"] = "Active"
-	if not values.get("date_of_birth") and fields_by_name.get("date_of_birth"):
-		values["date_of_birth"] = EMPLOYEE_FALLBACK_DATE_OF_BIRTH
-		warnings.append(
-			_("第 {0} 行：出生年月为空或无法识别，已临时使用 {1}，请后续补正。").format(
-				row_index or "", EMPLOYEE_FALLBACK_DATE_OF_BIRTH
-			)
-		)
 
 
 def _normalise_work_nature_import_value(value, is_confirmed=None):
@@ -5838,7 +5896,7 @@ def _validate_employee_import_row(
 			)
 		)
 
-	if not values.get("first_name") and "first_name" not in fields_by_name:
+	if mode != "update" and not values.get("first_name") and "first_name" not in fields_by_name:
 		name_field = fields_by_name.get("first_name") or fields_by_name.get("employee_name") or {
 			"fieldname": "first_name",
 			"field_label": _("姓名"),
@@ -5983,9 +6041,12 @@ def get_employee_import_source_balance(company: str = ""):
 			"dingtalk_duplicate_employee_codes": snapshot["duplicate_employee_codes"],
 		}
 
+	current_filters = {"company": company}
+	if frappe.get_meta(EMPLOYEE_DOCTYPE).has_field("custom_roster_excluded"):
+		current_filters["custom_roster_excluded"] = 0
 	employees = frappe.get_all(
 		EMPLOYEE_DOCTYPE,
-		filters={"company": company},
+		filters=current_filters,
 		fields=["name", "custom_employee_code", "employee_name", "status", "custom_work_nature"],
 		limit_page_length=0,
 	)
@@ -6044,7 +6105,7 @@ def get_employee_import_source_balance(company: str = ""):
 
 
 def _get_employee_roster_replace_candidates(planned_rows, company=""):
-	"""Return only same-company staff omitted from a verified full-roster import.
+	"""Return current-roster staff omitted from a verified full-roster import.
 
 	A first import contains only ``insert`` actions, so its new employee names do
 	not exist when the preview is created.  Compare both the resolved employee
@@ -6063,7 +6124,7 @@ def _get_employee_roster_replace_candidates(planned_rows, company=""):
 	}
 	current_employees = frappe.get_all(
 		EMPLOYEE_DOCTYPE,
-		filters={"company": company, "status": ["!=", "Left"]},
+		filters={"company": company, "custom_roster_excluded": 0},
 		fields=["name", "custom_employee_code"],
 		limit_page_length=0,
 	)
@@ -6111,17 +6172,92 @@ def _dedupe_import_errors(errors):
 	return deduped
 
 
+def _employee_roster_mandatory_field_errors(values, action, mode, row_index, fields_by_name, meta_fields):
+	"""Reject missing, deferred or cleared required fields before any write."""
+	deferred_fields = values.get("_employee_import_deferred_fields") or set()
+	errors = []
+	for fieldname, meta_field in meta_fields.items():
+		if not meta_field.get("reqd"):
+			continue
+		deferred = fieldname in deferred_fields
+		cleared_existing = (
+			mode in {"replace", "merge"}
+			and action == "update"
+			and fieldname in values
+			and _is_blank_value(values[fieldname])
+		)
+		missing_new = action == "insert" and fieldname != "status" and _is_blank_value(values.get(fieldname))
+		placeholder_birth_date = fieldname == "date_of_birth" and str(values.get(fieldname) or "") == EMPLOYEE_FALLBACK_DATE_OF_BIRTH
+		if not (deferred or cleared_existing or missing_new or placeholder_birth_date):
+			continue
+		field = fields_by_name.get(fieldname) or {
+			"fieldname": fieldname,
+			"field_label": meta_field.get("label") or fieldname,
+			"fieldtype": meta_field.get("fieldtype") or "Data",
+		}
+		message = _("出生日期是系统占位值") if placeholder_birth_date else (
+			_("必填字段为空") if missing_new and not deferred else _("员工档案必填项不能暂缓填写或清空")
+		)
+		errors.append(_field_error(
+			row_index, field, message,
+			_("请点击“编辑本行”填写实际内容，再重新校验；不能用“-”或系统占位日期代替。"),
+		))
+	return errors
+
+
+def _employee_roster_field_conflicts(existing, values, fields_by_name, decisions):
+	"""Compare imported fields with one employee and apply explicit merge choices."""
+	doc = frappe.get_doc(EMPLOYEE_DOCTYPE, existing)
+	if "custom_work_nature" in values:
+		# Employment status is derived by the Employee hook from work nature.
+		# Do not offer a separate choice that the save hook would overwrite.
+		values.pop("status", None)
+	has_name_pair = "first_name" in values and "employee_name" in values
+	fields = []
+	for fieldname, imported in list(values.items()):
+		if fieldname not in fields_by_name or fieldname in {"company", "custom_employee_code"}:
+			continue
+		if fieldname == "employee_name" and has_name_pair:
+			continue
+		current = doc.get("employee_name" if fieldname == "first_name" and has_name_pair else fieldname)
+		if str(current or "").strip() == str(imported or "").strip():
+			continue
+		choice = decisions.get(fieldname)
+		if choice not in {None, "existing", "import"}:
+			frappe.throw(_("字段冲突处理选项不正确：{0}").format(fieldname))
+		fields.append({
+			"fieldname": fieldname,
+			"field_label": fields_by_name[fieldname].get("field_label") or fieldname,
+			"existing_value": str(current or ""),
+			"import_value": str(imported or ""),
+			"choice": choice or "",
+		})
+		if choice == "existing":
+			values.pop(fieldname)
+			if fieldname == "first_name":
+				values.pop("employee_name", None)
+	return fields
+
+
+def _employee_roster_conflict_signature(fields):
+	return hashlib.sha256(json.dumps(
+		[(field["fieldname"], field["existing_value"], field["import_value"]) for field in fields],
+		ensure_ascii=False, sort_keys=True,
+	).encode("utf-8")).hexdigest()
+
+
 def _build_employee_roster_import_plan(
-	file_url, mode="insert", match_by="employee_code", manual_mappings=None, row_overrides=None
+	file_url, mode="insert", match_by="employee_code", manual_mappings=None, row_overrides=None,
+	field_resolutions=None, conflict_signatures=None, require_conflict_signatures=False,
 ):
 	mode = mode or "insert"
-	if mode not in {"insert", "update", "replace"}:
+	if mode not in {"insert", "update", "replace", "merge"}:
 		frappe.throw(_("导入模式不正确"))
 	if match_by not in EMPLOYEE_DUPLICATE_MATCH_FIELDS:
 		frappe.throw(_("重复员工匹配策略不正确"))
 
 	context = _apply_manual_header_mappings(_get_uploaded_roster_context(file_url), manual_mappings)
-	if mode == "update":
+	if mode in {"update", "merge"}:
 		matched_fields = {match.get("fieldname") for match in context["matches"] if match.get("fieldname")}
 		if not matched_fields.intersection(EMPLOYEE_DUPLICATE_MATCH_FIELDS[match_by]):
 			frappe.throw(_("批量修改信息至少要匹配当前选择的更新依据：{0}").format(match_by))
@@ -6137,6 +6273,10 @@ def _build_employee_roster_import_plan(
 	row_overrides = _parse_json(row_overrides, {}) or {}
 	if not isinstance(row_overrides, dict):
 		frappe.throw(_("人工校正数据格式不正确"))
+	field_resolutions = _parse_json(field_resolutions, {}) or {}
+	conflict_signatures = _parse_json(conflict_signatures, {}) or {}
+	if not isinstance(field_resolutions, dict) or not isinstance(conflict_signatures, dict):
+		frappe.throw(_("字段差异处理数据格式不正确"))
 	result = {
 		"inserted": 0,
 		"updated": 0,
@@ -6154,6 +6294,8 @@ def _build_employee_roster_import_plan(
 			len(overrides) for overrides in row_overrides.values() if isinstance(overrides, dict)
 		),
 		"source_conflicts": 0,
+		"conflicts": [],
+		"unresolved_conflicts": 0,
 		"dingtalk_snapshots": {},
 	}
 	planned_rows = []
@@ -6172,6 +6314,8 @@ def _build_employee_roster_import_plan(
 			result["warnings"],
 			row_index,
 			row_override,
+			mode == "replace",
+			mode == "merge",
 		)
 		# Resolve the company before duplicate matching and replacement preview.
 		# A blank company column means the selected/default company, never a
@@ -6182,10 +6326,13 @@ def _build_employee_roster_import_plan(
 			frappe.throw(_("请先选择导入公司；不能在公司未知时匹配员工工号。"))
 		if company not in dingtalk_snapshots:
 			dingtalk_snapshots[company] = _get_latest_dingtalk_onjob_snapshot(company)
+		action, existing = _preview_employee_action(values, meta_fields, mode, match_by)
 		row_errors = _dedupe_import_errors(
 			parse_errors
 			+ _validate_employee_import_row(
-				values, fields_by_name, meta_fields, row_index, parse_errors, mode=mode, match_by=match_by
+				values, fields_by_name, meta_fields, row_index, parse_errors,
+				mode=("update" if mode == "merge" and action == "update" else "insert" if mode == "merge" else mode),
+				match_by=match_by,
 			)
 		)
 		employee_code = str(values.get("custom_employee_code") or "").strip()
@@ -6207,7 +6354,13 @@ def _build_employee_roster_import_plan(
 			row_errors.append(source_conflict)
 			result["source_conflicts"] += 1
 		row_errors = _dedupe_import_errors(row_errors)
-		action, existing = _preview_employee_action(values, meta_fields, mode, match_by)
+		fields_with_errors = {error.get("fieldname") for error in row_errors}
+		row_errors.extend(
+			error for error in _employee_roster_mandatory_field_errors(
+				values, action, mode, row_index, fields_by_name, meta_fields
+			) if error.get("fieldname") not in fields_with_errors
+		)
+		row_errors = _dedupe_import_errors(row_errors)
 
 		if mode == "update" and action == "skip" and not row_errors:
 			row_errors.append(
@@ -6235,6 +6388,20 @@ def _build_employee_roster_import_plan(
 			continue
 		if action == "insert":
 			_apply_employee_roster_insert_defaults(values, result["warnings"], row_index, fields_by_name)
+		if mode == "merge" and action == "update":
+			decisions = field_resolutions.get(str(row_index), {})
+			if not isinstance(decisions, dict):
+				frappe.throw(_("字段差异处理数据格式不正确"))
+			conflicts = _employee_roster_field_conflicts(existing, values, fields_by_name, decisions)
+			if conflicts:
+				signature = _employee_roster_conflict_signature(conflicts)
+				if require_conflict_signatures and conflict_signatures.get(str(row_index)) != signature:
+					frappe.throw(_("第 {0} 行员工资料已变化，请重新预览并核对差异。").format(row_index))
+				result["conflicts"].append({
+					"row": row_index, "employee_code": employee_code,
+					"fields": conflicts, "signature": signature,
+				})
+				result["unresolved_conflicts"] += sum(not field["choice"] for field in conflicts)
 
 		if action == "update":
 			result["updated"] += 1
@@ -6262,56 +6429,29 @@ def _build_employee_roster_import_plan(
 		result["warnings"].append(_("确认导入时将从花名册新建部门“{0}”（{1}）；上下级与合并关系请通过组织配置设置。").format(department, company))
 
 	if mode == "replace":
+		if not planned_rows:
+			frappe.throw(_("完整花名册没有可导入的员工行，已停止覆盖。"))
 		target_companies = {row["values"].get("company") for row in planned_rows if row["values"].get("company")}
 		if len(target_companies) > 1:
 			frappe.throw(_("覆盖当前花名册一次只能处理一个公司，请按公司分别导入。"))
 		target_company = next(iter(target_companies), "")
 		replace_candidates = _get_employee_roster_replace_candidates(planned_rows, target_company)
 		candidate_codes = {
-			str(row.custom_employee_code or "").strip(): row.name
+			str(row.custom_employee_code or "").strip()
 			for row in frappe.get_all(
 				EMPLOYEE_DOCTYPE,
-				filters={"name": ["in", replace_candidates or ["__no_employee__"]]},
-				fields=["name", "custom_employee_code"],
+				filters={"name": ["in", replace_candidates or ["__no_employee__"]], "status": ["!=", "Left"]},
+				fields=["custom_employee_code"],
 				limit_page_length=0,
 			)
 		}
 		snapshot = dingtalk_snapshots.get(target_company) or _get_latest_dingtalk_onjob_snapshot(target_company)
-		protected = sorted(set(candidate_codes).intersection(snapshot.get("employee_codes", set())))
-		if replace_candidates and (
-			snapshot.get("status") != "已完成"
-			or not snapshot.get("employee_codes")
-			or snapshot.get("snapshot_row_count") != snapshot.get("records_received")
-			or snapshot.get("missing_employee_code_count")
-			or snapshot.get("duplicate_employee_codes")
-		):
-			result["source_conflicts"] += 1
-			result["failed"] += 1
-			result["errors"].append(
-				{
-					"row": "",
-					"fieldname": "custom_employee_code",
-					"field_label": _("来源冲突"),
-					"message": _("钉钉在职快照未完成、记录数不完整或工号有缺失/重复，无法确认遗漏人员是否确已离职，已阻止整表覆盖。"),
-					"suggestion": _("请先成功完成一次钉钉全量在职同步，再重新预览完整花名册。"),
-				}
-			)
-		if protected:
-			result["source_conflicts"] += len(protected)
-			result["failed"] += len(protected)
-			result["errors"].append(
-				{
-					"row": "",
-					"fieldname": "custom_employee_code",
-					"field_label": _("来源冲突"),
-					"message": _("最新钉钉在职名单仍包含 {0} 名被花名册遗漏的员工，已阻止整表覆盖：{1}").format(
-						len(protected), "、".join(protected[:20]) + ("……" if len(protected) > 20 else "")
-					),
-					"suggestion": _(
-						"先重新同步钉钉并核对这些工号；系统中不存在的离职员工请使用“批量添加员工”导入完整资料，"
-						"已存在的员工请使用“批量修改信息”，不要通过遗漏行推断离职。"
-					),
-				}
+		still_onjob = sorted(candidate_codes.intersection(snapshot.get("employee_codes", set())))
+		if still_onjob:
+			result["warnings"].append(
+				_("本次文件遗漏的 {0} 名员工仍在钉钉在职名单中；覆盖后会移出当前花名册，历史档案和在职状态保留：{1}").format(
+					len(still_onjob), "、".join(still_onjob[:20]) + ("……" if len(still_onjob) > 20 else "")
+				)
 			)
 		result["archived"] = 0 if result["failed"] else len(replace_candidates)
 
@@ -6337,12 +6477,13 @@ def preview_employee_roster_import(
 	match_by: str = "employee_code",
 	manual_mappings: str = "{}",
 	row_overrides: str = "{}",
+	field_resolutions: str = "{}",
 ):
 	require_hrms_capability("roster_import_submit")
 	result, _planned_rows, _meta_fields = _build_employee_roster_import_plan(
-		file_url, mode, match_by, manual_mappings, row_overrides
+		file_url, mode, match_by, manual_mappings, row_overrides, field_resolutions
 	)
-	result["can_import"] = not result["failed"]
+	result["can_import"] = not result["failed"] and not result["unresolved_conflicts"]
 	result["failed_rows_key"] = _store_employee_roster_failed_rows(result["failed_rows"])
 	return result
 
@@ -6354,13 +6495,18 @@ def import_employee_roster(
 	match_by: str = "employee_code",
 	manual_mappings: str = "{}",
 	row_overrides: str = "{}",
+	field_resolutions: str = "{}",
+	conflict_signatures: str = "{}",
 ):
 	require_hrms_capability("roster_import_submit")
 	preview_result, planned_rows, meta_fields = _build_employee_roster_import_plan(
-		file_url, mode, match_by, manual_mappings, row_overrides
+		file_url, mode, match_by, manual_mappings, row_overrides,
+		field_resolutions, conflict_signatures, mode == "merge",
 	)
 	if mode == "replace" and preview_result["failed"]:
 		frappe.throw(_("覆盖当前花名册前，请先修正所有错误行"))
+	if mode == "merge" and (preview_result["failed"] or preview_result["unresolved_conflicts"]):
+		frappe.throw(_("请先修正错误行并逐字段确认所有资料差异"))
 
 	result = {
 		**preview_result,
@@ -6370,6 +6516,10 @@ def import_employee_roster(
 		"archived": 0,
 		"base_records": {"性别": 0, "部门": 0, "岗位": 0, "工作性质": 0},
 	}
+	if mode == "replace":
+		frappe.db.savepoint("roster_complete_replace")
+	elif mode == "merge":
+		frappe.db.savepoint("roster_complete_merge")
 
 	for planned_row in planned_rows:
 		if planned_row["action"] == "skip":
@@ -6386,6 +6536,8 @@ def import_employee_roster(
 				for fieldname, value in values.items():
 					if fieldname in meta_fields:
 						doc.set(fieldname, value)
+				if mode in {"replace", "merge"}:
+					doc.custom_roster_excluded = 0
 				doc.save(ignore_permissions=True)
 				result["updated"] += 1
 			elif planned_row["action"] == "insert":
@@ -6394,6 +6546,8 @@ def import_employee_roster(
 				for fieldname, value in values.items():
 					if fieldname in meta_fields:
 						doc.set(fieldname, value)
+				if mode in {"replace", "merge"}:
+					doc.custom_roster_excluded = 0
 				doc.insert(ignore_permissions=True)
 				result["inserted"] += 1
 		except Exception as exc:
@@ -6410,26 +6564,24 @@ def import_employee_roster(
 			result["errors"].append(error)
 			result["failed_rows"].append(_make_failed_row(row_index, error, planned_row["row"]))
 
-	if mode == "replace" and not result["failed"]:
+	if mode in {"replace", "merge"} and result["failed"]:
+		frappe.db.rollback(save_point="roster_complete_replace" if mode == "replace" else "roster_complete_merge")
+		result["inserted"] = result["updated"] = 0
+		result["base_records"] = {"性别": 0, "部门": 0, "岗位": 0, "工作性质": 0}
+		result["warnings"].append(_("导入有失败行，已回滚本次所有写入；当前花名册未改变。"))
+	elif mode == "replace":
 		target_companies = {row["values"].get("company") for row in planned_rows if row["values"].get("company")}
-		for employee_name in _get_employee_roster_replace_candidates(planned_rows, next(iter(target_companies), "")):
-			try:
-				doc = frappe.get_doc(EMPLOYEE_DOCTYPE, employee_name)
-				doc.status = "Left"
-				doc.relieving_date = frappe.utils.today()
-				doc.save(ignore_permissions=True)
+		try:
+			for employee_name in _get_employee_roster_replace_candidates(planned_rows, next(iter(target_companies), "")):
+				frappe.db.set_value(EMPLOYEE_DOCTYPE, employee_name, "custom_roster_excluded", 1)
 				result["archived"] += 1
-			except Exception as exc:
-				frappe.log_error(frappe.get_traceback(), _("员工花名册覆盖失败"))
-				result["failed"] += 1
-				result["errors"].append(
-					{
-						"row": "",
-						"fieldname": "",
-						"field_label": _("覆盖当前花名册"),
-						"message": _("员工 {0} 标记为已离职失败：{1}").format(employee_name, exc),
-					}
-				)
+		except Exception as exc:
+			frappe.db.rollback(save_point="roster_complete_replace")
+			result["inserted"] = result["updated"] = result["archived"] = 0
+			result["base_records"] = {"性别": 0, "部门": 0, "岗位": 0, "工作性质": 0}
+			result["failed"] += 1
+			result["errors"].append({"row": "", "fieldname": "", "field_label": _("覆盖当前花名册"), "message": str(exc)})
+			result["warnings"].append(_("完整覆盖未完成，已回滚本次所有写入；当前花名册未改变。"))
 
 	frappe.db.commit()
 	result["can_import"] = not result["failed"]
@@ -6499,6 +6651,18 @@ def _get_allowed_export_fields(fields):
 	return allowed
 
 
+def _get_reference_roster_export_fields():
+	meta_fields = _get_employee_meta_field_map()
+	missing = [header for fieldname, header in EMPLOYEE_REFERENCE_EXPORT_COLUMNS if fieldname not in meta_fields]
+	if missing:
+		frappe.throw(_("对照花名册字段在当前站点不存在：{0}").format("、".join(missing)))
+	selected_fields = [fieldname for fieldname, _header in EMPLOYEE_REFERENCE_EXPORT_COLUMNS]
+	allowed_fields = {
+		fieldname: {"field_label": header} for fieldname, header in EMPLOYEE_REFERENCE_EXPORT_COLUMNS
+	}
+	return selected_fields, allowed_fields
+
+
 def _parse_selected_fields(fields, allowed_fields):
 	fields = _parse_json(fields, [])
 	if not fields:
@@ -6555,6 +6719,9 @@ def _write_sheet_rows(sheet, rows):
 	for column_index, column_cells in enumerate(sheet.columns, start=1):
 		max_width = max(len(str(cell.value or "")) for cell in column_cells)
 		sheet.column_dimensions[get_column_letter(column_index)].width = max(12, min(32, max_width + 4))
+	if rows:
+		sheet.freeze_panes = "A2"
+		sheet.auto_filter.ref = sheet.dimensions
 
 
 def _get_child_export_fields(child_doctype):
@@ -6571,6 +6738,8 @@ def _get_child_export_fields(child_doctype):
 def _format_employee_export_value(fieldname, value, department_names):
 	if fieldname == "department":
 		return _department_display_name(value, department_names)
+	if fieldname in {"status", "gender", "employment_type", "salary_mode"}:
+		return _display_option(value)
 	return value
 
 
@@ -6578,7 +6747,9 @@ def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tab
 	from openpyxl import Workbook
 	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
-	filters = filters or {}
+	filters = dict(filters or {})
+	if frappe.get_meta(EMPLOYEE_DOCTYPE).has_field("custom_roster_excluded"):
+		filters["custom_roster_excluded"] = 0
 	workbook = Workbook()
 	used_titles = set()
 	main_sheet = workbook.active
@@ -6832,15 +7003,19 @@ def download_employee_roster_export(
 	tables: str = "[]",
 	export_scope: str = "all",
 	current_filters: str = "{}",
+	export_format: str = "custom",
 ):
 	from hrms.access_control import require_hrms_capability
 	require_hrms_capability("personnel_export")
 	from frappe.desk.utils import provide_binary_file
 
-	doc = _get_template_doc()
-	template_fields = _get_employee_export_fields(doc)
-	allowed_fields = _get_allowed_export_fields(template_fields)
-	selected_fields = _parse_selected_fields(fields, allowed_fields)
+	if export_format == "reference":
+		selected_fields, allowed_fields = _get_reference_roster_export_fields()
+	else:
+		doc = _get_template_doc()
+		template_fields = _get_employee_export_fields(doc)
+		allowed_fields = _get_allowed_export_fields(template_fields)
+		selected_fields = _parse_selected_fields(fields, allowed_fields)
 	selected_tables = _parse_selected_tables(tables)
 	if not selected_fields:
 		frappe.throw(_("请至少选择一个导出字段"))

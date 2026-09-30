@@ -299,6 +299,16 @@ def get_custom_fields():
 				"insert_after": "naming_series",
 			},
 			{
+				"fieldname": "custom_roster_excluded",
+				"fieldtype": "Check",
+				"label": _("Excluded from Current Roster"),
+				"description": _("Retains the employee for historical links after a complete roster replacement."),
+				"default": "0",
+				"hidden": 1,
+				"read_only": 1,
+				"insert_after": "custom_employee_code",
+			},
+			{
 				"fieldname": "employment_type",
 				"fieldtype": "Link",
 				"ignore_user_permissions": 1,
@@ -862,6 +872,7 @@ def update_select_perm_after_install():
 
 PUBLIC_HRMS_NAVIGATION_PAGES = (
 	"hrms-workbench",
+	"approval-center",
 	"personnel-home",
 	"organizational-chart",
 	"recruitment-center",
@@ -924,6 +935,7 @@ def after_migrate():
 	ensure_personnel_sidebar_links()
 	ensure_employee_rehire_setup()
 	ensure_employee_work_nature_setup()
+	ensure_employee_roster_membership_field()
 	ensure_employee_identity_number_in_basic_information()
 	ensure_employee_material_title_field()
 	ensure_yongxin_departments_roster_assignable()
@@ -940,6 +952,13 @@ def ensure_employee_material_title_field():
 	fields = get_custom_fields().get("File", [])
 	if fields:
 		create_custom_fields({"File": fields}, ignore_validate=True)
+
+
+def ensure_employee_roster_membership_field():
+	"""Keep historical Employee links while complete imports replace the visible roster."""
+	fields = [field for field in get_custom_fields()["Employee"] if field["fieldname"] == "custom_roster_excluded"]
+	create_custom_fields({"Employee": fields}, ignore_validate=True)
+	frappe.db.sql("UPDATE `tabEmployee` SET custom_roster_excluded = 0 WHERE custom_roster_excluded IS NULL")
 
 
 def ensure_yongxin_departments_roster_assignable():

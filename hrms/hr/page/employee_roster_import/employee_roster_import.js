@@ -14,6 +14,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		import_result: null,
 		manual_mappings: {},
 		row_overrides: {},
+		field_resolutions: {},
 		file: null,
 		request_id: 0,
 		import_progress_timer: null,
@@ -73,30 +74,23 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			<div class="hrms-import-landing">
 				<div class="alert alert-info">
 					<strong>${__("员工资料日常维护链路：")}</strong>
-					${__("在职初次建档与后续入职从钉钉同步；系统内补充和修正员工资料。Excel 仅用于钉钉未覆盖的历史档案补录或经审核的批量修正。是否新增只看系统中是否已有该员工档案；所有入口统一按“公司 + 公司工号”识别员工。")}
+					${__("两个入口统一按“公司 + 公司工号”识别员工。导入前先预览，确认后才写入。")}
 					<button class="btn btn-primary btn-sm" data-action="go-dingtalk">${__("前往钉钉员工同步")}</button>
 				</div>
 				<div class="alert alert-secondary" data-source-balance>${__("正在读取钉钉与系统员工来源核对摘要...")}</div>
 				<div class="hrms-import-card">
 					<div>
-						<div class="hrms-import-card__title"><span class="orange-dot"></span>${__("完整花名册核对（高风险）")}</div>
-						<p>${__("仅用于经过审核的完整名册。表中遗漏会被视为拟离职；若与钉钉最新在职名单冲突，系统将停止覆盖，不会自动判定离职。")}</p>
+						<div class="hrms-import-card__title"><span class="orange-dot"></span>${__("完整花名册覆盖导入（高风险）")}</div>
+						<p>${__("仅用于经过审核的完整名册。本次文件决定当前花名册成员；未出现的旧员工将移出当前名册，历史档案和在职状态保留。")}</p>
 					</div>
-					<button class="btn btn-default" data-action="start-replace">${__("进入完整核对")}</button>
+					<button class="btn btn-default" data-action="start-replace">${__("覆盖当前花名册")}</button>
 				</div>
 				<div class="hrms-import-card">
 					<div>
-						<div class="hrms-import-card__title"><span class="blue-dot"></span>${__("历史档案补录（例外）")}</div>
-						<p>${__("仅用于钉钉未覆盖、且有来源依据的历史员工档案。已存在的公司工号将跳过，不会覆盖原有资料。")}</p>
+						<div class="hrms-import-card__title"><span class="blue-dot"></span>${__("添加员工及修改信息")}</div>
+						<p>${__("工号不存在时新增；工号已存在时逐字段比对，资料不一致须选择保留系统值、采用表单值或手工修改。")}</p>
 					</div>
-					<button class="btn btn-primary" data-action="start-insert">${__("导入花名册")}</button>
-				</div>
-				<div class="hrms-import-card">
-					<div>
-						<div class="hrms-import-card__title"><span class="orange-dot"></span>${__("受控批量修正（例外）")}</div>
-						<p>${__("单人修改请进入员工档案。此处只处理经审核的已有员工批量修正；找不到对应公司工号时不会新增。")}</p>
-					</div>
-					<button class="btn btn-warning" data-action="start-update">${__("去修改信息")}</button>
+					<button class="btn btn-primary" data-action="start-merge">${__("添加或修改")}</button>
 				</div>
 				<button class="btn btn-link hrms-import-records" data-action="records">${__("查看导入花名册记录")}</button>
 			</div>
@@ -128,7 +122,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			const snapshot_status = state.source_balance.snapshot?.status || "";
 			const snapshot_warning = snapshot_status !== "已完成" || missing_code || duplicate_code || state.source_balance.snapshot?.snapshot_row_count !== state.source_balance.snapshot?.records_received;
 			target.removeClass("alert-secondary alert-info alert-warning").addClass(snapshot_warning ? "alert-warning" : "alert-info");
-			target.html(`${snapshot_warning ? __("钉钉在职快照需人工核对（{0}）；", [snapshot_status || __("未知状态")]) : ""}${__("来源核对：系统当前员工未出现在钉钉 {0} 人；系统已离职但钉钉仍在职 {1} 人；钉钉在职但系统无档案 {2} 人；钉钉缺少公司工号 {3} 人；重复工号 {4} 个。", [system_only, status_conflicts, dingtalk_only, missing_code, duplicate_code])} <button class="btn btn-xs btn-default" data-action="view-source-balance">${__("查看人工核对明细")}</button>`);
+			target.html(`${snapshot_warning ? __("钉钉在职快照需人工核对（{0}）；", [snapshot_status || __("未知状态")]) : ""}${__("来源核对：系统当前员工未出现在钉钉 {0} 人；系统已离职但钉钉仍在职 {1} 人；钉钉在职但当前名册无此员工 {2} 人；钉钉缺少公司工号 {3} 人；重复工号 {4} 个。", [system_only, status_conflicts, dingtalk_only, missing_code, duplicate_code])} <button class="btn btn-xs btn-default" data-action="view-source-balance">${__("查看人工核对明细")}</button>`);
 		}).catch(() => {
 			$(page.body).find("[data-source-balance]").text(__("来源核对摘要读取失败，请稍后刷新。"));
 		});
@@ -139,7 +133,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		const groups = [
 			[__("系统当前员工未出现在钉钉"), balance.current_not_in_dingtalk || []],
 			[__("系统已离职但钉钉仍在职"), balance.left_in_dingtalk || []],
-			[__("钉钉在职但系统无档案"), balance.dingtalk_not_in_employee || []],
+			[__("钉钉在职但当前名册无此员工"), balance.dingtalk_not_in_employee || []],
 		];
 		const content = groups.map(([label, rows]) => `
 			<h5>${frappe.utils.escape_html(label)} (${rows.length})</h5>
@@ -151,8 +145,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	function render_upload() {
 		const title = {
 			replace: __("智能花名册导入-覆盖当前花名册"),
-			update: __("智能花名册导入-批量修改信息"),
-			insert: __("智能花名册导入-批量添加员工"),
+			merge: __("智能花名册导入-添加员工及修改信息"),
 		}[state.mode] || __("智能花名册导入");
 		page.set_title(title);
 		page.set_primary_action(null);
@@ -166,7 +159,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 				</div>
 				<div class="hrms-import-tips">
 					<h4>${__("温馨提示")}</h4>
-					<p>1. ${__("本入口用于钉钉未覆盖的历史补录或经审核的批量修正；日常新员工请走钉钉扫码入职，单人资料请在员工档案维护。上传后会先匹配表头，不会立即写入。")}</p>
+					<p>1. ${state.mode === "replace" ? __("此入口按完整文件覆盖当前花名册成员；旧员工档案和历史记录保留。上传后会先匹配表头并预览，不会立即写入。") : __("工号不存在时新增，已存在时比对系统值与表单值；逐项确认差异后才写入。")}</p>
 					<p>2. ${__("您可以用自有花名册导入，也可以")} <button class="btn btn-link btn-xs" data-action="download-template">${__("下载标准模板")}</button></p>
 				</div>
 				<div class="hrms-import-effects">
@@ -182,10 +175,14 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	function render_match() {
 		const headers = state.parse_result?.headers || [];
 		const fields = state.parse_result?.fields || [];
-		const missing = state.parse_result?.missing_required || [];
+		const missing = required_mapping_fields();
 		page.set_title(__("智能花名册导入-匹配表头"));
 		page.set_primary_action(__("预览导入结果"), () => {
-			state.manual_mappings = collect_manual_mappings();
+			const mappings = collect_manual_mappings();
+			if (JSON.stringify(mappings) !== JSON.stringify(state.manual_mappings)) {
+				state.field_resolutions = {};
+			}
+			state.manual_mappings = mappings;
 			const missing_required = current_missing_required();
 			if (missing_required.length) {
 				frappe.msgprint({
@@ -220,7 +217,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 						<div class="form-control-static">${__("按工号（同一公司内唯一）")}</div>
 					</div>
 					${
-						state.mode === "update"
+						state.mode === "merge"
 							? `<div class="alert alert-info"><button class="btn btn-default btn-sm" data-action="use-departure-update-fields">${__("只更新离职信息")}</button> <span class="text-muted">${__("保留工号、工作性质、离职日期和离职原因，其余列不写入员工档案。")}</span></div>`
 							: ""
 					}
@@ -286,9 +283,14 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	}
 
 	function current_missing_required() {
-		const fields = state.parse_result?.missing_required || [];
+		const fields = required_mapping_fields();
 		const selected = new Set(Object.values(collect_manual_mappings()));
 		return fields.filter((field) => !selected.has(field.fieldname));
+	}
+
+	function required_mapping_fields() {
+		const fields = state.parse_result?.missing_required || [];
+		return state.mode === "merge" ? fields.filter((field) => field.fieldname === "custom_employee_code") : fields;
 	}
 
 	function render_warnings(warnings) {
@@ -311,6 +313,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 					match_by: state.match_by,
 					manual_mappings: JSON.stringify(state.manual_mappings || {}),
 					row_overrides: JSON.stringify(state.row_overrides || {}),
+					field_resolutions: JSON.stringify(state.field_resolutions || {}),
 				},
 				freeze: true,
 				freeze_message: __("正在校验花名册..."),
@@ -328,7 +331,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		const errors = result.errors || [];
 		const warnings = result.warnings || [];
 		const is_replace = state.mode === "replace";
-		const can_write = !is_replace || !result.failed;
+		const can_write = Boolean(result.can_import);
 		page.set_title(__("智能花名册导入-预览导入结果"));
 		page.set_primary_action(can_write ? __("导入") : null, can_write ? confirm_import : null);
 		$(page.body).html(`
@@ -343,7 +346,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 					</div>
 					${
 						is_replace
-							? `<div class="alert alert-warning">${__("确认写入后，将新增 {0} 人、更新 {1} 人，并把本花名册未出现的 {2} 名当前员工标记为已离职。员工档案不会删除。", [
+							? `<div class="alert alert-warning">${__("确认写入后，将新增 {0} 人、更新 {1} 人，并把本文件未出现的 {2} 名旧员工移出当前花名册。历史档案和在职状态保留；如有任何写入失败，整次覆盖会回滚。", [
 								result.inserted || 0,
 								result.updated || 0,
 								result.archived || 0,
@@ -351,6 +354,8 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 							: ""
 					}
 					${result.manual_corrections ? `<div class="alert alert-info">${__("已应用 {0} 项本次导入的人工校正；原 Excel 文件不会被修改。", [result.manual_corrections])}</div>` : ""}
+					${state.mode === "merge" ? render_conflict_summary(result.conflicts || []) : ""}
+					${result.unresolved_conflicts ? `<div class="alert alert-warning">${__("还有 {0} 项员工资料差异未选择，请逐项核对后再导入。", [result.unresolved_conflicts])}</div>` : ""}
 					${result.source_conflicts ? `<div class="alert alert-danger">${__("发现 {0} 个钉钉与表单来源冲突，冲突行不会写入；请按公司工号人工核对在职/离职状态。", [result.source_conflicts])}</div>` : ""}
 					${Object.keys(result.dingtalk_snapshots || {}).length ? `<div class="alert alert-info">${__("本次已同时核对最新钉钉在职快照：{0}", [Object.entries(result.dingtalk_snapshots).map(([company, snapshot]) => `${company} / ${snapshot.sync_log} / ${snapshot.started_at || "-"} / ${snapshot.status} / ${snapshot.employee_count}${__("人")}`).join("；")])}</div>` : `<div class="alert alert-warning">${__("当前没有可用的钉钉在职快照；表单仍按公司工号导入，但无法自动检查跨来源在职/离职冲突。")}</div>`}
 					${result.deferred ? `<div class="alert alert-info">${__("有 {0} 项资料以“-”暂缓填写，将以空值导入，可在员工档案中后续补充。", [result.deferred])}</div>` : ""}
@@ -366,6 +371,81 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 				</div>
 			</div>
 		`);
+	}
+
+	function render_conflict_summary(rows) {
+		if (!rows.length) return "";
+		const repeated_fields = new Map();
+		for (const row of rows) {
+			for (const field of row.fields) {
+				if (Object.prototype.hasOwnProperty.call(state.row_overrides[String(row.row)] || {}, field.fieldname)) continue;
+				const group = repeated_fields.get(field.fieldname) || { label: field.field_label, count: 0 };
+				group.count++;
+				repeated_fields.set(field.fieldname, group);
+			}
+		}
+		return `<div class="hrms-import-result"><h4>${__("已有员工资料差异")}</h4>
+			<p>${__("点击每名员工查看系统现有信息和本次表单信息，逐项选择或修改。")}</p>
+			${[...repeated_fields].filter(([, group]) => group.count > 1).map(([fieldname, group]) => `<div class="alert alert-info">
+				${__("{0}：{1} 条差异。将统一替换此字段的已有选择；其他字段和手工修改不变。", [frappe.utils.escape_html(group.label), group.count])}
+				<button class="btn btn-default btn-sm" data-action="resolve-matching-conflicts" data-fieldname="${frappe.utils.escape_html(fieldname)}" data-choice="import">${__("全部采用表单值")}</button>
+				<button class="btn btn-default btn-sm" data-action="resolve-matching-conflicts" data-fieldname="${frappe.utils.escape_html(fieldname)}" data-choice="existing">${__("全部保留系统值")}</button></div>`).join("")}
+			<table class="table table-bordered"><thead><tr><th>${__("Excel 行")}</th><th>${__("公司工号")}</th><th>${__("差异项")}</th><th>${__("操作")}</th></tr></thead><tbody>
+			${rows.map((row) => `<tr><td>${frappe.utils.escape_html(row.row)}</td><td>${frappe.utils.escape_html(row.employee_code || "")}</td><td>${frappe.utils.escape_html(row.fields.length)} ${__("项，其中未处理")} ${frappe.utils.escape_html(row.fields.filter((field) => !field.choice).length)} ${__("项")}</td><td><button class="btn btn-default btn-sm" data-action="resolve-conflicts" data-row-index="${frappe.utils.escape_html(row.row)}">${__("比对并选择")}</button></td></tr>`).join("")}
+			</tbody></table></div>`;
+	}
+
+	function resolve_matching_conflicts(fieldname, choice) {
+		if (!["existing", "import"].includes(choice)) return;
+		let changed = false;
+		for (const row of state.preview_result?.conflicts || []) {
+			if (!row.fields.some((field) => field.fieldname === fieldname)) continue;
+			const row_key = String(row.row);
+			if (Object.prototype.hasOwnProperty.call(state.row_overrides[row_key] || {}, fieldname)) continue;
+			state.field_resolutions[row_key] = { ...(state.field_resolutions[row_key] || {}), [fieldname]: choice };
+			changed = true;
+		}
+		if (changed) request_preview();
+	}
+
+	function open_conflict_editor(row_index) {
+		const row = (state.preview_result?.conflicts || []).find((item) => Number(item.row) === Number(row_index));
+		if (!row) return;
+		const dialog = new frappe.ui.Dialog({
+			title: __("比对第 {0} 行员工资料（工号 {1}）", [row.row, row.employee_code]),
+			size: "extra-large",
+			fields: [{ fieldtype: "HTML", fieldname: "comparison", options: `
+				<table class="table table-bordered"><thead><tr><th>${__("字段")}</th><th>${__("系统现有信息")}</th><th>${__("新表单信息")}</th><th>${__("选择")}</th><th>${__("手工修改")}</th></tr></thead><tbody>
+				${row.fields.map((field) => `<tr data-conflict-field="${frappe.utils.escape_html(field.fieldname)}"><td>${frappe.utils.escape_html(field.field_label)}</td><td>${frappe.utils.escape_html(field.existing_value || "-")}</td><td>${frappe.utils.escape_html(field.import_value || "-")}</td><td><select class="form-control" data-conflict-choice><option value="">${__("请选择")}</option><option value="existing" ${field.choice === "existing" ? "selected" : ""}>${__("保留系统值")}</option><option value="import" ${field.choice === "import" ? "selected" : ""}>${__("采用表单值")}</option><option value="custom">${__("手工修改")}</option></select></td><td><input class="form-control" data-conflict-custom value="${frappe.utils.escape_html(field.import_value || "")}" placeholder="${__("选择手工修改后填写")}"></td></tr>`).join("")}
+				</tbody></table>` }],
+			primary_action_label: __("保存选择并重新预览"),
+			primary_action() {
+				const choices = { ...(state.field_resolutions[String(row.row)] || {}) };
+				const overrides = { ...(state.row_overrides[String(row.row)] || {}) };
+				let incomplete = false;
+				dialog.$wrapper.find("[data-conflict-field]").each(function () {
+					const fieldname = this.dataset.conflictField;
+					const choice = $(this).find("[data-conflict-choice]").val();
+					if (!choice) { incomplete = true; return; }
+					if (choice === "custom") {
+						overrides[fieldname] = $(this).find("[data-conflict-custom]").val();
+						choices[fieldname] = "import";
+					} else {
+						delete overrides[fieldname];
+						choices[fieldname] = choice;
+					}
+				});
+				if (incomplete) {
+					frappe.msgprint(__("请为每个差异字段选择处理方式。"));
+					return;
+				}
+				state.field_resolutions[String(row.row)] = choices;
+				state.row_overrides[String(row.row)] = overrides;
+				dialog.hide();
+				request_preview();
+			},
+		});
+		dialog.show();
 	}
 
 	function render_errors(errors, empty_message) {
@@ -432,8 +512,8 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			state.import_in_progress = true;
 			page.set_primary_action(null);
 			render_import_progress();
-			frappe
-				.call({
+			Promise.resolve()
+				.then(() => frappe.call({
 					method: "hrms.api.employee_field_template.import_employee_roster",
 					args: {
 						file_url: state.file.file_url,
@@ -441,10 +521,12 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 						match_by: state.match_by,
 						manual_mappings: JSON.stringify(state.manual_mappings || {}),
 						row_overrides: JSON.stringify(state.row_overrides || {}),
+						field_resolutions: JSON.stringify(state.field_resolutions || {}),
+						conflict_signatures: JSON.stringify(Object.fromEntries((state.preview_result?.conflicts || []).map((row) => [String(row.row), row.signature]))),
 					},
 					freeze: true,
 					freeze_message: __("正在导入..."),
-				})
+				}))
 				.then((r) => {
 					state.step = 4;
 					state.import_result = r.message || {};
@@ -461,13 +543,14 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		};
 
 		if (state.mode !== "replace") {
+			if (!state.preview_result?.can_import) return;
 			submit_import();
 			return;
 		}
 
 		const result = state.preview_result || {};
 		frappe.confirm(
-			__("将覆盖当前花名册：新增 {0} 人、更新 {1} 人，并将本表未出现的 {2} 名当前员工标记为已离职。员工档案不会删除，是否继续？", [
+			__("将按本次文件覆盖当前花名册：新增 {0} 人、更新 {1} 人，并将文件未出现的 {2} 名旧员工移出当前名册。历史档案和在职状态保留，是否继续？", [
 				result.inserted || 0,
 				result.updated || 0,
 				result.archived || 0,
@@ -527,7 +610,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 				fieldtype: "Data",
 				default: existing_values[error.fieldname] ?? error.current_value ?? "",
 				description: `${frappe.utils.escape_html(error.suggestion || "")}${_can_defer_field(error.fieldname) ? `<br>${__("暂不填写时可输入“-”，系统将保留为空，之后可在员工档案补充。")}` : ""}`,
-				reqd: [__("必填字段为空"), __("离职员工必须填写离职日期")].includes(error.message),
+				reqd: [__("必填字段为空"), __("离职员工必须填写离职日期"), __("出生日期是系统占位值")].includes(error.message),
 			})),
 			primary_action_label: __("保存并重新校验"),
 			primary_action(values) {
@@ -549,7 +632,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	}
 
 	function _can_defer_field(fieldname) {
-		return !["custom_employee_code", "first_name", "employee_name", "department", "date_of_joining", "designation"].includes(fieldname);
+		return !["custom_employee_code", "first_name", "employee_name", "department", "date_of_joining", "designation", "date_of_birth", "gender", "status", "company", "custom_work_nature"].includes(fieldname);
 	}
 
 	function render_result() {
@@ -567,7 +650,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 						<div><span>${__("读取行数")}</span><strong>${frappe.utils.escape_html(result.row_count || 0)}</strong></div>
 						<div><span>${__("新增员工")}</span><strong>${frappe.utils.escape_html(result.inserted || 0)}</strong></div>
 						<div><span>${__("更新员工")}</span><strong>${frappe.utils.escape_html(result.updated || 0)}</strong></div>
-						${state.mode === "replace" ? `<div><span>${__("标记已离职")}</span><strong>${frappe.utils.escape_html(result.archived || 0)}</strong></div>` : ""}
+						${state.mode === "replace" ? `<div><span>${__("移出当前名册")}</span><strong>${frappe.utils.escape_html(result.archived || 0)}</strong></div>` : ""}
 						<div><span>${__("跳过")}</span><strong>${frappe.utils.escape_html(result.skipped || 0)}</strong></div>
 						<div><span>${__("失败")}</span><strong>${frappe.utils.escape_html(result.failed || 0)}</strong></div>
 					</div>
@@ -578,7 +661,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 					${render_warnings(warnings)}
 					${
 						errors.length
-							? `<div class="alert alert-info">${__("失败行可直接点击“编辑本行”修正；无需重新上传文件。保存后会返回预览，确认导入即可补入修正后的记录，已成功新增的员工不会重复创建。")}</div>${render_errors(errors, __("导入完成，没有发现行级错误。"), true)}`
+							? `<div class="alert alert-info">${["replace", "merge"].includes(state.mode) ? __("本次导入有失败行，已回滚所有写入。可点击“编辑本行”修正后重新预览。") : __("失败行可直接点击“编辑本行”修正；无需重新上传文件。")}</div>${render_errors(errors, __("导入完成，没有发现行级错误。"), true)}`
 							: `<div class="alert alert-success">${__("导入完成，没有发现行级错误。")}</div>`
 					}
 					<div class="hrms-import-actions">
@@ -622,7 +705,8 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 					.then((r) => {
 					if (request_id !== state.request_id || state.file?.file_url !== file.file_url) return;
 					state.step = 2;
-					state.row_overrides = {};
+						state.row_overrides = {};
+						state.field_resolutions = {};
 						state.parse_result = r.message;
 						render_match();
 					});
@@ -641,6 +725,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		state.import_result = null;
 		state.manual_mappings = {};
 		state.row_overrides = {};
+		state.field_resolutions = {};
 		render_upload();
 	}
 
@@ -671,9 +756,9 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 	$(page.body).on("click", "[data-action]", function () {
 		const action = this.dataset.action;
 		if (action === "go-dingtalk") frappe.set_route("attendance-import-center", "dingtalk");
-		if (["start-insert", "start-update", "start-replace"].includes(action)) {
+		if (["start-merge", "start-replace"].includes(action)) {
 			if (!require_import_permission()) return;
-			state.mode = { "start-insert": "insert", "start-update": "update", "start-replace": "replace" }[action];
+			state.mode = { "start-merge": "merge", "start-replace": "replace" }[action];
 			state.step = 1;
 			render_upload();
 		}
@@ -692,11 +777,13 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			this.dataset.rowIndex,
 			state.step === 4 ? state.import_result : state.preview_result,
 		);
+		if (action === "resolve-conflicts") open_conflict_editor(this.dataset.rowIndex);
+		if (action === "resolve-matching-conflicts") resolve_matching_conflicts(this.dataset.fieldname, this.dataset.choice);
 		if (action === "download-preview-failed") download_failed_rows(state.preview_result);
 		if (action === "download-failed") download_failed_rows();
 		if (action === "restart") {
 			// A cached Page keeps the previous mode. Return to the landing page so
-			// the next file can explicitly be imported as an addition or an update.
+			// the next file can explicitly choose replacement or add/update.
 			state.mode = "";
 			state.step = 1;
 			state.match_by = "employee_code";
@@ -705,6 +792,7 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			state.import_result = null;
 			state.manual_mappings = {};
 			state.row_overrides = {};
+			state.field_resolutions = {};
 			state.file = null;
 			render_landing();
 		}

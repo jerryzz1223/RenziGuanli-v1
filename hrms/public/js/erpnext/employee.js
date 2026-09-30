@@ -567,14 +567,15 @@ function apply_configured_field_required(frm, field, configured_field) {
 function setup_personnel_employee_detail(frm) {
 	if (frm.is_new()) return;
 
-	// Mirrors the personnel detail concepts with native Frappe actions:
-	// 概览 / 在职信息 / 个人信息 / 联系信息 / 工资社保 / 合同信息 / 材料附件 / 背景调查 / 更多.
-	frm.page.add_inner_button(__("员工对比"), function () {
-		frappe.set_route("List", "Employee", {
-			status: frm.doc.status || "Active",
-			department: frm.doc.department || undefined,
+	// Keep the native form's related-roster action scoped to this company and department.
+	if (frm.doc.company && frm.doc.department) {
+		frm.page.add_inner_button(__("查看同部门员工"), function () {
+			frappe.set_route("List", "Employee", {
+				company: frm.doc.company,
+				department: frm.doc.department,
+			});
 		});
-	});
+	}
 
 	frm.page.add_inner_button(__("人事异动"), function () {
 		frappe.new_doc("Employee Transfer", {

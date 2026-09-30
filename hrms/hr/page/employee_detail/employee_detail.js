@@ -983,7 +983,6 @@ class EmployeeDetailPage {
 						${current_employment?.name ? `<button class="btn btn-default btn-sm" data-action="open-current-employment" data-current-employee="${frappe.utils.escape_html(current_employment.name)}">${frappe.utils.escape_html(__("查看当前任职档案"))}</button>` : ""}
 						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="upload-photo">${__("上传照片")}</button>` : ""}
 						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="edit-employee">${__("编辑资料")}</button>` : ""}
-						<button class="btn btn-default btn-sm" data-action="compare">${__("员工对比")}</button>
 						<button class="btn btn-primary btn-sm" data-action="transfer">${__("办理人事异动")}</button>
 						${this.is_probation_work_nature(header) ? `<button class="btn btn-default btn-sm" data-action="promotion">${__("转正面谈")}</button>` : ""}
 						<button class="btn btn-default btn-sm" data-action="separation">${__("离职")}</button>
@@ -1705,10 +1704,6 @@ class EmployeeDetailPage {
 		this.wrapper.querySelectorAll("[data-action='open-apple-tree-detail']").forEach((button) => {
 			button.addEventListener("click", () => frappe.set_route("apple-tree-center", "person", button.dataset.applePerson, button.dataset.appleYear));
 		});
-		const compare_button = this.wrapper.querySelector("[data-action='compare']");
-		if (compare_button) {
-			compare_button.addEventListener("click", () => frappe.show_alert(__("员工对比功能将在后续阶段接入")));
-		}
 	}
 
 	open_separation_reason_picker() {

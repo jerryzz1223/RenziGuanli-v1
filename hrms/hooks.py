@@ -28,8 +28,8 @@ add_to_apps_screen = [
 app_include_js = [
 	"hrms.bundle.js",
 	"/assets/hrms/js/hrms_capability_ui.js?v=20260928-attendance-final-approval-v1",
-	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260929-attendance-parent-return-v1",
-	"/assets/hrms/js/hrms_top_nav.js?v=20260928-navbar-route-refresh-v1",
+	"/assets/hrms/js/hrms_home_redirect_v6.js?v=20260930-approval-center-v1",
+	"/assets/hrms/js/hrms_top_nav.js?v=20260930-approval-center-v1",
 	"/assets/hrms/js/hrms_contextual_form_import.js?v=20260811b",
 	"/assets/hrms/js/hrms_file_uploader.js?v=20260912a",
 	"/assets/hrms/js/hrms_entry.js?v=20260929-mute-desk-sounds-v1",

@@ -61,6 +61,14 @@ function harness() {
  assert.equal(s.records.length, 0);
  assert.equal(h.api.get_visible_roster_table_rows(h.listview, [], s).length, 0, 'successful empty result stays empty');
 
+ const paged = harness(), pagedState = paged.api.get_roster_table_state(paged.listview);
+ paged.api.load_roster_table_records(paged.listview, pagedState);
+ paged.requests[0].callback({message: {rows: Array.from({length: 500}, (_, index) => ({name: `employee-${index}`})), total: 501}});
+ assert.equal(paged.requests.length, 2, 'roster fetches the next server page when current members exceed 500');
+ assert.equal(paged.requests[1].args.page, 2);
+ paged.requests[1].callback({message: {rows: [{name: 'employee-500'}], total: 501}});
+ assert.equal(pagedState.records.length, 501, 'all current members are available to table pagination');
+
  const counts = harness();
  counts.api.update_roster_counts(counts.listview);
  counts.api.update_roster_counts(counts.listview);

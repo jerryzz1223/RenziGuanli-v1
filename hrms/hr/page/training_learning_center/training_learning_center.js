@@ -78,47 +78,56 @@ class TrainingLearningHome {
 		return `<button class="hrms-training-home-metric" data-training-home-route="${this.escape(route)}"><span>${this.escape(label)}</span><strong>${this.escape(value || 0)}</strong><small>${this.escape(note)}</small><i>→</i></button>`;
 	}
 
-	flow(index, title, detail, route) {
-		return `<button class="hrms-training-step" data-training-home-route="${this.escape(route)}"><span>${this.escape(index)}</span><strong>${this.escape(title)}</strong><small>${this.escape(detail)}</small><i>→</i></button>`;
-	}
-
 	render(data) {
 		const metrics = data.metrics || {};
-		const risks = data.risks || [];
-		const events = data.upcoming_events || [];
+		const events = data.scheduled_events_preview || data.upcoming_events || [];
+		const departments = data.department_summary || [];
+		const planned = Number(metrics.planned_courses) || 0;
+		const implemented = Number(metrics.implemented_plans) || 0;
+		const rate = planned ? Math.round(implemented / planned * 100) : 0;
+		const attention = [
+			{ label: __("计划关联待确认"), value: metrics.review_matches, detail: __("实际课程与计划的关联需要确认"), route: "review-training-match" },
+			{ label: __("完成后结果未提交"), value: metrics.pending_results, detail: __("已完成活动尚无已提交结果"), route: "pending-training-result" },
+			{ label: __("排期已过仍待开展"), value: metrics.overdue_events, detail: __("活动日期已过，状态仍为待开展"), route: "training-event" },
+			{ label: __("需补训标记"), value: metrics.retraining_count, detail: __("已提交结果中标记需补训的人次"), route: "completed-training-event" },
+			{ label: __("复训未来30天到期"), value: metrics.retraining_due, detail: __("有复训截止日期的活动数"), route: "training-event" },
+		];
 		this.wrapper.innerHTML = `
 			<section class="hrms-training-home">
 				<header class="hrms-training-home-hero">
-					<div><p>TRAINING & LEARNING</p><h1>${__("培训学习主页")}</h1><span>${__("集中查看培训执行、待办、近期安排和闭环进度。")}</span></div>
+					<div><p>TRAINING & LEARNING</p><h1>${__("培训学习主页")}</h1><span>${this.escape(this.company() || __("当前公司"))} · ${__("全部已录入计划与活动")}</span></div>
 					<div><button class="btn btn-primary" data-training-home-route="training-program">${__("查看培训计划")}</button><button class="btn btn-default" data-training-home-refresh>${__("刷新数据")}</button></div>
 				</header>
 				<div class="hrms-training-home-metrics">
-					${this.metric(__("年度计划"), metrics.planned_courses, __("计划表中的应开课程"), "training-program")}
-					${this.metric(__("已实施计划"), metrics.implemented_plans, __("已匹配实际上课"), "training-program")}
-					${this.metric(__("待实施计划"), metrics.pending_plans, __("尚未匹配实际课程"), "training-program")}
-					${this.metric(__("临时新增"), metrics.temporary_events, __("计划外实际课程"), "training-event")}
-					${this.metric(__("已完成活动"), metrics.completed_events, __("已完成的培训场次"), "completed-training-event")}
+					${this.metric(__("计划课程"), planned, __("当前公司全部计划课程"), "annual-training-program")}
+					${this.metric(__("已实施计划"), implemented, __("有已完成活动的计划"), "implemented-training-program")}
+					${this.metric(__("待实施计划"), metrics.pending_plans, __("尚无已完成活动"), "pending-training-program")}
+					${this.metric(__("已完成活动"), metrics.completed_events, __("实际培训活动数"), "completed-training-event")}
+					${this.metric(__("名单人次"), metrics.participant_instances, __("活动名单累计，含未开展活动"), "training-event")}
 				</div>
 				<div class="hrms-training-home-grid">
-					<section class="hrms-training-panel hrms-training-flow-panel">
-						<div class="hrms-training-panel-heading"><div><p>${__("业务流程")}</p><h2>${__("培训闭环")}</h2></div><span>${__("按步骤办理")}</span></div>
-						<div class="hrms-training-flow">
-							${this.flow("01", __("培训计划"), __("上传并查看年度课程"), "training-program")}
-							${this.flow("02", __("培训活动"), __("排期、签到与授课"), "training-event")}
-							${this.flow("03", __("考核结果"), __("成绩、不合格与补训"), "training-result")}
-							${this.flow("04", __("培训反馈"), __("满意度与改进建议"), "training-feedback")}
-							${this.flow("05", __("员工技能"), __("记录与岗位资格沉淀"), "employee-skill-map")}
-						</div>
+					<section class="hrms-training-panel hrms-training-home-progress">
+						<div class="hrms-training-panel-heading"><div><p>${__("计划执行")}</p><h2>${__("计划实施进度")}</h2></div><button class="btn btn-link" data-training-home-route="training-program">${__("查看计划")}</button></div>
+						<div class="hrms-training-home-progress-number"><strong>${planned ? `${rate}%` : "—"}</strong><span>${implemented} / ${planned} ${__("项计划已实施")}</span></div>
+						<div class="hrms-training-home-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${rate}" aria-label="${__("计划实施率")}"><span style="width: ${rate}%"></span></div>
+						<div class="hrms-training-home-progress-breakdown"><button type="button" data-training-home-route="pending-training-program">${__("待实施")} <strong>${this.escape(metrics.pending_plans || 0)}</strong></button><span>${__("关联待确认")} <strong>${this.escape(metrics.review_matches || 0)}</strong></span><button type="button" data-training-home-route="temporary-training-event">${__("临时新增活动")} <strong>${this.escape(metrics.temporary_events || 0)}</strong></button></div>
+						<p class="hrms-training-home-definition">${__("实施率 = 有已完成活动的计划 ÷ 全部计划课程；临时新增活动不计入计划。")}</p>
 					</section>
-					<section class="hrms-training-panel hrms-training-risk-panel">
-						<div class="hrms-training-panel-heading"><div><p>${__("需要关注")}</p><h2>${__("培训待办")}</h2></div><button class="btn btn-link" data-training-home-route="training-result">${__("查看结果")}</button></div>
-						<div class="hrms-training-risks">${risks.map((item) => `<button class="hrms-training-risk ${this.escape(item.tone)}" data-training-home-route="${item.title === "复训临期" ? "training-event" : "training-result"}"><span>${this.escape(item.value || 0)}</span><div><strong>${this.escape(item.title)}</strong><small>${this.escape(item.detail)}</small></div><i>→</i></button>`).join("")}</div>
+					<section class="hrms-training-panel hrms-training-home-attention">
+						<div class="hrms-training-panel-heading"><div><p>${__("需要处理")}</p><h2>${__("管理关注事项")}</h2></div></div>
+						<div class="hrms-training-home-attention-list">${attention.map((item) => `<button data-training-home-route="${item.route}"><span class="${Number(item.value) > 0 ? "has-items" : ""}">${this.escape(item.value || 0)}</span><div><strong>${this.escape(item.label)}</strong><small>${this.escape(item.detail)}</small></div><i>→</i></button>`).join("")}</div>
 					</section>
 				</div>
-				<section class="hrms-training-panel hrms-training-home-events">
-					<div class="hrms-training-panel-heading"><div><p>${__("培训执行")}</p><h2>${__("近期培训活动")}</h2></div><button class="btn btn-link" data-training-home-route="training-event">${__("查看全部")}</button></div>
-					<div class="hrms-training-home-event-list">${events.length ? events.map((event) => `<button data-training-home-route="training-event"><span>${this.escape(event.start_time ? frappe.datetime.str_to_user(event.start_time) : __("待安排"))}</span><div><strong>${this.escape(event.event_name)}</strong><small>${this.escape(event.training_category || __("未分类"))} · ${this.escape(event.location || __("地点待定"))}</small></div><i>→</i></button>`).join("") : `<div class="hrms-training-empty">${__("暂无待开展的培训活动，可从培训计划开始安排。")}</div>`}</div>
-				</section>
+				<div class="hrms-training-home-grid">
+					<section class="hrms-training-panel hrms-training-home-departments">
+						<div class="hrms-training-panel-heading"><div><p>${__("部门分布")}</p><h2>${__("待实施计划最多的部门")}</h2></div><span>${__("按待实施数排序")}</span></div>
+						${departments.length ? `<div class="hrms-training-home-department-list">${departments.slice(0, 6).map((row) => `<div><strong>${this.escape(row.department)}</strong><span>${__("已实施")} ${this.escape(row.implemented)} / ${this.escape(row.planned)}</span><b>${__("待实施")} ${this.escape(row.pending)}</b></div>`).join("")}</div><p class="hrms-training-home-definition">${__("显示前 6 个部门；完整课程请查看培训计划。")}</p>` : `<div class="hrms-training-empty">${__("当前公司还没有已录入的计划课程。")}</div>`}
+					</section>
+					<section class="hrms-training-panel hrms-training-home-events">
+						<div class="hrms-training-panel-heading"><div><p>${__("培训安排")}</p><h2>${__("待开展活动排期")}</h2></div><button class="btn btn-link" data-training-home-route="training-event">${__("查看全部")}</button></div>
+						<div class="hrms-training-home-event-list">${events.length ? events.map((event) => `<button data-training-home-route="training-event"><span>${this.escape(event.start_time ? frappe.datetime.str_to_user(event.start_time) : __("待安排"))}${event.is_overdue ? ` <em>${__("已逾期")}</em>` : ""}</span><div><strong>${this.escape(event.event_name)}</strong><small>${this.escape(event.training_category || __("未分类"))} · ${this.escape(event.location || __("地点待定"))}</small></div><i>→</i></button>`).join("") : `<div class="hrms-training-empty">${__("暂无已排期的待开展活动。")}</div>`}</div>
+					</section>
+				</div>
 			</section>`;
 		this.bind();
 	}
@@ -137,7 +146,13 @@ class TrainingLearningHome {
 	destination(route) {
 		return {
 			"training-program": { view: "plans", status: "全部" },
+			"annual-training-program": { view: "plans", status: "年度计划" },
+			"implemented-training-program": { view: "plans", status: "已实施" },
+			"pending-training-program": { view: "plans", status: "待实施" },
 			"training-event": { view: "activities", status: "全部" },
+			"review-training-match": { view: "plans", status: "待确认" },
+			"pending-training-result": { view: "activities", status: "结果未提交" },
+			"temporary-training-event": { view: "activities", status: "临时新增" },
 			"completed-training-event": { view: "activities", status: "已完成" },
 			"training-result": { view: "activities", status: "已完成" },
 			"training-feedback": { view: "activities", status: "已完成" },

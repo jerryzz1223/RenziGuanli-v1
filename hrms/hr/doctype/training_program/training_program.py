@@ -252,16 +252,29 @@ def get_training_plan_management(company: str | None = None):
 		if event.training_program:
 			events_by_program[event.training_program].append(event)
 	program_by_name = {program.name: program for program in programs}
+	program_classification = {program.name: (program.source_classification or "计划") for program in programs}
+	submitted_result_events = {
+		row.training_event for row in frappe.get_all(
+			"Training Result",
+			filters={"training_event": ["in", [event.name for event in events]], "docstatus": 1},
+			fields=["training_event"], limit_page_length=0,
+		)
+	} if events else set()
 	activity_statuses = {"Completed": "已完成", "Scheduled": "待开展", "Cancelled": "已取消"}
 	activity_rows = []
 	for event in events:
 		program = program_by_name.get(event.training_program)
 		match = matches.get(event.source_import_key, {})
+		match_status = event.plan_match_status or (
+			("临时新增" if program_classification.get(event.training_program) == "临时" else "已匹配计划")
+			if event.training_program else ("待确认" if match.get("status") == "review" else "临时新增")
+		)
 		activity_rows.append(
 			{
 				"key": f"event:{event.name}", "kind": "actual",
 				"status": activity_statuses.get(event.event_status, event.event_status or "待开展"),
-				"event_status": event.event_status, "course": event.course or event.event_name,
+				"event_status": event.event_status, "plan_match_status": match_status,
+				"has_submitted_result": event.name in submitted_result_events, "course": event.course or event.event_name,
 				"department": event.source_owner_department or event.owner_department,
 				"planned_month": (program.source_planned_month or program.planned_month) if program else "",
 				"classification": "实际发生", "program": event.training_program or "", "event": event.name,
@@ -326,17 +339,8 @@ def get_training_plan_management(company: str | None = None):
 			}
 		)
 	planned = [row for row in rows if row["kind"] == "plan" and row["classification"] == "计划"]
-	program_classification = {program.name: (program.source_classification or "计划") for program in programs}
-	temporary_event_count = 0
-	review_event_count = 0
-	for event in events:
-		status = event.plan_match_status
-		if not status and event.training_program:
-			status = "临时新增" if program_classification.get(event.training_program) == "临时" else "已匹配计划"
-		elif not status:
-			status = "待确认" if matches.get(event.source_import_key, {}).get("status") == "review" else "临时新增"
-		temporary_event_count += status == "临时新增"
-		review_event_count += status == "待确认"
+	temporary_event_count = sum(row["plan_match_status"] == "临时新增" for row in activity_rows)
+	review_event_count = sum(row["plan_match_status"] == "待确认" for row in activity_rows)
 	return {
 		"metrics": {
 			"planned_courses": len(planned),
@@ -527,8 +531,9 @@ def get_training_learning_dashboard(company: str | None = None, include_plan_man
 	metrics = {
 		"total_programs": frappe.db.count("Training Program", {"company": company}),
 		"active_programs": frappe.db.count("Training Program", {"company": company, "status": "Scheduled"}),
-		"scheduled_events": frappe.db.count("Training Event", {"company": company, "event_status": "Scheduled"}),
-		"completed_events": frappe.db.count("Training Event", {"company": company, "event_status": "Completed"}),
+		"scheduled_events": frappe.db.count("Training Event", {"company": company, "event_status": "Scheduled", "docstatus": ["<", 2]}),
+		"completed_events": frappe.db.count("Training Event", {"company": company, "event_status": "Completed", "docstatus": ["<", 2]}),
+		"overdue_events": frappe.db.count("Training Event", {"company": company, "event_status": "Scheduled", "docstatus": ["<", 2], "start_time": ["<", today]}),
 		"feedback_count": frappe.db.sql(
 			"""
 				select count(feedback.name)
@@ -540,7 +545,7 @@ def get_training_learning_dashboard(company: str | None = None, include_plan_man
 		)[0][0],
 		"retraining_due": frappe.db.count(
 			"Training Event",
-			{"company": company, "retraining_due_on": ["between", [today, soon]]},
+			{"company": company, "event_status": ["!=", "Cancelled"], "docstatus": ["<", 2], "retraining_due_on": ["between", [today, soon]]},
 		),
 	}
 	attendance = _attendance_summary(company)
@@ -549,11 +554,21 @@ def get_training_learning_dashboard(company: str | None = None, include_plan_man
 
 	upcoming_events = frappe.get_all(
 		"Training Event",
-		filters={"company": company, "event_status": "Scheduled", "start_time": [">=", today]},
+		filters={"company": company, "event_status": "Scheduled", "docstatus": ["<", 2], "start_time": [">=", today]},
 		fields=["name", "event_name", "training_program", "start_time", "location", "training_category", "qualification_gate"],
 		order_by="start_time asc",
 		limit_page_length=5,
 	)
+	overdue_events = frappe.get_all(
+		"Training Event",
+		filters={"company": company, "event_status": "Scheduled", "docstatus": ["<", 2], "start_time": ["<", today]},
+		fields=["name", "event_name", "training_program", "start_time", "location", "training_category", "qualification_gate"],
+		order_by="start_time desc",
+		limit_page_length=3,
+	)
+	for event in overdue_events:
+		event["is_overdue"] = True
+	scheduled_events_preview = overdue_events + upcoming_events[:3]
 
 	risks = []
 	if metrics["retraining_due"]:
@@ -562,12 +577,37 @@ def get_training_learning_dashboard(company: str | None = None, include_plan_man
 		risks.append({"tone": "danger", "title": "补训待处理", "value": metrics["retraining_count"], "detail": "已提交结果中标记为需要补训的员工"})
 	if metrics["exception_count"]:
 		risks.append({"tone": "danger", "title": "考核异常", "value": metrics["exception_count"], "detail": "已提交结果中不合格或缺考的员工"})
-	if not risks:
-		risks.append({"tone": "success", "title": "当前无高风险待办", "value": 0, "detail": "可从培训计划开始安排下一轮培训"})
-
 	plan_management = get_training_plan_management(company)
 	metrics.update(plan_management["metrics"])
-	result = {"metrics": metrics, "upcoming_events": upcoming_events, "risks": risks}
+	metrics["participant_instances"] = sum(row["participant_count"] for row in plan_management["activity_rows"])
+	metrics["pending_results"] = sum(
+		row["event_status"] == "Completed" and not row["has_submitted_result"]
+		for row in plan_management["activity_rows"]
+	)
+	if metrics["review_matches"]:
+		risks.append({"tone": "warning", "title": "计划关联待确认", "value": metrics["review_matches"], "detail": "实际课程与计划的关联需要确认"})
+	if metrics["pending_results"]:
+		risks.append({"tone": "warning", "title": "结果未提交", "value": metrics["pending_results"], "detail": "已完成活动尚无已提交结果"})
+	if metrics["overdue_events"]:
+		risks.append({"tone": "warning", "title": "排期已过", "value": metrics["overdue_events"], "detail": "活动日期已过，状态仍为待开展"})
+	if not risks:
+		risks.append({"tone": "success", "title": "当前无待关注事项", "value": 0, "detail": "可查看培训计划与待开展活动"})
+	departments = defaultdict(lambda: {"planned": 0, "implemented": 0, "pending": 0})
+	for row in plan_management["rows"]:
+		if row["kind"] != "plan" or row["classification"] != "计划":
+			continue
+		department = row["department"] or "未指定部门"
+		departments[department]["planned"] += 1
+		departments[department]["implemented"] += row["status"] == "已实施"
+		departments[department]["pending"] += row["status"] == "待实施"
+	department_summary = [
+		{"department": name, **counts}
+		for name, counts in sorted(departments.items(), key=lambda item: (-item[1]["pending"], -item[1]["planned"], item[0]))
+	]
+	result = {
+		"metrics": metrics, "upcoming_events": upcoming_events, "scheduled_events_preview": scheduled_events_preview,
+		"risks": risks, "department_summary": department_summary,
+	}
 	if cint(include_plan_management):
 		result["plan_management"] = plan_management
 	return result

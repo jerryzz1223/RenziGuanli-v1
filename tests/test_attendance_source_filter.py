@@ -129,12 +129,31 @@ class AttendanceSourceFilterTest(TestCase):
 
     def test_default_result_request_is_bounded_and_reports_complete_count(self):
         rows = [{"eligible_for_downstream": True, "processed_value": {"苹果类型": "绿苹果", "有效苹果数": 1}} for _ in range(601)]
-        with patch.object(self.api, "_require_processing_manager"), patch.object(self.api, "_require_company", side_effect=lambda v:v), patch.object(self.api, "_require_month", side_effect=lambda v:v), patch.object(self.api, "_require_processing_source_type", side_effect=lambda v:v), patch.object(self.api, "_latest_batch", return_value=SimpleNamespace(name="batch", status="已确认", source_type="apple_tree")), patch.object(self.api, "_ensure_current_apple_tree_policy", return_value=0), patch.object(self.api, "_processing_meta", return_value={}), patch.object(self.api.frappe.db, "count", side_effect=[601, 0]), patch.object(self.api, "_result_rows", side_effect=lambda batch, limit, **kwargs: rows[kwargs.get("page_start", 0):kwargs.get("page_start", 0) + limit]):
+        stored = [{"processed_value_json": json.dumps(row["processed_value"]), "eligible_for_downstream": 1} for row in rows]
+        with patch.object(self.api, "_require_processing_manager"), patch.object(self.api, "_require_company", side_effect=lambda v:v), patch.object(self.api, "_require_month", side_effect=lambda v:v), patch.object(self.api, "_require_processing_source_type", side_effect=lambda v:v), patch.object(self.api, "_latest_batch", return_value=SimpleNamespace(name="batch", status="已确认", source_type="apple_tree")), patch.object(self.api, "_ensure_current_apple_tree_policy", return_value=0), patch.object(self.api, "_processing_meta", return_value={}), patch.object(self.api.frappe.db, "count", side_effect=[601, 0]), patch.object(self.api.frappe, "get_all", return_value=stored) as get_all, patch.object(self.api, "_result_rows", side_effect=lambda batch, limit, **kwargs: rows[kwargs.get("page_start", 0):kwargs.get("page_start", 0) + limit]):
             response = self.api.list_processing_results("永新", "2026-08", "apple_tree")
         self.assertEqual(len(response["processed_rows"]), 25)
         self.assertEqual(response["total_count"], 601)
         self.assertEqual(response["page_length"], 25)
-        self.assertEqual(response["result_summary"]["green_apples"], 25)
+        self.assertEqual(response["result_summary"]["green_apples"], 601)
+        self.assertEqual(get_all.call_args.kwargs["filters"], {"import_batch": "batch"})
+        self.assertEqual(get_all.call_args.kwargs["limit_page_length"], 0)
+
+    def test_full_batch_summary_uses_reviewed_values_and_excludes_ineligible_rows(self):
+        records = [
+            {"processed_value_json": '{"苹果类型":"绿苹果","有效苹果数":2}', "eligible_for_downstream": 1},
+            {"processed_value_json": '{"苹果类型":"红苹果","有效苹果数":8}', "confirmed_value_json": '{"有效苹果数":3}', "eligible_for_downstream": 1},
+            {"processed_value_json": '{"苹果类型":"红苹果","有效苹果数":9}', "eligible_for_downstream": 0},
+        ]
+        with patch.object(self.api.frappe, "get_all", return_value=records):
+            self.assertEqual(self.api._processing_batch_summary(self.batch), {"green_apples": 2, "red_apples": 3})
+        missed = SimpleNamespace(name="missing", source_type="missing_card")
+        records = [
+            {"processed_value_json": '{"included":true,"red_apples":1,"amount":5}', "eligible_for_downstream": 1},
+            {"processed_value_json": '{"included":true,"red_apples":1,"amount":5}', "eligible_for_downstream": 0},
+        ]
+        with patch.object(self.api.frappe, "get_all", return_value=records):
+            self.assertEqual(self.api._processing_batch_summary(missed), {"included_rows": 1, "green_apples": 0, "red_apples": 1, "amount": 5})
 
     def test_housing_allowance_errors_precede_valid_rows_across_pages(self):
         batch = SimpleNamespace(name="housing-batch", source_type="housing_allowance")

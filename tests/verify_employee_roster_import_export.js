@@ -53,6 +53,9 @@ for (const marker of [
 	"log_employee_export_record",
 	"export_scope",
 	"current_filters",
+	"basic_export_fields",
+	"EMPLOYEE_REFERENCE_EXPORT_COLUMNS",
+	"_get_reference_roster_export_fields",
 	"download_employee_import_template",
 	"MULTI_RECORD_EXPORT_TABLE_MAP",
 	"_make_employee_export_workbook",
@@ -189,10 +192,14 @@ for (const marker of [
 	"frappe.pages[\"employee-roster-import\"]",
 	"手动匹配字段",
 	"导入映射设置",
-	"批量添加员工",
-	"批量修改信息",
+	"添加员工及修改信息",
+	"比对并选择",
+	"保留系统值",
+	"采用表单值",
+	"手工修改",
 	"覆盖当前花名册",
 	"start-replace",
+	"start-merge",
 	"frappe.confirm",
 	"导入花名册",
 	"上传文件",
@@ -283,7 +290,7 @@ for (const marker of [
 	'if mode == "update":',
 	"批量修改信息至少要匹配当前选择的更新依据",
 	'and (mode != "update" or fieldname in update_match_fields)',
-	"mode=mode, match_by=match_by",
+	'mode=("update" if mode == "merge" and action == "update" else "insert" if mode == "merge" else mode)',
 ]) {
 	mustInclude(api, marker, `按工号更新时必须允许只修改选定字段：${marker}`);
 }
@@ -299,7 +306,7 @@ for (const marker of [
 for (const marker of [
 	"最新钉钉在职名单",
 	"source_conflicts",
-	"是否新增只看系统中是否已有该员工档案",
+	"工号不存在时新增",
 	"公司 + 公司工号",
 	"get_employee_import_source_balance",
 	"查看人工核对明细",
@@ -310,14 +317,14 @@ for (const marker of [
 for (const marker of [
 	"def _get_latest_dingtalk_onjob_snapshot",
 	"def _employee_roster_source_conflict",
-	"已阻止整表覆盖",
+	"历史档案和在职状态保留",
 ]) {
-	mustInclude(api, marker, `离职导入与钉钉在职快照缺少服务端保护：${marker}`);
+	mustInclude(api, marker, `导入与钉钉在职快照缺少来源核对：${marker}`);
 }
 
 for (const marker of [
-	"历史档案补录（例外）",
-	"找不到对应公司工号时不会新增",
+	"添加员工及修改信息",
+	"工号已存在时逐字段比对",
 	"未找到可更新的员工",
 ]) {
 	mustInclude(api + importJs, marker, `新增与修改必须按员工档案是否存在分流：${marker}`);
@@ -336,7 +343,10 @@ for (const obsolete of ["start-history", 'state.mode === "history"', 'mode == "h
 	}
 }
 
-mustInclude(api, 'mode not in {"insert", "update", "replace"}', "花名册只能使用新增、修改或完整覆盖模式。");
+mustInclude(api, 'mode not in {"insert", "update", "replace", "merge"}', "花名册应支持覆盖及新增/修改模式。");
+for (const marker of ['"unresolved_conflicts"', "field_resolutions:", "_employee_roster_field_conflicts", "_employee_roster_conflict_signature", "require_conflict_signatures"]) {
+	mustInclude(api + importJs, marker, `差异选择必须在预览、提交时由服务端重新校验：${marker}`);
+}
 const previewAction = api.match(/def _preview_employee_action[\s\S]*?\n\ndef /)?.[0] || "";
 for (const marker of [
 	'if mode == "insert":',
@@ -355,12 +365,13 @@ if (previewAction.includes("custom_work_nature")) {
 for (const marker of [
 	'"replace"',
 	"_get_employee_roster_replace_candidates",
-	'filters={"company": company, "status": ["!=", "Left"]}',
+	'filters={"company": company, "custom_roster_excluded": 0}',
 	"imported_employee_codes",
 	'"archived"',
-	'doc.status = "Left"',
+	'frappe.db.set_value(EMPLOYEE_DOCTYPE, employee_name, "custom_roster_excluded", 1)',
+	'frappe.db.rollback(save_point="roster_complete_replace")',
 ]) {
-	mustInclude(api, marker, `覆盖当前花名册缺少安全同步行为：${marker}`);
+	mustInclude(api, marker, `覆盖当前花名册缺少完整替换行为：${marker}`);
 }
 
 mustInclude(
@@ -384,6 +395,9 @@ for (const marker of [
 	"导出记录",
 	"保存为人事报表",
 	"排序并导出",
+	"按基础花名册选列",
+	"对照花名册格式（37 列）",
+	"export_format=${export_format}",
 	"multi_record_categories",
 	"selected_tables",
 	"data-table-name",
@@ -391,6 +405,13 @@ for (const marker of [
 ]) {
 	mustInclude(exportJs, marker, `Export page missing behavior: ${marker}`);
 }
+
+mustInclude(employeeList, 'sessionStorage.setItem("hrms_employee_roster_current_filters", JSON.stringify(filters))',
+	"花名册导出必须保存当前筛选条件。");
+mustInclude(exportJs, 'state.export_scope = "current_filters"',
+	"从花名册进入导出页时应默认使用当前筛选结果。");
+mustInclude(exportJs, 'state.selected = new Set(state.schema.basic_export_fields || [])',
+	"从花名册进入导出页时应优先选择基础花名册字段。");
 
 if (exportJs.includes('type="checkbox" disabled')) {
 	throw new Error("工作表分类 checkbox 不应禁用，必须可以选择。");

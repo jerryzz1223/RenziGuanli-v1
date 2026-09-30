@@ -50,6 +50,11 @@ def _count_in_date_range(doctype, date_field, start_date, end_date, filters=None
 	return _count(doctype, safe_filters)
 
 
+def _employee_company_filters(extra=None):
+	"""Use the same company scope as the Employee roster page."""
+	return {"company": frappe.defaults.get_user_default("Company") or "", **(extra or {})}
+
+
 def _employee_distribution(fieldname, limit=8, include_employee_names=False):
 	"""Return a permission-aware distribution of visible active employees.
 
@@ -61,7 +66,7 @@ def _employee_distribution(fieldname, limit=8, include_employee_names=False):
 	if not _has_field("Employee", fieldname):
 		return {"items": [], "total": 0, "unreported": 0, "other": 0, "members": {}}
 
-	filters = _safe_filters("Employee", {"status": "Active"})
+	filters = _safe_filters("Employee", _employee_company_filters({"status": "Active"}))
 	try:
 		rows = frappe.get_list(
 			"Employee",
@@ -764,10 +769,10 @@ def _get_home_data(include_personnel_analytics=False):
 	month_start = today.replace(day=1)
 	weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 
-	employee_total = _count("Employee")
-	active_employees = _count_with_safe_filters("Employee", {"status": "Active"})
-	left_employees = _count_with_safe_filters("Employee", {"status": "Left"})
-	inactive_employees = _count_with_safe_filters("Employee", {"status": "Inactive"})
+	employee_total = _count_with_safe_filters("Employee", _employee_company_filters())
+	active_employees = _count_with_safe_filters("Employee", _employee_company_filters({"status": "Active"}))
+	left_employees = _count_with_safe_filters("Employee", _employee_company_filters({"status": "Left"}))
+	inactive_employees = _count_with_safe_filters("Employee", _employee_company_filters({"status": "Inactive"}))
 
 	open_jobs = _count_with_safe_filters("Job Opening", {"status": "Open"})
 	today_interviews = _count_today("Interview", "scheduled_on")
@@ -780,7 +785,7 @@ def _get_home_data(include_personnel_analytics=False):
 
 	onboarding = _count_with_safe_filters("Employee Onboarding", {"boarding_status": "Pending"})
 	separation = _count_with_safe_filters("Employee Separation", {"boarding_status": "Pending"})
-	monthly_new_hires = _count_in_date_range("Employee", "date_of_joining", month_start, today)
+	monthly_new_hires = _count_in_date_range("Employee", "date_of_joining", month_start, today, _employee_company_filters())
 	analytics = {}
 	if include_personnel_analytics:
 		analytics = {
@@ -860,15 +865,15 @@ def _get_home_data(include_personnel_analytics=False):
 		"right_rail": {
 			"risk_level": "正常" if employee_total else "暂无数据",
 			"reminders": {
-				"birthdays": _count_with_safe_filters("Employee", {"date_of_birth": nowdate()}),
-				"work_anniversaries": _count_with_safe_filters("Employee", {"date_of_joining": nowdate()}),
+				"birthdays": _count_with_safe_filters("Employee", _employee_company_filters({"date_of_birth": nowdate()})),
+				"work_anniversaries": _count_with_safe_filters("Employee", _employee_company_filters({"date_of_joining": nowdate()})),
 				"contracts": 0,
 				"onboarding": onboarding,
 			},
 			"overview": {
 				"total": employee_total,
 				"active": active_employees,
-				"probation": _count_with_safe_filters("Employee", {"employment_type": "Probation"}),
+				"probation": _count_with_safe_filters("Employee", _employee_company_filters({"employment_type": "Probation"})),
 				"left": left_employees,
 				"inactive": inactive_employees,
 			},

@@ -268,7 +268,7 @@ for (const marker of [
 	"合同信息",
 	"材料附件",
 	"背景调查",
-	"员工对比",
+	"查看同部门员工",
 	"人事异动",
 	"openEmployeeFormForEdit",
 ]) {

@@ -111,6 +111,74 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(rows[0]["red_apple_amount"], 5)
 		self.assertEqual(rows[0]["special_workday_hours"], 2)
 
+	def test_second_signed_apple_amounts_follow_included_source_quantities(self):
+		api = self.api
+		batches = {
+			kind: types.SimpleNamespace(source_type=kind, company="测试公司", attendance_month="2026-08")
+			for kind in ("attendance_draft", "apple_tree", "missing_card")
+		}
+		def record(code, kind, values, included=True):
+			return {
+				"source_type": kind, "employee_code": code, "employee_name": code,
+				"eligible_for_downstream": included, "processed_value": values,
+			}
+		records = {
+			"attendance_draft": [record("E-001", "attendance_draft", {"standard_hours": 168})],
+			"apple_tree": [
+				record("E-001", "apple_tree", {"苹果类型": "绿苹果", "有效苹果数": 3}),
+				record("E-001", "apple_tree", {"苹果类型": "红苹果", "有效苹果数": 2}),
+				record("E-001", "apple_tree", {"苹果类型": "绿苹果", "有效苹果数": 99}, False),
+				record("E-002", "apple_tree", {"苹果类型": "绿苹果", "有效苹果数": 4}),
+			],
+			"missing_card": [
+				record("E-001", "missing_card", {"included": True, "red_apples": 2, "amount": 10}),
+				record("E-001", "missing_card", {"included": False, "red_apples": 2, "amount": 10}, False),
+			],
+		}
+		with patch.object(api, "_result_rows", side_effect=lambda batch, *_args, **_kwargs: records[batch.source_type]):
+			rows = api._monthly_final_rows(batches)
+		self.assertEqual(len(rows), 1)
+		self.assertEqual(rows[0]["employee_code"], "E-001")
+		self.assertEqual(rows[0]["green_apples"], 3)
+		self.assertEqual(rows[0]["red_apples"], 4)
+		self.assertEqual(rows[0]["missing_card_count"], 1)
+		self.assertEqual(rows[0]["green_apple_amount"], 15)
+		self.assertEqual(rows[0]["red_apple_amount"], 20)
+		self.assertNotIn("missing_card_count", api.MONTHLY_FINAL_WEB_EDITABLE_FIELDS)
+		self.assertIn(("missing_card_count", "忘打卡次数"), api.FINAL_SIGNED_COLUMNS)
+
+		captured = {}
+		file_manager = sys.modules["frappe.utils.file_manager"]
+		with patch.object(file_manager, "save_file", side_effect=lambda name, content, *args, **kwargs: (
+			captured.update(content=content) or types.SimpleNamespace(file_url="/private/files/second-signed.xlsx", file_name=name)
+		)):
+			api._save_monthly_signed_confirmation_file("2026-08", rows)
+		sheet = load_workbook(io.BytesIO(captured["content"]))["第二次员工签字版"]
+		self.assertEqual(sheet["BE2"].value, "忘打卡次数")
+		self.assertEqual(sheet["BE5"].value, 1)
+		self.assertEqual(sheet["BE5"].number_format, "0")
+		self.assertEqual(sheet["BF2"].value, "绿苹果金额\n（元）")
+		self.assertEqual(sheet["BG2"].value, "红苹果金额\n（含忘打卡，元）")
+		self.assertEqual(sheet["BF5"].value, 15)
+		self.assertEqual(sheet["BG5"].value, 20)
+		self.assertEqual(sheet["BE6"].value, "=SUM(BE5:BE5)")
+
+	def test_old_second_signed_output_requires_regeneration_before_preview(self):
+		api = self.api
+		with (
+			patch.object(api, "_require_processing_manager"),
+			patch.object(api, "_require_company", side_effect=lambda value: value),
+			patch.object(api, "_require_month", side_effect=lambda value: value),
+			patch.object(api, "_latest_batch", return_value=types.SimpleNamespace()),
+			patch.object(api, "get_locked_final_outputs", return_value={
+				"locked_snapshot_version": "snapshot", "layout_version": api.MONTHLY_FINAL_LAYOUT_VERSION - 1,
+			}),
+		):
+			preview = api.get_monthly_final_preview("测试公司", "2026-08", "signed")
+		self.assertFalse(preview["available"])
+		self.assertTrue(preview["stale"])
+		self.assertIn("重新锁定", preview["reason"])
+
 	def test_first_signed_remark_only_shows_monthly_late_count(self):
 		api = self.api
 		monthly_rows = [
@@ -154,6 +222,60 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 
 		self.assertEqual(rows[0]["special_hours_days"], [{"day": 1, "hours": 0.5}, {"day": 2, "hours": 2.0}])
 		self.assertEqual(rows[0]["special_workday_hours"], 2.5)
+
+	def test_confirmed_special_hours_blank_dates_and_missing_people_do_not_keep_derived_hours(self):
+		api = self.api
+		attendance = types.SimpleNamespace(
+			source_type="attendance_draft", company="测试公司", attendance_month="2026-08",
+		)
+		special = types.SimpleNamespace(
+			source_type="special_hours", company="测试公司", attendance_month="2026-08",
+		)
+		attendance_records = [
+			{"source_type": "attendance_draft", "employee_code": code, "employee_name": code,
+			 "eligible_for_downstream": True, "processed_value": {
+				 "employee_code": code, "employee_name": code,
+				 "special_workday_hours": sum(item["hours"] for item in entries),
+				 "special_hours_days": entries,
+			 }}
+			for code, entries in (
+				("E-001", [{"day": 3, "hours": 1}, {"day": 4, "hours": 1}]),
+				("E-002", [{"day": 3, "hours": 1}]),
+			)
+		]
+		special_records = [{
+			"employee_code": "E-001", "employee_name": "E-001", "eligible_for_downstream": True,
+			"processed_value": {"special_hours_days": [{"day": 3, "hours": 0.5}], "special_hours": 0.5},
+		}]
+		with (
+			patch.object(api, "_result_rows", side_effect=lambda batch, *args, **kwargs:
+				attendance_records if batch.source_type == "attendance_draft" else special_records),
+			patch.object(api, "_company_statutory_holidays", return_value=set()),
+		):
+			with_source = api._monthly_final_rows({"attendance_draft": attendance, "special_hours": special})
+			without_source = api._monthly_final_rows({"attendance_draft": attendance})
+		self.assertEqual([(row["employee_code"], row["special_workday_hours"]) for row in with_source],
+			[("E-001", 0.5), ("E-002", 0.0)])
+		self.assertEqual(with_source[0]["special_hours_days"], [{"day": 3, "hours": 0.5}])
+		self.assertEqual(with_source[1]["special_hours_days"], [])
+		self.assertEqual([(row["employee_code"], row["special_workday_hours"]) for row in without_source],
+			[("E-001", 2.0), ("E-002", 1.0)])
+
+	def test_old_first_signed_output_requires_regeneration_before_preview(self):
+		api = self.api
+		with (
+			patch.object(api, "_require_processing_manager"),
+			patch.object(api, "_require_company", side_effect=lambda value: value),
+			patch.object(api, "_require_month", side_effect=lambda value: value),
+			patch.object(api, "_latest_batch", return_value=types.SimpleNamespace()),
+			patch.object(api, "_processing_meta", return_value={"first_signed_outputs": {
+				"locked_snapshot_version": "snapshot", "layout_version": api.FIRST_SIGNED_LAYOUT_VERSION - 1,
+			}}),
+		):
+			preview = api.get_monthly_final_preview("测试公司", "2026-08", "first_signed")
+		self.assertFalse(preview["available"])
+		self.assertTrue(preview["stale"])
+		self.assertIn("重新生成", preview["reason"])
 
 	def test_workbook_matches_first_signature_layout(self):
 		api = self.api
@@ -243,7 +365,7 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 			patch.object(api, "_require_company", side_effect=lambda value: value),
 			patch.object(api, "_require_month", side_effect=lambda value: value),
 			patch.object(api, "_latest_batch", return_value=batch),
-			patch.object(api, "_processing_meta", return_value={"first_signed_outputs": {"locked_snapshot_version": "snapshot"}}),
+			patch.object(api, "_processing_meta", return_value={"first_signed_outputs": {"locked_snapshot_version": "snapshot", "layout_version": api.FIRST_SIGNED_LAYOUT_VERSION}}),
 			patch.object(api, "_first_signed_snapshot_batches", return_value={"attendance_draft": batch}),
 			patch.object(api, "_monthly_snapshot_version", return_value="snapshot"),
 			patch.object(api, "_monthly_first_signed_rows", return_value=rows),
@@ -321,14 +443,14 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(captured["name"], "2026-07_第二次员工签字版.xlsx")
 		book = load_workbook(io.BytesIO(captured["content"]), data_only=False)
 		sheet = book["第二次员工签字版"]
-		self.assertIn("D1:BJ1", {str(item) for item in sheet.merged_cells.ranges})
+		self.assertIn("D1:BK1", {str(item) for item in sheet.merged_cells.ranges})
 		self.assertIn("J2:K2", {str(item) for item in sheet.merged_cells.ranges})
 		self.assertIn("AE2:AG2", {str(item) for item in sheet.merged_cells.ranges})
 		self.assertIn("B6:H6", {str(item) for item in sheet.merged_cells.ranges})
 		self.assertEqual(sheet["D1"].value, "7月工时奖惩确认表")
 		self.assertEqual(sheet["AG3"].value, "团圆假\n工时")
-		self.assertEqual(sheet["BJ2"].value, "备注")
-		self.assertEqual(sheet["BJ5"].value, "2026-07-01迟到30分钟（半小时以内）")
+		self.assertEqual(sheet["BK2"].value, "备注")
+		self.assertEqual(sheet["BK5"].value, "2026-07-01迟到30分钟（半小时以内）")
 		self.assertEqual(sheet["X5"].value, 40)
 		self.assertEqual(sheet["AJ5"].value, "=J5+K5")
 		self.assertTrue(sheet.row_dimensions[4].hidden)
@@ -337,7 +459,7 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(sheet["R10"].value, "审核：")
 		self.assertEqual(sheet["AS10"].value, "审核：")
 		self.assertEqual(sheet["BA10"].value, "复核：")
-		self.assertEqual(sheet["BH10"].value, "制表：李微微2026.6.11")
+		self.assertEqual(sheet["BI10"].value, "制表：李微微2026.6.11")
 
 	def test_all_disabled_company_shift_rules_do_not_use_builtin_fallback(self):
 		api = self.api

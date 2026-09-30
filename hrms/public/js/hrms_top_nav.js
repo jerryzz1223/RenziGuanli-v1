@@ -157,8 +157,8 @@
 		{
 			label: "审批",
 			icon: "approval",
-			route: "/desk/workflow",
-			keys: ["workflow", "workflow-action", "expense-claim", "travel-request"],
+			route: "/desk/approval-center/pending",
+			keys: ["approval-center"],
 		},
 		{
 			label: "公告",
@@ -236,7 +236,7 @@
 		"招聘": "recruitment",
 		"考勤假期": "attendance-import-center",
 		"薪酬": "payroll-input-center",
-		"审批": "workflow",
+		"审批": "approval-center",
 		"公告": "announcement-directory",
 		"培训学习": "training-learning-center",
 		"绩效": "performance",

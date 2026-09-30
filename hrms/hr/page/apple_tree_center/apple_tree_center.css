@@ -55,6 +55,7 @@
 .apple-tree-center__person-detail-filter-fields { align-items: flex-end; display: flex; flex-wrap: wrap; gap: 8px; }
 .apple-tree-center__person-detail-filter-fields label { color: #566274; font-size: 12px; font-weight: 600; margin: 0; }
 .apple-tree-center__person-detail-filter-fields input { margin-top: 4px; min-width: 150px; }
+.apple-tree-center__item-select { margin-top: 4px; min-width: 230px; max-width: 100%; font-size: 12px; font-weight: 400; }
 .apple-tree-center__person-detail-filter-fields > span { color: #748096; padding-bottom: 8px; }
 .apple-tree-center__person-detail-search { flex: 1 1 280px; }
 .apple-tree-center__person-detail-search input { width: 100%; }

@@ -22,7 +22,7 @@ class AppleTreeCenter {
 		this.data = null;
 		this.activePerson = "";
 		this.personData = null;
-		this.personFilters = { startDate: "", endDate: "", search: "" };
+		this.personFilters = { startDate: "", endDate: "", search: "", item: "" };
 		this.personRouteFilterKey = "";
 		this.table = { page: 1, pageSize: 20, sortKey: "green_apples", sortOrder: "desc", filters: {} };
 		this.requestId = 0;
@@ -70,7 +70,7 @@ class AppleTreeCenter {
 	}
 
 	personDefaultFilters() {
-		return { startDate: this.startDate || "", endDate: this.endDate || "", search: "" };
+		return { startDate: this.startDate || "", endDate: this.endDate || "", search: "", item: "" };
 	}
 
 	personUrl(person, year = this.year) {
@@ -378,8 +378,25 @@ class AppleTreeCenter {
 			if (startDate && (!rewardDate || rewardDate < startDate)) return false;
 			if (endDate && (!rewardDate || rewardDate > endDate)) return false;
 			if (search && !Object.values(row).join(" ").toLowerCase().includes(search)) return false;
+			if (filters.item && this.rewardItemCategory(row.reward_item) !== filters.item) return false;
 			return true;
 		});
+	}
+
+	rewardItemCategory(value) {
+		const text = String(value || "").trim();
+		const parts = text.split("/").map((part) => part.trim()).filter(Boolean);
+		return parts.length >= 3 ? parts.slice(0, 3).join("/") : text.split("，", 1)[0].trim();
+	}
+
+	rewardItemOptions() {
+		const counts = new Map();
+		for (const row of this.personData?.rows || []) {
+			const category = this.rewardItemCategory(row.reward_item);
+			if (category) counts.set(category, (counts.get(category) || 0) + 1);
+		}
+		return [...counts].sort(([left], [right]) => left.localeCompare(right, "zh-Hans-CN", { numeric: true }))
+			.map(([category, count]) => `<option value="${this.escape(category)}" ${this.personFilters.item === category ? "selected" : ""}>${this.escape(category)}（${count}）</option>`).join("");
 	}
 
 	sortPersonRows(rows, columns) {
@@ -424,7 +441,7 @@ class AppleTreeCenter {
 			const active = sort.field === column.field;
 			const arrow = active ? (sort.direction === "asc" ? "↑" : "↓") : "↕";
 			const next = active && sort.direction === "asc" ? "降序" : "升序";
-			return `<th class="${cellClass(column)}" aria-sort="${active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}"><button class="apple-tree-center__sort ${active ? "is-sorted" : ""}" data-person-sort="${column.field}" aria-label="${this.escape(column.label)}：点击${next}排序"><span>${this.escape(column.label)}</span><span aria-hidden="true">${arrow}</span></button></th>`;
+			return `<th class="${cellClass(column)}" aria-sort="${active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}"><button class="apple-tree-center__sort ${active ? "is-sorted" : ""}" data-person-sort="${column.field}" aria-label="${this.escape(column.label)}：点击${next}排序"><span>${this.escape(column.label)}</span><span aria-hidden="true">${arrow}</span></button>${column.field === "reward_item" ? `<select class="form-control apple-tree-center__item-select" data-person-detail-item aria-label="按奖惩项目筛选"><option value="">全部项目</option>${this.rewardItemOptions()}</select>` : ""}</th>`;
 		}).join("");
 		const body = rows.length ? rows.map((row) => `<tr>${columns.map((column) => `<td class="${cellClass(column)}">${this.detailValue(this.personCellText(row, column), column.numeric)}</td>`).join("")}</tr>`).join("") : `<tr><td class="apple-tree-center__empty-cell" colspan="${columns.length}">没有符合明细筛选条件的记录。</td></tr>`;
 		const total = columns.map((column, index) => {
@@ -441,7 +458,7 @@ class AppleTreeCenter {
 		if (this.month) inherited.push(`统计期间：${this.month}`);
 		if (this.startDate && this.endDate) inherited.push(`${this.startDate} 至 ${this.endDate}`);
 		if (this.search) inherited.push(`统计关键词：${this.search}`);
-		return `<div class="apple-tree-center__person-detail-filters"><div class="apple-tree-center__person-detail-filter-fields"><label>明细开始日期<input type="date" class="form-control" data-person-detail-start-date value="${this.escape(filters.startDate)}"></label><span>至</span><label>明细结束日期<input type="date" class="form-control" data-person-detail-end-date value="${this.escape(filters.endDate)}"></label><label class="apple-tree-center__person-detail-search">明细关键词<input class="form-control" data-person-detail-search value="${this.escape(filters.search)}" placeholder="奖/惩项目、备注、创建人"></label><button class="btn btn-default" data-person-detail-apply>筛选</button>${filters.startDate || filters.endDate || filters.search ? `<button class="btn btn-link" data-person-detail-clear>清除</button>` : ""}</div><p>已继承统计页条件：${this.escape(inherited.length ? inherited.join("；") : "全年全部条件")}；明细筛选只会在此范围内继续缩小结果。</p></div>`;
+		return `<div class="apple-tree-center__person-detail-filters"><div class="apple-tree-center__person-detail-filter-fields"><label>明细开始日期<input type="date" class="form-control" data-person-detail-start-date value="${this.escape(filters.startDate)}"></label><span>至</span><label>明细结束日期<input type="date" class="form-control" data-person-detail-end-date value="${this.escape(filters.endDate)}"></label><label class="apple-tree-center__person-detail-search">明细关键词<input class="form-control" data-person-detail-search value="${this.escape(filters.search)}" placeholder="奖/惩项目、备注、创建人"></label><button class="btn btn-default" data-person-detail-apply>筛选</button>${filters.startDate || filters.endDate || filters.search || filters.item ? `<button class="btn btn-link" data-person-detail-clear>清除</button>` : ""}</div><p>点击“奖/惩项目”列下的选项，可按已有记录的前三层路径归类筛选；已继承统计页条件：${this.escape(inherited.length ? inherited.join("；") : "全年全部条件")}。</p></div>`;
 	}
 
 	renderPerson() {
@@ -465,8 +482,14 @@ class AppleTreeCenter {
 			const endDate = this.wrapper.querySelector("[data-person-detail-end-date]")?.value || "";
 			if ((startDate && !endDate) || (!startDate && endDate)) return frappe.msgprint("明细开始日期和结束日期需要同时填写。");
 			if (startDate && endDate && startDate > endDate) return frappe.msgprint("明细开始日期不能晚于结束日期。");
-			this.personFilters = { startDate, endDate, search: this.wrapper.querySelector("[data-person-detail-search]")?.value.trim() || "" };
+			this.personFilters = { startDate, endDate, search: this.wrapper.querySelector("[data-person-detail-search]")?.value.trim() || "", item: this.wrapper.querySelector("[data-person-detail-item]")?.value || "" };
 			this.renderPerson();
+		});
+		this.wrapper.querySelector("[data-person-detail-item]")?.addEventListener("change", (event) => {
+			this.personFilters.item = event.target.value;
+			const scrollLeft = this.wrapper.querySelector(".apple-tree-center__person-scroll")?.scrollLeft || 0;
+			this.renderPerson();
+			this.wrapper.querySelector(".apple-tree-center__person-scroll").scrollLeft = scrollLeft;
 		});
 		this.wrapper.querySelector("[data-person-detail-clear]")?.addEventListener("click", () => { this.personFilters = this.personDefaultFilters(); this.renderPerson(); });
 		this.wrapper.querySelectorAll("[data-person-sort]").forEach((button) => button.addEventListener("click", () => {
@@ -499,6 +522,7 @@ class AppleTreeCenter {
 			detail_start_date: this.view === "person" ? this.personFilters.startDate : "",
 			detail_end_date: this.view === "person" ? this.personFilters.endDate : "",
 			detail_search: this.view === "person" ? this.personFilters.search : "",
+			detail_item: this.view === "person" ? this.personFilters.item : "",
 			sort_key: sort.field || "",
 			sort_order: sort.direction || "desc",
 		});

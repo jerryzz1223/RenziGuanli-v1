@@ -1,0 +1,13 @@
+.hrms-approval-center { padding: 18px 12px; max-width: 1400px; }
+.hrms-approval-center__top { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.hrms-approval-center__top h2 { margin: 0 0 6px; font-size: 22px; }
+.hrms-approval-center__top p { color: #6b7280; margin: 0; }
+.hrms-approval-center__tabs { display: flex; gap: 24px; border-bottom: 1px solid #e5e7eb; margin: 22px 0 18px; }
+.hrms-approval-center__tabs a { padding: 10px 3px; color: #475569; text-decoration: none; }
+.hrms-approval-center__tabs a.active { color: #1d4f91; border-bottom: 2px solid #1d4f91; font-weight: 600; }
+.hrms-approval-center__summary { color: #475569; margin-bottom: 12px; }
+.hrms-approval-center th { white-space: nowrap; }
+.hrms-approval-center td { vertical-align: middle !important; }
+.hrms-approval-center td:first-child { min-width: 260px; }
+.hrms-approval-center__empty, .hrms-approval-center__state { padding: 48px 16px !important; text-align: center; }
+.hrms-approval-center__more { text-align: center; padding: 12px 0 24px; }

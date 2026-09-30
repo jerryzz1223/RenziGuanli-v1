@@ -7,12 +7,14 @@ import json
 import re
 from calendar import monthrange
 from collections import OrderedDict
+from contextlib import nullcontext
 from datetime import date
 
 import frappe
 from frappe import _
 from frappe.utils import now_datetime
 from frappe.utils.background_jobs import MAX_QUEUED_JOBS, get_queue, get_queue_list, get_running_jobs_in_queue
+from hrms.payroll.standing_pay import legacy_migration
 
 
 # Only company-owned input and transaction data belongs here. Company,
@@ -104,7 +106,7 @@ DATA_CLEANUP_MODULES = OrderedDict(
 				"label": "钉钉同步业务数据",
 				"description": "原始同步记录、同步日志与员工映射（不删除钉钉密钥设置）",
 				"risk": "medium",
-				"doctypes": ("HRMS DingTalk Raw Record", "HRMS DingTalk Sync Log", "HRMS DingTalk User Map"),
+				"doctypes": ("HRMS DingTalk Employee Import", "HRMS DingTalk Raw Record", "HRMS DingTalk Sync Log", "HRMS DingTalk User Map"),
 			},
 		),
 		(
@@ -114,10 +116,14 @@ DATA_CLEANUP_MODULES = OrderedDict(
 				"description": "员工主档与跨部门支援能力持续有效，不按月份删除",
 				"risk": "critical",
 				"requires": ("attendance", "payroll", "form_intake", "personnel_changes", "dingtalk"),
-				"doctypes": ("Cross Department Support Capability", "Employee"),
+				"doctypes": ("HRMS Employee Relationship", "Employee Skill Map", "Cross Department Support Capability", "Employee"),
 			},
 		),
 	)
+)
+
+ROSTER_CLEANUP_MODULES = (
+	"attendance", "payroll", "form_intake", "personnel_changes", "dingtalk", "employees",
 )
 
 # These company-scoped operational DocTypes have no deletion hooks and are not
@@ -151,6 +157,8 @@ BULK_CLEANUP_DOCTYPES = frozenset(
 		"HRMS Business Process Record",
 		"HRMS Form Import Batch",
 		"Cross Department Support Capability",
+		"Training Result Employee",
+		"Training Event Employee",
 	}
 )
 
@@ -182,6 +190,8 @@ CLEANUP_RECORD_LABELS = {
 	"HRMS Employee Salary Change": "员工调薪记录",
 	"HRMS Payroll Variable Import Batch": "薪资变动项导入批次",
 	"HRMS Form Import Row": "表单导入明细",
+	"Training Result Employee": "培训结果关联员工",
+	"Training Event Employee": "培训活动关联员工",
 	"HRMS Business Process Record": "表单生成的业务记录",
 	"HRMS Form Import Batch": "表单导入批次",
 	"Employee Promotion": "员工晋升",
@@ -197,7 +207,11 @@ CLEANUP_RECORD_LABELS = {
 	"HRMS DingTalk Raw Record": "钉钉原始同步记录",
 	"HRMS DingTalk Sync Log": "钉钉同步日志",
 	"HRMS DingTalk User Map": "钉钉员工映射",
+	"HRMS DingTalk Employee Import": "钉钉员工导入审批",
+	"HRMS Employee Relationship": "员工关系",
+	"Employee Skill Map": "员工技能档案",
 	"Cross Department Support Capability": "跨部门支援能力",
+	"File": "关联附件",
 	"Employee": "员工主档",
 }
 
@@ -469,6 +483,232 @@ def _plan_token(company, module_keys, records, cleanup_month=""):
 	return hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 
+def _attached_file_names(records):
+	"""Collect files attached to planned bulk-deleted documents."""
+	if not frappe.db.exists("DocType", "File"):
+		return []
+	files = []
+	for doctype, names in records.items():
+		if doctype not in BULK_CLEANUP_DOCTYPES or not names:
+			continue
+		files.extend(frappe.get_all(
+			"File",
+			filters={"attached_to_doctype": doctype, "attached_to_name": ["in", names]},
+			pluck="name",
+			limit_page_length=0,
+		))
+	return list(dict.fromkeys(files))
+
+
+def _submitted_personnel_warnings(records):
+	"""Show submitted documents that will be cancelled before deletion."""
+	warnings = []
+	for doctype in ("Employee Promotion", "Employee Transfer", "Employee Separation"):
+		names = records.get(doctype, [])
+		if not names:
+			continue
+		count = frappe.db.count(doctype, {"name": ["in", names], "docstatus": 1})
+		if count:
+			warnings.append({
+				"doctype": doctype,
+				"label": _(CLEANUP_RECORD_LABELS.get(doctype, doctype)),
+				"count": count,
+			})
+	return warnings
+
+
+def _prepare_promotion_employee_for_cleanup(company, promotion):
+	"""Apply the existing legacy education mapping before normal cancellation."""
+	if frappe.db.get_value("Employee", promotion.employee, "company") != company:
+		frappe.throw(_("晋升单关联的员工不属于当前公司，已停止清空。"))
+	if frappe.db.get_value("Employee", promotion.employee, "custom_education_level") == "初中及以下":
+		frappe.db.set_value(
+			"Employee", promotion.employee, "custom_education_level", "初中", update_modified=False
+		)
+
+
+def _roster_cleanup_plan(company):
+	"""Include every company Employee, even one previously hidden from the roster."""
+	all_records = _records_by_module(company, set(ROSTER_CLEANUP_MODULES))
+	records = _selected_records(all_records, ROSTER_CLEANUP_MODULES)
+	for child_doctype in ("Training Result Employee", "Training Event Employee"):
+		if frappe.db.exists("DocType", child_doctype):
+			# Training parents can be shared. Remove only this company's child
+			# employee links and retain other participants' records.
+			records[child_doctype] = frappe.get_all(
+				child_doctype,
+				filters={"employee": ["in", records.get("Employee") or [""]]},
+				pluck="name", limit_page_length=0,
+			)
+			records.move_to_end(child_doctype, last=False)
+	files = _attached_file_names(records)
+	if files:
+		# Attach fields on import batches still point at these files. Remove the
+		# owning records first so File.on_trash can pass its normal link check.
+		records["File"] = files
+	return records, _submitted_personnel_warnings(records), _employee_link_blockers(company, records)
+
+
+@frappe.whitelist()
+def preview_company_roster_cleanup(company: str):
+	"""Preview permanent removal of company employees and their managed data."""
+	_require_system_manager()
+	company = _require_company(company)
+	records, warnings, linked_blockers = _roster_cleanup_plan(company)
+	return {
+		"company": company,
+		"count": sum(len(names) for names in records.values()),
+		"employee_count": len(records.get("Employee", [])),
+		"records": [
+			{"doctype": doctype, "label": _(CLEANUP_RECORD_LABELS.get(doctype, doctype)), "count": len(names)}
+			for doctype, names in records.items() if names
+		],
+		"blockers": [],
+		"warnings": warnings,
+		"linked_blockers": linked_blockers,
+		"confirmation_text": f"清空 {company} 全部员工及关联数据",
+		"plan_token": _plan_token(company, ROSTER_CLEANUP_MODULES, records),
+	}
+
+
+@frappe.whitelist()
+def execute_company_roster_cleanup(company: str, confirm: str = "", plan_token: str = ""):
+	"""Delete the previewed company roster and managed links atomically."""
+	_require_system_manager()
+	company = _require_company(company)
+	records, _warnings, linked_blockers = _roster_cleanup_plan(company)
+	expected_token = _plan_token(company, ROSTER_CLEANUP_MODULES, records)
+	if not plan_token or plan_token != expected_token:
+		frappe.throw(_("花名册已变化，请重新预览后再清空。"))
+	if confirm != f"清空 {company} 全部员工及关联数据":
+		frappe.throw(_("确认文本不匹配，未清空花名册。"))
+	if linked_blockers:
+		frappe.throw(_("仍有未纳入清理范围的员工关联记录，请先处理后重新预览。"))
+	deleted = OrderedDict()
+	savepoint = "hrms_company_roster_cleanup"
+	frappe.db.savepoint(savepoint)
+	previous_in_test = frappe.in_test
+	frappe.in_test = True
+	try:
+		for doctype, names in records.items():
+			if doctype in BULK_CLEANUP_DOCTYPES:
+				deleted[doctype] = _bulk_delete_cleanup_docs(doctype, names)
+				continue
+			deleted[doctype] = 0
+			# Approved payroll decisions prohibit ordinary deletion. The admin-only
+			# full-roster purge uses their existing migration escape hatch only for
+			# these two DocTypes, after a bound preview and transaction savepoint.
+			payroll_decision = doctype in {"HRMS Employee Salary Change", "HRMS Employee Contribution Change"}
+			with legacy_migration() if payroll_decision else nullcontext():
+				for name in names:
+					if doctype == "File" and not frappe.db.exists("File", name):
+						continue
+					doc = frappe.get_doc(doctype, name)
+					doc.flags.ignore_permissions = True
+					if doc.docstatus == 1:
+						if doctype == "Employee Promotion":
+							_prepare_promotion_employee_for_cleanup(company, doc)
+						doc.cancel()
+					frappe.delete_doc(doctype, name, ignore_permissions=True, delete_permanently=True)
+					deleted[doctype] += 1
+		if frappe.db.count("Employee", {"company": company}):
+			frappe.throw(_("员工主档仍有残留，已回滚本次清空。"))
+		if frappe.db.exists("DocType", "HRMS Data Cleanup Log"):
+			frappe.get_doc({
+				"doctype": "HRMS Data Cleanup Log",
+				"company_code": company,
+				"company_display_name": frappe.db.get_value("Company", company, "company_name") or company,
+				"modules": _("全部员工主档及关联业务数据清空"),
+				"record_count": sum(deleted.values()),
+				"executed_by": frappe.session.user,
+				"executed_at": now_datetime(),
+				"plan_token": expected_token,
+				"deleted_json": json.dumps(deleted, ensure_ascii=False),
+			}).insert(ignore_permissions=True)
+	except Exception:
+		frappe.db.rollback(save_point=savepoint)
+		raise
+	finally:
+		frappe.in_test = previous_in_test
+	return {
+		"company": company,
+		"count": sum(deleted.values()),
+		"employee_count": deleted.get("Employee", 0),
+		"deleted": deleted,
+		"message": _("{0}：已删除 {1} 名员工主档及 {2} 条关联业务数据。").format(
+			company, deleted.get("Employee", 0), sum(deleted.values()) - deleted.get("Employee", 0)
+		),
+	}
+
+
+@frappe.whitelist()
+def preview_all_employee_roster_cleanup():
+	"""Preview one reset of every company's Employee records and managed links."""
+	_require_system_manager()
+	companies = [row[0] for row in frappe.db.sql(
+		"SELECT DISTINCT company FROM tabEmployee WHERE company IS NOT NULL AND company != '' ORDER BY company",
+		as_list=True,
+	)]
+	company_previews = [preview_company_roster_cleanup(company) for company in companies]
+	counts = OrderedDict()
+	warnings = []
+	blockers = []
+	linked_blockers = []
+	for preview in company_previews:
+		for record in preview["records"]:
+			key = record["doctype"]
+			counts.setdefault(key, {"doctype": key, "label": record["label"], "count": 0})["count"] += record["count"]
+		for source, target in (("warnings", warnings), ("blockers", blockers), ("linked_blockers", linked_blockers)):
+			target.extend({**item, "label": f'{preview["company"]} · {item.get("label") or item.get("doctype")}'} for item in preview[source])
+	token_payload = [(preview["company"], preview["plan_token"]) for preview in company_previews]
+	return {
+		"company": _("全部公司"),
+		"companies": company_previews,
+		"count": sum(preview["count"] for preview in company_previews),
+		"employee_count": sum(preview["employee_count"] for preview in company_previews),
+		"records": list(counts.values()),
+		"warnings": warnings,
+		"blockers": blockers,
+		"linked_blockers": linked_blockers,
+		"confirmation_text": "清空全部员工及关联数据",
+		"plan_token": hashlib.sha256(json.dumps(token_payload, ensure_ascii=False).encode()).hexdigest(),
+	}
+
+
+@frappe.whitelist()
+def execute_all_employee_roster_cleanup(confirm: str = "", plan_token: str = ""):
+	"""Apply the all-company preview in one database transaction."""
+	_require_system_manager()
+	preview = preview_all_employee_roster_cleanup()
+	if confirm != preview["confirmation_text"]:
+		frappe.throw(_("确认文本不匹配，未清空花名册。"))
+	if not plan_token or plan_token != preview["plan_token"]:
+		frappe.throw(_("花名册已变化，请重新预览后再清空。"))
+	if preview["blockers"] or preview["linked_blockers"]:
+		frappe.throw(_("仍有未纳入清理范围的员工关联记录，请先处理后重新预览。"))
+	if not preview["employee_count"]:
+		return {"employee_count": 0, "count": 0, "message": _("全部员工主档已为空。")}
+	frappe.db.savepoint("hrms_all_employee_roster_cleanup")
+	try:
+		results = [execute_company_roster_cleanup(
+			item["company"], item["confirmation_text"], item["plan_token"]
+		) for item in preview["companies"]]
+		if frappe.db.count("Employee"):
+			frappe.throw(_("仍有员工主档残留，已回滚本次清空。"))
+	except Exception:
+		frappe.db.rollback(save_point="hrms_all_employee_roster_cleanup")
+		raise
+	return {
+		"employee_count": sum(item["employee_count"] for item in results),
+		"count": sum(item["count"] for item in results),
+		"companies": [item["company"] for item in results],
+		"message": _("已清空全部 {0} 名员工主档及 {1} 条关联业务数据。").format(
+			sum(item["employee_count"] for item in results),
+			sum(item["count"] - item["employee_count"] for item in results),
+		),
+	}
+
+
 def _employee_cleanup_blockers(all_records, module_keys):
 	if "employees" not in module_keys:
 		return []
@@ -563,9 +803,19 @@ def _employee_link_blockers(company, planned_records):
 			continue
 		seen.add(identity)
 		meta = frappe.get_meta(doctype)
-		if meta.istable or not meta.has_field(fieldname):
+		if not meta.has_field(fieldname):
 			continue
-		count = frappe.db.count(doctype, {fieldname: ["in", employees]})
+		if meta.istable:
+			linked_rows = frappe.get_all(
+				doctype, filters={fieldname: ["in", employees]},
+				fields=["name", "parent", "parenttype"], limit_page_length=0,
+			)
+			count = sum(
+				row.parent not in planned_records.get(row.parenttype, [])
+				for row in linked_rows
+			)
+		else:
+			count = frappe.db.count(doctype, {fieldname: ["in", employees]})
 		if count:
 			blockers.append(
 				{

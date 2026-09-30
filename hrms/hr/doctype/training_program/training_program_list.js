@@ -603,7 +603,11 @@
 			const people = [row.convener, row.target].join(" ").toLowerCase();
 			return (!query || haystack.includes(query))
 				&& (!person || people.includes(person))
-				&& (planTableState.status === "全部" || row.status === planTableState.status)
+				&& (planTableState.status === "全部"
+					|| (planTableState.status === "年度计划" && row.kind === "plan" && row.classification === "计划")
+					|| (planTableState.view === "activities" && planTableState.status === "临时新增" && row.plan_match_status === "临时新增")
+					|| (planTableState.view === "activities" && planTableState.status === "结果未提交" && row.event_status === "Completed" && !row.has_submitted_result)
+					|| row.status === planTableState.status)
 				&& department_matches_filter(row.department, planTableState.department)
 				&& (!planTableState.trainingType || row.training_type === planTableState.trainingType)
 				&& (!planTableState.month || row.planned_month === planTableState.month);
@@ -625,7 +629,7 @@
 		const activities = planTableState.view === "activities";
 		const rows = activities ? (management.activity_rows || []) : (management.rows || []);
 		if (loading) return `<div class="hrms-training-panel hrms-training-plan-panel"><div class="hrms-training-empty">${__("正在核对计划与实际上课…")}</div></div>`;
-		const statuses = activities ? ["全部", "已完成", "待开展", "已取消"] : ["全部", "已实施", "待实施", "待确认", "临时新增", "临时课程"];
+		const statuses = activities ? ["全部", "已完成", "待开展", "已取消", "临时新增", "结果未提交"] : ["全部", "年度计划", "已实施", "待实施", "待确认", "临时新增", "临时课程"];
 		const filtered = plan_table_rows(rows);
 		const totalPages = Math.max(1, Math.ceil(filtered.length / planTableState.pageSize));
 		planTableState.page = Math.min(planTableState.page, totalPages);

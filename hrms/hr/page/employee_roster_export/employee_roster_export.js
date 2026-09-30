@@ -9,6 +9,8 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 		schema: null,
 		selected: new Set(),
 		selected_tables: new Set(),
+		use_basic_export_fields: false,
+		export_format: "reference",
 		active_category: "",
 		export_scope: "all",
 		current_filters: {},
@@ -21,18 +23,31 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 	page.set_secondary_action(__("返回"), () => frappe.set_route("List", "Employee"));
 
 	function load_schema() {
-		try {
-			state.current_filters = JSON.parse(sessionStorage.getItem("hrms_employee_roster_current_filters") || "{}");
-		} catch (e) {
-			state.current_filters = {};
+		const saved_filters = sessionStorage.getItem("hrms_employee_roster_current_filters");
+		if (saved_filters) {
+			try {
+				const parsed_filters = JSON.parse(saved_filters);
+				state.current_filters = parsed_filters && typeof parsed_filters === "object" && !Array.isArray(parsed_filters)
+					? parsed_filters : {};
+				state.export_scope = "current_filters";
+				state.use_basic_export_fields = true;
+				state.export_format = "reference";
+			} catch (e) {
+				state.current_filters = {};
+			}
+			sessionStorage.removeItem("hrms_employee_roster_current_filters");
 		}
 		const company = window.hrmsCompanyContext?.getCurrentCompany?.() || frappe.defaults?.get_user_default?.("Company") || "";
-		if (company) state.current_filters.company = company;
+		if (company && !state.current_filters.company) state.current_filters.company = company;
 		const request_id = ++state.schema_request_id;
 		return frappe.call("hrms.api.employee_field_template.get_employee_import_export_schema").then((r) => {
 			if (request_id !== state.schema_request_id) return;
+			const first_load = !state.schema;
 			state.schema = r.message;
 			state.active_category = state.schema.categories?.[0]?.label || "";
+			if (first_load && state.use_basic_export_fields) {
+				state.selected = new Set(state.schema.basic_export_fields || []);
+			}
 			(state.schema.fields || []).forEach((field) => {
 				if (field.required) state.selected.add(field.fieldname);
 			});
@@ -57,32 +72,44 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 			$(page.body).html(`<div class="text-muted">${__("正在加载字段配置...")}</div>`);
 			return;
 		}
-		page.set_primary_action(__("排序并导出"), export_selected, "download");
+		const export_label = state.export_format === "reference" ? __("按对照花名册格式导出") : __("排序并导出");
+		page.set_primary_action(export_label, export_selected, "download");
 		$(page.body).html(`
 			<div class="hrms-export-shell">
+				${render_format_choice()}
+				${render_export_scope()}
+				${state.export_format === "custom" ? `
 				<div class="hrms-export-note">
 					<span class="text-danger">*</span> ${__("选择需要导出的字段，已勾选的必选字段不可取消。")}
 					<span class="text-muted ml-2">${__("字段来源于员工属性设置，禁用字段不会出现在导出范围内。")}</span>
 					<span class="text-muted ml-2">${__("导出模板设置位于设置中心，可保存导出模板。")}</span>
+					<button class="btn btn-default btn-sm ml-2" data-action="select-basic">${__("按基础花名册选列")}</button>
 				</div>
 				<div class="hrms-export-layout">
 					<div class="hrms-export-categories">
 						${render_category_menu()}
 					</div>
 					<div class="hrms-export-fields">
-						${render_export_scope()}
 						${render_active_fields()}
 					</div>
 				</div>
+				` : `<div class="hrms-export-note">${__("首个工作表按对照花名册固定导出 {0} 列，表头名称和顺序与原表一致。", [state.schema.reference_export_headers?.length || 37])}</div>`}
 				${render_multi_record_categories()}
 				${render_export_records()}
 				<div class="hrms-export-footer">
-					<span>${__("已选择 {0} 个字段，{1} 个工作表", [state.selected.size, state.selected_tables.size])}</span>
-					<button class="btn btn-default" data-action="save-report">${__("保存为人事报表")}</button>
-					<button class="btn btn-primary" data-action="export">${__("排序并导出")}</button>
+					<span>${state.export_format === "reference" ? __("固定 {0} 列，附加 {1} 个工作表", [state.schema.reference_export_headers?.length || 37, state.selected_tables.size]) : __("已选择 {0} 个字段，{1} 个工作表", [state.selected.size, state.selected_tables.size])}</span>
+					${state.export_format === "custom" ? `<button class="btn btn-default" data-action="save-report">${__("保存为人事报表")}</button>` : ""}
+					<button class="btn btn-primary" data-action="export">${export_label}</button>
 				</div>
 			</div>
 		`);
+	}
+
+	function render_format_choice() {
+		return `<div class="hrms-export-scope">
+			<label class="hrms-export-check"><input type="radio" name="export_format" value="reference" ${state.export_format === "reference" ? "checked" : ""}><span>${__("对照花名册格式（37 列）")}</span></label>
+			<label class="hrms-export-check"><input type="radio" name="export_format" value="custom" ${state.export_format === "custom" ? "checked" : ""}><span>${__("自定义列")}</span></label>
+		</div>`;
 	}
 
 	function render_export_scope() {
@@ -90,7 +117,7 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 			<div class="hrms-export-scope">
 				<label class="hrms-export-check">
 					<input type="radio" name="export_scope" value="all" ${state.export_scope === "all" ? "checked" : ""}>
-					<span>${__("全部员工")}</span>
+					<span>${__("全部员工（含离职）")}</span>
 				</label>
 				<label class="hrms-export-check">
 					<input type="radio" name="export_scope" value="current_filters" ${state.export_scope === "current_filters" ? "checked" : ""}>
@@ -175,7 +202,7 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 									<tr>
 										<td>${frappe.utils.escape_html(record.created_at || "")}</td>
 										<td>${frappe.utils.escape_html(record.filename || "")}</td>
-										<td>${frappe.utils.escape_html(record.export_scope === "current_filters" ? __("当前筛选结果") : __("全部员工"))}</td>
+										<td>${frappe.utils.escape_html(record.export_scope === "current_filters" ? __("当前筛选结果") : __("全部员工（含离职）"))}</td>
 										<td>${frappe.utils.escape_html(record.user || "")}</td>
 									</tr>`,
 								)
@@ -191,10 +218,11 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 		const fields = encodeURIComponent(JSON.stringify(Array.from(state.selected)));
 		const tables = encodeURIComponent(JSON.stringify(Array.from(state.selected_tables)));
 		const export_scope = encodeURIComponent(state.export_scope);
+		const export_format = encodeURIComponent(state.export_format);
 		const current_filters = encodeURIComponent(JSON.stringify(state.current_filters));
 		window.open(
 			frappe.urllib.get_full_url(
-				`/api/method/hrms.api.employee_field_template.download_employee_roster_export?fields=${fields}&tables=${tables}&export_scope=${export_scope}&current_filters=${current_filters}`,
+				`/api/method/hrms.api.employee_field_template.download_employee_roster_export?fields=${fields}&tables=${tables}&export_scope=${export_scope}&current_filters=${current_filters}&export_format=${export_format}`,
 			),
 		);
 		setTimeout(() => load_export_records().then(render), 800);
@@ -279,8 +307,19 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 		state.export_scope = this.value;
 		render();
 	});
+	$(page.body).on("change", "input[name='export_format']", function () {
+		state.export_format = this.value;
+		render();
+	});
 
 	$(page.body).on("click", "[data-action='export']", export_selected);
+	$(page.body).on("click", "[data-action='select-basic']", () => {
+		state.selected = new Set(state.schema?.basic_export_fields || []);
+		(state.schema?.fields || []).forEach((field) => {
+			if (field.required) state.selected.add(field.fieldname);
+		});
+		render();
+	});
 	$(page.body).on("click", "[data-action='save-report']", save_report);
 
 	wrapper.employee_roster_export = {

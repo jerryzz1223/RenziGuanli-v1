@@ -337,6 +337,18 @@
 		}, __("入职资料"));
 
 		const export_button = listview.page.add_inner_button(__("导出"), function () {
+			const filters = build_roster_route_options(get_active_roster_card().filters, get_stored_roster_column_filter());
+			const table_state = get_roster_table_state(listview);
+			const table_filters = { ...table_state.filters };
+			if (table_state.pending_filter) {
+				table_filters[table_state.pending_filter.fieldname] = table_state.pending_filter.value;
+			}
+			Object.entries(table_filters).forEach(([fieldname, value]) => {
+				if (roster_filterable_columns.has(fieldname) && String(value || "").trim()) {
+					filters[fieldname] = ["like", `%${String(value).trim()}%`];
+				}
+			});
+			sessionStorage.setItem("hrms_employee_roster_current_filters", JSON.stringify(filters));
 			frappe.set_route("employee-roster-export");
 		});
 		set_roster_action_permission(export_button, has_capability("personnel_export"), "人事导出");
@@ -638,32 +650,23 @@
 		dialog.show();
 	}
 
-	const ROSTER_CLEANUP_MODULES = ["attendance", "payroll", "form_intake", "personnel_changes", "dingtalk", "employees"];
-
 	function can_clear_current_company_roster() {
 		const roles = frappe.user_roles || frappe.boot?.user?.roles || [];
 		return roles.includes("System Manager");
 	}
 
 	function open_roster_cleanup_dialog(listview) {
-		const default_company = frappe.defaults.get_user_default("Company");
 		frappe.call({
-			method: "hrms.api.data_operations.get_company_data_management_context",
-			args: { company: default_company || "" },
+			method: "hrms.api.data_operations.preview_all_employee_roster_cleanup",
 			freeze: true,
 			freeze_message: __("正在生成清空预览…"),
-		}).then((context_response) => {
-			const company = context_response.message?.company;
-			if (!company) {
-				frappe.msgprint(__("未找到可清空的当前公司。"));
+		}).then((preview_response) => {
+			const preview = preview_response.message || {};
+			if (!preview.employee_count) {
+				frappe.msgprint(__("全部公司员工主档已经为空。"));
 				return;
 			}
-			return frappe.call({
-				method: "hrms.api.data_operations.preview_company_data_cleanup",
-				args: { company, modules: ROSTER_CLEANUP_MODULES },
-				freeze: true,
-				freeze_message: __("正在检查关联数据…"),
-			}).then((preview_response) => render_roster_cleanup_confirmation(listview, preview_response.message || {}));
+			render_roster_cleanup_confirmation(listview, preview);
 		});
 	}
 
@@ -672,22 +675,29 @@
 		const blocker_text = blockers
 			.map((item) => `${item.label || item.doctype}（${item.count || 0}）`)
 			.join("、");
+		const warning_text = (preview.warnings || [])
+			.map((item) => `${item.label || item.doctype}（${item.count || 0}）`)
+			.join("、");
+		const record_text = (preview.records || [])
+			.map((item) => `${item.label || item.doctype}（${item.count || 0}）`)
+			.join("、");
 		const dialog = new frappe.ui.Dialog({
 			title: __("确认清空花名册"),
 			fields: [
 				{
 					fieldtype: "HTML",
 					fieldname: "warning",
-					options: `<div class="alert alert-danger">${frappe.utils.escape_html(__("即将清除 {0} 的员工花名册及其关联业务数据，共 {1} 条。此操作不可撤销。", [preview.company, preview.count || 0]))}${blocker_text ? `<br><br>${frappe.utils.escape_html(__("仍有关联记录：{0}。请先在数据处理中心处理后再清空。", [blocker_text]))}` : ""}</div>`,
+					options: `<div class="alert alert-danger">${frappe.utils.escape_html(__("即将永久删除全部 {0} 家公司共 {1} 名员工档案（包括离职和此前已移出花名册的员工），以及 {2} 条关联业务数据。此操作不可通过花名册恢复。", [(preview.companies || []).length, preview.employee_count || 0, (preview.count || 0) - (preview.employee_count || 0)]))}${record_text ? `<br><br>${frappe.utils.escape_html(__("删除范围：{0}", [record_text]))}` : ""}${warning_text ? `<br><br>${frappe.utils.escape_html(__("将先按正常流程取消已提交单据：{0}。", [warning_text]))}` : ""}${blocker_text ? `<br><br>${frappe.utils.escape_html(__("暂不能清空：{0}。请先处理后重新预览。", [blocker_text]))}` : ""}</div>`,
 				},
-				{ fieldtype: "Data", fieldname: "confirmation", label: __("输入确认文本：{0}", [preview.confirmation_text || ""]), reqd: 1 },
-				{ fieldtype: "Check", fieldname: "acknowledge", label: __("我确认清空的是当前公司数据"), reqd: 1 },
+				...(blockers.length ? [] : [
+					{ fieldtype: "Data", fieldname: "confirmation", label: __("输入确认文本：{0}", [preview.confirmation_text || ""]), reqd: 1 },
+				{ fieldtype: "Check", fieldname: "acknowledge", label: __("我确认永久删除全部公司的员工及关联数据"), reqd: 1 },
+				]),
 			],
-			primary_action_label: blockers.length ? __("前往数据处理中心") : __("确认清空"),
+			primary_action_label: blockers.length ? __("关闭") : __("确认清空"),
 			primary_action(values) {
 				if (blockers.length) {
 					dialog.hide();
-					frappe.set_route("hrms-data-operations");
 					return;
 				}
 				if (values.confirmation !== preview.confirmation_text || !values.acknowledge) {
@@ -695,15 +705,13 @@
 					return;
 				}
 				frappe.call({
-					method: "hrms.api.data_operations.execute_company_data_cleanup",
+					method: "hrms.api.data_operations.execute_all_employee_roster_cleanup",
 					args: {
-						company: preview.company,
-						modules: ROSTER_CLEANUP_MODULES,
 						confirm: values.confirmation,
 						plan_token: preview.plan_token,
 					},
 					freeze: true,
-					freeze_message: __("正在清空花名册…"),
+					freeze_message: __("正在删除全部公司员工及关联数据…"),
 				}).then((response) => {
 					dialog.hide();
 					frappe.show_alert({ message: response.message?.message || __("花名册已清空"), indicator: "green" });
@@ -995,14 +1003,21 @@
 		state.error = false;
 		state.records = null;
 		state.source_key = source_key;
-		frappe.call({
+		const records = [];
+		const load_page = (page) => frappe.call({
 			method: "hrms.api.employee_field_template.get_employee_roster",
-			args: { filters: JSON.stringify(filters), page: 1, page_length: ROSTER_ALL_EMPLOYEES_PAGE_LENGTH },
+			args: { filters: JSON.stringify(filters), page, page_length: ROSTER_ALL_EMPLOYEES_PAGE_LENGTH },
 			callback(response) {
 				if (state.request_id !== request_id) return;
-				state.loading = false;
 				const message = response.message || {};
-				state.records = Array.isArray(message.rows) ? message.rows : [];
+				const rows = Array.isArray(message.rows) ? message.rows : [];
+				records.push(...rows);
+				if (rows.length === ROSTER_ALL_EMPLOYEES_PAGE_LENGTH && records.length < Number(message.total || 0)) {
+					load_page(page + 1);
+					return;
+				}
+				state.loading = false;
+				state.records = records;
 				state.records_card_label = card.label;
 				state.page = 1;
 				ensure_roster_empty_result_header(listview);
@@ -1014,6 +1029,7 @@
 				ensure_roster_empty_result_header(listview);
 			},
 		});
+		load_page(1);
 	}
 
 	function render_roster_table_pagination(listview, state, total, page_count) {
@@ -1805,13 +1821,10 @@ function hide_native_filter_controls() {
 	}
 
 	function hide_roster_page_length_controls() {
-		document.querySelectorAll(".list-paging-area").forEach((paging_area) => {
-			paging_area.querySelectorAll("button, a, .btn, .dropdown-toggle").forEach((control) => {
-				if (["20", "100", "500", "2500"].includes((control.textContent || "").trim())) {
-					control.classList.add("hrms-roster-page-length-hidden");
-				}
-			});
-		});
+		// The custom roster table has its own pagination. Frappe's native area
+		// only adds a "Load More" action that cannot advance the visible table.
+		document.querySelectorAll(".page-container.hrms-employee-roster-page .list-paging-area")
+			.forEach((paging_area) => paging_area.remove());
 	}
 
 	function get_roster_department_label(value) {

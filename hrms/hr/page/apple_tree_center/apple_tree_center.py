@@ -513,7 +513,10 @@ def _summary_record(row):
 		"reward_item": "月度考勤终稿",
 		"green_apples": row.get("green_apples"),
 		"red_apples": row.get("red_apples"),
-		"reward_amount": row.get("apple_reward_amount"),
+		"reward_amount": row.get("apple_reward_amount") if row.get("apple_reward_amount") is not None else (
+			_number(row.get("green_apple_amount")) - _number(row.get("red_apple_amount"))
+			if row.get("green_apple_amount") is not None and row.get("red_apple_amount") is not None else None
+		),
 		"approval_no": row.get("attendance_lock_version") or "",
 		"approval_result": row.get("status") or "",
 		"approval_status": row.get("lock_status") or "",
@@ -527,6 +530,36 @@ def _list_active_month_records(company, attendance_month):
 	from hrms.api.attendance_import import list_monthly_attendance_summary
 
 	return list_monthly_attendance_summary(company=company, attendance_month=attendance_month, page_length=MAX_VISIBLE_RECORDS)
+
+
+def _locked_processing_month_records(company, attendance_month):
+	"""Read the generated signed final, without creating another statistics copy."""
+	from hrms.api.attendance_processing_center import get_monthly_final_preview
+
+	try:
+		preview = get_monthly_final_preview(company, attendance_month, kind="signed")
+	except frappe.PermissionError:
+		return []
+	if not preview.get("available"):
+		return []
+	version = str(preview.get("locked_snapshot_version") or "")
+	return [
+		{**row, "attendance_month": attendance_month, "attendance_lock_version": f"处理终稿:{version}",
+		 "lock_status": "已锁定", "status": "已确认"}
+		for row in preview.get("rows", []) if str(row.get("employee_code") or "").strip()
+	]
+
+
+def _available_processing_months(company):
+	return {
+		str(row.get("attendance_month") or "").strip()
+		for row in frappe.get_list(
+			ATTENDANCE_BATCH_DOCTYPE, fields=["attendance_month"],
+			filters={"company": company, "source_type": "attendance_draft"},
+			page_length=MAX_VISIBLE_RECORDS,
+		)
+		if re.match(r"^\d{4}-\d{2}$", str(row.get("attendance_month") or "").strip())
+	}
 
 
 def _active_history_batch(company, attendance_month):
@@ -805,7 +838,7 @@ def _build_export_workbook(view, data, title, column_filters="", sort_key="", so
 
 
 @frappe.whitelist()
-def download_export(view: str = "annual-summary", year: str = "", month: str = "", search: str = "", company: str = "", start_date: str = "", end_date: str = "", person: str = "", column_filters: str = "", sort_key: str = "", sort_order: str = "desc", detail_start_date: str = "", detail_end_date: str = "", detail_search: str = "", department: str = "", designation: str = ""):
+def download_export(view: str = "annual-summary", year: str = "", month: str = "", search: str = "", company: str = "", start_date: str = "", end_date: str = "", person: str = "", column_filters: str = "", sort_key: str = "", sort_order: str = "desc", detail_start_date: str = "", detail_end_date: str = "", detail_search: str = "", detail_item: str = "", department: str = "", designation: str = ""):
 	"""Download the currently selected Apple-tree statistics view as Excel."""
 	view = str(view or "annual-summary").strip()
 	if view not in EXPORT_VIEWS:
@@ -816,7 +849,7 @@ def download_export(view: str = "annual-summary", year: str = "", month: str = "
 		person_args = {
 			"person": str(person).strip(), "year": year, "company": company, "month": month, "search": search,
 			"start_date": start_date, "end_date": end_date, "detail_start_date": detail_start_date,
-			"detail_end_date": detail_end_date, "detail_search": detail_search,
+			"detail_end_date": detail_end_date, "detail_search": detail_search, "detail_item": detail_item,
 		}
 		if str(department or "").strip():
 			person_args["department"] = department
@@ -949,6 +982,11 @@ def _filter_apple_detail_rows(rows, start_date=None, end_date=None, search=""):
 	return [row for row in rows if _apple_detail_matches(row, start_date, end_date, str(search or "").strip())]
 
 
+def _reward_item_category(value):
+	parts = [part.strip() for part in str(value or "").split("/") if part.strip()]
+	return "/".join(parts[:3]) if len(parts) >= 3 else str(value or "").split("，", 1)[0].strip()
+
+
 def _locked_detail_extras(company, attendance_month, employee_code=""):
 	from hrms.api.attendance_processing_center import get_monthly_final_preview
 
@@ -985,7 +1023,7 @@ def get_employee_summary(employee: str, year: str = "", company: str = ""):
 
 
 @frappe.whitelist()
-def get_person_detail(person: str, year: str = "", company: str = "", month: str = "", search: str = "", start_date: str = "", end_date: str = "", detail_start_date: str = "", detail_end_date: str = "", detail_search: str = "", department: str = "", designation: str = ""):
+def get_person_detail(person: str, year: str = "", company: str = "", month: str = "", search: str = "", start_date: str = "", end_date: str = "", detail_start_date: str = "", detail_end_date: str = "", detail_search: str = "", detail_item: str = "", department: str = "", designation: str = ""):
 	"""Return the employee's raw Apple-tree reward/penalty ledger."""
 	data_args = {"year": year, "month": month, "search": search, "company": company, "start_date": start_date, "end_date": end_date}
 	if str(department or "").strip():
@@ -1006,15 +1044,20 @@ def get_person_detail(person: str, year: str = "", company: str = "", month: str
 	person_code = str(employee.get("employee_code") or "")
 	summary_rows = [dict(row) for row in data["records"] if str(row.get("employee_code") or "") == person_code]
 	year_text = str(data["filters"]["year"])
-	history_months = _available_history_months(data["filters"]["company"])
 	months = sorted({str(row.get("attendance_month") or row.get("reward_date") or "")[:7] for row in summary_rows if str(row.get("attendance_month") or row.get("reward_date") or "")[:4] == year_text})
 	rows = []
 	for attendance_month in months:
-		if attendance_month in history_months:
+		if any(row.get("reward_item") == "历史数据导入" for row in summary_rows if row.get("attendance_month") == attendance_month):
 			history_rows = _list_history_month_records(data["filters"]["company"], attendance_month, outer_start, outer_end, include_detail=True)
 			detail_rows = [detail for item in history_rows if str(item.get("employee_code") or "") == person_code for detail in item.get("detail_rows", [])]
 		else:
 			detail_rows = _active_apple_detail_rows(data["filters"]["company"], attendance_month, person_code, outer_start, outer_end)
+			locked_summary = next((summary for summary in summary_rows if summary.get("attendance_month") == attendance_month and summary.get("reward_item") == "月度考勤终稿"), None)
+			if locked_summary and (
+				sum(_number(detail.get("green_apples")) for detail in detail_rows) != _number(locked_summary.get("green_apples"))
+				or sum(_number(detail.get("red_apples")) for detail in detail_rows) != _number(locked_summary.get("red_apples"))
+			):
+				detail_rows = []
 		if detail_rows:
 			rows.extend(detail_rows)
 			continue
@@ -1027,12 +1070,14 @@ def get_person_detail(person: str, year: str = "", company: str = "", month: str
 				fallback = _apple_detail_from_record({**summary, "reward_item": summary.get("reward_item") or "月度考勤终稿"}, len(rows) + 1)
 				rows.append(fallback)
 	rows = _filter_apple_detail_rows(rows, detail_start, detail_end, detail_search)
+	if detail_item:
+		rows = [row for row in rows if _reward_item_category(row.get("reward_item")) == str(detail_item).strip()]
 	rows.sort(key=lambda row: (str(row.get("reward_date") or ""), _number(row.get("sequence"))))
 	return {
 		"available": True, "person": employee, "year": data["filters"]["year"],
 		"available_years": data.get("available_years", [data["filters"]["year"]]),
 		"company": data["filters"]["company"], "rows": rows, "totals": _apple_detail_totals(rows),
-		"filters": {"month": data["filters"].get("month", ""), "search": data["filters"].get("search", ""), "start_date": data["filters"].get("start_date", ""), "end_date": data["filters"].get("end_date", ""), "department": data["filters"].get("department", ""), "designation": data["filters"].get("designation", ""), "detail_start_date": detail_start.isoformat() if detail_start else "", "detail_end_date": detail_end.isoformat() if detail_end else "", "detail_search": str(detail_search or "").strip()},
+		"filters": {"month": data["filters"].get("month", ""), "search": data["filters"].get("search", ""), "start_date": data["filters"].get("start_date", ""), "end_date": data["filters"].get("end_date", ""), "department": data["filters"].get("department", ""), "designation": data["filters"].get("designation", ""), "detail_start_date": detail_start.isoformat() if detail_start else "", "detail_end_date": detail_end.isoformat() if detail_end else "", "detail_search": str(detail_search or "").strip(), "detail_item": str(detail_item or "").strip()},
 		"columns": [{"field": field, "label": label, "numeric": numeric} for field, label, numeric in APPLE_DETAIL_COLUMNS],
 	}
 
@@ -1070,6 +1115,8 @@ def get_data(year: str = "", month: str = "", search: str = "", company: str = "
 		},
 		reverse=True,
 	)
+	processing_months = _available_processing_months(company)
+	available_months = sorted(set(available_months) | processing_months, reverse=True)
 	history_months = _available_history_months(company)
 	available_months = sorted(set(available_months) | history_months, reverse=True)
 	available_years = _available_years([{"reward_date": f"{item}-01"} for item in available_months], year)
@@ -1085,6 +1132,11 @@ def get_data(year: str = "", month: str = "", search: str = "", company: str = "
 		target_months = [f"{year}-{number:02d}" for number in range(quarter_start, quarter_start + 3) if f"{year}-{number:02d}" in available_months]
 	records = []
 	for attendance_month in target_months:
+		processing_records = _locked_processing_month_records(company, attendance_month) if attendance_month in processing_months else []
+		if processing_records:
+			if not custom_start or (custom_start <= _month_bounds(attendance_month)[0] and custom_end >= _month_bounds(attendance_month)[1] - date.resolution):
+				records.extend(_summary_record(row) for row in processing_records)
+			continue
 		# A history import is an explicit statistics-only version for that month.
 		# It takes precedence on this page but never mutates or feeds attendance/payroll.
 		history_records = (
@@ -1117,5 +1169,5 @@ def get_data(year: str = "", month: str = "", search: str = "", company: str = "
 		"people": people,
 		"months": months,
 		"records": records,
-		"notice": "统计范围为当前公司。已单独导入历史数据的月份使用历史导入版本，其他月份使用月度考勤终稿当前生效版本；历史导入不修改考勤终稿或薪资。" + (" 自定义日期范围内，历史导入按奖/惩日期精确统计；月度考勤终稿仅在范围完整覆盖该月时纳入。" if custom_start else "") + (" 当前筛选结果超过 10000 条，请缩小年份、月份或日期范围。" if len(records) >= MAX_VISIBLE_RECORDS else ""),
+		"notice": "统计范围为当前公司。已锁定并生成的考勤处理终稿自动显示在本页；没有该终稿的月份沿用历史导入或旧版月度终稿。历史导入不修改考勤终稿或薪资。" + (" 自定义日期范围内，历史导入按奖/惩日期精确统计；月度考勤终稿仅在范围完整覆盖该月时纳入。" if custom_start else "") + (" 当前筛选结果超过 10000 条，请缩小年份、月份或日期范围。" if len(records) >= MAX_VISIBLE_RECORDS else ""),
 	}

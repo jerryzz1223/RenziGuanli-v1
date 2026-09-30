@@ -1485,11 +1485,11 @@ class AttendanceImportCenter {
 			["红苹果", summary.red_apples || 0, "red"],
 			["红苹果金额", summary.amount || 0, "amount"],
 		];
-		return this.render_processing_summary("忘打卡汇总", items);
+		return this.render_processing_summary("忘打卡汇总（当前批次全部有效记录）", items);
 	}
 
 	render_apple_tree_summary(summary = {}) {
-		return this.render_processing_summary("苹果树汇总", [
+		return this.render_processing_summary("苹果树汇总（当前批次全部有效记录）", [
 			["绿苹果", summary.green_apples || 0, "green"],
 			["红苹果", summary.red_apples || 0, "red"],
 		]);
@@ -1537,9 +1537,9 @@ class AttendanceImportCenter {
 		const resultDescription = isAttendanceDraft
 			? __("按员工一行展示已可采用的钉钉明确数据。无异常记录会自动进入下游；待处理异常请在“异常处理”修改后再进入计算。")
 			: isAppleTree
-				? __("绿苹果、红苹果直接采用来源表数值，不根据奖/惩项目重算或核对颗数；仅当项目明确为绿苹果、数量却填入红苹果列时报错。人员与来源追溯字段仍保留。")
+				? __("绿苹果、红苹果直接采用来源表数值，不根据奖/惩项目重算或核对颗数；仅当项目明确为绿苹果、数量却填入红苹果列时报错。下方汇总覆盖当前批次全部有效记录，第二次签字版只计入有有效考勤的工号。人员与来源追溯字段仍保留。")
 				: isMissedPunch
-					? __("每笔补卡审批完整展示；不能确定的记录需先在异常队列处理，处理结果会保留审计记录并同步到本页。")
+					? __("每笔补卡审批完整展示；不能确定的记录需先在异常队列处理，处理结果会保留审计记录并同步到本页。下方汇总覆盖当前批次全部有效记录，第二次签字版只计入有有效考勤的工号。")
 			: isMonthlySupport
 				? __("显示金额或逐日工时。每行均可手动修改并留痕；重新上传会生成新批次，并以整月明细替换当前有效版本。")
 				: __("每行均可手动修改并保留原值、原因和操作人；后续导入会按本来源的业务唯一键合并，命中时更新，未命中时新增。");

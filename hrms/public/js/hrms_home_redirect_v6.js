@@ -627,21 +627,12 @@
 		},
 		{
 			label: "审批",
-			route: "/desk/workflow",
+			route: "/desk/approval-center/pending",
 			icon: "W",
-			keys: ["workflow", "workflow-action", "expense-claim", "travel-request"],
+			keys: ["approval-center"],
 			items: [
-				{ type: "link", label: "主页", route: "/desk/workflow", slug: "workflow" },
-				{
-					type: "section",
-					label: "审批",
-					children: [
-						{ label: "工作流", route: "/desk/workflow", slug: "workflow" },
-						{ label: "待办审批", route: "/desk/workflow-action", slug: "workflow-action" },
-						{ label: "费用报销", route: "/desk/expense-claim", slug: "expense-claim" },
-						{ label: "出差申请", route: "/desk/travel-request", slug: "travel-request" },
-					],
-				},
+				{ type: "link", label: "待办审批", route: "/desk/approval-center/pending", slug: "approval-center/pending" },
+				{ type: "link", label: "已审批", route: "/desk/approval-center/approved", slug: "approval-center/approved" },
 			],
 		},
 		{
@@ -801,7 +792,7 @@
 		"招聘": "recruitment",
 		"考勤假期": "attendance-import-center",
 		"薪酬": "payroll-input-center",
-		"审批": "workflow",
+		"审批": "approval-center",
 		"培训学习": "training-learning-center",
 		"绩效": "performance",
 		"更多": "attendance-import-center/dingtalk",
@@ -860,7 +851,7 @@
 				if (["employee-talk-form", "employee-duty-change", "employee-reward-form"].indexOf(route[0]) !== -1 && route[1]) {
 					return normalize_slug(route[0] + "/" + route[1]);
 				}
-				if ((route[0] === "attendance-import-center" || route[0] === "payroll-input-center" || route[0] === "apple-tree-center") && route[1]) {
+				if ((route[0] === "attendance-import-center" || route[0] === "payroll-input-center" || route[0] === "apple-tree-center" || route[0] === "approval-center") && route[1]) {
 					return normalize_slug(route[0] + "/" + route[1]);
 				}
 				return normalize_slug(route[0]);
@@ -886,7 +877,7 @@
 		if (parts[0].toLowerCase() === "organizational-chart" && parts[1] && parts[1].toLowerCase() === "report") {
 			return "organization-report";
 		}
-		if ((parts[0].toLowerCase() === "attendance-import-center" || parts[0].toLowerCase() === "payroll-input-center" || parts[0].toLowerCase() === "apple-tree-center") && parts[1]) {
+		if ((parts[0].toLowerCase() === "attendance-import-center" || parts[0].toLowerCase() === "payroll-input-center" || parts[0].toLowerCase() === "apple-tree-center" || parts[0].toLowerCase() === "approval-center") && parts[1]) {
 			return normalize_slug(parts[0] + "/" + parts[1]);
 		}
 		return normalize_slug(parts[0]);
@@ -903,7 +894,7 @@
 		if (normalized === "organizational-chart/report") {
 			return "organization-report";
 		}
-		if (normalized.indexOf("attendance-import-center/") === 0 || normalized.indexOf("payroll-input-center/") === 0 || normalized.indexOf("apple-tree-center/") === 0) {
+		if (normalized.indexOf("attendance-import-center/") === 0 || normalized.indexOf("payroll-input-center/") === 0 || normalized.indexOf("apple-tree-center/") === 0 || normalized.indexOf("approval-center/") === 0) {
 			return normalized;
 		}
 		return normalize_slug(normalized.split("/")[0]);
