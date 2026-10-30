@@ -32,7 +32,7 @@ for (const marker of [
 	"_make_qr_svg",
 	'"is_private": 1',
 ]) assert(api.includes(marker), `missing registration API marker: ${marker}`);
-for (const marker of ["员工扫码填写", "window.location.origin", "create_registration_link", "get_registration_qr_svg", "open_employee_registration_link({ direct: true })", "手动填写", "hrms-registration-manual-entry"]) {
+for (const marker of ["员工扫码填写", "window.location.origin", "create_registration_link", "get_registration_qr_svg", "open_employee_registration_link();", "options.direct", "手动填写", "hrms-registration-manual-entry"]) {
 	assert(desk.includes(marker), `missing desk QR marker: ${marker}`);
 }
 for (const marker of ["添加员工", "stopImmediatePropagation", "hrms-registration-manual-entry", "create_registration_link"]) {

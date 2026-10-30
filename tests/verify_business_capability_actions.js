@@ -16,7 +16,7 @@ const keys = new Set();
 for (const match of capabilityDefinitions.matchAll(/_capability\("([a-z0-9_]+)"/g)) keys.add(match[1]);
 for (const match of capabilityDefinitions.matchAll(/"key":\s*"([a-z0-9_]+)"/g)) keys.add(match[1]);
 
-if (keys.size !== 40) throw new Error(`Expected 40 business capabilities, found ${keys.size}.`);
+if (keys.size !== 41) throw new Error(`Expected 41 business capabilities, found ${keys.size}.`);
 for (const key of keys) {
 	if (!ui.includes(`${key}:`)) throw new Error(`Global capability UI is missing ${key}.`);
 }
@@ -48,4 +48,4 @@ for (const marker of ["submit_capability", "approval_capability", "_require_form
 	if (!`${intakeApi}\n${intakeUi}`.includes(marker)) throw new Error(`Form import permission marker missing: ${marker}`);
 }
 
-console.log(`Business capability action matrix verified (${keys.size}/40 keys).`);
+console.log(`Business capability action matrix verified (${keys.size}/41 keys).`);

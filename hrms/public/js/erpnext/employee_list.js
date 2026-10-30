@@ -307,6 +307,11 @@
 		listview.page.__hrms_roster_actions_ready = true;
 		const has_capability = (key) => capabilities.has("*") || capabilities.has(key);
 
+		const full_roster_button = listview.page.add_inner_button(__("钉钉全量员工"), function () {
+			open_dingtalk_full_roster(listview);
+		});
+		set_roster_action_permission(full_roster_button, has_capability("dingtalk_employee_import_approve"), "钉钉员工导入审批");
+
 		const dingtalk_sync_button = listview.page.add_inner_button(__("钉钉同步新员工"), function () {
 			sync_new_employees_from_dingtalk(listview);
 		});
@@ -420,6 +425,10 @@
 		}
 		dialog.show();
 		load_records();
+	}
+
+	function open_dingtalk_full_roster(listview) {
+		frappe.set_route("dingtalk-roster-review");
 	}
 
 	function sync_new_employees_from_dingtalk(listview) {
@@ -1153,7 +1162,10 @@
 		return date;
 	}
 
-	function is_roster_contract_expiry_warning(contract_end_date, today = new Date()) {
+	function is_roster_contract_expiry_warning(contract_end_date, today = new Date(), employee = null) {
+		employee = employee || {};
+		if (employee.status === "Left" || ["离职", "已离职"].includes(employee.custom_work_nature)) return false;
+		if (typeof employee.contract_expiry_warning === "boolean") return employee.contract_expiry_warning;
 		const end_date = get_roster_date_only(contract_end_date);
 		const current_date = get_roster_date_only(today);
 		if (!end_date || !current_date) return false;
@@ -1189,7 +1201,7 @@
 		if (column.fieldname === "suggested_confirmation_date" && employee.date_of_joining) {
 			cell.title = __("仅供参考，不影响实际转正");
 		}
-		if (column.fieldname === "contract_end_date" && is_roster_contract_expiry_warning(employee.contract_end_date)) {
+		if (column.fieldname === "contract_end_date" && is_roster_contract_expiry_warning(employee.contract_end_date, new Date(), employee)) {
 			cell.classList.add("hrms-roster-contract-expiry-warning");
 			const end_date = get_roster_date_only(employee.contract_end_date);
 			const today = get_roster_date_only(new Date());
@@ -1785,7 +1797,7 @@ function hide_native_filter_controls() {
 		const page_wrapper = listview?.page?.wrapper?.[0] || listview?.page?.wrapper?.get?.(0);
 		if (!page_wrapper) return;
 
-		const allowed_labels = ["钉钉同步新员工", "钉钉导入审批", "表单导入", "导出", "清空花名册"];
+		const allowed_labels = ["钉钉全量员工", "钉钉同步新员工", "钉钉导入审批", "表单导入", "导出", "清空花名册"];
 		const toolbar = page_wrapper.querySelector(".page-actions, .list-view-actions, .list-actions") || page_wrapper;
 
 		// Sorting is provided by the fixed table header. Remove Frappe's separate

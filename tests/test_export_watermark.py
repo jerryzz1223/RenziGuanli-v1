@@ -80,6 +80,61 @@ class TestExportWatermark(unittest.TestCase):
 				sheet = archive.read("xl/worksheets/sheet1.xml")
 				self.assertIn(b"A&amp;&amp;B", sheet)
 
+	def test_print_watermark_covers_all_page_types_and_preserves_report_content(self):
+		from openpyxl import Workbook, load_workbook
+
+		book = Workbook()
+		book.create_sheet("第二张表")
+		for sheet in book:
+			sheet.append(["员工编号", "工时"])
+			sheet.append(["TEST-001", 8])
+			sheet.print_title_rows = "1:1"
+			sheet.print_area = "A1:B2"
+			sheet.HeaderFooter.differentFirst = True
+			sheet.HeaderFooter.differentOddEven = True
+			sheet.oddHeader.left.text = "原有报表名称"
+			sheet.oddHeader.center.text = "原有公司名称"
+			sheet.oddHeader.center.size = 10
+			sheet.oddFooter.right.text = "第 &P 页"
+			sheet.page_margins.top = 0
+			sheet.page_margins.header = 0
+		settings = types.ModuleType("hrms.utils.export_watermark_settings")
+		settings.get_export_watermark_options = lambda key: {"export": True, "print": True, "text": "A&B 测试水印", "opacity": 20}
+		output = BytesIO()
+		with patch.dict(sys.modules, {"hrms.utils.export_watermark_settings": settings}):
+			WATERMARK.save_workbook_with_logo_watermark(book, output, export_key="roster")
+		with ZipFile(BytesIO(output.getvalue())) as archive:
+			for number in (1, 2):
+				root = ElementTree.fromstring(archive.read(f"xl/worksheets/sheet{number}.xml"))
+				for tag in ("oddHeader", "evenHeader", "firstHeader"):
+					header = root.find(f"{{{WATERMARK._SPREADSHEET_NAMESPACE}}}headerFooter/{{{WATERMARK._SPREADSHEET_NAMESPACE}}}{tag}")
+					self.assertIn("A&&B 测试水印", header.text)
+					if tag == "oddHeader":
+						self.assertIn("&C&10 原有公司名称_x000a_&18&KD7D7D7A&&B 测试水印", header.text)
+		output.seek(0)
+		for sheet in load_workbook(output):
+			self.assertEqual(sheet["B2"].value, 8)
+			self.assertEqual(sheet.print_title_rows, "$1:$1")
+			self.assertIn("$A$1:$B$2", str(sheet.print_area))
+			self.assertEqual(sheet.oddHeader.left.text, "原有报表名称")
+			self.assertTrue(sheet.oddHeader.center.text.startswith("原有公司名称\n"))
+			self.assertEqual(sheet.oddFooter.right.text, "第 &P 页")
+			self.assertTrue(sheet.HeaderFooter.differentFirst)
+			self.assertTrue(sheet.HeaderFooter.differentOddEven)
+			self.assertFalse(sheet.HeaderFooter.scaleWithDoc)
+			self.assertGreaterEqual(sheet.page_margins.header, 0.3)
+			self.assertGreaterEqual(sheet.page_margins.top - sheet.page_margins.header, 0.8)
+
+	def test_legacy_logo_export_also_has_print_watermark(self):
+		from openpyxl import Workbook, load_workbook
+
+		output = BytesIO()
+		WATERMARK.save_workbook_with_logo_watermark(Workbook(), output)
+		output.seek(0)
+		book = load_workbook(output)
+		for header in (book.active.oddHeader, book.active.evenHeader, book.active.firstHeader):
+			self.assertEqual(header.center.text, "永新电子（常熟）有限公司")
+
 	def test_background_relationship_is_valid_with_header_comments(self):
 		namespace = WATERMARK._DOCUMENT_RELATIONSHIPS_NAMESPACE
 		content = (

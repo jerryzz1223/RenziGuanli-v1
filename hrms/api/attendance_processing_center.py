@@ -250,12 +250,14 @@ ATTENDANCE_DAILY_EDIT_FIELDS = (
 	("确认计入的加班时长", "确认计入的加班时长（小时）", ("确认计入的加班时长", "confirmed_overtime_hours")),
 	("休息日加班（小时）", "休息日加班（小时）", ("休息日加班（小时）",)),
 	("节假日加班（小时）", "节假日加班（小时）", ("节假日加班（小时）",)),
+	("深夜班", "深夜班", ATTENDANCE_NUMERIC_FIELDS["deep_night_shifts"]),
 	("大夜班", "大夜班", ("大夜班",)),
 	("小夜班", "小夜班", ("小夜班",)),
 ) + tuple((ATTENDANCE_NUMERIC_FIELDS[field][0], LEAVE_LABELS[field], ATTENDANCE_NUMERIC_FIELDS[field]) for field in LEAVE_FIELDS)
 
 ATTENDANCE_LATE_DAILY_EDIT_FIELDS = frozenset({
 	"日期类型", "班次", "上班时间", "下班时间", "迟到次数", "标准工时", "实际出勤（小时）",
+	"深夜班", "大夜班", "小夜班",
 	ATTENDANCE_NUMERIC_FIELDS["personal_leave_hours"][0],
 	ATTENDANCE_NUMERIC_FIELDS["sick_leave_hours"][0],
 	ATTENDANCE_NUMERIC_FIELDS["annual_leave_hours"][0],
@@ -2278,7 +2280,7 @@ def _result_rows(batch, page_length: int = 5000, employee_code: str = "", page_s
 		PROCESSING_RECORD_DOCTYPE,
 		filters=filters,
 		fields=["name", "company", "attendance_month", "employee_code", "employee_name", "department", "source_type", "processed_value_json", "original_value_json", "exception_codes", "exception_message", "review_status", "proposed_value_json", "confirmed_value_json", "reviewer", "reviewed_on", "review_note", "review_history_json", "eligible_for_downstream", "source_file", "source_sheet", "source_row", "source_id", "approval_no"],
-		order_by="employee_code asc, source_row asc",
+		order_by="employee_code asc, source_row asc, name asc",
 		limit_start=max(cint(page_start), 0),
 		limit_page_length=page_length,
 	)
@@ -2325,7 +2327,10 @@ def _restore_daily_exception_lines_from_source(record: dict[str, Any], *, all_de
 	details = (matching_row.get("proposed_value") or {}).get("attendance_details") or []
 	if all_details:
 		return details
-	return exception_lines_from_attendance_details(details, record.get("exception_codes") or [])
+	return _active_attendance_exception_lines({
+		"attendance_details": details,
+		"_daily_exception_decisions": _daily_exception_decisions(_effective_result_values(record)),
+	}, record.get("exception_codes") or [])
 
 
 def _serialize_record(record, current_shift_rule_version: str | None = None, *, hydrate_daily_details: bool = True):
@@ -2554,6 +2559,8 @@ def _excluded_attendance_daily_keys(row: dict[str, Any], values: dict[str, Any] 
 	"""Resolve dated exclusions, including the old bulk deferrals, without dropping a whole employee."""
 	values = values if values is not None else _effective_result_values(row)
 	keys = {str(key) for key in values.get("_excluded_attendance_daily_keys", []) if str(key)}
+	if row.get("review_status") == "已驳回":
+		keys.update(_daily_line_key(line) for line in values.get("attendance_details") or [] if isinstance(line, dict))
 	if row.get("review_status") == "暂不计入":
 		keys.update(_daily_line_key(line) for line in _active_attendance_exception_lines(values, row.get("exception_codes") or []))
 	return keys
@@ -2570,7 +2577,13 @@ def _pending_attendance_daily_keys(row: dict[str, Any], values: dict[str, Any] |
 	for item in details:
 		by_date[str(item.get("attendance_date") or "")].append(_daily_line_key(item))
 	pending = set()
-	for line in row.get("daily_pending_exception_lines") or _active_attendance_exception_lines(values, row.get("exception_codes") or []):
+	lines = row.get("daily_pending_exception_lines") or _active_attendance_exception_lines(values, row.get("exception_codes") or [])
+	if not lines:
+		# Old pending batches sometimes retained a dated warning without its
+		# code. Treat that as an unknown pending fact, never as overtime-only.
+		lines = [line for line in values.get("exception_lines") or []
+			if isinstance(line, dict) and not line.get("exception_codes") and not line.get("resolved")]
+	for line in lines:
 		if not isinstance(line, dict):
 			continue
 		key = _daily_line_key(line)
@@ -2583,12 +2596,47 @@ def _pending_attendance_daily_keys(row: dict[str, Any], values: dict[str, Any] |
 	return pending - _excluded_attendance_daily_keys(row, values)
 
 
+WORKDAY_OVERTIME_ONLY_EXCEPTIONS = frozenset({
+	"WORKDAY_OUTSIDE_SHIFT_UNAPPROVED", "WORKDAY_OVERTIME_APPROVAL_NOT_APPLIED",
+	"WORKDAY_OVERTIME_DINGTALK_ANOMALY", "WORKDAY_OVERTIME_APPROVAL_MISMATCH",
+})
+
+
+def _pending_workday_overtime_keys(row, values):
+	"""Identify dates whose pending review affects only weekday overtime."""
+	pending = _pending_attendance_daily_keys(row, values)
+	codes_by_key = defaultdict(set)
+	details_by_date = defaultdict(list)
+	for detail in values.get("attendance_details") or []:
+		details_by_date[str(detail.get("attendance_date") or "")].append(_daily_line_key(detail))
+	for line in row.get("daily_pending_exception_lines") or _active_attendance_exception_lines(values, row.get("exception_codes") or []):
+		key = _daily_line_key(line)
+		matches = details_by_date.get(str(line.get("attendance_date") or ""), [])
+		if key not in pending and len(matches) == 1:
+			key = matches[0]
+		codes_by_key[key].update(line.get("exception_codes") or [])
+	return {key for key in pending if codes_by_key[key] and codes_by_key[key] <= WORKDAY_OVERTIME_ONLY_EXCEPTIONS}
+
+
 def _attendance_downstream_values(row: dict[str, Any], *, exclude_pending_dates: bool = False) -> dict[str, Any]:
-	"""Subtract excluded dates' settlement facts while keeping scheduled standard hours."""
+	"""Exclude reviewed dates entirely; isolate unresolved weekday overtime."""
 	values = _effective_result_values(row)
 	keys = _excluded_attendance_daily_keys(row, values)
+	explicit_keys = set(keys)
 	if exclude_pending_dates:
-		keys |= _pending_attendance_daily_keys(row, values)
+		overtime_keys = _pending_workday_overtime_keys(row, values) - keys
+		if overtime_keys:
+			values = deepcopy_json(values)
+			# Preserve checked base attendance, leave and night-shift facts. Never
+			# synthesize approved overtime from a punch or an unresolved warning.
+			details = values.get("attendance_details") or []
+			values["workday_overtime_hours"] = round(_as_number(values.get("workday_overtime_hours")) - sum(
+				_as_number(item.get("workday_overtime_hours")) for item in details if _daily_line_key(item) in overtime_keys
+			), 4)
+			for item in details:
+				if _daily_line_key(item) in overtime_keys:
+					item["workday_overtime_hours"] = 0
+		keys |= _pending_attendance_daily_keys(row, values) - overtime_keys
 	if not keys:
 		return values
 	values = deepcopy_json(values)
@@ -2596,6 +2644,9 @@ def _attendance_downstream_values(row: dict[str, Any], *, exclude_pending_dates:
 	excluded = [item for item in details if _daily_line_key(item) in keys]
 	if len(excluded) != len(keys):
 		frappe.throw(_("排除日期与原始考勤明细不一致，请先重新识别来源后重试。"))
+	values["standard_hours"] = round(_as_number(values.get("standard_hours")) - sum(
+		_as_number(item.get("standard_hours")) for item in excluded if _daily_line_key(item) in explicit_keys
+	), 4)
 	for field, _label in ATTENDANCE_DRAFT_RESULT_COLUMNS:
 		if field in {"department", "employee_name", "employee_code", "attendance_note", "leave_hours", "deep_night_shifts", "standard_hours"}:
 			continue
@@ -2616,6 +2667,52 @@ def _attendance_downstream_values(row: dict[str, Any], *, exclude_pending_dates:
 	return values
 
 
+def _attendance_downstream_exclusions(row: dict[str, Any]) -> list[dict[str, Any]]:
+	"""Describe current exclusions without changing the retained source or review history."""
+	values = _effective_result_values(row)
+	explicit = _excluded_attendance_daily_keys(row, values)
+	overtime = _pending_workday_overtime_keys(row, values) - explicit
+	pending = _pending_attendance_daily_keys(row, values) - overtime - explicit
+	history = {
+		str(event.get("field_name") or "").removeprefix("__daily_exclusion__:"): event
+		for event in row.get("review_history") or []
+		if str(event.get("field_name") or "").startswith("__daily_exclusion__:")
+	}
+	entries = []
+	for detail in values.get("attendance_details") or []:
+		key = _daily_line_key(detail)
+		if key not in (explicit | overtime | pending):
+			continue
+		event = history.get(key, {})
+		only_overtime = key in overtime
+		if key in explicit:
+			reason = event.get("reason") or row.get("review_note") or "人工确认当天不计入下游"
+		elif only_overtime:
+			reason = "工作日加班异常待审核，暂不计加班，保留正常出勤"
+		else:
+			reason = "当天异常待审核，结算项暂不计入；仍需处理异常"
+		entries.append({
+			"record_id": row.get("record_id") or row.get("name") or "",
+			"employee_code": row.get("employee_code") or values.get("employee_code") or "",
+			"employee_name": row.get("employee_name") or values.get("employee_name") or "",
+			"department": row.get("department") or values.get("department") or "",
+			"source_type": "attendance_draft", "daily_record_id": key,
+			"attendance_date": detail.get("attendance_date") or "",
+			"source_file": detail.get("source_file") or row.get("source_file") or "",
+			"source_sheet": detail.get("source_sheet") or row.get("source_sheet") or "",
+			"source_row": detail.get("source_row"),
+			"scope": "仅工作日加班" if only_overtime else "当天全部考勤" if key in explicit else "待审核日期结算项",
+			"excluded_standard_hours": _as_number(detail.get("standard_hours")) if key in explicit else 0,
+			"excluded_actual_hours": 0 if only_overtime else _as_number(detail.get("actual_attendance_hours")),
+			"excluded_overtime_hours": _as_number(detail.get("workday_overtime_hours")) + (0 if only_overtime else _as_number(detail.get("restday_overtime_hours")) + _as_number(detail.get("holiday_overtime_hours"))),
+			"status": "已确认排除" if key in explicit else "待审核，暂不计入",
+			"reason": reason, "message": reason,
+			"operator": (event.get("reviewer") or row.get("reviewer") or "") if key in explicit else "系统规则",
+			"occurred_on": str(event.get("reviewed_on") or row.get("reviewed_on") or "") if key in explicit else "",
+		})
+	return entries
+
+
 def _signed_standard_hours_from_daily_source(row: dict[str, Any]) -> float | None:
 	"""Sum the same dated standard-hour cells shown in the first signed detail sheet."""
 	month = str(row.get("attendance_month") or "")
@@ -2626,7 +2723,10 @@ def _signed_standard_hours_from_daily_source(row: dict[str, Any]) -> float | Non
 		return None
 	total = 0.0
 	has_standard_cell = False
+	excluded_keys = _excluded_attendance_daily_keys(row)
 	for daily in rows:
+		if _daily_source_key(daily.get("source_row") or daily.get("_source_row"), daily.get("source_file") or row.get("source_file"), daily.get("source_sheet") or row.get("source_sheet"), _daily_attendance_date(daily.get("日期") or daily.get("考勤日期"))) in excluded_keys:
+			continue
 		if _daily_attendance_date(daily.get("日期") or daily.get("考勤日期"))[:7] != month:
 			continue
 		for alias in ATTENDANCE_NUMERIC_FIELDS["standard_hours"]:
@@ -3220,9 +3320,14 @@ def _export_processed_result(batch, include_logo: bool = True) -> dict[str, str]
 
 
 def _active_attendance_exception_lines(values: dict[str, Any], exception_codes: list[str]) -> list[dict[str, Any]]:
-	return values.get("exception_lines") or exception_lines_from_attendance_details(
+	lines = values.get("exception_lines") or exception_lines_from_attendance_details(
 		values.get("attendance_details") or [], exception_codes,
 	)
+	# Historic detail recovery must respect reviewed facts, even when another
+	# date still has the same exception code in the employee's queue.
+	return _apply_daily_exception_decisions({
+		"proposed_value": {"exception_lines": lines}, "exception_codes": exception_codes,
+	}, _daily_exception_decisions(values))["proposed_value"]["exception_lines"]
 
 
 def _pending_attendance_exception_line_count(batch) -> int:
@@ -3283,6 +3388,7 @@ def _slot_payload(batch):
 		"row_count": metrics.get("source_rows", batch.daily_sheet_rows or 0),
 		"eligible_employee_source_rows": metrics.get("eligible_employee_source_rows", 0),
 		"employee_summary_count": metrics.get("processed_rows", processed_rows),
+		"processed_rows": processed_rows,
 		# This is a live pending count, rather than the historic number detected
 		# at import. Resolved rows stay auditable but disappear from the work queue.
 		"exception_count": pending_exception_count,
@@ -3458,7 +3564,7 @@ def get_processing_batch(company: str, attendance_month: str):
 	daily_workflow = _daily_month_workflow(company, attendance_month)
 	anchor_batch = _latest_batch(company, attendance_month, "attendance_draft")
 	anchor_meta = _processing_meta(anchor_batch) if anchor_batch else {}
-	first_signed_inputs = _first_signed_inputs(company, attendance_month, slots)
+	first_signed_inputs = [item for item in finalization_inputs if item["source_type"] in FIRST_SIGNED_SOURCE_TYPES]
 	first_signed_outputs = anchor_meta.get("first_signed_outputs", {})
 	final_outputs = anchor_meta.get("monthly_final_outputs", {})
 	approval = _monthly_final_approval_state(company, attendance_month, anchor_meta, finalization_inputs)
@@ -3689,7 +3795,7 @@ def bulk_import_and_process_sources(company: str, attendance_month: str, files: 
 		"notice": (
 			_("六类考勤来源已完成匹配、导入并进入当前月度快照。无效记录已自动排除，不需要逐类审批；但锁定终稿前仍须提交月度终稿审批。")
 			if complete
-			else _("已完成所选 {0} 类来源的匹配、导入和加工。本次未选择：{1}；请以刷新后的月度终稿来源状态为准，未补齐时不能提交审批和锁定。").format(len(items), "、".join(unselected))
+			else _("已完成所选 {0} 类来源的匹配、导入和加工。本次未选择：{1}；未提供项目生成时留空，已提供来源必须通过校验后才能提交审批和锁定。").format(len(items), "、".join(unselected))
 		),
 	}
 
@@ -4334,7 +4440,7 @@ def update_attendance_draft_daily_row(
 		frappe.throw(_("修改钉钉每日数据必须填写原因。"))
 	if isinstance(changes, str):
 		changes = _loads(changes, {})
-	if not isinstance(changes, dict) or not changes:
+	if not isinstance(changes, dict):
 		frappe.throw(_("请至少修改一个每日考勤字段。"))
 	try:
 		source_row = int(source_row)
@@ -4357,6 +4463,9 @@ def update_attendance_draft_daily_row(
 	target = candidates[0] if candidates else None
 	if not target:
 		frappe.throw(_("未找到该员工的钉钉来源行。"))
+	confirm_late = review_status == "已通过" and "LATE_MARKED" in (target.get("exception_codes") or [])
+	if not changes and not confirm_late:
+		frappe.throw(_("请至少修改一个每日考勤字段。"))
 	allowed_fields = {field["fieldname"] for field in target["editable_fields"]}
 	invalid_fields = sorted(set(changes) - allowed_fields)
 	if invalid_fields:
@@ -4387,6 +4496,10 @@ def update_attendance_draft_daily_row(
 	decisions = _daily_exception_decisions(confirmed_before)
 	target_key = _daily_source_key(source_row, target.get("source_file"), target.get("source_sheet"), target.get("attendance_date"))
 	overrides[target_key] = {**overrides.get(target_key, {}), **changes}
+	if confirm_late:
+		# Approval confirms this dated late fact without erasing its count or
+		# approving any other exception on this date or elsewhere in the month.
+		decisions[target_key] = {**decisions.get(target_key, {}), "LATE_MARKED": True}
 
 	# Rebuild this employee from its original rows plus the approved overlay and
 	# the company's current structured shift rules. The uploaded source remains
@@ -4401,11 +4514,13 @@ def update_attendance_draft_daily_row(
 	batch = frappe.get_doc(IMPORT_BATCH_DOCTYPE, doc.import_batch)
 	shift_bundle = _attendance_shift_rule_bundle(company)
 	scheduling_policies = _attendance_scheduling_policies(company)
+	employees = _employee_directory(company) or None
+	exception_policy = _attendance_draft_exception_policy()
 	baseline_rows = process_attendance_draft_rows(
 		_effective_daily_source_rows(serialized), attendance_month=attendance_month,
 		source_file=doc.source_file or batch.source_file, source_sheet=doc.source_sheet or "每日统计",
-		employee_directory=_employee_directory(company) or None,
-		exception_policy=_attendance_draft_exception_policy(),
+		employee_directory=employees,
+		exception_policy=exception_policy,
 		shift_rules=shift_bundle["rules"], shift_rule_version=shift_bundle["version"],
 		scheduling_policies=scheduling_policies,
 	)["processed_rows"]
@@ -4415,8 +4530,8 @@ def update_attendance_draft_daily_row(
 		attendance_month=attendance_month,
 		source_file=doc.source_file or batch.source_file,
 		source_sheet=doc.source_sheet or "每日统计",
-		employee_directory=_employee_directory(company) or None,
-		exception_policy=_attendance_draft_exception_policy(),
+		employee_directory=employees,
+		exception_policy=exception_policy,
 		shift_rules=shift_bundle["rules"],
 		shift_rule_version=shift_bundle["version"],
 		scheduling_policies=scheduling_policies,
@@ -4478,14 +4593,18 @@ def update_attendance_draft_daily_row(
 	doc.eligible_for_downstream = 1 if effective_review_status == "已通过" and _confirmed_downstream_eligible(confirmed) else 0
 	doc.save(ignore_permissions=True)
 	batch_status = _refresh_batch_review_status(batch)
-	processed_result = _export_processed_result(batch)
+	# Download regenerates from persisted records; saving one date must not
+	# synchronously serialize and watermark the entire company workbook.
+	processed_result = None
 	_invalidate_monthly_final_after_source_change(batch, "daily_source_row_manual_update")
 	_save_batch_notes(batch, {
 		"processed_result": processed_result,
-		"processed_result_refreshed_on": now_datetime().isoformat(),
+		"processed_result_refreshed_on": None,
 		"processed_result_refresh_reason": "daily_source_row_manual_update",
 	})
 	result = _serialize_record(doc.as_dict())
+	result["edited_daily_row_pending"] = active_target is not None
+	result["edited_daily_row_exception_codes"] = list((active_target or {}).get("exception_codes") or [])
 	result["batch_status"] = batch_status
 	result["processed_result"] = processed_result
 	frappe.db.commit()
@@ -4910,11 +5029,12 @@ def review_attendance_draft_daily_exception(
 	doc.eligible_for_downstream = 1 if effective_review_status == "已通过" and _confirmed_downstream_eligible(confirmed) else 0
 	doc.save(ignore_permissions=True)
 	batch_status = _refresh_batch_review_status(batch)
-	processed_result = _export_processed_result(batch)
+	# The explicit download endpoint rebuilds the latest workbook on demand.
+	processed_result = None
 	_invalidate_monthly_final_after_source_change(batch, "daily_exception_review")
 	_save_batch_notes(batch, {
 		"processed_result": processed_result,
-		"processed_result_refreshed_on": processed_at.isoformat(),
+		"processed_result_refreshed_on": None,
 		"processed_result_refresh_reason": "daily_exception_review",
 	})
 	result = _serialize_record(doc.as_dict())
@@ -4979,7 +5099,7 @@ def _bulk_exclude_attendance_daily_lines(batch, daily_record_ids, select_all_pen
 		history = _loads(doc.review_history_json, [])
 		for key in sorted(keys):
 			line = pending[key]
-			history.append({"field_name": f"__daily_exclusion__:{key}", "old_value": "待审核", "new_value": "不计入下游", "original_value": deepcopy_json(line), "reason": reason.strip(), "review_status": "暂不计入", "reviewer": frappe.session.user, "reviewed_on": processed_at.isoformat(), "attendance_date": line.get("attendance_date"), "source_row": line.get("source_row"), "source_file": line.get("source_file"), "source_sheet": line.get("source_sheet")})
+			history.append({"field_name": f"__daily_exclusion__:{key}", "old_value": "待审核", "new_value": "不计入下游", "original_value": deepcopy_json(line), "exclusion_scope": "whole_day", "excluded_values": deepcopy_json(next(item for item in details if _daily_line_key(item) == key)), "reason": reason.strip(), "review_status": "暂不计入", "reviewer": frappe.session.user, "reviewed_on": processed_at.isoformat(), "attendance_date": line.get("attendance_date"), "source_row": line.get("source_row"), "source_file": line.get("source_file"), "source_sheet": line.get("source_sheet")})
 		remaining = set(pending) - keys
 		all_daily_codes = {code for line in serialized.get("daily_exception_lines") or [] for code in line.get("exception_codes") or []}
 		remaining_non_daily = set(_loads(doc.exception_codes, [])) - all_daily_codes - NON_BLOCKING_ATTENDANCE_EVENT_CODES
@@ -6361,6 +6481,18 @@ def list_manual_adjustments(company: str, attendance_month: str, page_length: in
 
 
 @frappe.whitelist()
+def list_attendance_downstream_exclusions(company: str, attendance_month: str, page_start: int = 0, page_length: int = 100):
+	"""Current exclusion ledger; manual decisions remain in the source review history."""
+	_require_processing_manager("attendance_view", "attendance_import_submit", "attendance_final_approve", "attendance_final_lock")
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	batch = _latest_batch(company, attendance_month, "attendance_draft")
+	entries = [entry for row in _all_final_source_rows(batch) for entry in _attendance_downstream_exclusions(row)] if batch else []
+	entries.sort(key=lambda entry: (entry["attendance_date"], entry["employee_code"], entry["daily_record_id"]), reverse=True)
+	start, limit = max(cint(page_start), 0), min(max(cint(page_length), 1), 500)
+	return {"items": entries[start:start + limit], "total_count": len(entries), "page_start": start, "page_length": limit, "has_more": start + limit < len(entries)}
+
+
+@frappe.whitelist()
 def list_attendance_manual_adjustments(company: str, attendance_month: str, page_length: int = 500):
 	"""Named attendance ledger API; retain the legacy API for existing callers."""
 	return list_manual_adjustments(company, attendance_month, page_length)
@@ -6855,18 +6987,112 @@ def upsert_department_mapping(
 	}
 
 
+def _all_final_source_rows(batch, employee_code=""):
+	"""Read every record; a generation check must not stop at the first page."""
+	rows, start = [], 0
+	while True:
+		page = _result_rows(batch, 5000, employee_code=employee_code, page_start=start)
+		rows.extend(page)
+		if len(page) < 5000:
+			return rows
+		start += len(page)
+
+
+def _final_input_quality(inputs, batches):
+	"""Missing optional sources are allowed; supplied unresolved facts are not."""
+	population = {}
+	records = {key: _all_final_source_rows(batch) for key, batch in batches.items() if batch}
+	for row in records.get("attendance_draft", []):
+		if _attendance_row_has_report_dates(row):
+			population[str(row.get("employee_code") or "")] = row.get("employee_name") or ""
+	for item in inputs:
+		key = item["source_type"]
+		batch = batches.get(key)
+		item.update(required=key == "attendance_draft", provided=bool(batch), issues=[], missing_items=[], exclusions=[])
+		if not batch:
+			item["ready"] = key != "attendance_draft"
+			item["status"] = "未提供，生成时留空" if item["ready"] else "缺少必需考勤来源"
+			item["missing_items"].append({"message": item["label"] + "未提供"})
+			continue
+		if not item["ready"]:
+			item["issues"].append({"message": "来源尚未完成加工和确认：" + item["status"]})
+		precheck = item.get("precheck") or {}
+		precheck = precheck.get("result") or precheck
+		coverage = (item.get("data_quality") or {}).get("month_date_coverage") or precheck.get("month_date_coverage") or {}
+		for day in coverage.get("missing_dates") or []:
+			item["issues"].append({"attendance_date": day, "message": "考勤来源缺少该日期，请补齐完整月份"})
+		if precheck.get("is_valid") is False:
+			for message in precheck.get("validation_errors") or [precheck.get("message") or "来源结构校验未通过"]:
+				item["issues"].append({"message": str(message)})
+		if key == "attendance_draft" and (item.get("data_quality") or {}).get("excluded_missing_employee_code_rows"):
+			raw_rows, sheet_name = _read_source_rows(batch)
+			for raw in raw_rows:
+				if not _attendance_draft_data_quality_value(raw, "工号", "员工工号", "employee_code"):
+					item["issues"].append({"employee_name": raw.get("姓名") or "", "attendance_date": _daily_attendance_date(raw.get("日期")), "source_file": batch.source_file, "source_sheet": raw.get("source_sheet") or sheet_name, "source_row": raw.get("source_row"), "message": "来源行缺少工号，请修正来源后重新上传"})
+		if not records.get(key):
+			item["issues"].append({"message": "来源没有加工记录，请修正或重新上传"})
+		if key in MONTHLY_SUPPORT_SOURCE_TYPES:
+			item["import_error_count"] = sum(1 for row in records.get(key, []) if row.get("exception_codes"))
+		seen = set()
+		for row in records.get(key, []):
+			code = str(row.get("employee_code") or "")
+			locator = {"employee_code": code, "employee_name": row.get("employee_name") or "", "source_file": row.get("source_file") or "", "source_sheet": row.get("source_sheet") or "", "source_row": row.get("source_row"), "record_id": row.get("record_id") or ""}
+			pending = row.get("daily_pending_exception_lines") or []
+			unresolved = row.get("review_status") == "待审核" or (key == "attendance_draft" and bool(_pending_attendance_daily_keys(row)))
+			values = _effective_result_values(row)
+			if key == "attendance_draft":
+				item["exclusions"].extend(_attendance_downstream_exclusions(row))
+				overtime_keys = _pending_workday_overtime_keys(row, values)
+				pending_keys = _pending_attendance_daily_keys(row, values)
+				dated_lines = row.get("daily_exception_lines") or _active_attendance_exception_lines(values, row.get("exception_codes") or [])
+				dated_codes = {code for line in dated_lines for code in line.get("exception_codes") or []}
+				non_daily_codes = set(row.get("exception_codes") or []) - dated_codes - NON_BLOCKING_ATTENDANCE_EVENT_CODES
+				if pending_keys and pending_keys <= overtime_keys and not non_daily_codes:
+					unresolved = False
+				values = _attendance_downstream_values(row, exclude_pending_dates=True)
+			if row.get("review_status") != "已驳回":
+				for field in ("standard_hours", "actual_attendance_hours", "workday_overtime_hours", "restday_overtime_hours", "holiday_overtime_hours", "special_hours", "special_workday_hours", "special_restday_hours", "special_holiday_hours", "housing_allowance", "full_attendance_award", "green_apple_amount", "red_apple_amount", "deep_night_shifts", "large_night_shifts", "small_night_shifts", "personal_leave_hours", "sick_leave_hours", "annual_leave_hours", "work_injury_hours", "rest_arrangement_hours", "absence_hours", "reunion_leave_hours", "bereavement_leave_hours", "marriage_leave_hours", "amount", "有效苹果数", "missing_card_count"):
+					value = values.get(field)
+					if value in (None, ""):
+						continue
+					try:
+						number = float(value)
+						valid = not isinstance(value, bool) and number >= 0 and number < float("inf")
+					except (TypeError, ValueError):
+						valid = False
+					if not valid:
+						item["issues"].append({**locator, "message": field + "必须是有限的非负数，请修正来源数据"})
+			# Monthly support import errors must be corrected at the source, even
+			# when the invalid row was automatically excluded from calculation.
+			if unresolved or (key in MONTHLY_SUPPORT_SOURCE_TYPES and row.get("exception_codes")):
+				for line in pending or [{}]:
+					item["issues"].append({**locator, "source_row": line.get("source_row") or locator["source_row"], "attendance_date": line.get("attendance_date") or "", "message": line.get("exception_message") or row.get("exception_message") or "数据异常尚未修正或审核", "exception_codes": line.get("exception_codes") or row.get("exception_codes") or []})
+			if row.get("review_status") == "已驳回":
+				item["missing_items"].append({**locator, "message": "已审核不计入，下游不使用该记录"})
+			elif code and (row.get("eligible_for_downstream") or _monthly_support_reincluded_after_attendance_upload(row)):
+				seen.add(code)
+			if key != "attendance_draft" and code and code not in population:
+				item["missing_items"].append({**locator, "message": "该员工没有本月有效考勤，不纳入终稿"})
+		if key in {"housing_allowance", "full_attendance", "special_hours"}:
+			for code in sorted(set(population) - seen):
+				item["missing_items"].append({"employee_code": code, "employee_name": population[code], "message": "该员工未提供" + item["label"] + "有效记录，留空"})
+		if key == "attendance_draft" and not population:
+			item["issues"].append({"message": "没有可生成终稿的有效考勤人员"})
+		item["ready"] = bool(item["ready"] and not item["issues"])
+		if item["issues"]:
+			item["status"] = "需修正后才能进入下游"
+	return inputs
+
+
 def _finalization_inputs(company, attendance_month, slots):
 	by_source = {slot["source_type"]: slot for slot in slots}
 	inputs = []
 	for source_type in SOURCE_TYPES:
 		slot = by_source.get(source_type)
-		# Confirmation is the final decision for a main source.  Rows that remain
-		# in the audit queue after confirmation have already been excluded from
-		# downstream calculation, so they must not reopen the month-final gate.
-		# Otherwise a card can truthfully display “已确认” while the lock button
-		# remains disabled forever because of its historic pending-row count.
+		# Batch confirmation and record correctness are separate checks. The
+		# complete record-quality gate below must still pass before locking.
 		ready = bool(slot and slot["status"] == "已确认")
-		inputs.append({"key": source_type, "source_type": source_type, "label": SOURCE_LABELS[source_type], "status": "已就绪" if ready else slot["status"] if slot else "未就绪", "ready": ready, "snapshot_version": ""})
+		inputs.append({"key": source_type, "source_type": source_type, "label": SOURCE_LABELS[source_type], "status": "已就绪" if ready else slot["status"] if slot else "未就绪", "ready": ready, "snapshot_version": "", "precheck": slot.get("precheck", {}) if slot else {}, "data_quality": slot.get("data_quality", {}) if slot else {}})
 	for source_type in MONTHLY_SUPPORT_SOURCE_TYPES:
 		batch = _latest_batch(company, attendance_month, source_type)
 		meta = _processing_meta(batch) if batch else {}
@@ -6891,31 +7117,19 @@ def _finalization_inputs(company, attendance_month, slots):
 			# Kept for compatibility with existing clients.  Import validation errors
 			# are shown on the source result page, never in the exception queue.
 			"pending_exception_count": 0,
-			"import_error_count": sum(1 for row in _result_rows(batch, 5000) if row.get("exception_codes")) if batch else 0,
+			"import_error_count": 0,  # Filled from all records by the quality gate.
 			"can_precheck": bool(batch and batch.source_file and (batch.status in {"待加工", "预览", "已导入"} or needs_processing)),
 			"can_process": bool(batch and precheck.get("is_valid") and not processed_rows and batch.status == "待加工"),
 			"can_confirm": False,
 			"description": MONTHLY_SUPPORT_SOURCE_CONFIG[source_type]["description"],
+			"precheck": precheck,
 		})
-	return inputs
+	return _final_input_quality(inputs, {key: _latest_batch(company, attendance_month, key) for key in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES})
 
 
 def _first_signed_inputs(company, attendance_month, slots):
-	"""Build the narrower gate for the first-signature attendance form."""
-	by_source = {slot["source_type"]: slot for slot in slots}
-	inputs = []
-	for source_type in FIRST_SIGNED_SOURCE_TYPES:
-		slot = by_source.get(source_type)
-		ready = bool(slot and slot["status"] == "已确认")
-		inputs.append({
-			"key": source_type,
-			"source_type": source_type,
-			"label": SOURCE_LABELS[source_type],
-			"status": "已就绪" if ready else slot["status"] if slot else "未就绪",
-			"ready": ready,
-			"snapshot_version": "",
-		})
-	return inputs
+	"""Project source readiness for the attendance-focused first form."""
+	return [item for item in _finalization_inputs(company, attendance_month, slots) if item["source_type"] in FIRST_SIGNED_SOURCE_TYPES]
 
 
 FINAL_SIGNED_COLUMNS = (
@@ -7120,8 +7334,8 @@ def _attendance_final_excel_config_hash() -> str:
 
 # New files use each employee's dated daily standard-hours total. Keep the
 # shared-standard versions identifiable so their locked previews stay unchanged.
-MONTHLY_FINAL_LAYOUT_VERSION = 21
-FIRST_SIGNED_LAYOUT_VERSION = 9
+MONTHLY_FINAL_LAYOUT_VERSION = 25
+FIRST_SIGNED_LAYOUT_VERSION = 12
 APPLE_REWARD_AMOUNT_PER_APPLE = 5
 SHARED_STANDARD_FINAL_LAYOUT_VERSIONS = frozenset({13, 14})
 SHARED_STANDARD_FIRST_SIGNED_LAYOUT_VERSIONS = frozenset({5})
@@ -7310,16 +7524,12 @@ def _payroll_settlement_values(row: dict[str, Any]) -> dict[str, float]:
 
 
 def _final_snapshot_batches(company: str, attendance_month: str):
-	return {source_type: _latest_batch(company, attendance_month, source_type) for source_type in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES}
+	return {source_type: batch for source_type in SOURCE_TYPES + MONTHLY_SUPPORT_SOURCE_TYPES if (batch := _latest_batch(company, attendance_month, source_type))}
 
 
 def _first_signed_snapshot_batches(company: str, attendance_month: str):
-	"""Use the two required sources and carry over confirmed special hours."""
-	batches = {source_type: _latest_batch(company, attendance_month, source_type) for source_type in FIRST_SIGNED_SOURCE_TYPES}
-	special_hours = _latest_batch(company, attendance_month, "special_hours")
-	if special_hours and special_hours.status == "已确认":
-		batches["special_hours"] = special_hours
-	return batches
+	"""All three forms and their checklists describe the same source snapshot."""
+	return _final_snapshot_batches(company, attendance_month)
 
 
 def _legacy_final_snapshot_batches(company: str, attendance_month: str):
@@ -7333,7 +7543,7 @@ def _processing_state_hash(batch) -> str:
 		filters={"import_batch": batch.name},
 		fields=["name", "review_status", "eligible_for_downstream", "confirmed_value_json", "modified"],
 		order_by="name asc",
-		limit_page_length=5000,
+		limit_page_length=0,
 	)
 	return hashlib.sha256(_json(rows).encode()).hexdigest()
 
@@ -7343,6 +7553,8 @@ def _monthly_snapshot_version(batches: dict[str, Any]) -> str:
 	material = [
 		{
 			"source_type": source_type,
+			# A changed exclusion policy requires a new review and lock snapshot.
+			"settlement_policy_version": 2,
 			"batch": batch.name,
 			"checksum": batch.source_checksum,
 			"processing_state": _processing_state_hash(batch),
@@ -7528,20 +7740,44 @@ def list_monthly_final_approval_history(company: str, attendance_month: str):
 	return {"items": items}
 
 
+def _monthly_support_reincluded_after_attendance_upload(record: dict[str, Any]) -> bool:
+	"""Recheck an old import-time population exclusion at final generation."""
+	if record.get("source_type") not in MONTHLY_SUPPORT_SOURCE_TYPES or record.get("exception_codes") or record.get("review_status") == "已驳回":
+		return False
+	values = record.get("proposed_value") or record.get("processed_value") or {}
+	if not values.get("exclusion_reason"):
+		return False
+	# A reviewer may deliberately exclude a source row even after its employee
+	# appears in attendance.  That explicit decision must continue to win.
+	for event in record.get("review_history") or []:
+		if isinstance(event, dict) and event.get("field_name") == "eligible_for_downstream":
+			return False
+	return True
+
+
+def _monthly_final_field_was_edited(record: dict[str, Any], field: str) -> bool:
+	return any(
+		isinstance(event, dict)
+		and event.get("field_name") == "__web_monthly_final__"
+		and field in (event.get("new_value") or {})
+		for event in record.get("review_history") or []
+	)
+
+
 def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared_standard_hours: bool = False, standard_hours_override: int | None = None):
 	"""Aggregate confirmed processing rows without recalculating their source facts."""
 	rows_by_employee = defaultdict(dict)
 	attendance_population = set()
-	# A confirmed monthly special-hours grid owns the whole month. Blank cells
-	# mean no registered hours; attendance-derived shift estimates must not fill
-	# those dates (or employees omitted from that grid) back in.
+	excluded_dates_by_employee = {}
+	# A supplied special-hours grid owns the month. An omitted employee is a
+	# missing fact; retain a blank rather than inventing zero or shift estimates.
 	monthly_special_hours_source = bool(batches.get("special_hours"))
 	for source_type, batch in sorted(batches.items(), key=lambda item: item[0] != "attendance_draft"):
 		if not batch:
 			continue
-		records = _result_rows(batch, 5000, employee_code=employee_code) if employee_code else _result_rows(batch, 5000)
+		records = _all_final_source_rows(batch, employee_code)
 		for record in records:
-			if not (_attendance_row_has_report_dates(record) if source_type == "attendance_draft" else _attendance_row_has_downstream_dates(record)):
+			if source_type == "attendance_draft" and not _attendance_row_has_report_dates(record):
 				continue
 			values = _attendance_downstream_values(record, exclude_pending_dates=True) if source_type == "attendance_draft" else _effective_result_values(record)
 			code = str(values.get("employee_code") or record.get("employee_code") or "").strip()
@@ -7551,10 +7787,19 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 			key = code or f"name:{name}"
 			if source_type == "attendance_draft":
 				attendance_population.add(key)
+				raw_values = _effective_result_values(record)
+				excluded_keys = _excluded_attendance_daily_keys(record, raw_values)
+				excluded_dates_by_employee[key] = {
+					str(detail.get("attendance_date") or "") for detail in raw_values.get("attendance_details") or []
+					if _daily_line_key(detail) in excluded_keys
+				}
 			elif key not in attendance_population:
 				# Monthly additions and reward files can contain template carry-over or
 				# historical employees. Attendance defines the payroll population; a
 				# supplemental source must never create an extra salary recipient.
+				continue
+			recovered_support = bool(code) and not record.get("eligible_for_downstream") and _monthly_support_reincluded_after_attendance_upload(record)
+			if source_type != "attendance_draft" and not (_attendance_row_has_downstream_dates(record) or recovered_support):
 				continue
 			output = rows_by_employee[key]
 			output.setdefault("employee_code", code)
@@ -7564,14 +7809,15 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 				output["attendance_review_status"] = record.get("review_status") or "无需审核"
 				output["eligible_for_downstream"] = bool(record.get("eligible_for_downstream"))
 				for field, _label in ATTENDANCE_DRAFT_RESULT_COLUMNS:
-					output[field] = values.get(field, output.get(field, 0))
+					default = None if field in {"special_hours", "special_workday_hours", "special_restday_hours", "special_holiday_hours"} else 0
+					output[field] = values.get(field, output.get(field, default))
 				daily_standard_hours = _signed_standard_hours_from_daily_source(record)
 				if daily_standard_hours is not None:
 					output["standard_hours"] = daily_standard_hours
 				derived_special_entries = values.get("special_hours_days") or []
 				if monthly_special_hours_source:
 					for field in ("special_hours", "special_workday_hours", "special_restday_hours", "special_holiday_hours"):
-						output[field] = 0.0
+						output[field] = None
 					output["special_hours_days"] = []
 				elif derived_special_entries:
 					output["special_hours_days"] = _merge_special_hours_entries([], derived_special_entries)
@@ -7580,11 +7826,23 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 				for field in ("green_apple_amount", "red_apple_amount", "housing_allowance", "full_attendance_award", "employee_signature", "review_note", "signed_final_override"):
 					if field in values:
 						output[field] = values.get(field)
+				output["_explicit_final_fields"] = {
+					field for field in ("housing_allowance", "full_attendance_award")
+					if _monthly_final_field_was_edited(record, field)
+				}
+				exclusions = _attendance_downstream_exclusions(record)
+				output["downstream_exclusions"] = exclusions
+				if exclusions:
+					summary = "；".join(f"{entry['attendance_date']} {entry['scope']}不计入（{entry['reason']}）" for entry in exclusions)
+					output["review_note"] = "；".join(filter(None, (str(output.get("review_note") or "").strip(), summary)))
 				pending_dates = len(_pending_attendance_daily_keys(record))
 				if pending_dates or not output["eligible_for_downstream"]:
-					status_note = f"考勤初稿{output['attendance_review_status']}；{pending_dates}条待审核日期的考勤结算项未计入，标准工时按每日明细汇总，请核对原始记录" if pending_dates else f"考勤初稿{output['attendance_review_status']}（是否计入下游：否），请核对原始记录"
+					overtime_dates = len(_pending_workday_overtime_keys(record, _effective_result_values(record)))
+					status_note = f"考勤初稿{output['attendance_review_status']}；{pending_dates}条待审核日期中，{overtime_dates}条仅暂不计工作日加班、保留基础出勤，其余日期考勤结算项未计入；标准工时按每日明细汇总，请核对原始记录" if overtime_dates else f"考勤初稿{output['attendance_review_status']}；{pending_dates}条待审核日期的考勤结算项未计入，标准工时按每日明细汇总，请核对原始记录" if pending_dates else f"考勤初稿{output['attendance_review_status']}（是否计入下游：否），请核对原始记录"
 					output["review_note"] = "；".join(filter(None, (str(output.get("review_note") or "").strip(), status_note)))
 			elif source_type == "missing_card":
+				if str(values.get("punch_time") or "")[:10] in excluded_dates_by_employee.get(key, set()):
+					continue
 				if values.get("included", True):
 					output["missing_card_count"] = _as_number(output.get("missing_card_count")) + 1
 				output["red_apples"] = _as_number(output.get("red_apples")) + _as_number(values.get("red_apples"))
@@ -7608,19 +7866,28 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 				# The whole confirmed grid replaces attendance-derived special hours,
 				# including dates left blank in the grid.
 				merged_entries = _merge_special_hours_entries([], values.get("special_hours_days"))
+				original_entries = list(merged_entries)
+				merged_entries = [entry for entry in merged_entries if f"{batch.attendance_month}-{int(entry['day']):02d}" not in excluded_dates_by_employee.get(key, set())]
 				output["special_hours_days"] = merged_entries
 				output["special_hours"] = (
 					sum(_as_number(entry.get("hours")) for entry in merged_entries)
-					if merged_entries else _as_number(values.get("special_hours"))
+					if original_entries else _as_number(values.get("special_hours"))
 				)
 				breakdown = _special_hours_breakdown(merged_entries, batch.attendance_month, batch.company)
 				for field, amount in breakdown.items():
 					output[field] = amount
 			elif source_type in {"housing_allowance", "full_attendance"}:
-				if output.get("signed_final_override"):
-					continue
 				field = MONTHLY_SUPPORT_SOURCE_CONFIG[source_type]["value_field"]
-				output[field] = _as_number(output.get(field)) + _as_number(values.get(field))
+				if field in output.get("_explicit_final_fields", set()):
+					continue
+				if output.get("signed_final_override") and not recovered_support:
+					continue
+				output[field] = _as_number(values.get(field)) if recovered_support else _as_number(output.get(field)) + _as_number(values.get(field))
+	for output in rows_by_employee.values():
+		output.pop("_explicit_final_fields", None)
+		# None is a missing fact, while a supplied numeric zero remains zero.
+		for field in ("housing_allowance", "full_attendance_award", "green_apple_amount", "red_apple_amount", "missing_card_count"):
+			output.setdefault(field, None)
 	if shared_standard_hours and standard_hours_override is not None:
 		# Historical shared-standard files retain their stored display value.
 		for row in rows_by_employee.values():
@@ -7641,7 +7908,7 @@ def _monthly_first_signed_rows(batches: dict[str, Any], employee_code: str = "",
 	for sequence, row in enumerate(rows, start=1):
 		row["sequence"] = sequence
 		late_count = _as_number(row.get("late_count"))
-		status_note = row.get("review_note") if not row.get("eligible_for_downstream", True) else ""
+		status_note = row.get("review_note") if row.get("downstream_exclusions") or not row.get("eligible_for_downstream", True) else ""
 		row["review_note"] = "；".join(filter(None, (f"迟到{late_count:g}次" if late_count > 0 else "", status_note)))
 		for field in ("special_workday_hours", "special_restday_hours", "special_holiday_hours"):
 			row.setdefault(field, "")
@@ -7654,12 +7921,13 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 	if not batch:
 		return []
 	items = []
-	for record in _result_rows(batch, 5000):
+	for record in _all_final_source_rows(batch):
 		if not _attendance_row_has_report_dates(record):
 			continue
 		values = _effective_result_values(record)
 		excluded_keys = _excluded_attendance_daily_keys(record)
 		pending_keys = _pending_attendance_daily_keys(record, values)
+		overtime_pending_keys = _pending_workday_overtime_keys(record, values)
 		pending_dates = {
 			str(item.get("attendance_date") or "")
 			for item in values.get("attendance_details") or []
@@ -7683,7 +7951,7 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 				raw.get("source_sheet") or record.get("source_sheet"), _daily_attendance_date(pick("日期", "考勤日期")),
 			)
 			detail = details_by_key.get(detail_key, {})
-			date_review_note = "待审核，考勤结算项未计入；标准工时计入" if detail_key in pending_keys or _daily_attendance_date(pick("日期", "考勤日期")) in pending_dates else "已标记考勤结算项不计入；标准工时计入" if detail_key in excluded_keys else ""
+			date_review_note = "工作日加班待审核，暂不计入；基础出勤保留" if detail_key in overtime_pending_keys else "待审核，考勤结算项未计入；标准工时计入" if detail_key in pending_keys or _daily_attendance_date(pick("日期", "考勤日期")) in pending_dates else "人工确认当天不计入下游；标准工时及全部结算项均排除" if detail_key in excluded_keys else ""
 			# Weekday overtime comes only from the DingTalk export.  Punches and special
 			# hours may validate it, but must not synthesize a value for older batches.
 			calculated_workday_overtime = detail.get("calculated_workday_overtime_hours")
@@ -7696,6 +7964,23 @@ def _monthly_first_signed_daily_rows(batches: dict[str, Any]):
 			if calculated_workday_overtime in (None, ""):
 				calculated_workday_overtime = detail.get("confirmed_overtime_hours", pick("工作日加班（小时）"))
 
+			settled_detail = dict(detail)
+			if detail_key in excluded_keys or (detail_key in pending_keys and detail_key not in overtime_pending_keys):
+				# All numeric attendance facts are settlement-only here. Raw punches
+				# and the review note remain visible, never summed as payable hours.
+				raw = dict(raw)
+				settlement_fields = {alias for aliases in ATTENDANCE_NUMERIC_FIELDS.values() for alias in aliases}
+				settlement_fields.update({"婚假", "丧假", "公假", "产假", "团圆假"})
+				for field in raw:
+					if field in settlement_fields and (detail_key in excluded_keys or field not in ATTENDANCE_NUMERIC_FIELDS["standard_hours"]):
+						raw[field] = 0
+				for field in ("personal_leave_hours", "late_count", "confirmed_overtime_hours"):
+					settled_detail[field] = 0
+				calculated_workday_overtime = 0
+			elif detail_key in overtime_pending_keys:
+				calculated_workday_overtime = 0
+				settled_detail["confirmed_overtime_hours"] = 0
+			detail = settled_detail
 			items.append([
 				pick("姓名", "员工姓名") or values.get("employee_name") or "",
 				pick("工号", "员工工号", "员工编号") or values.get("employee_code") or "",
@@ -7742,14 +8027,59 @@ def _save_monthly_final_file(attendance_month: str, title: str, columns, rows):
 	sheet.title = title
 	sheet.append([label for _field, label in columns])
 	for row in rows:
-		sheet.append([row.get(field, 0 if field not in {"employee_code", "employee_name", "department", "employee_signature", "review_note"} else "") for field, _label in columns])
+		sheet.append([row.get(field) for field, _label in columns])
 	for column in sheet.columns:
 		sheet.column_dimensions[column[0].column_letter].width = min(max(max(len(str(cell.value or "")) for cell in column) + 2, 12), 24)
 	sheet.freeze_panes = "A2"
 	output = BytesIO()
+	_append_final_quality_sheet(book, rows)
 	save_workbook_with_logo_watermark(book, output, export_key="attendance_final")
 	file = save_file(f"{attendance_month}_{title}.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
+
+
+def _final_display_number(row, field):
+	return None if row.get(field) is None else _as_number(row[field])
+
+
+def _append_final_quality_sheet(book, rows):
+	checks = rows[0].get("_source_quality") if rows else None
+	if checks is not None:
+		exclusions = [entry for item in checks for entry in item.get("exclusions", [])]
+		ledger = book.create_sheet("不计入下游记录")
+		ledger.append(["工号", "姓名", "日期", "排除范围", "排除标准工时", "排除实际出勤", "排除加班工时", "状态", "原因", "处理人", "处理时间", "源文件", "工作表", "源行"])
+		for entry in exclusions:
+			ledger.append([entry.get(field) for field in ("employee_code", "employee_name", "attendance_date", "scope", "excluded_standard_hours", "excluded_actual_hours", "excluded_overtime_hours", "status", "reason", "operator", "occurred_on", "source_file", "source_sheet", "source_row")])
+		for cells in ledger.iter_rows(min_row=2):
+			for cell in cells:
+				if isinstance(cell.value, str):
+					cell.data_type = "s"
+		ledger.freeze_panes = "A2"
+		ledger.auto_filter.ref = ledger.dimensions
+		for column in ledger.columns:
+			ledger.column_dimensions[column[0].column_letter].width = 22
+		ledger.column_dimensions["I"].width = 60
+	if checks is None:
+		return
+	sheet = book.create_sheet("生成检查清单")
+	sheet.append(["来源", "类别", "工号", "姓名", "日期", "源文件", "工作表", "源行", "说明"])
+	for item in checks:
+		for category, entries in (("缺失或排除", item.get("missing_items", [])), ("阻断错误", item.get("issues", []))):
+			for entry in entries:
+				sheet.append([item["label"], category, entry.get("employee_code"), entry.get("employee_name"), entry.get("attendance_date"), entry.get("source_file"), entry.get("source_sheet"), entry.get("source_row"), entry.get("message")])
+	sheet.freeze_panes = "A2"
+	sheet.auto_filter.ref = sheet.dimensions
+	for column in "ABCDEFGHI":
+		sheet.column_dimensions[column].width = 42 if column in "FI" else 18
+
+
+@frappe.whitelist()
+def get_monthly_final_generation_check(company: str, attendance_month: str):
+	_require_processing_manager("attendance_view", "attendance_import_submit", "attendance_final_approve", "attendance_final_lock")
+	company, attendance_month = _require_company(company), _require_month(attendance_month)
+	slots = [_slot_payload(_latest_batch(company, attendance_month, source)) for source in SOURCE_TYPES]
+	inputs = _finalization_inputs(company, attendance_month, [slot for slot in slots if slot])
+	return {"ready": all(item["ready"] for item in inputs), "inputs": inputs}
 
 
 def _save_monthly_finance_confirmation_file(attendance_month: str, rows):
@@ -7843,10 +8173,10 @@ def _save_monthly_finance_confirmation_file(attendance_month: str, rows):
 			_as_number(row.get("large_night_shifts")),
 			_as_number(row.get("small_night_shifts")),
 			_as_number(row.get("absence_hours")),
-			_as_number(row.get("green_apple_amount")),
-			_as_number(row.get("red_apple_amount")),
-			_as_number(row.get("housing_allowance")),
-			_as_number(row.get("full_attendance_award")),
+			_final_display_number(row, "green_apple_amount"),
+			_final_display_number(row, "red_apple_amount"),
+			_final_display_number(row, "housing_allowance"),
+			_final_display_number(row, "full_attendance_award"),
 			row.get("employee_signature") or "",
 			row.get("review_note") or "",
 		]
@@ -7862,6 +8192,7 @@ def _save_monthly_finance_confirmation_file(attendance_month: str, rows):
 	sheet.freeze_panes = "A5"
 	sheet.sheet_view.showGridLines = False
 	output = BytesIO()
+	_append_final_quality_sheet(book, rows)
 	save_workbook_with_logo_watermark(book, output, export_key="attendance_finance")
 	file = save_file(f"{attendance_month}_财务版.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
@@ -7973,8 +8304,7 @@ def _save_monthly_first_signed_confirmation_file(attendance_month: str, rows, da
 		sheet.column_dimensions[get_column_letter(column)].width = width
 
 	def export_number(value):
-		number = _as_number(value)
-		return "" if number == 0 else number
+		return None if value in (None, "") else _as_number(value)
 
 	for excel_row, row in enumerate(rows, start=5):
 		values = [
@@ -8010,6 +8340,7 @@ def _save_monthly_first_signed_confirmation_file(attendance_month: str, rows, da
 	sheet.page_setup.paperSize = sheet.PAPERSIZE_A4
 	sheet.print_area = "B2:Z" + str(max(4, len(rows) + 4))
 	output = BytesIO()
+	_append_final_quality_sheet(book, rows)
 	save_workbook_with_logo_watermark(book, output, export_key="attendance_first_signed")
 	file = save_file(f"{attendance_month}_一次签字版.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
@@ -8103,12 +8434,12 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 		personal, sick, annual, injury, rest, absence = (_as_number(row.get("personal_leave_hours")), _as_number(row.get("sick_leave_hours")), _as_number(row.get("annual_leave_hours")), _as_number(row.get("work_injury_hours")), _as_number(row.get("rest_arrangement_hours")), _as_number(row.get("absence_hours")))
 		bereavement, marriage, reunion = (_as_number(row.get("bereavement_leave_hours")), _as_number(row.get("marriage_leave_half_days")), _as_number(row.get("reunion_leave_hours")))
 		values = [excel_row - 4, _display_department(row.get("department")), row.get("employee_code") or "", row.get("employee_name") or "", row.get("date_of_joining") or "", standard, actual,
-			f"=H{excel_row}-Q{excel_row}/2-R{excel_row}-S{excel_row}-V{excel_row}-W{excel_row}", special["special_workday_hours"], workday, special["special_restday_hours"], restday, special["special_holiday_hours"], holiday,
+			f"=H{excel_row}-Q{excel_row}/2-R{excel_row}-S{excel_row}-V{excel_row}-W{excel_row}", _final_display_number(row, "special_workday_hours"), workday, _final_display_number(row, "special_restday_hours"), restday, _final_display_number(row, "special_holiday_hours"), holiday,
 			personal, sick, annual, injury, rest, absence, bereavement, marriage, reunion, 0,
 			f"=Q{excel_row}*0.5", f"=R{excel_row}", f"=S{excel_row}", f"=V{excel_row}", f"=W{excel_row}", f"=Q{excel_row}*0.5", f"=P{excel_row}", f"=X{excel_row}", f"=T{excel_row}",
 			f"=I{excel_row}+Z{excel_row}+AA{excel_row}+AC{excel_row}+AD{excel_row}+AB{excel_row}", f"=J{excel_row}+K{excel_row}", f"=L{excel_row}+M{excel_row}", f"=N{excel_row}+O{excel_row}", f"=AH{excel_row}", f"=AE{excel_row}+AG{excel_row}+AF{excel_row}", 0,
 			f"=IF(AM{excel_row}-AJ{excel_row}>0,AM{excel_row}-AJ{excel_row},0)", f"=IF(AN{excel_row}-AK{excel_row}>0,AN{excel_row}-AK{excel_row},0)", f"=AI{excel_row}+AM{excel_row}+AN{excel_row}-AP{excel_row}-AQ{excel_row}", f"=G{excel_row}-AR{excel_row}", f"=IF(AJ{excel_row}-AM{excel_row}>0,AJ{excel_row}-AM{excel_row},0)", f"=IF(AK{excel_row}-AN{excel_row}>0,AK{excel_row}-AN{excel_row},0)", f"=AI{excel_row}+AM{excel_row}+AN{excel_row}", f"=AL{excel_row}",
-			_as_number(row.get("deep_night_shifts")), _as_number(row.get("large_night_shifts")), _as_number(row.get("small_night_shifts")), absence, 0, 0, 0, _as_number(row.get("missing_card_count")), _as_number(row.get("green_apple_amount")), _as_number(row.get("red_apple_amount")), _as_number(row.get("housing_allowance")), _as_number(row.get("full_attendance_award")), row.get("employee_signature") or "", row.get("review_note") or ""]
+			_as_number(row.get("deep_night_shifts")), _as_number(row.get("large_night_shifts")), _as_number(row.get("small_night_shifts")), absence, 0, 0, 0, _final_display_number(row, "missing_card_count"), _final_display_number(row, "green_apple_amount"), _final_display_number(row, "red_apple_amount"), _final_display_number(row, "housing_allowance"), _final_display_number(row, "full_attendance_award"), row.get("employee_signature") or "", row.get("review_note") or ""]
 		for column, value in enumerate(values, start=form_start):
 			cell = sheet.cell(row=excel_row, column=column, value=value)
 			cell.border = border
@@ -8120,9 +8451,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 				cell.number_format = "0.0"
 		sheet.row_dimensions[excel_row].height = 36
 
-	# The second-signature source has a fixed total line followed by the four
-	# approval/signature labels.  Keep those rows in the exported workbook so it
-	# can be printed and signed without manual reconstruction.
+	# Keep the total line and the form preparer's attribution in the footer.
 	total_row = len(rows) + 5
 	sheet.merge_cells(f"B{total_row}:H{total_row}")
 	sheet[f"B{total_row}"] = "合计："
@@ -8138,7 +8467,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 	sheet.row_dimensions[total_row].height = 36
 	footer_row = total_row + 4
 	for coordinate, value in {
-		f"R{footer_row}": "审核：", f"AS{footer_row}": "审核：", f"BA{footer_row}": "复核：", f"BI{footer_row}": "制表：李微微2026.6.11",
+		f"BI{footer_row}": "制表：李微微2026.6.11",
 	}.items():
 		cell = sheet[coordinate]
 		cell.value = value
@@ -8156,6 +8485,7 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 	sheet.page_margins.right = 0
 	sheet.print_area = f"A1:BL{footer_row}"
 	output = BytesIO()
+	_append_final_quality_sheet(book, rows)
 	save_workbook_with_logo_watermark(book, output, export_key="attendance_second_signed")
 	file = save_file(f"{attendance_month}_第二次员工签字版.xlsx", output.getvalue(), None, None, is_private=1)
 	return {"file_url": file.file_url, "file_name": file.file_name}
@@ -8163,12 +8493,12 @@ def _save_monthly_signed_confirmation_file(attendance_month: str, rows):
 
 def _generate_first_signed_output(company: str, attendance_month: str, state: dict[str, Any]):
 	"""Build or reuse the first-signature output within the current lock action."""
-	readiness = state["first_signed_inputs"]
+	readiness = state["finalization_inputs"]
 	blocked = [item for item in readiness if not item["ready"]]
 	if blocked:
 		return {"blocked": True, "reason": _("第一次签字版来源未完备，尚未生成文件。"), "readiness": readiness, "missing_sources": [item["label"] for item in blocked]}
 	batches = _first_signed_snapshot_batches(company, attendance_month)
-	if any(not batch for batch in batches.values()):
+	if not batches.get("attendance_draft"):
 		return {"blocked": True, "reason": _("第一次签字版来源不完整，尚未生成文件。"), "readiness": readiness}
 	locked_snapshot_version = _monthly_snapshot_version(batches)
 	anchor_batch = batches["attendance_draft"]
@@ -8178,6 +8508,7 @@ def _generate_first_signed_output(company: str, attendance_month: str, state: di
 	rows = _monthly_first_signed_rows(batches)
 	if not rows:
 		return {"blocked": True, "reason": _("没有可进入第一次签字版的员工数据，尚未生成文件。"), "readiness": readiness}
+	rows[0]["_source_quality"] = readiness
 	daily_rows = _monthly_first_signed_daily_rows(batches)
 	file = _save_monthly_first_signed_confirmation_file(attendance_month, rows, daily_rows)
 	first_signed_outputs = {
@@ -8188,6 +8519,7 @@ def _generate_first_signed_output(company: str, attendance_month: str, state: di
 		"generated_on": now_datetime().isoformat(),
 		"employee_count": len(rows),
 		"layout_version": FIRST_SIGNED_LAYOUT_VERSION,
+		"source_quality": readiness,
 	}
 	_save_batch_notes(anchor_batch, {"first_signed_outputs": first_signed_outputs})
 	return {"blocked": False, "readiness": readiness, "first_signed_outputs": first_signed_outputs, "snapshot_version": locked_snapshot_version}
@@ -8215,7 +8547,7 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 	if blocked:
 		return {"blocked": True, "reason": _("月度终稿来源未完备，尚未生成任何文件。"), "readiness": readiness, "missing_sources": [item["label"] for item in blocked]}
 	batches = _final_snapshot_batches(company, attendance_month)
-	if any(not batch for batch in batches.values()):
+	if not batches.get("attendance_draft"):
 		return {"blocked": True, "reason": _("终稿来源不完整，尚未生成文件。"), "readiness": readiness}
 	approval = _monthly_final_approval_state(company, attendance_month, finalization_inputs=readiness)
 	if not approval.get("approved_for_current_snapshot"):
@@ -8237,6 +8569,7 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 	rows = _monthly_final_rows(batches)
 	if not rows:
 		return {"blocked": True, "reason": _("没有可进入下游的员工数据，尚未生成终稿。"), "readiness": readiness}
+	rows[0]["_source_quality"] = readiness
 	signed = _save_monthly_signed_confirmation_file(attendance_month, rows)
 	finance = _save_monthly_finance_confirmation_file(attendance_month, rows)
 	final_outputs = {
@@ -8255,6 +8588,7 @@ def generate_monthly_final_files(company: str, attendance_month: str, snapshot_v
 		"employee_count": len(rows),
 		"layout_version": MONTHLY_FINAL_LAYOUT_VERSION,
 		"attendance_final_excel_config_hash": config_hash,
+		"source_quality": readiness,
 	}
 	_save_batch_notes(anchor_batch, {"monthly_final_outputs": final_outputs})
 	frappe.db.commit()
@@ -8281,15 +8615,20 @@ def get_monthly_final_preview(company: str, attendance_month: str, kind: str = "
 	if not outputs.get("locked_snapshot_version"):
 		return {"available": False, "reason": _("请先生成第一次签字版。") if kind == "first_signed" else _("请先锁定并生成月度终稿。")}
 	if kind == "first_signed" and cint(outputs.get("layout_version")) < FIRST_SIGNED_LAYOUT_VERSION:
-		return {"available": False, "stale": True, "reason": _("特殊工时汇总规则已更新，请重新生成第一次签字版。")}
+		return {"available": False, "stale": True, "reason": _("考勤结算或表格规则已更新，请重新生成第一次签字版。")}
 	if kind != "first_signed" and cint(outputs.get("layout_version")) < MONTHLY_FINAL_LAYOUT_VERSION:
 		return {"available": False, "stale": True, "reason": _("终稿计算规则已更新，请重新锁定并生成第二次签字版和财务版。")}
+	quality = get_monthly_final_generation_check(company, attendance_month)
+	if not quality["ready"]:
+		return {"available": False, "reason": _("来源存在未修正错误或未完成审核，不能进入下游。"), "source_quality": quality["inputs"]}
 	batches = (_first_signed_snapshot_batches(company, attendance_month) if kind == "first_signed" else _final_snapshot_batches(company, attendance_month))
-	if any(not batch for batch in batches.values()):
+	if not batches.get("attendance_draft"):
 		return {"available": False, "reason": _("第一次签字版来源不完整，无法提供预览。") if kind == "first_signed" else _("终稿来源不完整，无法提供预览。")}
 	locked_version = str(outputs.get("locked_snapshot_version") or "")
 	current_version = _monthly_snapshot_version(batches)
 	preview_batches = batches
+	if current_version != locked_version and kind == "first_signed":
+		return {"available": False, "stale": True, "reason": _("来源或人工处理已变化，请重新生成第一次签字版。")}
 	if current_version != locked_version and kind != "first_signed":
 		legacy_batches = _legacy_final_snapshot_batches(company, attendance_month)
 		legacy_matches = bool(all(legacy_batches.values())) and _monthly_snapshot_version(legacy_batches) == locked_version
@@ -8307,12 +8646,14 @@ def get_monthly_final_preview(company: str, attendance_month: str, kind: str = "
 	return {
 		"available": True,
 		"kind": kind,
+		"file_url": outputs.get("file_url") if kind == "first_signed" else (outputs.get("second_signed_file_url") or outputs.get("signed_file_url")) if kind == "signed" else outputs.get("finance_file_url"),
 		"title": _("一次签字版") if kind == "first_signed" else _("第二次员工签字版") if kind == "signed" else _("财务版"),
 		"locked_snapshot_version": locked_version,
 		"columns": [{"field": field, "label": label} for field, label in columns],
 		"web_editable_fields": list(MONTHLY_FINAL_WEB_EDITABLE_FIELDS) if kind == "signed" else [],
 		"special_hours_fields": list(MONTHLY_FINAL_SPECIAL_HOURS_FIELDS) if kind == "signed" else [],
 		"rows": rows if kind in {"first_signed", "signed"} else _finance_final_preview_rows(rows),
+		"source_quality": outputs.get("source_quality", []),
 	}
 
 

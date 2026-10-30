@@ -1,0 +1,10 @@
+{
+ "doctype": "Page",
+ "name": "dingtalk-roster-review",
+ "page_name": "dingtalk-roster-review",
+ "title": "钉钉资料核对",
+ "module": "HR",
+ "standard": "Yes",
+ "roles": [],
+ "system_page": 0
+}

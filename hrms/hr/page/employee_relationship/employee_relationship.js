@@ -271,9 +271,9 @@ class EmployeeRelationshipPage {
 
 	load_relationship_statistics() {
 		const request_id = ++this.statistics_request_id;
-		frappe.call({
+		Promise.resolve(frappe.call({
 			method: "hrms.hr.page.employee_relationship.employee_relationship.get_employee_relationship_statistics",
-		}).then((response) => {
+		})).then((response) => {
 			if (request_id !== this.statistics_request_id) return;
 			this.render_relationship_statistics(response.message || {});
 		}).catch(() => {
@@ -539,7 +539,7 @@ class EmployeeRelationshipPage {
 	load_relationships() {
 		const request_id = ++this.list_request_id;
 		const search = this.wrapper.querySelector("[data-relationship-search]")?.value.trim() || "";
-		frappe.call({
+		Promise.resolve(frappe.call({
 			method: "hrms.hr.page.employee_relationship.employee_relationship.get_employee_relationships",
 			args: {
 				search,
@@ -549,7 +549,7 @@ class EmployeeRelationshipPage {
 				sort_order: this.relationship_sort_order,
 				limit: 100,
 			},
-		}).then((response) => {
+		})).then((response) => {
 			if (request_id !== this.list_request_id) return;
 			this.render_relationship_list(response.message || {});
 		}).catch(() => {

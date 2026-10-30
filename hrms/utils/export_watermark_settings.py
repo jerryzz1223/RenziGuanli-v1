@@ -80,7 +80,7 @@ def get_export_watermark_options(export_key):
 	enabled = bool(entry.get("export", EXPORT_DEFAULTS[export_key]))
 	return {
 		"export": enabled,
-		"print": enabled and bool(entry.get("print", False)),
+		"print": enabled and bool(entry.get("print", True)),
 		"text": str(text)[:100],
 		"opacity": max(1, min(50, int(opacity))),
 	}
@@ -98,7 +98,7 @@ def get_export_watermark_settings():
 		"opacity": int(opacity),
 		"exports": [
 			{"key": key, "label": label, "export": bool((rules.get(key) or {}).get("export", default)),
-			 "print": bool((rules.get(key) or {}).get("print", False))}
+			 "print": bool((rules.get(key) or {}).get("export", default)) and bool((rules.get(key) or {}).get("print", True))}
 			for key, label, default in EXPORTS
 		],
 	}

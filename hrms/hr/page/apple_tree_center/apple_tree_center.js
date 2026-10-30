@@ -378,11 +378,11 @@ class AppleTreeCenter {
 		this.personRequestKey = this.activePerson + "/" + this.year + "/" + this.month + "/" + this.startDate + "/" + this.endDate + "/" + this.search + "/" + this.department + "/" + this.designation;
 		this.personData = null;
 		this.wrapper.innerHTML = `<section class="apple-tree-center apple-tree-center--state">正在加载个人明细…</section>`;
-		return frappe.call({
+		return Promise.resolve(frappe.call({
 			method: "hrms.hr.page.apple_tree_center.apple_tree_center.get_person_detail",
 			timeout: 30000,
 			args: { person: this.activePerson, year: this.year, month: this.month, search: this.search, company: this.company(), start_date: this.startDate, end_date: this.endDate, department: this.department, designation: this.designation },
-		}).then((response) => {
+		})).then((response) => {
 			if (requestId !== this.requestId) return;
 			this.personRequestKey = "";
 			this.personData = response.message || {};

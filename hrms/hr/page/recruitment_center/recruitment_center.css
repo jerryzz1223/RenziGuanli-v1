@@ -11,6 +11,87 @@
 }
 
 .recruitment-center--state { color: var(--recruitment-muted); min-height: 140px; }
+.recruitment-center.interview-register { --recruitment-border: #e7edf5; --recruitment-muted: #8492a8; --recruitment-primary: #315f9e; display: grid; gap: 16px; margin: 0; padding: 0; min-width: 0; border: 0; border-radius: 0; background: transparent; color: #28384f; }
+.interview-register *, .interview-register *::before, .interview-register *::after { box-sizing: border-box; }
+.interview-register__hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 26px 28px; border: 1px solid #dce5f2; border-radius: 16px; background: linear-gradient(117deg, #edf4ff 0%, #fff 65%); }
+.interview-register__hero h1 { margin: 0; color: #1f2d42; font-size: 28px; font-weight: 700; }
+.interview-register__actions { display: flex; gap: 8px; flex-shrink: 0; }
+.interview-register .btn { border-radius: 8px; font-size: 13px; }
+.interview-register .btn-primary { background: #191919; color: #fff; border-color: #191919; }
+.interview-register .btn-primary:hover { background: #333; border-color: #333; }
+.interview-register .btn-default { background: #f4f5f7; color: #394557; border: 1px solid transparent; }
+.interview-register button:focus-visible, .interview-register input:focus-visible, .interview-register select:focus-visible { outline: 2px solid #6c98d6; outline-offset: 3px; }
+.interview-register button[hidden] { display: none; }
+.interview-register__navigation { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 4px; }
+.interview-register__navigation button { background: transparent; border: 0; border-radius: 8px; padding: 9px 14px; font-size: 13px; color: #748197; }
+.interview-register__navigation button.is-active { color: #315f9e; background: #edf3fc; font-weight: 600; }
+.interview-register__navigation button:hover { background: #f0f4fa; }
+.interview-register__navigation button span { margin-left: 5px; color: #96a5bc; }
+.interview-register__panel { min-width: 0; padding: 22px; border: 1px solid var(--recruitment-border); border-radius: 16px; background: #fff; }
+.interview-register__panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.interview-register__panel-heading h2 { margin: 0; color: #26364a; font-size: 18px; font-weight: 650; }
+.interview-register__filters { display: grid; align-items: end; grid-template-columns: minmax(140px,1.1fr) minmax(140px,.9fr) minmax(200px,1.5fr) minmax(96px,.65fr) minmax(100px,.7fr) auto; gap: 16px; }
+.interview-register__filters label { display: grid; gap: 8px; font-size: 12px; color: #738198; font-weight: 500; margin: 0; min-width: 0; }
+.interview-register__filters [data-company] { min-width: 0; }
+.interview-register__filters [data-company] .form-group { margin-bottom: 0; }
+.interview-register__filters [data-company] .control-label { margin-bottom: 8px; color: #738198; font-size: 12px; }
+.interview-register__filters .form-control { width: 100%; min-width: 0; height: 38px; border: 1px solid #e5eaf1; background: #f9fafc; box-shadow: none; border-radius: 8px; font-size: 13px; color: #34455e; }
+.interview-register__filter-actions { display: flex; gap: 8px; padding-bottom: 1px; }
+.interview-register__filter-actions .btn { min-height: 38px; }
+.interview-register__view-switch { display: flex; gap: 3px; padding: 4px; border-radius: 9px; background: #f3f5f9; }
+.interview-register__view-switch button { padding: 7px 12px; border: 0; border-radius: 6px; background: transparent; color: #8391a7; font-size: 12px; white-space: nowrap; }
+.interview-register__view-switch button.is-active { background: #fff; color: #315f9e; box-shadow: 0 1px 4px #233b5d12; font-weight: 600; }
+.interview-register__daily-scroll { overflow-x: auto; }
+.interview-register__daily { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+.interview-register__daily th { background: #f7f9fc; text-align: left; font-size: 12px; font-weight: 500; color: #8391a7; padding: 13px 14px; border-bottom: 1px solid #edf1f6; }
+.interview-register__daily th:first-child { width: 17%; border-radius: 8px 0 0 8px; }
+.interview-register__daily th:last-child { width: 105px; border-radius: 0 8px 8px 0; }
+.interview-register__daily td { padding: 20px 14px; border-bottom: 1px solid #edf1f6; vertical-align: middle; overflow-wrap: anywhere; }
+.interview-register__daily tbody tr:last-child td { border-bottom: 0; }
+.interview-register__daily tbody tr:hover { background: #fafcff; }
+.interview-register__daily strong { font-weight: 500; }
+.interview-register__daily small { display: block; margin-top: 7px; color: #8a98ad; font-size: 12px; line-height: 1.5; }
+.interview-register__name, .interview-register__open { color: #315f9e; background: transparent; border: 0; padding: 0; font-weight: 600; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.interview-register__open { font-size: 12px; font-weight: 500; }
+.interview-register__open span { padding-left: 4px; color: #88a3c7; }
+.interview-register__badge { display: inline-block; padding: 5px 9px; border-radius: 6px; font-size: 12px; white-space: nowrap; }
+.interview-register__badge--green { background: #edf6f1; color: #348060; }
+.interview-register__badge--amber { background: #fff4e2; color: #ad741f; }
+.interview-register__badge--neutral { background: #f0f3f8; color: #7a889e; }
+.interview-register__scroll { max-height: 65vh; overflow: auto; border: 1px solid var(--recruitment-border); border-radius: 8px; }
+.interview-register__table { border-collapse: separate; border-spacing: 0; min-width: 2340px; width: 100%; font-size: 13px; }
+.interview-register__table th, .interview-register__table td { border-right: 1px solid #edf1f6; border-bottom: 1px solid #edf1f6; padding: 14px 12px; vertical-align: middle; min-width: 84px; }
+.interview-register__table th { background: #f4f7fc; color: #74849c; font-size: 12px; font-weight: 500; text-align: center; white-space: nowrap; }
+.interview-register__table thead { position: sticky; top: 0; z-index: 2; }
+.interview-register__table td { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 220px; }
+.interview-register__table td:nth-child(6) { min-width: 125px; }
+.interview-register__table tbody tr:hover { background: #fafcff; }
+.interview-register__footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 18px; margin-top: 6px; border-top: 1px solid #edf1f6; color: var(--recruitment-muted); font-size: 12px; }
+.interview-register__empty { display: grid; justify-items: center; gap: 10px; padding: 55px 20px; text-align: center; }
+.interview-register__empty > span { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: #f0f5fd; color: #87a6d1; font-size: 26px; }
+.interview-register__empty strong { color: #5f728d; font-size: 15px; }
+.interview-register__empty p { color: #95a2b6; font-size: 13px; margin: 0; }
+@media (max-width: 1200px) { .interview-register__filters { grid-template-columns: repeat(3, minmax(0,1fr)); } }
+@media (max-width: 760px) {
+	.interview-register__hero { align-items: flex-start; flex-direction: column; padding: 22px; gap: 20px; }
+	.interview-register__hero h1 { font-size: 24px; }
+	.interview-register__actions { width: 100%; }
+	.interview-register__actions .btn { flex: 1; }
+	.interview-register__panel { padding: 18px; }
+	.interview-register__panel-heading { align-items: flex-start; flex-direction: column; gap: 14px; }
+	.interview-register__filters { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
+	.interview-register__filters > label:nth-of-type(2), .interview-register__filter-actions { grid-column: 1 / -1; }
+	.interview-register__filter-actions .btn { flex: 1; }
+	.interview-register__navigation button { padding: 9px 10px; }
+	.interview-register__daily, .interview-register__daily tbody { display: block; }
+	.interview-register__daily thead { display: none; }
+	.interview-register__daily tr { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 18px 12px; padding: 20px 0; border-bottom: 1px solid #edf1f6; }
+	.interview-register__daily td { display: block; border: 0; padding: 0; }
+	.interview-register__daily td::before { display: block; content: attr(data-label); margin-bottom: 8px; color: #95a2b6; font-size: 11px; }
+	.interview-register__daily td:first-child, .interview-register__daily td:last-child { grid-column: 1 / -1; }
+	.interview-register__daily td:first-child .interview-register__name { font-size: 16px; }
+	.interview-register__daily td:last-child::before { display: none; }
+}
 .recruitment-center__header, .recruitment-center__panel-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .recruitment-center__header h2 { font-size: 22px; margin: 2px 0 6px; }
 .recruitment-center__header p, .recruitment-center__panel-head p { color: var(--recruitment-muted); margin: 0; }

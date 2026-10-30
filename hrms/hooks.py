@@ -35,7 +35,7 @@ app_include_js = [
 	"/assets/hrms/js/hrms_entry.js?v=20260929-mute-desk-sounds-v1",
 	"/assets/hrms/js/hrms_employee_registration_entry.js?v=20260915-qr-entry-v1",
 	"/assets/hrms/js/hrms_employee_form_entry.js?v=20260916-three-form-pages-v9-record-breadcrumb",
-	"/assets/hrms/js/hrms_announcement.js?v=20260916-announcement-v13-signed-version-lock",
+	"/assets/hrms/js/hrms_announcement.js?v=20261008-announcement-v14-native-promise",
 ]
 app_include_css = [
 	"hrms.bundle.css",

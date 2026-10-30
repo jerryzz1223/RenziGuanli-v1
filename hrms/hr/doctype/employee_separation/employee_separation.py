@@ -153,7 +153,9 @@ class EmployeeSeparation(Document):
 		employee.relieving_date = getdate(actual_departure_time) if actual_departure_time else None
 
 		employee.flags.ignore_permissions = True
-		employee.save()
+		from hrms.utils.employee_status_updates import save_employee_status_update
+
+		save_employee_status_update(employee, "separation")
 		return True
 
 	def _set_employee_pending_state(self):
@@ -167,7 +169,9 @@ class EmployeeSeparation(Document):
 		employee.status = "Inactive"
 		employee.relieving_date = None
 		employee.flags.ignore_permissions = True
-		employee.save()
+		from hrms.utils.employee_status_updates import save_employee_status_update
+
+		save_employee_status_update(employee, "separation")
 		return True
 
 

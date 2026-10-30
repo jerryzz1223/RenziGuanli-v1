@@ -40,7 +40,7 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 		const company = window.hrmsCompanyContext?.getCurrentCompany?.() || frappe.defaults?.get_user_default?.("Company") || "";
 		if (company && !state.current_filters.company) state.current_filters.company = company;
 		const request_id = ++state.schema_request_id;
-		return frappe.call("hrms.api.employee_field_template.get_employee_import_export_schema").then((r) => {
+		return Promise.resolve(frappe.call("hrms.api.employee_field_template.get_employee_import_export_schema")).then((r) => {
 			if (request_id !== state.schema_request_id) return;
 			const first_load = !state.schema;
 			state.schema = r.message;
@@ -58,10 +58,10 @@ frappe.pages["employee-roster-export"].on_page_load = function (wrapper) {
 
 	function load_export_records() {
 		const request_id = ++state.records_request_id;
-		return frappe.call({
+		return Promise.resolve(frappe.call({
 			method: "hrms.api.employee_field_template.get_employee_export_records",
 			args: { current_filters: JSON.stringify(state.current_filters) },
-		}).then((r) => {
+		})).then((r) => {
 			if (request_id !== state.records_request_id) return;
 			state.export_records = r.message || [];
 		});

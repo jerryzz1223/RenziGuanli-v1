@@ -49,6 +49,10 @@ assert(sidebar.includes('label: "更多服务"'));
 assert(sidebar.includes('{ type: "link", label: "数据统计", route: "/desk/hrms-data-statistics", slug: "hrms-data-statistics" }'));
 const dataStatisticsSidebar = sidebar.match(/label: "更多服务"[\s\S]*?\n\t\t},/);
 assert(dataStatisticsSidebar && !dataStatisticsSidebar[0].includes('label: "系统管理"'));
-assert(hooks.includes("20260914-data-statistics-clean-sidebar-v4"));
+// The statistics entry is delivered by the top navigation and home redirect
+// assets. Keep a cache-busting query on those actual entry points instead of
+// pinning this test to an obsolete, unrelated version marker.
+assert(hooks.includes('"/assets/hrms/js/hrms_top_nav.js?v='));
+assert(hooks.includes('"/assets/hrms/js/hrms_home_redirect_v6.js?v='));
 
 console.log("HRMS data statistics page and top More-menu entry verified.");

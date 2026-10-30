@@ -9,13 +9,23 @@ const source = fs.readFileSync(
 	"utf8",
 );
 
+assert.match(
+	source,
+	/this\.tab_load_promises\[group\] = Promise\.resolve\(frappe\.call\(\{[\s\S]*?get_employee_detail_tab[\s\S]*?\}\)\)\.then\(/,
+	"Lazy employee-detail tabs must convert Frappe Deferred responses to native Promises before finally().",
+);
+assert.match(
+	source,
+	/Promise\.resolve\(frappe\.call\(\{[\s\S]*?get_employee_summary[\s\S]*?\}\)\)\.then\(/,
+	"Apple-tree summaries must convert Frappe Deferred responses to native Promises before catch().",
+);
+
 for (const marker of [
 	"get_employee_summary",
 	"load_apple_tree_summary",
 	"render_apple_tree_summary",
 	"苹果树汇总",
-	"在职信息-苹果树汇总",
-	"hrms-employee-detail-collapse-row",
+	"hrms-employee-detail-related-row",
 	"data-action=\"open-apple-tree-detail\"",
 	'frappe.set_route("apple-tree-center", "person", button.dataset.applePerson, button.dataset.appleYear)',
 ]) {
@@ -24,12 +34,9 @@ for (const marker of [
 for (const marker of ["user-select: text !important", "-webkit-user-select: text !important", "has_text_selection(container)"]) {
 	assert(source.includes(marker), `Employee detail must keep rendered record text copyable: ${marker}`);
 }
-assert.match(
-	source,
-	/row\.addEventListener\("click", \(\) => \{[\s\S]*?if \(this\.has_text_selection\(row\)\) return;[\s\S]*?toggle_related_block/,
-	"Selecting text in a related-record row must not collapse it before it can be copied.",
-);
-assert(!source.includes("hrms-employee-apple-tree"), "Apple-tree summary must reuse related-record collapse styling, not a separate card.");
+assert(!source.includes("toggle_related_block"), "Related records must stay expanded without collapse handlers.");
+assert(!source.includes('__("办理入口")'), "Read-only history must not show processing entry footers.");
+assert(!source.includes("data-related-action="), "Related-record processing buttons must be removed.");
 for (const marker of [
 	'__("员工花名册 / 员工档案")',
 	'__("返回员工花名册")',
@@ -93,6 +100,17 @@ context.globalThis = context;
 vm.createContext(context);
 vm.runInContext(`${source}\nglobalThis.EmployeeDetailPageForTest = EmployeeDetailPage;`, context);
 
+const recordView = Object.create(context.EmployeeDetailPageForTest.prototype);
+const educationHtml = recordView.render_related_block({label: "教育经历", count: 1, items: [{fields: [{label: "学历", value: "高中"}, {label: "毕业院校", value: "示例学校"}]}], action_doctype: "Employee Transfer"});
+assert(educationHtml.includes("高中") && educationHtml.includes("示例学校"), "Education content must render immediately without a click.");
+assert(!educationHtml.includes("data-related-key") && !educationHtml.includes("data-related-action"));
+const emptyHtml = recordView.render_related_block({label: "工作经历", count: 0, items: []});
+assert(emptyHtml.includes("暂无记录"), "Empty history must also be visible immediately.");
+recordView.apple_tree_summary = {available: true, person_key: "example", year: 2026, person: {green_apples: 2, red_apples: 1, record_count: 3}};
+const appleHtml = recordView.render_apple_tree_summary();
+assert(appleHtml.includes("绿苹果") && appleHtml.includes("查看详细信息"), "Apple-tree metrics and drilldown must stay visible.");
+assert(!appleHtml.includes("办理入口") && !appleHtml.includes("data-related-key"));
+
 context.EmployeeDetailPageForTest.prototype.render = function () {
 	this.wrapper.rendered_employee = this.detail.header.employee_name;
 	this.page.set_title(this.detail.header.employee_name);
@@ -149,6 +167,22 @@ async function run() {
 	await flushPromises();
 	assert.strictEqual(main.rendered_employee, "Employee B refreshed");
 	assert.strictEqual(requests.length, 8, "A refreshed employee page must reload its Apple-tree summary.");
+
+	const appleTreePage = {
+		apple_tree_request_id: 0,
+		apple_tree_summary: null,
+		renders: 0,
+		is_current_request: () => true,
+		render() { this.renders += 1; },
+	};
+	context.frappe.call = () => ({ then(resolve) { resolve({ message: { available: true } }); } });
+	await context.EmployeeDetailPageForTest.prototype.load_apple_tree_summary.call(appleTreePage, "EMP-B", "ACME", 1);
+	assert.strictEqual(appleTreePage.apple_tree_summary.available, true, "A then-only Deferred must load the Apple-tree summary.");
+
+	context.frappe.call = () => ({ then(resolve, reject) { reject(new Error("summary unavailable")); } });
+	await context.EmployeeDetailPageForTest.prototype.load_apple_tree_summary.call(appleTreePage, "EMP-B", "ACME", 1);
+	assert.strictEqual(appleTreePage.apple_tree_summary.available, false, "A then-only Deferred rejection must show the existing fallback summary.");
+	assert.strictEqual(appleTreePage.renders, 2, "Both Apple-tree summary outcomes must refresh the detail view.");
 
 	console.log("Employee detail follows the current route and ignores stale responses.");
 }

@@ -866,10 +866,10 @@
 	function open_training_detail(row, workspace, reload) {
 		workspace.__trainingDetailRow = row;
 		workspace.innerHTML = `<div class="hrms-training-panel"><div class="hrms-training-empty">${__("正在读取课程详情…")}</div></div>`;
-		frappe.call({
+		Promise.resolve(frappe.call({
 			method: "hrms.hr.doctype.training_program.training_program.get_training_plan_detail",
 			args: { kind: row.kind, name: row.program || row.event, company: currentCompany() },
-		}).then(({ message }) => render_training_detail(workspace, message || {})).catch(() => reload());
+		})).then(({ message }) => render_training_detail(workspace, message || {})).catch(() => reload());
 	}
 
 	function render_dashboard(workspace, dashboard = {}, loading = false) {

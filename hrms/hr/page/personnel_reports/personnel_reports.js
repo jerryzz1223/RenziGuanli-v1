@@ -14,18 +14,6 @@ frappe.pages["personnel-reports"].on_page_load = function (wrapper) {
 	};
 
 	$(page.body).addClass("hrms-report-center");
-	page.set_primary_action(__("添加报表"), () => frappe.set_route("employee-roster-export"), "add");
-
-	function add_page_menu_item(label, action) {
-		if (page.add_action_item) {
-			page.add_action_item(label, action);
-		} else if (page.add_menu_item) {
-			page.add_menu_item(label, action);
-		}
-	}
-
-	add_page_menu_item(__("邮件订阅"), show_subscription_plan);
-	add_page_menu_item(__("编辑分组"), () => frappe.set_route("List", "HRMS Employee Report"));
 
 	function load() {
 		if (state.load_promise) return state.load_promise;
@@ -123,7 +111,7 @@ frappe.pages["personnel-reports"].on_page_load = function (wrapper) {
 										${frappe.utils.icon("download", "sm")}
 									</button>
 									<button class="btn btn-xs btn-default" data-more-report="${frappe.utils.escape_html(report.id)}" title="${__("更多")}">
-										${frappe.utils.icon("more-horizontal", "sm")}
+										${__("更多")}
 									</button>
 								</div>
 							</div>`,

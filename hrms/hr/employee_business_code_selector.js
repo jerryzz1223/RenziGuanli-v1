@@ -28,8 +28,10 @@
 		if (!frm.doc.employee || frm.__hrms_loading_employee_code) return;
 
 		frm.__hrms_loading_employee_code = true;
-		frappe.db
-			.get_value("Employee", frm.doc.employee, ["custom_employee_code", "employee_name"])
+		// Older Frappe builds return a jQuery Deferred here.  It is thenable but
+		// has no Promise.prototype.finally(), so normalise it before resetting the
+		// loading guard below.
+		Promise.resolve(frappe.db.get_value("Employee", frm.doc.employee, ["custom_employee_code", "employee_name"]))
 			.then(({ message }) => {
 				const employee_code = message?.custom_employee_code || "";
 				if (employee_code) {
@@ -38,6 +40,9 @@
 					set_employee_identity_hint(frm, { ...message, employee_code });
 				}
 			})
+			// This is a best-effort display-only lookup; leave the form usable when
+			// the employee record cannot be read and, crucially, still clear its guard.
+			.catch(() => {})
 			.finally(() => {
 				frm.__hrms_loading_employee_code = false;
 			});

@@ -39,7 +39,9 @@ class SalaryArchitecture {
 
 	load() {
 		this.wrapper.innerHTML = `<div class="text-muted">${this.escape(__("正在加载薪级表..."))}</div>`;
-		frappe.call("hrms.api.payroll_input.list_salary_structure_versions")
+		// Older Frappe builds may return a Deferred with `then` but without
+		// native `catch`; normalize it before using the promise error path below.
+		Promise.resolve(frappe.call("hrms.api.payroll_input.list_salary_structure_versions"))
 			.then((response) => {
 				this.versions = response.message || [];
 				if (!this.selectedVersion || !this.versions.some((row) => row.name === this.selectedVersion)) {

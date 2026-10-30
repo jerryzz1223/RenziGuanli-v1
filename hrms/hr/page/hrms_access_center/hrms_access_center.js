@@ -106,9 +106,12 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 			primary_action_label: __("确认停用"),
 			primary_action() {
 				dialog.disable_primary_action();
-				frappe.call("hrms.access_control.disable_hrms_user_account", {
+				// Older Frappe releases return a jQuery Deferred, whose chain lacks
+				// Promise.prototype.finally(). Normalise it so the dialog can always
+				// restore its primary action after the request settles.
+				Promise.resolve(frappe.call("hrms.access_control.disable_hrms_user_account", {
 					user: account.user,
-				}).then(() => {
+				})).then(() => {
 					dialog.hide();
 					frappe.show_alert({ message: __("账户已停用，历史记录已保留"), indicator: "green" });
 					load();
@@ -120,6 +123,9 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 	}
 
 	function assigned_roles(account) {
+		if (account.user === "Administrator") {
+			return `<span class="hrms-access-center__role-chip">${__("超级管理员")}</span>`;
+		}
 		const roles = account.assigned_roles || [];
 		const labels = [account.access_tier_label || __("只读")];
 		if (roles.includes("System Manager")) labels.push(__("系统管理员"));
@@ -170,7 +176,9 @@ frappe.pages["hrms-access-center"].on_page_load = function (wrapper) {
 			primary_action_label: __("执行实际权限测试"),
 			primary_action(values) {
 				dialog.disable_primary_action();
-				frappe.call("hrms.api.employee_field_template.test_hrms_effective_permission", values)
+				// Frappe may expose this RPC as a Deferred rather than a native Promise.
+				// Keep the cleanup handler compatible with both response shapes.
+				Promise.resolve(frappe.call("hrms.api.employee_field_template.test_hrms_effective_permission", values))
 					.then((response) => {
 						dialog.hide();
 						render_permission_result(response.message || {});

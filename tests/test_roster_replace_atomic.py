@@ -1,6 +1,9 @@
 """Verify complete roster imports replace membership atomically."""
 
 import ast
+import importlib.util
+import sys
+from unittest.mock import patch
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,6 +52,14 @@ class RosterReplaceAtomicTests(unittest.TestCase):
 			get_traceback=lambda: "traceback",
 			throw=lambda message: (_ for _ in ()).throw(ValueError(message)),
 		)
+		# Load the real helper without importing the Frappe-dependent package.
+		helper_path = SOURCE.parents[1] / "utils/employee_status_updates.py"
+		spec = importlib.util.spec_from_file_location("status_updates", helper_path)
+		helper = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(helper)
+		modules = patch.dict(sys.modules, {"hrms.utils.employee_status_updates": helper})
+		modules.start()
+		self.addCleanup(modules.stop)
 		tree = ast.parse(SOURCE.read_text())
 		function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "import_employee_roster")
 		function.decorator_list = []

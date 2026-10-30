@@ -134,9 +134,17 @@ class EmployeeTransfer(Document):
 				row.new = new_value
 
 			current_value = _get_work_nature(employee) if fieldname == "employment_type" else employee.get(fieldname)
+			if self.docstatus == 1 and cstr(row.current).strip() != cstr(current_value).strip():
+				frappe.throw(_("员工的{0}已变化，请重新核对异动明细后再提交。").format(TRANSFER_PROPERTY_FIELDS[fieldname]))
 			row.current = cstr(current_value)
 			row.property = TRANSFER_PROPERTY_FIELDS[fieldname]
-			if cstr(current_value).strip() == cstr(row.new).strip():
+			department_change = next((item for item in self.transfer_details if item.fieldname == "department"), None)
+			same_designation_in_new_department = (
+				fieldname == "designation"
+				and department_change
+				and _resolve_transfer_link_value("Department", department_change.new, employee.company) != employee.department
+			)
+			if cstr(current_value).strip() == cstr(row.new).strip() and not same_designation_in_new_department:
 				frappe.throw(_("{0}的变更前后不能相同。").format(row.property))
 			if fieldname == "reports_to" and row.new == employee.name:
 				frappe.throw(_("直属上级不能选择员工本人。"))
@@ -146,6 +154,14 @@ class EmployeeTransfer(Document):
 				and not frappe.db.exists(field.options, row.new)
 			):
 				frappe.throw(_("{0}不存在：{1}").format(row.property, row.new))
+			if field.fieldtype == "Select" and fieldname != "employment_type":
+				options = [option.strip() for option in cstr(field.options).split("\n") if option.strip()]
+				if new_value not in options:
+					frappe.throw(_("请选择有效的{0}选项。").format(row.property))
+			if fieldname == "reports_to":
+				manager = frappe.db.get_value("Employee", row.new, ["status", "company"], as_dict=True)
+				if not manager or manager.status != "Active" or manager.company != employee.company:
+					frappe.throw(_("直属上级须为本公司在职员工。"))
 			details[fieldname] = row
 
 		if "department" in details and "designation" not in details:
@@ -155,6 +171,17 @@ class EmployeeTransfer(Document):
 			department_company = frappe.db.get_value("Department", details["department"].new, "company")
 			if self.company and department_company != self.company:
 				frappe.throw(_("目标部门 {0} 不属于公司 {1}。").format(details["department"].new, self.company))
+
+		if "designation" in details:
+			department = details["department"].new if "department" in details else employee.department
+			if not department or not _designation_belongs_to_department(details["designation"].new, department):
+				frappe.throw(_("所选岗位不属于目标部门，请重新选择岗位。"))
+
+		if "employment_type" in details and "custom_is_confirmed" in details:
+			nature = details["employment_type"].new
+			confirmed = details["custom_is_confirmed"].new
+			if (nature == "在职 · 正式" and confirmed != "是") or (nature == "在职 · 试用期" and confirmed != "否"):
+				frappe.throw(_("工作性质与转正状态不一致，请检查变更内容。"))
 
 	def before_submit(self):
 		if not self.transfer_date:
@@ -209,6 +236,32 @@ def _apply_work_nature(employee, work_nature):
 		frappe.throw(_("工作性质不在现有五类范围内：{0}").format(work_nature))
 	_set_if_present(employee, "custom_work_nature", canonical_work_nature)
 	apply_employee_work_nature(employee)
+
+
+def _designation_belongs_to_department(designation, department):
+	if frappe.db.exists("Employee", {"department": department, "designation": designation}):
+		return True
+	meta = frappe.get_meta("Designation")
+	return bool(meta.has_field("hrms_source_department") and frappe.db.exists(
+		"Designation", {"name": designation, "hrms_source_department": department}
+	))
+
+
+@frappe.whitelist()
+def get_transfer_field_property(employee: str, fieldname: str) -> dict:
+	if fieldname not in TRANSFER_PROPERTY_FIELDS:
+		frappe.throw(_("不支持的异动项目。"))
+	doc = frappe.get_doc("Employee", employee)
+	doc.check_permission("read")
+	field = frappe.get_meta("Employee").get_field(fieldname)
+	if not field:
+		frappe.throw(_("员工档案中不存在此变更项目。"))
+	return {
+		"value": _get_work_nature(doc) if fieldname == "employment_type" else doc.get(fieldname),
+		"datatype": field.fieldtype,
+		"label": TRANSFER_PROPERTY_FIELDS[fieldname],
+		"options": field.options,
+	}
 
 
 @frappe.whitelist()

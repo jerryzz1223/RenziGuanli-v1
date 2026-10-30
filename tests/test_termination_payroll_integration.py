@@ -70,6 +70,7 @@ class TerminationPayrollIntegrationTest(unittest.TestCase):
             TERMINATION_RULE_VERSION=departure.RULE_VERSION, PAYROLL_PARTICIPATION_APPROVED_STATUS="审核通过",
             PAYROLL_SETTLEMENT_DOCTYPE="settlement", PAYROLL_INPUT_DOCTYPE="input",
             MONTHLY_ATTENDANCE_DOCTYPE="attendance", LOCAL_PAYROLL_TEST_COMPANY="TEST-HRMS",
+            PROCESSING_ATTENDANCE_LOCK_PREFIX="处理终稿:",
             _require_payroll_master_manager=lambda: None, _require_payroll_scope=lambda *args: args,
             _assert_workflow_locked_for_generation=lambda *args: None, _payroll_run_snapshot=lambda *args: "run-v1",
             _payroll_calculation_rules=lambda *args: {}, _apply_attendance_rule_parameters=lambda formulas, rules: formulas,

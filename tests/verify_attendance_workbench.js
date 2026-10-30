@@ -203,7 +203,7 @@ for (const marker of [
 	"requestId !== this.ledger_query_request_id || this.active_view !== expectedView",
 	"render_exception_pagination",
 	"data-exception-page",
-	"全选当前筛选来源的全部待处理异常",
+	"全选/取消全选当前页待处理异常",
 	"data-exception-record-select",
 	"data-select-exception-all",
 	"data-bulk-exception-process",

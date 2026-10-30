@@ -51,3 +51,23 @@ class ExportWatermarkSettingsTest(unittest.TestCase):
 		self.assertEqual(stored["opacity"], 15)
 		self.assertTrue(next(row for row in result["exports"] if row["key"] == "roster")["print"])
 		self.assertFalse(self.module.get_export_watermark_options("attendance_exceptions")["export"])
+
+	def test_all_default_watermarked_exports_also_print(self):
+		rows = self.module.get_export_watermark_settings()["exports"]
+		for row in rows:
+			with self.subTest(key=row["key"]):
+				options = self.module.get_export_watermark_options(row["key"])
+				self.assertEqual(options["print"], options["export"])
+				self.assertEqual(row["print"], options["print"])
+		self.assertFalse(self.module.get_export_watermark_options("unknown")["print"])
+
+	def test_missing_print_choice_defaults_on_but_explicit_off_is_preserved(self):
+		self.values[self.module.SETTINGS_DEFAULT_KEY] = json.dumps({"rules": {
+			"roster": {"export": True},
+			"attendance_final": {"export": True, "print": False},
+			"organization_configuration": {"export": False, "print": True},
+		}})
+		rows = {row["key"]: row for row in self.module.get_export_watermark_settings()["exports"]}
+		for key, expected in (("roster", True), ("attendance_final", False), ("organization_configuration", False)):
+			self.assertEqual(self.module.get_export_watermark_options(key)["print"], expected)
+			self.assertEqual(rows[key]["print"], expected)

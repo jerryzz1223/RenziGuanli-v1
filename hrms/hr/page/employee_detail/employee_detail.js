@@ -27,7 +27,6 @@ class EmployeeDetailPage {
 		this.last_loaded_at = 0;
 		this.cache_ttl = 30_000;
 		this.active_tab = "概览";
-		this.expanded_related = {};
 		this.apple_tree_summary = null;
 		this.apple_tree_request_id = 0;
 		this.tab_load_promises = {};
@@ -49,6 +48,13 @@ class EmployeeDetailPage {
 	show() {
 		document.body.classList.add("hrms-employee-detail-view");
 		this.page.set_secondary_action(__("返回员工花名册"), () => this.return_to_roster());
+		this.page.add_inner_button?.(__("导出全履历"), () => {
+			const employee = this.employee;
+			if (!employee || !this.detail) return;
+			frappe.require("/assets/hrms/js/hrms_employee_history_export.js", () => {
+				window.hrmsExportEmployeeHistory(employee);
+			});
+		});
 		this.set_breadcrumb();
 		this.refresh_from_route();
 	}
@@ -112,7 +118,6 @@ class EmployeeDetailPage {
 			this.navigation = {};
 			this.last_loaded_at = 0;
 			this.active_tab = "概览";
-			this.expanded_related = {};
 			this.trainingSearch = "";
 			this.trainingType = "";
 			this.apple_tree_summary = null;
@@ -208,10 +213,10 @@ class EmployeeDetailPage {
 		this.render_tab_loading();
 		if (this.tab_load_promises[group]) return this.tab_load_promises[group];
 		const employee = this.employee;
-		this.tab_load_promises[group] = frappe.call({
+		this.tab_load_promises[group] = Promise.resolve(frappe.call({
 			method: "hrms.api.employee_field_template.get_employee_detail_tab",
 			args: { employee, tab },
-		}).then(({ message }) => {
+		})).then(({ message }) => {
 			if (employee !== this.employee) return;
 			Object.assign(this.detail, message || {});
 			this.loaded_tab_groups.add(group);
@@ -240,10 +245,10 @@ class EmployeeDetailPage {
 
 	load_apple_tree_summary(employee, company, detail_request_id) {
 		const apple_tree_request_id = ++this.apple_tree_request_id;
-		return frappe.call({
+		return Promise.resolve(frappe.call({
 			method: "hrms.hr.page.apple_tree_center.apple_tree_center.get_employee_summary",
 			args: { employee, year: String(new Date().getFullYear()), company },
-		}).then((response) => {
+		})).then((response) => {
 			if (!this.is_current_request(detail_request_id, employee) || apple_tree_request_id !== this.apple_tree_request_id) return;
 			this.apple_tree_summary = response.message || { available: false, reason: __("苹果树汇总暂时无法读取。") };
 			this.render();
@@ -647,7 +652,7 @@ class EmployeeDetailPage {
 					background: #fff;
 					border-top: 1px solid #f3f5f7;
 					font-size: 13px;
-					cursor: pointer;
+					cursor: default;
 				}
 				.hrms-employee-material-intro {
 					margin-bottom: 16px;
@@ -813,7 +818,7 @@ class EmployeeDetailPage {
 					.hrms-employee-material-type { grid-template-columns: 1fr; gap: 8px; }
 					.hrms-employee-material-actions { justify-content: flex-start; flex-wrap: wrap; }
 				}
-				.hrms-employee-detail-collapse-row {
+				.hrms-employee-detail-related-row {
 					min-height: 46px;
 				}
 				.hrms-employee-detail-related-row:hover {
@@ -984,7 +989,7 @@ class EmployeeDetailPage {
 						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="upload-photo">${__("上传照片")}</button>` : ""}
 						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="edit-employee">${__("编辑资料")}</button>` : ""}
 						<button class="btn btn-primary btn-sm" data-action="transfer">${__("办理人事异动")}</button>
-						${this.is_probation_work_nature(header) ? `<button class="btn btn-default btn-sm" data-action="promotion">${__("转正面谈")}</button>` : ""}
+						${this.is_probation_work_nature(header) ? `<button class="btn btn-default btn-sm" data-action="promotion">${__("转正管理")}</button>` : ""}
 						<button class="btn btn-default btn-sm" data-action="separation">${__("离职")}</button>
 						<button class="btn btn-default btn-sm" data-action="contract">${__("合同记录")}</button>
 					</div>
@@ -1305,16 +1310,14 @@ class EmployeeDetailPage {
 		const data = this.apple_tree_summary;
 		const year = data?.year || new Date().getFullYear();
 		const person_key = data?.person_key || "";
-		const key = "在职信息-苹果树汇总";
-		const expanded = Boolean(this.expanded_related[key]);
 		const person = data?.person || {};
 		const count = data?.available ? Number(person.record_count || 0) : 0;
 		const detail_button = person_key ? `<button class="btn btn-default btn-xs" data-action="open-apple-tree-detail" data-apple-person="${frappe.utils.escape_html(person_key)}" data-apple-year="${frappe.utils.escape_html(String(year))}">${__("查看详细信息")}</button>` : "";
 		const fields = [["统计年度", `${year}${__("年")}`], ["绿苹果", person.green_apples], ["红苹果", person.red_apples], ["净苹果", person.net_apples], ["记录数", person.record_count], ["苹果金额", person.reward_amount]];
 		const detail = data?.available
-			? `<div class="hrms-employee-detail-related-detail">${this.render_related_items([{ fields: fields.map(([label, value]) => ({ label, value })) }])}<div class="hrms-employee-detail-related-footer"><span class="text-muted">${__("办理入口")}</span>${detail_button}</div></div>`
+			? `<div class="hrms-employee-detail-related-detail">${this.render_related_items([{ fields: fields.map(([label, value]) => ({ label, value })) }])}<div class="hrms-employee-detail-related-footer">${detail_button}</div></div>`
 			: `<div class="hrms-employee-detail-related-detail"><div class="text-muted">${frappe.utils.escape_html(data ? (data.reason || __("暂无苹果树记录。")) : __("正在读取..."))}</div></div>`;
-		return `<div class="hrms-employee-detail-related-row hrms-employee-detail-collapse-row" data-related-key="${key}"><div class="hrms-employee-detail-related-title"><strong>${__("苹果树汇总")}</strong><span class="text-muted">（${__("已有{0}条记录", [count])}）</span></div><div class="hrms-employee-detail-related-actions"><span>${count ? __("查看更多") : __("暂无数据")}</span><span>${expanded ? "⌃" : "⌄"}</span></div></div>${expanded ? detail : ""}`;
+		return `<div class="hrms-employee-detail-related-row"><div class="hrms-employee-detail-related-title"><strong>${__("苹果树汇总")}</strong><span class="text-muted">（${__("已有{0}条记录", [count])}）</span></div></div>${detail}`;
 	}
 
 	render_readonly_field(field) {
@@ -1414,28 +1417,22 @@ class EmployeeDetailPage {
 		return `
 			<div class="hrms-employee-detail-related">
 				${rows
-					.map((row, index) => this.render_related_block(row, tab_label, index))
+					.map((row) => this.render_related_block(row))
 					.join("")}
 			</div>
 		`;
 	}
 
-	render_related_block(row, tab_label, index) {
-		const key = `${tab_label}-${row.label}-${index}`;
-		const expanded = Boolean(this.expanded_related[key]);
+	render_related_block(row) {
 		const count = Number(row.count || 0);
 		return `
-			<div class="hrms-employee-detail-related-row hrms-employee-detail-collapse-row" data-related-key="${frappe.utils.escape_html(key)}">
+			<div class="hrms-employee-detail-related-row">
 				<div class="hrms-employee-detail-related-title">
 					<strong>${frappe.utils.escape_html(__(row.label))}</strong>
 					<span class="text-muted">（${__("已有{0}条记录", [count])}）</span>
 				</div>
-				<div class="hrms-employee-detail-related-actions">
-					<span>${count ? __("查看更多") : __("暂无数据")}</span>
-					<span>${expanded ? "⌃" : "⌄"}</span>
-				</div>
 			</div>
-			${expanded ? this.render_related_detail(row) : ""}
+			${this.render_related_detail(row)}
 		`;
 	}
 
@@ -1451,14 +1448,6 @@ class EmployeeDetailPage {
 		return `
 			<div class="hrms-employee-detail-related-detail">
 				${items.length ? this.render_related_items(items) : `<div class="text-muted">${__("暂无记录")}</div>`}
-				<div class="hrms-employee-detail-related-footer">
-					<span class="text-muted">${__("办理入口")}</span>
-					${
-						row.action_doctype || row.action_route
-							? `<button class="btn btn-default btn-xs" data-related-action="${frappe.utils.escape_html(row.action_doctype || "")}" data-related-route="${frappe.utils.escape_html(row.action_route || "")}">${frappe.utils.escape_html(__(row.action_label || "新增记录"))}</button>`
-							: `<span class="text-muted">${__("暂无办理入口")}</span>`
-					}
-				</div>
 			</div>
 		`;
 	}
@@ -1551,28 +1540,6 @@ class EmployeeDetailPage {
 				frappe.set_route("employee-relationship", this.employee);
 			});
 		});
-		this.wrapper.querySelectorAll("[data-related-key]").forEach((row) => {
-			row.addEventListener("click", () => {
-				// A mouseup after selecting a field also emits click. Do not collapse
-				// the record and discard the selection before the user can copy it.
-				if (this.has_text_selection(row)) return;
-				this.toggle_related_block(row.dataset.relatedKey);
-			});
-		});
-		this.wrapper.querySelectorAll("[data-related-action], [data-related-route]").forEach((button) => {
-			button.addEventListener("click", (event) => {
-				event.stopPropagation();
-				const doctype = button.dataset.relatedAction;
-				const route = button.dataset.relatedRoute;
-				if (doctype) {
-					frappe.new_doc(doctype, { employee: this.employee });
-					return;
-				}
-				if (route) {
-					frappe.set_route(route);
-				}
-			});
-		});
 		this.wrapper.querySelectorAll("[data-standing-pay-history]").forEach((button) => {
 			button.addEventListener("click", () => {
 				frappe.set_route("payroll-input-center", "salary-register", this.employee, button.dataset.standingPayHistory, "employee-detail");
@@ -1609,6 +1576,8 @@ class EmployeeDetailPage {
 					window.hrmsEmployeeNavigation.openEmployeeFormForEdit(this.employee);
 					return;
 				}
+				window.hrmsEmployeeNavigation = window.hrmsEmployeeNavigation || {};
+				window.hrmsEmployeeNavigation.returnAfterEdit = this.employee;
 				frappe.route_options = { hrms_allow_employee_form: 1 };
 				frappe.set_route("Form", "Employee", this.employee);
 			});
@@ -1667,27 +1636,8 @@ class EmployeeDetailPage {
 		this.wrapper.querySelectorAll("[data-action='promotion']").forEach((button) => {
 			button.addEventListener("click", () => {
 				if (!this.is_probation_work_nature(this.detail?.header)) return;
-				const interview_date = frappe.datetime.get_today();
-				frappe.new_doc("Employee Promotion", {
-					employee: this.employee,
-					promotion_date: interview_date,
-					custom_is_confirmation_interview: 1,
-					custom_confirmation_interview_date: interview_date,
-					promotion_details: [
-						{
-							property: __("是否转正"),
-							fieldname: "custom_is_confirmed",
-							current: this.detail?.header?.custom_is_confirmed || "",
-							new: "是",
-						},
-						{
-							property: __("转正日期"),
-							fieldname: "final_confirmation_date",
-							current: this.detail?.header?.final_confirmation_date || "",
-							new: interview_date,
-						},
-					],
-				});
+				window.hrmsConfirmationEmployee = this.employee;
+				frappe.set_route("List", "Employee Promotion");
 			});
 		});
 		this.wrapper.querySelectorAll("[data-action='separation']").forEach((button) => {
@@ -2010,11 +1960,6 @@ class EmployeeDetailPage {
 				});
 			},
 		);
-	}
-
-	toggle_related_block(key) {
-		this.expanded_related[key] = !this.expanded_related[key];
-		this.render();
 	}
 
 	format_value(value) {

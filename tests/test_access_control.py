@@ -197,6 +197,14 @@ class AccessControlTests(unittest.TestCase):
 		self.assertTrue(module.has_hrms_capability("roster_import_submit", user="worker@example.com"))
 		self.assertFalse(module.has_hrms_capability("attendance_final_approve", user="worker@example.com"))
 
+	def test_account_summary_does_not_label_an_unassigned_user_as_read_only(self):
+		module = _load_module()
+		self.assertIsNone(module.get_hrms_assigned_access_tier_for_roles([]))
+		self.assertIsNone(module.get_hrms_assigned_access_tier_for_roles(["System Manager"]))
+		self.assertIsNone(module.get_hrms_assigned_access_tier_for_roles([module.ATTENDANCE_FINAL_APPROVER_ROLE]))
+		self.assertEqual(module.get_hrms_assigned_access_tier_for_roles([module.READ_ONLY_ROLE]), "read")
+		self.assertEqual(module.get_hrms_assigned_access_tier_for_roles(["花名册导入审批"]), "approve")
+
 	def test_attendance_final_approval_is_an_independent_per_account_permission(self):
 		user = _UserDoc(["Existing Custom Role", "HRMS 提交"])
 		module = _load_module(user)

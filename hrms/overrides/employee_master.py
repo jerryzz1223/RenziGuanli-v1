@@ -22,7 +22,27 @@ class EmployeeMaster(Employee):
 		self._apply_company_employee_code()
 		link_new_employee_to_previous_employment(self)
 		apply_employee_work_nature(self)
+		from hrms.utils.employee_status_updates import validate_employee_status_correction
+
+		validate_employee_status_correction(self)
 		return super().validate()
+
+	def on_update(self):
+		parent_update = getattr(super(), "on_update", None)
+		if parent_update:
+			parent_update()
+		from hrms.utils.employee_status_updates import record_employee_status_correction
+
+		record_employee_status_correction(self)
+
+	def _get_missing_mandatory_fields(self):
+		# Recruitment is an optional source for an Employee. A site field
+		# template must not turn it into a prerequisite for standalone entry.
+		missing = super()._get_missing_mandatory_fields()
+		optional = {"job_applicant"}
+		if not self.get("user_id") and not cint(self.get("create_user_automatically")):
+			optional.update({"personal_email", "company_email", "prefered_contact_email"})
+		return [(fieldname, message) for fieldname, message in missing if fieldname not in optional]
 
 	def autoname(self):
 		# Employee.name is a Frappe link key, but it is also what standard Link
@@ -97,6 +117,8 @@ def apply_employee_work_nature(employee):
 	# Manual Employee creation is always a probationary onboarding record. The
 	# roster or approved DingTalk import may declare another work nature for a
 	# new employee, only when its source actually supplies that field.
+	if employee.is_new() and is_roster_import and not selected:
+		selected = {"Left": "离职", "Inactive": "待离职"}.get(employee.get("status"), "")
 	if employee.is_new() and (not is_roster_import or not selected):
 		selected = "在职·试用期"
 	selected_changed = employee.is_new() or employee.has_value_changed("custom_work_nature")

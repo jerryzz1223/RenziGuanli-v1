@@ -28,3 +28,8 @@ assert(
 );
 
 console.log("personnel page registration contract passed");
+
+const dingtalkPage = JSON.parse(read("hrms/hr/page/dingtalk_roster_review/dingtalk_roster_review.json"));
+assert(pageTemplate.includes('{"name": "dingtalk-roster-review", "title": "钉钉资料核对"'), "钉钉核对页面必须进入统一迁移注册清单。");
+assert(dingtalkPage.name === "dingtalk-roster-review" && dingtalkPage.page_name === "dingtalk-roster-review", "钉钉核对页路由必须与注册清单一致。");
+console.log("DingTalk review migration registration passed");

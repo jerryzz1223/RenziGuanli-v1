@@ -45,6 +45,24 @@ test("system home merges repeat refresh clicks and restores the button", async (
 	assert.equal(calls, 1);
 });
 
+test("system home accepts Frappe Deferred responses before cleanup", async () => {
+	const button = { disabled: false, isConnected: true, setAttribute() {}, removeAttribute() {} };
+	const { PageClass } = loadClass("hrms/hr/page/hrms_workbench/hrms_workbench.js", "HRMSHome", () => ({
+		// Installed Frappe returns a jQuery thenable, which does not implement
+		// Promise.prototype.finally().
+		then(resolve) {
+			resolve({ message: { refreshed: true } });
+		},
+	}));
+	const home = new PageClass(page((selector) => selector === "[data-home-refresh]" ? button : null));
+	home.render = () => {};
+
+	await assert.doesNotReject(home.refresh());
+	assert.deepEqual(home.data, { refreshed: true });
+	assert.equal(home.load_promise, null, "completed Deferred reads must release the in-flight request");
+	assert.equal(button.disabled, false, "cleanup must restore the refresh button");
+});
+
 test("personnel home keeps its DOM on a cache hit and fetches map data once", async () => {
 	let calls = 0;
 	const { PageClass, context } = loadClass("hrms/hr/page/personnel_home/personnel_home.js", "PersonnelHome", () => { calls++; return Promise.resolve({ message: {} }); });

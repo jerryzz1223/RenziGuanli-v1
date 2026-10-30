@@ -417,6 +417,9 @@ def get_custom_fields():
 			},
 		],
 		"File": [
+			{"fieldname": "custom_hrms_revocation_reason", "fieldtype": "Small Text", "label": _("撤销原因"), "read_only": 1},
+			{"fieldname": "custom_hrms_revoked_by", "fieldtype": "Link", "options": "User", "label": _("撤销人"), "read_only": 1},
+			{"fieldname": "custom_hrms_revoked_at", "fieldtype": "Datetime", "label": _("撤销时间"), "read_only": 1},
 			{
 				"fieldname": "custom_hrms_attachment_title",
 				"fieldtype": "Data",
@@ -539,6 +542,11 @@ def make_fixtures():
 		{"doctype": "Employment Type", "employee_type_name": _("Retainer")},
 		{"doctype": "Employment Type", "employee_type_name": _("Apprentice")},
 		# Job Applicant Source
+		{"doctype": "Job Applicant Source", "source_name": "门口"},
+		{"doctype": "Job Applicant Source", "source_name": "公众号"},
+		{"doctype": "Job Applicant Source", "source_name": "网上"},
+		{"doctype": "Job Applicant Source", "source_name": "老乡朋友"},
+		{"doctype": "Job Applicant Source", "source_name": "其他"},
 		{"doctype": "Job Applicant Source", "source_name": _("Website Listing")},
 		{"doctype": "Job Applicant Source", "source_name": _("Walk In")},
 		{"doctype": "Job Applicant Source", "source_name": _("Employee Referral")},

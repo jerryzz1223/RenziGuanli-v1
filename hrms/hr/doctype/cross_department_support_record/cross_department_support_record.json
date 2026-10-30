@@ -1,0 +1,144 @@
+{
+ "doctype": "DocType",
+ "name": "Cross Department Support Record",
+ "module": "HR",
+ "autoname": "CDSR-.YYYY.-.#####",
+ "engine": "InnoDB",
+ "is_submittable": 1,
+ "track_changes": 1,
+ "field_order": [
+  "employee",
+  "employee_name",
+  "company",
+  "source_reference",
+  "support_date",
+  "end_date",
+  "support_department",
+  "support_designation",
+  "capability",
+  "remarks",
+  "amended_from"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "options": "Employee",
+   "label": "员工",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "fetch_from": "employee.employee_name",
+   "read_only": 1,
+   "label": "姓名",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "options": "Company",
+   "fetch_from": "employee.company",
+   "read_only": 1,
+   "reqd": 1,
+   "label": "公司"
+  },
+  {
+   "fieldname": "source_reference",
+   "fieldtype": "Data",
+   "label": "来源单号",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "填写可追溯的支援申请/确认单号；同一员工同一单号只计一次。取消整次支援时须取消该单号下全部有效记录。"
+  },
+  {
+   "fieldname": "support_date",
+   "fieldtype": "Date",
+   "label": "支援开始日期",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "end_date",
+   "fieldtype": "Date",
+   "label": "支援结束日期"
+  },
+  {
+   "fieldname": "support_department",
+   "fieldtype": "Data",
+   "label": "支援部门",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "备注"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "options": "Cross Department Support Record",
+   "label": "修订自",
+   "read_only": 1,
+   "no_copy": 1,
+   "print_hide": 1
+  },
+  {
+   "fieldname": "support_designation",
+   "fieldtype": "Data",
+   "label": "支援岗位",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "capability",
+   "fieldtype": "Link",
+   "options": "Cross Department Support Capability",
+   "label": "支援能力",
+   "read_only": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1,
+   "delete": 1
+  },
+  {
+   "role": "HR Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1,
+   "delete": 1
+  },
+  {
+   "role": "HR User",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1
+  }
+ ],
+ "sort_field": "support_date",
+ "sort_order": "DESC",
+ "title_field": "employee_name",
+ "description": "实际支援台账：草稿不计次，已提交计次，取消不计次；同一员工同一来源单号去重，归属最早开始月份。"
+}

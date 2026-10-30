@@ -63,7 +63,7 @@
   {
    "fieldname": "promotion_date",
    "fieldtype": "Date",
-   "label": "Promotion Date",
+   "label": "转正日期",
    "reqd": 1
   },
   {

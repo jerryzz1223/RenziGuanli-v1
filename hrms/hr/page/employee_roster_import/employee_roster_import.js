@@ -41,8 +41,10 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			state.can_import = true;
 			return Promise.resolve();
 		}
-		return frappe
-			.call("hrms.access_control.get_current_hrms_capabilities")
+		// Legacy Frappe can return a jQuery Deferred.  Normalise it before the
+		// rejection handler so an unavailable permission check still leaves the
+		// import page in a usable, explicitly denied state.
+		return Promise.resolve(frappe.call("hrms.access_control.get_current_hrms_capabilities"))
 			.then((response) => {
 				state.capabilities_loaded = true;
 				state.can_import = (response.message?.capabilities || []).includes("roster_import_submit");
@@ -589,7 +591,10 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 			}
 		}
 		for (const error of row_errors) {
-			if (error.fieldname) fields.set(error.fieldname, error);
+			if (error.fieldname) {
+				const metadata = (state.parse_result?.fields || []).find((field) => field.fieldname === error.fieldname);
+				fields.set(error.fieldname, { ...metadata, ...error });
+			}
 		}
 		return [...fields.values()];
 	}
@@ -601,21 +606,37 @@ frappe.pages["employee-roster-import"].on_page_load = function (wrapper) {
 		const existing_values = state.row_overrides[String(row_index)] || {};
 		const dialog = new frappe.ui.Dialog({
 			title: __("校正 Excel 第 {0} 行", [row_index]),
-			fields: unique_errors.map((error) => ({
-				fieldname: error.fieldname,
-				label: [error.excel_cell, error.field_label || error.fieldname].filter(Boolean).join(" · "),
-				// Keep corrections as text: a Date control rejects the supported "-"
-				// placeholder before the server can interpret it as "fill in later".
-				fieldtype: "Data",
-				default: existing_values[error.fieldname] ?? error.current_value ?? "",
-				description: `${frappe.utils.escape_html(error.suggestion || "")}${_can_defer_field(error.fieldname) ? `<br>${__("暂不填写时可输入“-”，系统将保留为空，之后可在员工档案补充。")}` : ""}`,
-				reqd: [__("必填字段为空"), __("离职员工必须填写离职日期"), __("出生日期是系统占位值")].includes(error.message),
-			})),
+			fields: unique_errors.flatMap((error) => {
+				const original = existing_values[error.fieldname] ?? error.current_value ?? "";
+				const can_defer = _can_defer_field(error.fieldname) && error.can_defer !== false
+					&& !error.required && ![__("员工档案必填项不能暂缓填写或清空"), __("必填字段为空"), __("离职员工必须填写离职日期"), __("出生日期是系统占位值")].includes(error.message);
+				const defer_field = `__defer_${error.fieldname}`;
+				const fieldtype = ["Date", "Datetime", "Select", "Link", "Int", "Float", "Currency", "Percent"].includes(error.fieldtype) ? error.fieldtype : "Data";
+				let default_value = original;
+				if (["Date", "Datetime"].includes(fieldtype)) {
+					// Invalid source text belongs in the hint, never in a date control.
+					const date_text = String(original).slice(0, 10);
+					const parsed = new Date(`${date_text}T00:00:00Z`);
+					default_value = /^\d{4}-\d{2}-\d{2}$/.test(date_text) && !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === date_text ? original : "";
+				}
+				if (fieldtype === "Select" && !String(error.options || "").split("\n").includes(String(original))) default_value = "";
+				const field = {
+					fieldname: error.fieldname,
+					label: [error.excel_cell, error.field_label || error.fieldname].filter(Boolean).join(" · "),
+					fieldtype,
+					options: fieldtype === "Select" ? `\n${error.options || ""}` : error.options,
+					default: can_defer && ["-", "—"].includes(String(original).trim()) ? "" : default_value,
+					description: `${frappe.utils.escape_html(error.suggestion || "")}<br>${__("原内容：")}${frappe.utils.escape_html(String(original || "-"))}${["Date", "Datetime"].includes(fieldtype) ? `<br>${__("请选择实际日期，格式：YYYY-MM-DD（例如 1990-05-21）。")}` : ""}`,
+					reqd: can_defer ? 0 : Boolean(error.required || [__("必填字段为空"), __("员工档案必填项不能暂缓填写或清空"), __("离职员工必须填写离职日期"), __("出生日期是系统占位值")].includes(error.message)),
+					depends_on: can_defer ? `eval:!doc.${defer_field}` : undefined,
+				};
+				return can_defer ? [{fieldname: defer_field, fieldtype: "Check", label: __("{0}：暂不填写（以“-”占位，后续补充）", [error.field_label || error.fieldname]), default: ["-", "—"].includes(String(original).trim()) ? 1 : 0}, field] : [field];
+			}),
 			primary_action_label: __("保存并重新校验"),
 			primary_action(values) {
 				const corrections = {};
 				for (const error of unique_errors) {
-					const value = values[error.fieldname] ?? "";
+					const value = values[`__defer_${error.fieldname}`] ? "-" : values[error.fieldname] ?? "";
 					const original = existing_values[error.fieldname] ?? error.current_value ?? "";
 					if (String(value) !== String(original)) corrections[error.fieldname] = value;
 				}

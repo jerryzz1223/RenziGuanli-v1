@@ -212,6 +212,29 @@ class RosterImportGuardTests(unittest.TestCase):
 		meta["naming_series"] = {"reqd": 1, "label": "Series"}
 		self.assertEqual(check({"date_of_birth": "1992-03-04", "gender": "Male"}, "insert", "merge", 9, field, meta), [])
 
+	def test_editor_can_defer_optional_dates_missing_from_workbook_headers(self):
+		ns = load_functions(
+			"_row_to_employee_values",
+			_is_employee_import_deferred_placeholder=lambda value: value == "-",
+			_can_defer_employee_import_field=lambda field: field != "custom_employee_code",
+			_normalise_import_value=lambda _field, value, _metadata: value,
+			_excel_cell_reference=lambda *_args: "A2",
+			_is_blank_value=lambda value: value in (None, ""),
+			_is_employee_import_required_field=lambda *_args: False,
+			_apply_identity_card_derivatives=lambda *_args: None,
+			_=lambda value: value,
+		)
+		fields = {name: {"fieldname": name} for name in ("custom_employee_code", "contract_end_date")}
+		for replace in (False, True):
+			with self.subTest(replace=replace):
+				values, errors = ns["_row_to_employee_values"](
+					["4018"], [{"fieldname": "custom_employee_code", "column_index": 0}],
+					fields, [], 2, {"contract_end_date": "-"}, replace,
+				)
+				self.assertEqual(errors, [])
+				self.assertEqual(values["_employee_import_deferred_fields"], {"contract_end_date"})
+				self.assertIsNone(values.get("contract_end_date"))
+
 	def test_approved_dingtalk_import_keeps_supplied_work_nature(self):
 		source = SOURCE.parents[2] / "hrms/overrides/employee_master.py"
 		function = next(

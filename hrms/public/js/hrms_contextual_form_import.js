@@ -119,12 +119,12 @@
 					on_success(file) {
 						file_url = file.file_url;
 						dialog.set_primary_action(__("正在校验…"), () => {});
-						frappe.call({
+						Promise.resolve(frappe.call({
 							method: `${API}.preview_form_import`,
 							args: { file_url, template_key: template.key, company },
 							freeze: true,
 							freeze_message: __("正在匹配字段和基础资料…"),
-						}).then((response) => {
+						})).then((response) => {
 							preview = response.message || {};
 							render_dialog();
 						}).catch(() => {

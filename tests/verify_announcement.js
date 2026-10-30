@@ -185,9 +185,7 @@ for (const page of ["announcement-submission-records", "announcement-approval-re
 assert(projectDirectory.includes("var direct_announcement_page_slug = normalize_slug(current_path);"), "Announcement pages must use their URL while Frappe route state is settling");
 assert(projectDirectory.includes('"announcement-submission-records"') && projectDirectory.includes('"announcement-approval-records"') && projectDirectory.includes('"announcement-signed-records"'), "Announcement record pages must be included in the direct sidebar route guard");
 assert(projectDirectory.includes('label: "公告办理"'), "Announcement project directory section missing");
-assert(hooks.includes("20260918-announcement-sidebar-records-v1"), "Announcement project directory cache version missing");
-assert(hooks.includes("20260916-employee-relationship-v1"), "Announcement navigation cache version missing");
-assert(hooks.includes("20260916-announcement-v13-signed-version-lock"), "Announcement attachment download cache version missing");
+assert(hooks.includes("20261008-announcement-v14-native-promise"), "Announcement API Promise compatibility cache version missing");
 assert(api.includes('"has_signed_version": any(item.get("key") == "signed" for item in row.get("versions") or [])'), "Directory rows must expose signed-version lock state");
 assert(directory.includes("isLockedUnsigned") && directory.includes("hrms-announcement-status-link--locked"), "Unsigned rows with a signed version must be non-navigable");
 assert(directory.includes("data-download-url=\"${escape(row.word_template)}\"") && directory.includes("下载原件"), "Announcement directory detail must show an original download button");

@@ -54,6 +54,10 @@ for (const marker of [
 
 assert(!accessPage.includes("员工：${escape(scope.internal_for_value)}"), "Internal Employee link values must never be rendered.");
 assert(api.includes('hrms.patches.v16_0.reapply_company_employee_code_names') === false, "Patch registration belongs only in patches.txt.");
+assert(!api.includes('access_tier = "full"'), "Administrator must use a valid business tier key in the access summary.");
+assert(api.includes('"超级管理员" if is_administrator else'), "Administrator must show its fixed privilege distinctly.");
+assert(api.includes('"未分配业务档位"'), "Accounts without an HRMS business role must not be displayed as read only.");
+assert(accessPage.includes('if (account.user === "Administrator")'), "Administrator must not show a redundant business tier and approval badge.");
 
 for (const marker of [
 	"设置权限档位",

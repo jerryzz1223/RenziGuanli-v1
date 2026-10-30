@@ -116,7 +116,7 @@ CAPABILITY_DEFINITIONS = (
 	_capability("payroll_export", "薪酬导出", "薪酬导出", "薪酬", "导出定薪、社保公积金、试算和发放报表。", "critical", (("Salary Slip", "read", "export", "report", "print"), ("HRMS Payroll Settlement Record", "read", "export", "report"))),
 	_capability("payroll_rules", "薪酬规则配置", "薪酬规则配置", "薪酬", "维护薪资架构、计薪规则和字段映射。", "critical", (("Salary Structure", "read", "create", "write", "submit", "cancel"), ("HRMS Payroll Rule", "read", "create", "write"), ("HRMS Payroll Field Mapping", "read", "create", "write"))),
 
-	_capability("recruitment_submit", "招聘录入与提交", "招聘提交", "招聘", "录入职位、候选人、面试和录用申请。", "high", (("Job Opening", "read", "create", "write", "submit"), ("Job Applicant", "read", "create", "write"), ("Interview", "read", "create", "write", "submit"), ("Job Offer", "read", "create", "write", "submit"))),
+	_capability("recruitment_submit", "招聘录入与提交", "招聘提交", "招聘", "录入职位、候选人、面试和录用申请。", "high", (("Interview Registration", "read", "create", "write"), ("Job Applicant Source", "read", "create", "write"), ("Job Opening", "read", "create", "write", "submit"), ("Job Applicant", "read", "create", "write"), ("Interview", "read", "create", "write", "submit"), ("Job Offer", "read", "create", "write", "submit"))),
 	_capability("recruitment_approve", "招聘审批", "招聘审批", "招聘", "审批招聘职位、面试结论和录用通知。", "critical", (("Job Opening", "read", "write", "submit", "cancel"), ("Interview", "read", "write", "submit", "cancel"), ("Job Offer", "read", "write", "submit", "cancel"))),
 	_capability("training_submit", "培训录入与提交", "培训提交", "培训", "创建并提交培训计划、活动、结果和反馈。", "medium", (("Training Program", "read", "create", "write", "submit"), ("Training Event", "read", "create", "write", "submit"), ("Training Result", "read", "create", "write", "submit"), ("Training Feedback", "read", "create", "write", "submit"))),
 	_capability("training_approve", "培训审批", "培训审批", "培训", "审批或取消已提交的培训业务。", "high", (("Training Program", "read", "write", "submit", "cancel"), ("Training Event", "read", "write", "submit", "cancel"), ("Training Result", "read", "write", "submit", "cancel"))),
@@ -226,6 +226,14 @@ def get_hrms_access_tier_for_roles(roles):
 	if legacy_keys & (SUBMIT_TIER_CAPABILITY_KEYS - READ_TIER_CAPABILITY_KEYS):
 		return "submit"
 	return "read"
+
+
+def get_hrms_assigned_access_tier_for_roles(roles):
+	"""Return a display tier only when an HRMS business role is assigned."""
+	roles = set(roles or ())
+	if not roles & (set(ACCESS_TIER_BY_ROLE) | GRANULAR_BUSINESS_ROLES | {READ_ONLY_ROLE}):
+		return None
+	return get_hrms_access_tier_for_roles(roles)
 
 
 def employee_roster_permission_query(user: str | None = None):

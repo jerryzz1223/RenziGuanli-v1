@@ -25,19 +25,14 @@ def save_workbook_with_logo_watermark(workbook, output, export_key=None) -> None
 
 		options = get_export_watermark_options(export_key)
 		if options["print"]:
-			shade = round(255 - options["opacity"] * 2)
-			color = f"{shade:02X}" * 3
-			for sheet in workbook:
-				# Excel uses & as a header-format command prefix.
-				sheet.oddHeader.center.text = options["text"].replace("&", "&&")
-				sheet.oddHeader.center.size = 18
-				sheet.oddHeader.center.color = color
+			_add_print_watermark(workbook, options["text"], options["opacity"])
 		workbook.save(output)
 		if not options["export"]:
 			return
 		image = _render_text_watermark(options["text"], options["opacity"])
 	else:
 		# Existing callers keep their current logo until assigned an export key.
+		_add_print_watermark(workbook, "永新电子（常熟）有限公司", 12)
 		workbook.save(output)
 		image = None
 	output.seek(0)
@@ -45,6 +40,36 @@ def save_workbook_with_logo_watermark(workbook, output, export_key=None) -> None
 	output.seek(0)
 	output.truncate(0)
 	output.write(watermarked_content)
+
+
+def _add_print_watermark(workbook, label: str, opacity: int) -> None:
+	"""Repeat the label on every printed page without replacing report headers."""
+	shade = round(255 - opacity * 2)
+	color = f"{shade:02X}" * 3
+	# Excel uses & as a header-format command prefix.
+	text = label.replace("&", "&&")
+	for sheet in workbook:
+		for header in (sheet.oddHeader, sheet.evenHeader, sheet.firstHeader):
+			part = header.center
+			if part.text:
+				# Keep the existing header's text and formatting; style only the new line.
+				part.text += f"\n&18&K{color}{text}"
+			else:
+				part.text = text
+				part.size = 18
+				part.color = color
+		# A report fitted to many columns must not shrink the watermark to invisibility.
+		sheet.HeaderFooter.scaleWithDoc = False
+		# Some export templates use zero top margins. Reserve space for the header.
+		# Excel for Mac can place header text lower than a very small header margin.
+		# Leave enough room for the existing title plus an 18-point watermark line.
+		header_margin = max(sheet.page_margins.header or 0, 0.3)
+		sheet.page_margins.header = header_margin
+		lines = max(
+			len(header.center.text.splitlines())
+			for header in (sheet.oddHeader, sheet.evenHeader, sheet.firstHeader)
+		)
+		sheet.page_margins.top = max(sheet.page_margins.top or 0, header_margin + 0.4 * lines)
 
 
 def _render_text_watermark(label: str, opacity: int) -> bytes:

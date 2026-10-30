@@ -1,0 +1,12 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const path = require("node:path");
+const source = fs.readFileSync(path.join(__dirname, "../hrms/public/js/erpnext/employee_list.js"), "utf8");
+const routes = [];
+const context = { frappe: { get_meta: () => ({fields: []}), listview_settings: {}, set_route: (...args) => routes.push(args) } };
+vm.createContext(context);
+vm.runInContext(source.replace(/\}\)\(\);\s*$/, "globalThis.openFullRoster = open_dingtalk_full_roster;})();"), context);
+context.openFullRoster({});
+assert.deepEqual(routes, [["dingtalk-roster-review"]]);
+console.log("Full-roster entry opens the dedicated review page.");

@@ -162,7 +162,7 @@ def _monthly_final_rows(view, limit):
 
 
 @frappe.whitelist()
-def list_approvals(view="pending", page_length=50, page_start=0):
+def list_approvals(view: str = "pending", page_length: int = 50, page_start: int = 0):
 	"""List visible requests; approved history uses only persisted passing states."""
 	if frappe.session.user == "Guest":
 		frappe.throw("请先登录。", frappe.PermissionError)

@@ -135,6 +135,40 @@ class StandingPayTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '没有薪资审批权限'):
             self.api.review_decision('ACME', 'HRMS Employee Salary Change', 'missing', '已批准', 'forged')
 
+    def test_batch_approval_uses_exact_records_and_one_transaction(self):
+        saved = []
+        docs = {}
+        for name, kind in (('salary-1', self.api.SALARY), ('social-1', self.api.CONTRIBUTION)):
+            doc = SimpleNamespace(company='ACME', status='待审核', review_note='',
+                save=lambda ignore_permissions, name=name: saved.append(name))
+            docs[(kind, name)] = doc
+        self.frappe.get_doc.side_effect = lambda *args: SimpleNamespace(check_permission=lambda *a: None) if args[0] == 'Company' else docs[args]
+        self.frappe.db.savepoint = Mock()
+        self.frappe.db.rollback = Mock()
+        requests = json.dumps([{'decision_doctype': kind, 'name': name} for kind, name in docs])
+        result = self.api.approve_pending_batch('ACME', requests, '  核对通过  ')
+        self.assertEqual(result['approved_count'], 2)
+        self.assertEqual(saved, ['salary-1', 'social-1'])
+        self.assertTrue(all(doc.status == '已批准' and doc.review_note == '核对通过' for doc in docs.values()))
+        self.frappe.db.savepoint.assert_called_once_with('standing_batch_approval')
+        self.frappe.db.rollback.assert_not_called()
+        self.assertEqual(self.frappe.db.sql.call_count, 2)
+
+    def test_batch_approval_rolls_back_when_any_record_fails(self):
+        self.frappe.db.savepoint = Mock()
+        self.frappe.db.rollback = Mock()
+        def get_doc(*args):
+            if args[0] == 'Company':
+                return SimpleNamespace(check_permission=lambda *a: None)
+            return SimpleNamespace(company='ACME', save=Mock(side_effect=ValueError('已确认薪资')))
+        self.frappe.get_doc.side_effect = get_doc
+        request = json.dumps([{'decision_doctype': self.api.SALARY, 'name': 'salary-1'}])
+        with self.assertRaisesRegex(ValueError, '已确认薪资'):
+            self.api.approve_pending_batch('ACME', request, '核对通过')
+        self.frappe.db.rollback.assert_called_once_with(save_point='standing_batch_approval')
+        with self.assertRaisesRegex(ValueError, '审批申请不能重复'):
+            self.api.approve_pending_batch('ACME', json.dumps([json.loads(request)[0]] * 2), '核对通过')
+
     def test_self_approval_denied(self):
         for role in ('HR Manager', 'System Manager', '薪资审批'):
             self.frappe.get_roles = lambda user: [role]

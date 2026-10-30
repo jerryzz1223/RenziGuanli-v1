@@ -5,7 +5,11 @@
 			return frappe.utils.escape_html(value == null ? "" : String(value));
 		},
 		call(method, args) {
-			return frappe.call({ method, args: args || {}, freeze: true });
+			// Frappe may return a jQuery Deferred, which is thenable but does not
+			// expose Promise.prototype.finally(). Announcement approval and submit
+			// flows use cleanup handlers to re-enable their dialogs, so always expose
+			// a native Promise at this shared boundary.
+			return Promise.resolve(frappe.call({ method, args: args || {}, freeze: true }));
 		},
 		file_url(url) {
 			return url ? frappe.urllib.get_full_url(url) : "";

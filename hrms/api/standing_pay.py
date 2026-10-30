@@ -490,6 +490,42 @@ def review_decision(company: str, decision_doctype: str, name: str, decision: st
 
 
 @frappe.whitelist()
+def approve_pending_batch(company: str, requests: str, review_note: str):
+	"""Approve the exact pending requests reviewed by the user, as one transaction."""
+	company = _access(company, approve=True)
+	items = json.loads(requests) if isinstance(requests, str) else requests
+	if not isinstance(items, list) or not items or len(items) > 1000:
+		frappe.throw(_('请选择 1 至 1000 条待审批申请。'))
+	if not str(review_note or '').strip():
+		frappe.throw(_('请填写审批意见。'))
+	keys = []
+	for item in items:
+		if not isinstance(item, dict) or item.get('decision_doctype') not in (SALARY, CONTRIBUTION) or not isinstance(item.get('name'), str) or not item['name']:
+			frappe.throw(_('无效的审批申请。'))
+		keys.append((item['decision_doctype'], item['name']))
+	if len(set(keys)) != len(keys):
+		frappe.throw(_('审批申请不能重复。'))
+
+	frappe.db.savepoint('standing_batch_approval')
+	try:
+		# Fixed Doctype names and stable ordering avoid racing two reviewers.
+		for doctype, name in sorted(keys):
+			frappe.db.sql(f'SELECT name FROM `tab{doctype}` WHERE name=%s FOR UPDATE', (name,))
+		for doctype, name in keys:
+			doc = frappe.get_doc(doctype, name)
+			if doc.company != company:
+				frappe.throw(_('不能审批其他公司的记录。'))
+			doc.status, doc.review_note = '已批准', review_note.strip()
+			# The document controller enforces pending status, self-review,
+			# closed payroll periods, immutable values and audit stamping.
+			doc.save(ignore_permissions=True)
+	except Exception:
+		frappe.db.rollback(save_point='standing_batch_approval')
+		raise
+	return {'approved_count': len(keys)}
+
+
+@frappe.whitelist()
 def import_contribution_workbook(company: str, file_url: str, effective_date: str, preview: int = 1, request_mode: str = 'change'):
 	"""Reuse the existing source parsers; the independent register owns the approval."""
 	company = _access(company)

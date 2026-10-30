@@ -214,6 +214,16 @@ frappe.ui.form.on("Employee Transfer", {
 		derive_transfer_type(frm);
 	},
 
+	validate(frm) {
+		validate_inline_transfer_details(frm);
+	},
+
+	before_submit(frm) {
+		if (frm.doc.transfer_date > frappe.datetime.get_today()) {
+			frappe.throw(__("生效日期未到，可先保存草稿，到期后再提交。"));
+		}
+	},
+
 	on_submit(frm) {
 		frappe.show_alert({ message: __("人事异动已提交并写入任职记录"), indicator: "green" });
 	},

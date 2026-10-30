@@ -532,10 +532,13 @@ def _dingtalk_api_request(method, path, params=None, json_body=None, use_oapi=Fa
 
 def _drive_result_container(payload):
 	payload = _json_loads(payload)
-	for container in (payload, payload.get("result") or {}, payload.get("data") or {}):
+	if not isinstance(payload, dict):
+		return {}
+	for key in ("result", "data"):
+		container = payload.get(key)
 		if isinstance(container, dict):
 			return container
-	return {}
+	return payload
 
 
 def _fetch_dingtalk_drive_union_id():
@@ -907,7 +910,7 @@ def _roster_attachment_items(field):
 		for item in candidate:
 			if not isinstance(item, dict):
 				continue
-			if _first(item, "file_id", "fileId", "space_id", "spaceId", "download_uri", "downloadUri", "url"):
+			if _first(item, "file_id", "fileId", "space_id", "spaceId", "download_uri", "downloadUri", "download_url", "downloadUrl", "file_url", "fileUrl", "url"):
 				items.append(item)
 	return items
 
@@ -1015,7 +1018,11 @@ def _fetch_dingtalk_onjob_userids(page_size: int = 50):
 	"""Read the complete Smart HR on-job roster for the first full pull."""
 	userids = []
 	offset = 0
+	seen_cursors = set()
 	while True:
+		if str(offset) in seen_cursors:
+			frappe.throw(_("钉钉在职名单分页游标重复，无法确认名单完整性。"))
+		seen_cursors.add(str(offset))
 		payload = _dingtalk_api_request(
 			"POST",
 			DINGTALK_ONJOB_LIST_PATH,
@@ -1032,8 +1039,10 @@ def _fetch_dingtalk_onjob_userids(page_size: int = 50):
 			userid = str(userid or "").strip()
 			if userid and userid not in userids:
 				userids.append(userid)
-		if next_cursor in (None, "", offset) or not items:
+		if next_cursor in (None, "") or str(next_cursor) == "0" or not items:
 			break
+		if str(next_cursor) == str(offset):
+			frappe.throw(_("钉钉在职名单分页游标重复，无法确认名单完整性。"))
 		offset = next_cursor
 	return userids
 
@@ -1335,12 +1344,14 @@ def _stage_dingtalk_employee_import(user, company, sync_log, raw_record):
 				match["reason"] = "员工字段已一致" + ("；附件请使用独立补齐任务" if missing_attachments else "")
 		elif match.get("status") == "待审批":
 			match["status"] = "待匹配"
-			match["reason"] = "全量在职档案的公司工号未在系统中找到；不得从全量比对创建员工，请走待入职新成员流程"
+			match["reason"] = "全量在职档案的公司工号未在系统中找到；请通过全员导入预检核对资料后建档"
 	elif raw_record and raw_record.get("source_type") == DINGTALK_ONJOB_NEW_EMPLOYEE_SOURCE_TYPE and match.get("status") == "待审批" and not match.get("employee"):
 		issues = _dingtalk_new_employee_validation_issues(values)
 		if issues:
 			match["status"] = "待匹配"
 			match["reason"] = "；".join(issues)
+	if (raw_record and raw_record.get("source_type") == DINGTALK_EMPLOYEE_ROSTER_SOURCE_TYPE and (user.get("raw") or {}).get("hrms_directory_only")):
+		match["reason"] = "仅取得通讯录基础资料，未取得智能人事档案；" + (match.get("reason") or "缺少资料需人工补齐")
 	payload = user.get("raw") or user
 	payload_hash = _payload_hash(payload)
 	source_type = raw_record.get("source_type") if raw_record else ""
@@ -1546,21 +1557,24 @@ def _import_dingtalk_attachments(import_doc, employee_name):
 
 
 @frappe.whitelist()
-def verify_dingtalk_employee_attachment_download(import_name: str = "", attachment_index: int = 0):
+def verify_dingtalk_employee_attachment_download(import_name: str = "", attachment_index: int = 0, company: str = ""):
 	"""Read one synced attachment into memory to verify the download chain."""
 	_require_dingtalk_manager()
+	company = _require_sync_company(company)
 	if import_name:
 		import_doc = frappe.get_doc(DINGTALK_EMPLOYEE_IMPORT_DOCTYPE, import_name)
 	else:
 		candidate = frappe.db.get_value(
 			DINGTALK_EMPLOYEE_IMPORT_DOCTYPE,
-			{"attachment_count": [">", 0]},
+			{"company": company, "attachment_count": [">", 0]},
 			"name",
 			order_by="creation asc",
 		)
 		if not candidate:
 			return {"verified": False, "reason": "没有可验证的员工附件"}
 		import_doc = frappe.get_doc(DINGTALK_EMPLOYEE_IMPORT_DOCTYPE, candidate)
+	if import_doc.company != company:
+		frappe.throw(_("附件验证记录与当前同步公司不一致。"))
 	attachments = _json_loads(import_doc.get("attachments_json"))
 	if not isinstance(attachments, list) or not attachments:
 		return {"verified": False, "reason": "该同步记录没有附件"}
@@ -1717,17 +1731,23 @@ def _stage_roster_user(user, company, log, source_type=DINGTALK_EMPLOYEE_ROSTER_
 	return import_doc, mapping
 
 
-def _sync_all_employee_rosters(company: str = ""):
+def _sync_all_employee_rosters(company: str = "", sync_log=None, include_directory=False):
 	"""Compare current on-job employees; pre-entry remains a separate workflow."""
 	company = _require_api_sync_enabled(company)
-	log = _new_sync_log("员工档案同步", company=company)
-	userids = _fetch_dingtalk_onjob_userids()
-	details = _fetch_dingtalk_preentry_details(userids)
+	log = sync_log or _new_sync_log("员工档案同步", company=company)
 	received = pending_approval = pending_match = conflicts = unchanged = failed = attachment_count = 0
 	errors = []
 	try:
+		if include_directory:
+			from hrms.api.dingtalk_roster_tasks import fetch_full_roster_users
+
+			userids, details = fetch_full_roster_users()
+		else:
+			userids = _fetch_dingtalk_onjob_userids()
+			details = _fetch_dingtalk_preentry_details(userids)
 		for userid in userids:
 			received += 1
+			frappe.db.savepoint("dingtalk_roster_row")
 			try:
 				user = details.get(userid)
 				if not user:
@@ -1745,6 +1765,7 @@ def _sync_all_employee_rosters(company: str = ""):
 				elif import_doc.import_status == "无变更":
 					unchanged += 1
 			except Exception as exc:
+				frappe.db.rollback(save_point="dingtalk_roster_row")
 				failed += 1
 				if len(errors) < 10:
 					errors.append("{0}: {1}".format(userid, str(exc)))
@@ -2518,9 +2539,12 @@ def list_dingtalk_employee_comparisons(company: str = "", page_length: int = 500
 
 
 @frappe.whitelist()
-def apply_dingtalk_employee_comparison(import_name: str, fieldnames_json: str | list, reason: str):
+def apply_dingtalk_employee_comparison(import_name: str, fieldnames_json: str | list, reason: str, custom_values_json: str = "{}", expected_modified: str = "", keep_fieldnames_json: str = "[]", expected_import_modified: str = ""):
 	"""Apply explicitly selected roster values to one exactly matched Employee."""
 	_require_dingtalk_employee_import_approver()
+	custom_values = _json_loads(custom_values_json)
+	if not isinstance(custom_values, dict):
+		frappe.throw(_("自定义字段值必须是对象。"))
 	reason = str(reason or "").strip()
 	if not reason:
 		frappe.throw(_("请填写人工比对后的修改原因。"))
@@ -2530,7 +2554,13 @@ def apply_dingtalk_employee_comparison(import_name: str, fieldnames_json: str | 
 	if isinstance(selected, str):
 		selected = [selected]
 	selected = list(dict.fromkeys(str(item or "").strip() for item in (selected or []) if str(item or "").strip()))
-	if not selected:
+	kept = _json_loads(keep_fieldnames_json)
+	if not isinstance(kept, list) or any(not isinstance(item, str) for item in kept):
+		frappe.throw(_("保留字段必须是字段名列表。"))
+	kept = list(dict.fromkeys(kept))
+	if set(kept).intersection(selected):
+		frappe.throw(_("同一字段不能同时保留和修改。"))
+	if not selected and not kept:
 		frappe.throw(_("请至少选择一个需要修改的字段。"))
 	if DINGTALK_COMPARISON_PROTECTED_FIELDS.intersection(selected):
 		frappe.throw(_("公司、员工状态和公司工号不能通过钉钉比对修改。"))
@@ -2540,12 +2570,20 @@ def apply_dingtalk_employee_comparison(import_name: str, fieldnames_json: str | 
 		(import_name,),
 	)
 	import_doc = frappe.get_doc(DINGTALK_EMPLOYEE_IMPORT_DOCTYPE, import_name)
+	if expected_import_modified and str(import_doc.modified) != expected_import_modified:
+		frappe.throw(_("钉钉资料已发生变化，请刷新后重新核对。"))
 	source_type = frappe.db.get_value(DINGTALK_RAW_RECORD_DOCTYPE, import_doc.source_record, "source_type")
 	if source_type != DINGTALK_EMPLOYEE_ROSTER_SOURCE_TYPE or not import_doc.matched_employee:
 		frappe.throw(_("只能修改已按公司工号精确匹配的全量员工档案。"))
 	employee = frappe.get_doc("Employee", import_doc.matched_employee)
 	if employee.company != import_doc.company:
 		frappe.throw(_("员工所属公司与钉钉比对记录不一致。"))
+	frappe.db.sql("SELECT name FROM `tabEmployee` WHERE name=%s FOR UPDATE", (employee.name,))
+	employee.reload()
+	if employee.company != import_doc.company:
+		frappe.throw(_("员工所属公司已变化，请刷新后重新核对。"))
+	if expected_modified and str(employee.modified) != str(expected_modified):
+		frappe.throw(_("员工资料已被其他人修改，请刷新核对后重试。"))
 	values, labels = _recompute_dingtalk_employee_import(import_doc)
 	if str(values.get("custom_employee_code") or "").strip() != str(employee.get("custom_employee_code") or "").strip():
 		frappe.throw(_("公司工号已发生变化，请重新同步后再比对。"))
@@ -2554,6 +2592,17 @@ def apply_dingtalk_employee_comparison(import_name: str, fieldnames_json: str | 
 	for difference in differences:
 		_set_dingtalk_difference_applyability(difference, meta_fields.get(difference["fieldname"]))
 	allowed = {item["fieldname"] for item in differences}
+	if set(custom_values) - set(selected) or set(custom_values) - set(values):
+		frappe.throw(_("自定义值只能用于当前钉钉映射中明确选中的字段。"))
+	if set(kept) - allowed:
+		frappe.throw(_("保留字段已不是当前差异，请刷新后重新核对。"))
+	allowed.update(custom_values)
+	apply_values = dict(values)
+	apply_values.update(custom_values)
+	for item in differences:
+		if item["fieldname"] in custom_values:
+			item["dingtalk_value"] = custom_values[item["fieldname"]]
+			_set_dingtalk_difference_applyability(item, meta_fields.get(item["fieldname"]))
 	invalid = [fieldname for fieldname in selected if fieldname not in allowed]
 	if invalid:
 		frappe.throw(_("选中字段已不是当前差异：{0}").format("、".join(invalid)))
@@ -2565,16 +2614,24 @@ def apply_dingtalk_employee_comparison(import_name: str, fieldnames_json: str | 
 		meta_field = meta_fields.get(fieldname)
 		if not meta_field or fieldname not in employee.meta.get_valid_columns() or meta_field.fieldtype in {"Table", "Table MultiSelect", "HTML", "Section Break", "Column Break"}:
 			frappe.throw(_("字段 {0} 不允许通过比对页修改。").format(fieldname))
+		if meta_field.read_only or meta_field.fieldtype not in {"Data", "Link", "Select", "Date", "Datetime", "Int", "Float", "Currency", "Percent", "Check", "Small Text", "Text", "Long Text", "Phone"}:
+			frappe.throw(_("该字段不允许在资料核对页修改。"))
+		check = {"dingtalk_value": apply_values.get(fieldname)}
+		_set_dingtalk_difference_applyability(check, meta_field)
+		if not check["can_apply"]:
+			frappe.throw(check["validation_message"])
 		old_value = employee.get(fieldname)
-		new_value = values.get(fieldname)
+		new_value = apply_values.get(fieldname)
 		employee.set(fieldname, new_value)
 		changes.append({"fieldname": fieldname, "label": labels.get(fieldname) or meta_field.label or fieldname, "old": old_value, "new": new_value})
-	employee.flags.hrms_dingtalk_sync = True
-	employee.save(ignore_permissions=True)
+	if changes:
+		employee.flags.hrms_dingtalk_sync = True
+		employee.save(ignore_permissions=True)
 	import_doc.approved_by = frappe.session.user
 	import_doc.approved_at = now_datetime()
-	import_doc.approval_note = "人工比对修改：{0}；原因：{1}".format("、".join(item["label"] for item in changes), reason)
+	import_doc.approval_note = "人工比对修改：{0}；保留系统值：{1}；原因：{2}".format("、".join(item["label"] for item in changes), "、".join(labels.get(name) or name for name in kept), reason)
 	remaining = _dingtalk_employee_field_differences(values, employee, labels, meta_fields)
+	remaining = [item for item in remaining if item["fieldname"] not in set(selected + kept)]
 	import_doc.import_status = "已人工处理" if not remaining else "待人工比对"
 	import_doc.error_message = None if not remaining else "仍有 {0} 个字段差异待确认".format(len(remaining))
 	import_doc.save(ignore_permissions=True)
@@ -2631,6 +2688,8 @@ def run_existing_dingtalk_employee_attachment_import(company: str, import_names:
 				frappe.throw(_("附件任务仅允许处理本公司的全量员工档案快照。"))
 			if not import_doc.matched_employee:
 				frappe.throw(_("员工未按公司工号精确匹配，不导入附件。"))
+			if frappe.db.get_value("Employee", import_doc.matched_employee, "company") != company:
+				frappe.throw(_("员工所属公司与附件来源公司不一致，不导入附件。"))
 			result = _import_dingtalk_attachments(import_doc, import_doc.matched_employee)
 			import_doc.attachments_json = _json_dumps(result.get("attachments") or [])
 			import_doc.attachment_status = result.get("status") or "无附件"
@@ -2638,7 +2697,14 @@ def run_existing_dingtalk_employee_attachment_import(company: str, import_names:
 			import_doc.sync_completed_at = now_datetime()
 			import_doc.save(ignore_permissions=True)
 			downloaded += int(result.get("downloaded") or 0)
-			updated += 1
+			incomplete = int(result.get("failed") or 0) + int(result.get("unavailable") or 0)
+			if incomplete:
+				failed += 1
+				if len(errors) < 20:
+					errors.append("{0}: 附件归档未完成（已下载 {1}，下载失败 {2}，无下载接口 {3}）".format(
+						import_name, int(result.get("downloaded") or 0), int(result.get("failed") or 0), int(result.get("unavailable") or 0)))
+			else:
+				updated += 1
 			frappe.db.commit()
 		except Exception as exc:
 			frappe.db.rollback(save_point=savepoint)

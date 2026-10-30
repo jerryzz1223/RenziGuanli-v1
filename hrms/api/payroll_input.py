@@ -3866,7 +3866,7 @@ def delete_salary_structure_version(name: str):
 
 
 @frappe.whitelist()
-def save_salary_level_structure(structure_version: str, levels=None):
+def save_salary_level_structure(structure_version: str, levels: str | list[dict] | None = None):
 	"""Persist an ordered level matrix without assigning it to any employees."""
 	_require_payroll_master_manager()
 	if not frappe.db.exists(SALARY_STRUCTURE_VERSION_DOCTYPE, structure_version):
@@ -7018,7 +7018,7 @@ def set_payroll_variable_record_excluded(name: str, excluded: int = 1):
 
 
 @frappe.whitelist()
-def delete_payroll_variable_import_batches(batch_names, company: str = "", payroll_month: str = "", attendance_lock_version: str = ""):
+def delete_payroll_variable_import_batches(batch_names: str | list[str], company: str = "", payroll_month: str = "", attendance_lock_version: str = ""):
 	"""Atomically delete selected, unconfirmed monthly import batches.
 
 	Confirmed batches are immutable audit evidence.  Validate every selection
@@ -7919,7 +7919,7 @@ def get_payroll_workflow_status(company: str, payroll_month: str, attendance_loc
 
 
 @frappe.whitelist()
-def save_attendance_pay_rule(company: str, payroll_month: str, rule_code: str, settings=None):
+def save_attendance_pay_rule(company: str, payroll_month: str, rule_code: str, settings: str | dict | None = None):
 	"""Save an attendance-pay rule from the plain-language inline editor.
 
 	The API deliberately receives only business fields.  Rule codes, formulas,
@@ -8239,6 +8239,7 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 			("全勤奖", flt(row.get("full_attendance_award"))),
 			("住房补贴", flt(row.get("housing_allowance"))),
 		)
+		if row.get("full_attendance_award" if variable_type == "全勤奖" else "housing_allowance") is not None
 	}
 	if batch_name:
 		existing_attendance_rows = frappe.get_all(
@@ -8305,6 +8306,8 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 			("全勤奖", flt(row.get("full_attendance_award")), True),
 			("住房补贴", flt(row.get("housing_allowance")), True),
 		):
+			if row.get("full_attendance_award" if variable_type == "全勤奖" else "housing_allowance") is None:
+				continue
 			name = _insert_variable(batch_name, company, payroll_month, attendance_lock_version, "考勤终稿锁定快照", base_row, variable_type, amount, allow_zero, review_status="已确认")
 			if name:
 				variable_rows += 1
@@ -8421,6 +8424,9 @@ def generate_payroll_input_records(company: str, payroll_month: str, attendance_
 		)
 		manual_full_attendance_bonus = "全勤奖" in values
 		full_attendance_bonus = values["全勤奖"] if manual_full_attendance_bonus else calculated_full_attendance_bonus
+		if attendance_lock_version.startswith(PROCESSING_ATTENDANCE_LOCK_PREFIX) and not manual_full_attendance_bonus:
+			# An omitted attendance-final source is not permission to invent an award.
+			full_attendance_bonus = 0
 		apple_reward_amount = flt(getattr(attendance, "apple_reward_amount", 0)) + values["苹果树"]
 		earnings = (
 			apple_reward_amount

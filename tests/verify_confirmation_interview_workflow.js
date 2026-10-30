@@ -38,8 +38,8 @@ if (fields.custom_confirmation_result.options !== "转正通过\n转正不通过
 	throw new Error("转正结果只能为通过或不通过。");
 }
 
-mustInclude(detail, '__("转正面谈")', "试用期员工入口必须明确为转正面谈。");
-mustInclude(detail, "custom_is_confirmation_interview: 1", "转正面谈入口必须保留独立流程标记。");
+mustInclude(detail, '__("转正管理")', "试用期员工入口必须明确为转正管理。");
+mustInclude(detail, 'frappe.set_route("List", "Employee Promotion")', "员工详情入口应进入转正管理。");
 mustInclude(detail, '"在职 · 试用期"', "员工详情应显示在职与试用期的组合状态。");
 mustInclude(roster, '"在职 · 正式"', "花名册应显示在职正式员工的组合状态。");
 mustInclude(form, "转正不通过不会修改员工档案", "不通过时前端必须清理档案调整项。");

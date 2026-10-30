@@ -139,7 +139,7 @@ frappe.pages["hrms-model-center"].on_page_load = function (wrapper) {
 	}
 
 	$(page.body).html(`<div class="text-muted">${__("正在分析本项目实际使用的基础模型...")}</div>`);
-	frappe.call("hrms.api.employee_field_template.get_hrms_model_governance_catalog")
+	Promise.resolve(frappe.call("hrms.api.employee_field_template.get_hrms_model_governance_catalog"))
 		.then((response) => render(response.message || {}))
 		.catch(() => $(page.body).html(`<div class="alert alert-danger">${__("无法读取基础模型目录，请确认当前账户拥有系统管理员角色。")}</div>`));
 };

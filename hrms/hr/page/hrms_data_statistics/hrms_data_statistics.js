@@ -327,7 +327,7 @@ frappe.pages["hrms-data-statistics"].on_page_load = function (wrapper) {
 	function loadOperators() {
 		const company = window.hrmsCompanyContext?.getCurrentCompany?.() || "";
 		const requestId = ++state.operatorRequestId;
-		return frappe.call("hrms.api.data_statistics.get_hrms_operator_statistics", { company, month: state.month || undefined }).then((response) => {
+		return Promise.resolve(frappe.call("hrms.api.data_statistics.get_hrms_operator_statistics", { company, month: state.month || undefined })).then((response) => {
 			if (requestId !== state.operatorRequestId) return;
 			state.operatorData = response.message || { people: [], summary: {} };
 			render();

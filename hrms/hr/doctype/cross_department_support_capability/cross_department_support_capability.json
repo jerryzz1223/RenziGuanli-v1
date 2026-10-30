@@ -7,29 +7,144 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "employee_section", "employee", "employee_name", "employee_code", "column_break_employee", "source_department", "source_designation", "import_validation_note",
-  "support_section", "support_department", "support_designation", "qualification_status", "is_active", "column_break_support", "qualified_on", "valid_from", "valid_until",
+  "employee_section",
+  "employee",
+  "employee_name",
+  "employee_code",
+  "column_break_employee",
+  "source_department",
+  "source_designation",
+  "import_validation_note",
+  "support_section",
+  "support_department",
+  "column_break_support",
+  "support_designation",
+  "qualification_status",
+  "is_active",
+  "qualified_on",
+  "valid_from",
+  "valid_until",
   "remarks"
  ],
  "fields": [
-  {"fieldname": "employee_section", "fieldtype": "Section Break", "label": "员工信息"},
-  {"fieldname": "employee", "fieldtype": "Link", "in_list_view": 1, "label": "员工", "options": "Employee"},
-  {"fetch_from": "employee.employee_name", "fieldname": "employee_name", "fieldtype": "Data", "in_list_view": 1, "label": "姓名", "read_only": 1},
-  {"fetch_from": "employee.custom_employee_code", "fieldname": "employee_code", "fieldtype": "Data", "in_list_view": 1, "label": "工号", "read_only": 1},
-  {"fieldname": "column_break_employee", "fieldtype": "Column Break"},
-  {"fetch_from": "employee.department", "fieldname": "source_department", "fieldtype": "Link", "in_list_view": 1, "label": "原部门", "options": "Department", "read_only": 1},
-  {"fetch_from": "employee.designation", "fieldname": "source_designation", "fieldtype": "Link", "label": "原岗位", "options": "Designation", "read_only": 1},
-  {"fieldname": "import_validation_note", "fieldtype": "Small Text", "in_list_view": 1, "label": "导入待修正说明", "read_only": 1},
-  {"fieldname": "support_section", "fieldtype": "Section Break", "label": "支援能力"},
-  {"description": "点击选择可支援部门。", "fieldname": "support_department", "fieldtype": "Link", "in_list_view": 1, "label": "可支援部门", "options": "Department"},
-  {"description": "点击选择可支援岗位。", "fieldname": "support_designation", "fieldtype": "Link", "in_list_view": 1, "label": "可支援岗位", "options": "Designation"},
-  {"default": "有效", "fieldname": "qualification_status", "fieldtype": "Select", "in_list_view": 1, "label": "资格状态", "options": "有效\n待复核\n暂停\n失效", "reqd": 1},
-  {"default": "1", "fieldname": "is_active", "fieldtype": "Check", "in_list_view": 1, "label": "可派"},
-  {"fieldname": "column_break_support", "fieldtype": "Column Break"},
-  {"fieldname": "qualified_on", "fieldtype": "Date", "label": "考核通过日期"},
-  {"fieldname": "valid_from", "fieldtype": "Date", "label": "有效开始日期"},
-  {"fieldname": "valid_until", "fieldtype": "Date", "in_list_view": 1, "label": "有效截止日期"},
-  {"fieldname": "remarks", "fieldtype": "Small Text", "label": "备注"}
+  {
+   "fieldname": "employee_section",
+   "fieldtype": "Section Break",
+   "label": "员工信息"
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "员工",
+   "options": "Employee"
+  },
+  {
+   "fetch_from": "employee.employee_name",
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "姓名",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "employee.custom_employee_code",
+   "fieldname": "employee_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "工号",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_employee",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fetch_from": "employee.department",
+   "fieldname": "source_department",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "原部门",
+   "options": "Department",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "employee.designation",
+   "fieldname": "source_designation",
+   "fieldtype": "Link",
+   "label": "原岗位",
+   "options": "Designation",
+   "read_only": 1
+  },
+  {
+   "fieldname": "import_validation_note",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "导入待修正说明",
+   "read_only": 1
+  },
+  {
+   "fieldname": "support_section",
+   "fieldtype": "Section Break",
+   "label": "支援能力"
+  },
+  {
+   "description": "从下拉列表选择；保留已导入名单中的选项。",
+   "fieldname": "support_department",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "可支援部门",
+   "options": ""
+  },
+  {
+   "description": "从下拉列表选择；保留已导入名单中的选项。",
+   "fieldname": "support_designation",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "可支援岗位",
+   "options": ""
+  },
+  {
+   "default": "有效",
+   "fieldname": "qualification_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "资格状态",
+   "options": "有效\n待复核\n暂停\n失效",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "可派"
+  },
+  {
+   "fieldname": "column_break_support",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "qualified_on",
+   "fieldtype": "Date",
+   "label": "考核通过日期"
+  },
+  {
+   "fieldname": "valid_from",
+   "fieldtype": "Date",
+   "label": "有效开始日期"
+  },
+  {
+   "fieldname": "valid_until",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "有效截止日期"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "备注"
+  }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
@@ -39,9 +154,41 @@
  "name": "Cross Department Support Capability",
  "owner": "Administrator",
  "permissions": [
-  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
-  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "HR Manager", "share": 1, "write": 1},
-  {"create": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "HR User", "share": 1, "write": 1}
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR User",
+   "share": 1,
+   "write": 1
+  }
  ],
  "search_fields": "employee,employee_name,employee_code,support_department,support_designation",
  "sort_field": "modified",

@@ -1,6 +1,9 @@
 """Focused contracts for roster export filters and spreadsheet presentation."""
 
 import ast
+import importlib.util
+import sys
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -117,10 +120,23 @@ class EmployeeRosterExportFormatTests(unittest.TestCase):
     def test_workbook_header_remains_visible_and_filterable(self):
         scope = load_functions("_write_sheet_rows")
         sheet = Workbook().active
-        scope["_write_sheet_rows"](sheet, [["工号", "姓名"], ["0001", "甲"], ["0002", "乙"]])
+        spec = importlib.util.spec_from_file_location("hrms.utils.personnel_export_layout", SOURCE.parents[1] / "utils/personnel_export_layout.py")
+        layout = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(layout)
+        with patch.dict(sys.modules, {spec.name: layout}):
+            scope["_write_sheet_rows"](sheet, [["工号", "姓名"], ["0001", "甲"], ["0002", "乙"]])
         self.assertEqual(sheet.freeze_panes, "A2")
         self.assertEqual(sheet.auto_filter.ref, "A1:B3")
         self.assertEqual(sheet["A2"].value, "0001")
+        self.assertIsNone(sheet["A1"].fill.patternType)
+        self.assertEqual(sheet["A2"].border.bottom.style, "thin")
+        with patch.dict(sys.modules, {spec.name: layout}):
+            report = Workbook().active
+            scope["_write_sheet_rows"](report, [["Employee Name", "Status"], ["示例", "在职"]], title="在职员工花名册")
+        self.assertEqual(report["A1"].value, "在职员工花名册")
+        self.assertEqual(report["A3"].value, "姓名")
+        self.assertEqual(report.freeze_panes, "A4")
+        self.assertEqual(report.auto_filter.ref, "A3:B4")
 
 
 if __name__ == "__main__":

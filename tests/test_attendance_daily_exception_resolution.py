@@ -263,7 +263,7 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 		patches = dict(
 			_require_processing_manager=lambda: None, _require_company=lambda value: value,
 			_employee_directory=lambda company: [], _attendance_draft_exception_policy=lambda: {},
-			_refresh_batch_review_status=lambda batch: "待审核", _export_processed_result=lambda batch: {},
+			_refresh_batch_review_status=lambda batch: "待审核", _export_processed_result=lambda batch: self.fail("daily save must not export the whole batch"),
 			_invalidate_monthly_final_after_source_change=lambda *args: None, _save_batch_notes=lambda *args: None,
 			now_datetime=lambda: datetime(2026, 9, 21),
 		)
@@ -276,6 +276,9 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 			self.assertEqual([line["attendance_date"] for line in result["daily_pending_exception_lines"]], ["2026-07-13", "2026-07-20"])
 			self.assertEqual(reopened["daily_exception_lines"], result["daily_exception_lines"])
 			self.assertEqual(reopened["review_status"], "待审核")
+			self.assertFalse(result["edited_daily_row_pending"])
+			self.assertEqual(result["edited_daily_row_exception_codes"], [])
+			self.assertIsNone(result["processed_result"])
 			values = m._effective_result_values(reopened)
 			self.assertEqual(values["workday_overtime_hours"], 123)
 			self.assertEqual(values["restday_overtime_hours"], 3)
@@ -295,6 +298,77 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 			self.assertEqual(pending_result3["exception_codes"], [CLOCK_IN_CODE])
 			self.assertEqual(m._effective_result_values(result3)["restday_overtime_hours"], 5)
 			self.assertEqual(m._effective_result_values(result3)["workday_overtime_hours"], 123)
+
+	def test_approved_daily_late_fact_is_retained_without_blocking_other_exceptions(self):
+		m = self.module
+		for status, changes, sibling, mismatch in (
+			("已通过", {"迟到次数": 1, "实际出勤（小时）": 8}, False, False),
+			("已通过", {}, False, False),
+			("已通过", {"迟到次数": 1, "实际出勤（小时）": 8}, True, False),
+			("已通过", {"迟到次数": 1}, False, True),
+			("待审核", {"迟到次数": 1, "实际出勤（小时）": 8}, False, False),
+			("已驳回", {"迟到次数": 1, "实际出勤（小时）": 8}, False, False),
+		):
+			with self.subTest(status=status, changes=changes, sibling=sibling, mismatch=mismatch):
+				source = {
+					"姓名": "测试员工", "工号": "E-001", "日期": "2026-08-11", "日期类型": "工作日",
+					"实际部门": "工程课", "班次": "08:00-17:00", "上班时间": "08:01", "下班时间": "17:04",
+					"标准工时": 8, "实际出勤（小时）": 7.5 if changes else 8,
+					"迟到次数": 2 if changes else 1,
+					"source_file": "A.xlsx", "source_sheet": "每日统计", "source_row": 10,
+				}
+				sources = [source]
+				if sibling:
+					# Same row number in another file must remain independently pending.
+					sources.append({**source, "日期": "2026-08-12", "迟到次数": 1,
+						"实际出勤（小时）": 8, "source_file": "B.xlsx"})
+				row = m.process_attendance_draft_rows(sources, attendance_month="2026-08")["processed_rows"][0]
+				batch = SimpleNamespace(name="B", company="C", attendance_month="2026-08", source_type="attendance_draft", source_file="A.xlsx")
+				doc = SimpleNamespace(**m._record_payload(batch, row), name="R")
+				doc.as_dict = lambda: {key: value for key, value in vars(doc).items() if not callable(value)}
+				doc.save = lambda **kwargs: None
+				with patch.multiple(
+					m, _require_processing_manager=lambda: None, _require_company=lambda value: value,
+					_employee_directory=lambda company: [], _attendance_draft_exception_policy=lambda: {},
+					_refresh_batch_review_status=lambda batch: "待确认",
+					_invalidate_monthly_final_after_source_change=lambda *args: None,
+					_save_batch_notes=lambda *args: None, now_datetime=lambda: datetime(2026, 10, 30),
+				), patch.object(m.frappe, "get_doc", lambda doctype, name: doc if name == "R" else batch, create=True), \
+					patch.object(m.frappe.db, "commit", lambda: None, create=True):
+					result = m.update_attendance_draft_daily_row(
+						"C", "2026-08", "R", 10, changes, review_status=status, reason="核实迟到属实，保留次数",
+						source_file="A.xlsx", source_sheet="每日统计", attendance_date="2026-08-11",
+					)
+					reopened = m._serialize_record(doc.as_dict())
+					values = m._effective_result_values(reopened)
+					self.assertEqual(values["late_count"], 2 if sibling else 1)
+					detail = next(item for item in values["attendance_details"] if item["attendance_date"] == "2026-08-11")
+					self.assertEqual(detail["late_count"], 1)
+					self.assertEqual(detail["actual_attendance_hours"], 7.5 if mismatch else 8)
+					pending = next((line for line in reopened["daily_pending_exception_lines"] if line["attendance_date"] == "2026-08-11"), None)
+					if status == "已通过":
+						self.assertNotIn("LATE_MARKED", (pending or {}).get("exception_codes", []))
+						self.assertEqual(result["edited_daily_row_pending"], mismatch)
+						if mismatch:
+							self.assertIn("ATTENDANCE_HOURS_MISMATCH", pending["exception_codes"])
+						else:
+							self.assertEqual(reopened["review_status"], "待审核" if sibling else "已通过")
+							self.assertTrue(next(line for line in reopened["daily_exception_lines"] if line["attendance_date"] == "2026-08-11")["resolved"])
+						if sibling:
+							self.assertIn("LATE_MARKED", next(line for line in reopened["daily_pending_exception_lines"] if line["attendance_date"] == "2026-08-12")["exception_codes"])
+						# Rebuilding/recovering retained details must not resurrect a
+						# confirmed late mark when a sibling still carries LATE_MARKED.
+						replayed = m.process_attendance_draft_rows(m._effective_daily_source_rows(reopened), attendance_month="2026-08")["processed_rows"][0]
+						replayed = m._apply_daily_exception_decisions(replayed, m._daily_exception_decisions(values))
+						self.assertFalse(m._has_daily_exception(replayed, 10, "LATE_MARKED", source_file="A.xlsx"))
+						recovered = m._active_attendance_exception_lines({**values, "exception_lines": []}, ["LATE_MARKED"])
+						self.assertEqual([line["attendance_date"] for line in recovered], ["2026-08-12"] if sibling else [])
+						restored = m._restore_daily_exception_lines_from_source(reopened)
+						self.assertFalse(any(line["attendance_date"] == "2026-08-11" and "LATE_MARKED" in line["exception_codes"] for line in restored))
+					else:
+						self.assertTrue(m._has_daily_exception({"proposed_value": values}, 10, "LATE_MARKED", source_file="A.xlsx"))
+					self.assertEqual(reopened["review_history"][-1]["reason"], "核实迟到属实，保留次数")
+					self.assertEqual(reopened["review_history"][-1]["new_value"], changes)
 
 	def test_queue_focus_returns_employee_page_without_changing_filter(self):
 		m = self.module
@@ -379,10 +453,10 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 		late_fields = [field for field in payload["editable_fields"] if field["late_editor"]]
 
 		self.assertEqual(payload["exception_codes"], [CLOCK_IN_CODE, "LATE_MARKED"])
-		self.assertEqual(len(late_fields), 11)
+		self.assertEqual(len(late_fields), 14)
 		self.assertEqual(
 			[field["label"] for field in late_fields],
-			["工作类型", "班次", "上班打卡", "下班打卡", "迟到次数", "标准工时", "实际工时（小时）", "事假（含迟到，小时）", "病假（小时）", "特休（小时）", "排休（小时）"],
+			["工作类型", "班次", "上班打卡", "下班打卡", "迟到次数", "标准工时", "实际工时（小时）", "深夜班", "大夜班", "小夜班", "事假（含迟到，小时）", "病假（小时）", "特休（小时）", "排休（小时）"],
 		)
 		self.assertEqual(next(field["value"] for field in late_fields if field["default_name"] == "请假/事假(小时)"), 0.5)
 

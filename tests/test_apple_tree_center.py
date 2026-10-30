@@ -227,11 +227,24 @@ class AppleTreeCenterContractTest(unittest.TestCase):
 			def save(self, output):
 				output.write(b"xlsx")
 		center._build_export_workbook = lambda *_args: ExportWorkbook()
-		center.download_export(
-			view="person", year="2026", month="2026-06", search="张三", company="永新",
-			start_date="2026-06-01", end_date="2026-06-30", person="001",
-			detail_start_date="2026-06-10", detail_end_date="2026-06-18", detail_search="保养Y",
-		)
+		# This contract test loads the endpoint without a complete Frappe/HRMS install.
+		# Keep the export boundary local while still exercising the forwarded arguments.
+		hrms_package = ModuleType("hrms")
+		hrms_package.__path__ = []
+		utils_package = ModuleType("hrms.utils")
+		utils_package.__path__ = []
+		watermark_module = ModuleType("hrms.utils.export_watermark")
+		watermark_module.save_workbook_with_logo_watermark = lambda workbook, output, **_kwargs: workbook.save(output)
+		with patch.dict(sys.modules, {
+			"hrms": hrms_package,
+			"hrms.utils": utils_package,
+			"hrms.utils.export_watermark": watermark_module,
+		}):
+			center.download_export(
+				view="person", year="2026", month="2026-06", search="张三", company="永新",
+				start_date="2026-06-01", end_date="2026-06-30", person="001",
+				detail_start_date="2026-06-10", detail_end_date="2026-06-18", detail_search="保养Y",
+			)
 		self.assertEqual(calls[0], {
 			"person": "001", "year": "2026", "company": "永新", "month": "2026-06", "search": "张三",
 			"start_date": "2026-06-01", "end_date": "2026-06-30",

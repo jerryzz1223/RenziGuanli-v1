@@ -196,7 +196,7 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 			first_rows = api._monthly_first_signed_rows(batches)
 			daily_rows = api._monthly_first_signed_daily_rows(batches)
 		self.assertEqual([row["employee_code"] for row in rows], ["E-001", "E-002"])
-		self.assertEqual(rows[0].get("green_apple_amount", 0), 0)
+		self.assertIsNone(rows[0]["green_apple_amount"])
 		self.assertEqual(rows[1]["green_apple_amount"], 15)
 		self.assertFalse(rows[1]["eligible_for_downstream"])
 		self.assertIn("考勤初稿待审核（是否计入下游：否）", rows[1]["review_note"])
@@ -360,11 +360,68 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 			with_source = api._monthly_final_rows({"attendance_draft": attendance, "special_hours": special})
 			without_source = api._monthly_final_rows({"attendance_draft": attendance})
 		self.assertEqual([(row["employee_code"], row["special_workday_hours"]) for row in with_source],
-			[("E-001", 0.5), ("E-002", 0.0)])
+			[("E-001", 0.5), ("E-002", None)])
 		self.assertEqual(with_source[0]["special_hours_days"], [{"day": 3, "hours": 0.5}])
 		self.assertEqual(with_source[1]["special_hours_days"], [])
 		self.assertEqual([(row["employee_code"], row["special_workday_hours"]) for row in without_source],
 			[("E-001", 2.0), ("E-002", 1.0)])
+
+	def test_approved_support_correction_reaches_signed_final_after_old_exclusion(self):
+		api = self.api
+		batches = {
+			kind: types.SimpleNamespace(source_type=kind, company="测试公司", attendance_month="2026-08")
+			for kind in ("attendance_draft", "special_hours", "housing_allowance", "full_attendance")
+		}
+		codes = ("3885", "4051", "260601")
+		attendance = [{
+			"source_type": "attendance_draft", "employee_code": code, "employee_name": code,
+			"eligible_for_downstream": True,
+			"processed_value": {"employee_code": code, "employee_name": code, "signed_final_override": 1,
+				"special_workday_hours": 0, "housing_allowance": 0, "full_attendance_award": 0},
+		} for code in codes]
+		def approved(code, kind, field, amount):
+			return {
+				"source_type": kind, "employee_code": code, "employee_name": code,
+				"eligible_for_downstream": False, "review_status": "已通过", "exception_codes": [],
+				"review_history": [{"review_status": "已通过", "field_name": "department"}],
+				"proposed_value": {"exclusion_reason": "不在本月考勤初稿人员范围，已保留来源但不进入月度终稿"},
+				"processed_value": {"employee_code": code, "employee_name": code, field: amount,
+					"special_hours_days": [{"day": 21, "hours": amount}] if kind == "special_hours" else []},
+			}
+		records = {
+			"attendance_draft": attendance,
+			"special_hours": [approved("3885", "special_hours", "special_hours", 1), approved("4051", "special_hours", "special_hours", 2)],
+			"housing_allowance": [approved("4051", "housing_allowance", "housing_allowance", 200), approved("260601", "housing_allowance", "housing_allowance", 200)],
+			"full_attendance": [approved("3885", "full_attendance", "full_attendance_award", 200), approved("4051", "full_attendance", "full_attendance_award", 200)],
+		}
+		with (patch.object(api, "_result_rows", side_effect=lambda batch, *_args, **_kwargs: records[batch.source_type]),
+			patch.object(api, "_company_statutory_holidays", return_value=set()),
+			patch.object(api, "_employee_directory", return_value=[])):
+			rows = {row["employee_code"]: row for row in api._monthly_final_rows(batches)}
+		self.assertEqual(rows["3885"]["special_workday_hours"], 1)
+		self.assertEqual(rows["4051"]["special_workday_hours"], 2)
+		self.assertEqual(rows["3885"]["full_attendance_award"], 200)
+		self.assertEqual(rows["4051"]["full_attendance_award"], 200)
+		self.assertEqual(rows["4051"]["housing_allowance"], 200)
+		self.assertEqual(rows["260601"]["housing_allowance"], 200)
+
+	def test_old_population_exclusion_does_not_override_an_explicit_rejection(self):
+		api = self.api
+		base = {"source_type": "housing_allowance", "eligible_for_downstream": False,
+			"exception_codes": [], "proposed_value": {"exclusion_reason": "不在本月考勤初稿人员范围"}}
+		self.assertTrue(api._monthly_support_reincluded_after_attendance_upload(base))
+		self.assertFalse(api._monthly_support_reincluded_after_attendance_upload({**base,
+			"review_history": [{"field_name": "eligible_for_downstream", "review_status": "已驳回"}]}))
+		self.assertFalse(api._monthly_support_reincluded_after_attendance_upload({**base,
+			"exception_codes": ["MONTHLY_AMOUNT_INVALID"]}))
+		self.assertFalse(api._monthly_support_reincluded_after_attendance_upload({**base,
+			"review_status": "已驳回"}))
+
+	def test_web_final_field_edit_is_explicit(self):
+		record = {"review_history": [{"field_name": "__web_monthly_final__",
+			"new_value": {"housing_allowance": 0}}]}
+		self.assertTrue(self.api._monthly_final_field_was_edited(record, "housing_allowance"))
+		self.assertFalse(self.api._monthly_final_field_was_edited(record, "full_attendance_award"))
 
 	def test_old_first_signed_output_requires_regeneration_before_preview(self):
 		api = self.api
@@ -423,6 +480,7 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertEqual(sheet["E5"].value, "E-001")
 		self.assertEqual(sheet["G5"].value, 176)
 		self.assertEqual(sheet["I5"].value, 2)
+		self.assertEqual(sheet["W5"].value, 0)
 		self.assertIsNone(sheet["J5"].value)
 		self.assertIsNone(sheet["K5"].value)
 		self.assertEqual(sheet["Z5"].value, "迟到2次")
@@ -474,6 +532,7 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 			patch.object(api, "_first_signed_snapshot_batches", return_value={"attendance_draft": batch}),
 			patch.object(api, "_monthly_snapshot_version", return_value="snapshot"),
 			patch.object(api, "_monthly_first_signed_rows", return_value=rows),
+			patch.object(api, "get_monthly_final_generation_check", return_value={"ready": True}),
 		):
 			preview = api.get_monthly_final_preview("测试公司", "2026-07", "first_signed", "E-001")
 		self.assertEqual([row["employee_code"] for row in preview["rows"]], ["E-001"])
@@ -561,9 +620,9 @@ class TestAttendanceFirstSignedVersion(unittest.TestCase):
 		self.assertTrue(sheet.row_dimensions[4].hidden)
 		self.assertTrue(all(sheet.cell(row=4, column=column).value is None for column in range(2, sheet.max_column + 1)))
 		self.assertEqual(sheet.freeze_panes, "J4")
-		self.assertEqual(sheet["R10"].value, "审核：")
-		self.assertEqual(sheet["AS10"].value, "审核：")
-		self.assertEqual(sheet["BA10"].value, "复核：")
+		self.assertIsNone(sheet["R10"].value)
+		self.assertIsNone(sheet["AS10"].value)
+		self.assertIsNone(sheet["BA10"].value)
 		self.assertEqual(sheet["BI10"].value, "制表：李微微2026.6.11")
 
 	def test_all_disabled_company_shift_rules_do_not_use_builtin_fallback(self):

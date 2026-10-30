@@ -1,0 +1,234 @@
+{
+ "doctype": "DocType",
+ "name": "Interview Registration",
+ "module": "HR",
+ "autoname": "IR-.YYYY.-.#####",
+ "engine": "InnoDB",
+ "track_changes": 1,
+ "title_field": "candidate_name",
+ "search_fields": "candidate_name,phone,interview_position",
+ "sort_field": "interview_date",
+ "sort_order": "DESC",
+ "field_order": [
+  "company",
+  "registration_month",
+  "basic_section",
+  "candidate_name",
+  "native_place",
+  "source",
+  "phone",
+  "basic_column",
+  "gender",
+  "education",
+  "marital_status",
+  "age",
+  "interview_section",
+  "interview_date",
+  "interview_position",
+  "interview_column",
+  "referrer",
+  "interviewer",
+  "result_section",
+  "hired",
+  "assigned_department",
+  "assigned_position",
+  "rejection_reason",
+  "arrival_section",
+  "expected_start_date",
+  "arrival_status",
+  "no_show_reason"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "label": "公司",
+   "fieldtype": "Link",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "registration_month",
+   "label": "月份",
+   "fieldtype": "Data",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "basic_section",
+   "label": "人员基本信息",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "candidate_name",
+   "label": "姓名",
+   "fieldtype": "Data",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "native_place",
+   "label": "籍贯",
+   "fieldtype": "Data"
+  },
+  {
+   "fieldname": "source",
+   "label": "信息渠道",
+   "fieldtype": "Link",
+   "options": "Job Applicant Source"
+  },
+  {
+   "fieldname": "phone",
+   "label": "联系电话",
+   "fieldtype": "Data",
+   "reqd": 1
+  },
+  {
+   "fieldname": "basic_column",
+   "label": "",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "gender",
+   "label": "性别",
+   "fieldtype": "Select",
+   "options": "\n男\n女"
+  },
+  {
+   "fieldname": "education",
+   "label": "学历",
+   "fieldtype": "Select",
+   "options": "\n小学\n初中\n中专\n高中\n大专\n本科"
+  },
+  {
+   "fieldname": "marital_status",
+   "label": "婚姻状况",
+   "fieldtype": "Select",
+   "options": "\n未婚\n已婚\n离异\n丧偶"
+  },
+  {
+   "fieldname": "age",
+   "label": "年龄",
+   "fieldtype": "Int",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "interview_section",
+   "label": "面试信息",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "interview_date",
+   "label": "面试时间",
+   "fieldtype": "Date",
+   "reqd": 1,
+   "in_list_view": 1,
+   "default": "Today"
+  },
+  {
+   "fieldname": "interview_position",
+   "label": "面试岗位",
+   "fieldtype": "Autocomplete",
+   "options": "作业员\n检验员",
+   "reqd": 1,
+   "description": "可选择常用岗位，也可输入其他岗位。"
+  },
+  {
+   "fieldname": "interview_column",
+   "label": "",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "referrer",
+   "label": "介绍人",
+   "fieldtype": "Data"
+  },
+  {
+   "fieldname": "interviewer",
+   "label": "面试官",
+   "fieldtype": "Data"
+  },
+  {
+   "fieldname": "result_section",
+   "label": "录用与分配",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "hired",
+   "label": "录用与否",
+   "fieldtype": "Select",
+   "options": "\n是\n否",
+   "in_list_view": 1,
+   "description": "未确定时留空。此处为登记结果。"
+  },
+  {
+   "fieldname": "assigned_department",
+   "label": "分配部门",
+   "fieldtype": "Select",
+   "options": "\n连续课\n设备课\n品管课\n工程课\n总办室\n品保课\n药水课\n生管课\n量试组\n行政课\n环安课\n资财课"
+  },
+  {
+   "fieldname": "assigned_position",
+   "label": "分配岗位",
+   "fieldtype": "Data"
+  },
+  {
+   "fieldname": "rejection_reason",
+   "label": "未录用原因或其他",
+   "fieldtype": "Small Text"
+  },
+  {
+   "fieldname": "arrival_section",
+   "label": "报到跟进",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "expected_start_date",
+   "label": "预计人员上班时间",
+   "fieldtype": "Date"
+  },
+  {
+   "fieldname": "arrival_status",
+   "label": "是否报到",
+   "fieldtype": "Select",
+   "options": "\n待报到\n已报到\n未报到"
+  },
+  {
+   "fieldname": "no_show_reason",
+   "label": "未报到原因",
+   "fieldtype": "Small Text",
+   "depends_on": "eval:doc.arrival_status==\"未报到\"",
+   "mandatory_depends_on": "eval:doc.arrival_status==\"未报到\""
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "print": 1,
+   "export": 1,
+   "delete": 1
+  },
+  {
+   "role": "HR Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "print": 1,
+   "export": 1,
+   "delete": 1
+  },
+  {
+   "role": "HR User",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "print": 1,
+   "export": 1
+  }
+ ]
+}

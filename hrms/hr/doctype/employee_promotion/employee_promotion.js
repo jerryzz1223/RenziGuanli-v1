@@ -23,6 +23,10 @@ frappe.ui.form.on('Employee Promotion', {
 		window.hrmsEmployeeBusinessCodeSelector.resolve_employee(frm);
 	},
 
+	custom_is_confirmation_interview(frm) {
+		configure_confirmation_interview(frm);
+	},
+
 	custom_confirmation_result(frm) {
 		configure_confirmation_interview(frm);
 	},
@@ -36,6 +40,8 @@ function configure_confirmation_interview(frm) {
 			["employment_type", "custom_is_confirmed", "final_confirmation_date"].includes(detail.fieldname),
 		),
 	);
+
+	frm.set_df_property("promotion_date", "label", __(is_confirmation_interview ? "转正日期" : "Promotion Date"));
 
 	[
 		"confirmation_interview_section",
@@ -58,3 +64,15 @@ function configure_confirmation_interview(frm) {
 		frappe.show_alert({ message: __("转正不通过不会修改员工档案"), indicator: "blue" });
 	}
 }
+
+// Quick Entry does not run the full form's refresh handlers.
+frappe.ui.form.EmployeePromotionQuickEntryForm = class EmployeePromotionQuickEntryForm extends frappe.ui.form.QuickEntryForm {
+	render_dialog() {
+		super.render_dialog();
+		const route = frappe.get_route();
+		const from_confirmation_list = route[0] === "List" && route[1] === "Employee Promotion";
+		if (this.doc.custom_is_confirmation_interview || from_confirmation_list) {
+			this.dialog.set_df_property("promotion_date", "label", __("转正日期"));
+		}
+	}
+};

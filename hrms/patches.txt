@@ -77,3 +77,7 @@ hrms.patches.v16_0.ensure_standing_pay_roles #2026-09-10
 hrms.patches.v16_0.flatten_yongxin_roster_department_parents #2026-09-10
 hrms.patches.v16_0.migrate_employee_separation_approval_queue #2026-09-10
 hrms.patches.v16_0.add_primary_school_education_option #2026-09-29
+
+hrms.patches.v16_0.seed_interview_registration_sources #2026-10-28
+
+hrms.patches.v16_0.sync_cross_department_support_ledgers #2026-10-30

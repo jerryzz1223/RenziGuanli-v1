@@ -31,6 +31,9 @@ EMPLOYEE_FORM_ENTRY_TYPES = {
 }
 EMPLOYEE_FORM_ENTRY_ROLES = {"HR User", "HR Manager", "System Manager"}
 EMPLOYEE_FORM_ATTACHMENT_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
+REVOKED_MATERIAL_PREFIX = "hrms_revoked_"
+REVOCATION_FIELDS = ["custom_hrms_revocation_reason", "custom_hrms_revoked_by", "custom_hrms_revoked_at"]
+
 EMPLOYEE_ATTACHMENT_TITLE_FIELD = "custom_hrms_attachment_title"
 EMPLOYEE_FORM_TITLE_LABELS = {
 	"employee_talk": "谈话标题",
@@ -137,8 +140,11 @@ def archive_employee_form_attachment(employee: str, form_type: str, file_url: st
 	if not file_name:
 		frappe.throw(_("未找到已上传的表单材料"))
 
+	frappe.db.sql("SELECT name FROM `tabFile` WHERE name=%s FOR UPDATE", (file_name,))
 	file_doc = frappe.get_doc("File", file_name)
 	file_doc.check_permission("read")
+	if str(file_doc.attached_to_field or "").startswith(REVOKED_MATERIAL_PREFIX):
+		frappe.throw(_("已撤销的材料不能重新归档，请重新上传材料"))
 	is_attached_to_employee = (
 		file_doc.attached_to_doctype == "Employee" and file_doc.attached_to_name == doc.name
 	)
@@ -176,14 +182,15 @@ def list_employee_form_entries(form_type: str, company: str = "", search_text: s
 	form_entry = _form_entry_type(form_type)
 	search = str(search_text or "").strip().casefold()
 	material_field = f"{EMPLOYEE_MATERIAL_FIELD_PREFIX}{form_entry['material_type']}"
-	fields = ["name", "file_name", "file_url", "attached_to_name", "modified", "creation", "owner"]
+	fields = ["name", "file_name", "file_url", "attached_to_name", "attached_to_field", "modified", "creation", "owner"]
+	fields.extend(field for field in REVOCATION_FIELDS if frappe.db.has_column("File", field))
 	if _employee_attachment_title_field_available():
 		fields.insert(3, EMPLOYEE_ATTACHMENT_TITLE_FIELD)
 	files = frappe.get_list(
 		"File",
 		filters={
 			"attached_to_doctype": "Employee",
-			"attached_to_field": ["in", [material_field, form_entry["material_type"]]],
+			"attached_to_field": ["in", [material_field, form_entry["material_type"], f"{REVOKED_MATERIAL_PREFIX}{form_entry['material_type']}"]],
 		},
 		fields=fields,
 		order_by="modified desc, creation desc",
@@ -217,6 +224,11 @@ def list_employee_form_entries(form_type: str, company: str = "", search_text: s
 	users_by_name = {row.name: row for row in users}
 	return [
 		{
+			"name": row.name,
+			"entry_status": "已撤销" if str(row.attached_to_field or "").startswith(REVOKED_MATERIAL_PREFIX) else "已录入",
+			"revocation_reason": row.get("custom_hrms_revocation_reason") or "",
+			"revoked_by": row.get("custom_hrms_revoked_by") or "",
+			"revoked_at": row.get("custom_hrms_revoked_at") or "",
 			"employee": row.attached_to_name,
 			"employee_name": employees_by_name[row.attached_to_name].employee_name,
 			"employee_code": str(employees_by_name[row.attached_to_name].custom_employee_code or "").strip(),
@@ -292,3 +304,35 @@ def get_employee_form_entry_summaries(employee: str, company: str = ""):
 			"submitted_by_name": submitted_by_name,
 		}
 	return summaries
+
+
+@frappe.whitelist()
+def revoke_employee_form_entry(file_name: str, form_type: str, reason: str):
+	"""Retain evidence in the entry ledger while removing it from active archives."""
+	_require_employee_form_entry_access()
+	form_entry = _form_entry_type(form_type)
+	reason = str(reason or "").strip()
+	if not reason or len(reason) > 1000:
+		frappe.throw(_("请填写撤销原因（最多 1000 个字符）"))
+	if not all(frappe.db.has_column("File", field) for field in REVOCATION_FIELDS):
+		frappe.throw(_("撤销字段尚未完成迁移，请先执行站点 migrate"))
+	# Serialize repeat requests so the first operator's evidence is retained.
+	frappe.db.sql("SELECT name FROM `tabFile` WHERE name=%s FOR UPDATE", (file_name,))
+	file_doc = frappe.get_doc("File", file_name)
+	file_doc.check_permission("read")
+	material_type = form_entry["material_type"]
+	active_fields = [f"{EMPLOYEE_MATERIAL_FIELD_PREFIX}{material_type}", material_type]
+	revoked_field = f"{REVOKED_MATERIAL_PREFIX}{material_type}"
+	if file_doc.attached_to_doctype != "Employee" or file_doc.attached_to_field not in active_fields + [revoked_field]:
+		frappe.throw(_("该材料不属于指定员工表单"))
+	employee = frappe.get_doc("Employee", file_doc.attached_to_name)
+	employee.check_permission("write")
+	if file_doc.attached_to_field == revoked_field:
+		return {"name": file_doc.name, "entry_status": "已撤销"}
+	file_doc.db_set({
+		"attached_to_field": revoked_field,
+		"custom_hrms_revocation_reason": reason,
+		"custom_hrms_revoked_by": frappe.session.user,
+		"custom_hrms_revoked_at": frappe.utils.now(),
+	})
+	return {"name": file_doc.name, "entry_status": "已撤销"}

@@ -140,6 +140,7 @@ PERSONNEL_PAGE_DEFINITIONS = [
 	{"name": "employee-detail", "title": "员工档案详情", "icon": "user"},
 	{"name": "employee-roster-import", "title": "导入花名册", "icon": "upload"},
 	{"name": "employee-roster-export", "title": "导出花名册", "icon": "download"},
+	{"name": "dingtalk-roster-review", "title": "钉钉资料核对", "icon": "users"},
 	{"name": "personnel-reports", "title": "人事报表", "icon": "bar-chart"},
 	{
 		"name": "staff-attribute-settings",
@@ -1859,6 +1860,7 @@ def _get_employee_import_fields(doc):
 				"description": row.description or meta_field.description or "",
 				"category": row.category,
 				"required": 1 if is_minimum_import_field else 0,
+				"can_defer": not meta_field.get("reqd") and _can_defer_employee_import_field(row.fieldname),
 				"options": row.options or meta_field.options or "",
 				"enabled": _template_row_int(row, "enabled"),
 				"aliases": "\n".join(_field_aliases_for_row(row)),
@@ -2544,7 +2546,7 @@ def get_hrms_access_center():
 	why a user's existing password cannot appear in this screen.
 	"""
 	_require_system_manager()
-	from hrms.access_control import ATTENDANCE_FINAL_APPROVER_ROLE, ACCESS_TIER_BY_KEY, get_hrms_access_tier_for_roles
+	from hrms.access_control import ATTENDANCE_FINAL_APPROVER_ROLE, ACCESS_TIER_BY_KEY, get_hrms_assigned_access_tier_for_roles
 	users = frappe.get_all(
 		"User",
 		fields=["name", "full_name", "user_type", "enabled", "last_login"],
@@ -2613,7 +2615,11 @@ def get_hrms_access_center():
 	accounts = []
 	for user in users:
 		roles = roles_by_user.get(user.name, [])
-		access_tier = "full" if user.name == "Administrator" else get_hrms_access_tier_for_roles(roles)
+		# Administrator bypasses the business-tier checks, but the public tier
+		# catalogue has only read / submit / approve.  Keep its fixed privilege
+		# explicit in the label instead of looking up the retired "full" key.
+		is_administrator = user.name == "Administrator"
+		access_tier = "approve" if is_administrator else get_hrms_assigned_access_tier_for_roles(roles)
 		data_scopes = permissions_by_user.get(user.name, [])
 		business_scopes = _business_user_permissions(data_scopes)
 		accounts.append(
@@ -2626,8 +2632,11 @@ def get_hrms_access_center():
 				"assigned_roles": roles,
 				"assigned_role_labels": [role_labels.get(role, _(role)) for role in roles],
 				"access_tier": access_tier,
-				"access_tier_label": ACCESS_TIER_BY_KEY[access_tier]["label"],
-				"attendance_final_approve": int(user.name == "Administrator" or access_tier == "full" or ATTENDANCE_FINAL_APPROVER_ROLE in roles),
+				"access_tier_label": (
+					"超级管理员" if is_administrator else
+					ACCESS_TIER_BY_KEY[access_tier]["label"] if access_tier else "未分配业务档位"
+				),
+				"attendance_final_approve": int(is_administrator or ATTENDANCE_FINAL_APPROVER_ROLE in roles),
 				"role_count": len(roles),
 				"data_scope_count": len(data_scopes),
 				"data_scopes": business_scopes,
@@ -3479,12 +3488,16 @@ def _department_display_name(value, department_names=None):
 
 
 def _hydrate_employee_roster_display_values(rows):
+	from hrms.utils.personnel_contract_reminders import contract_expiry_warning
+
+	today = frappe.utils.today()
 	department_values = sorted({row.get("department") for row in rows if row.get("department")})
 	department_names = _get_department_display_names(department_values)
 
 	for row in rows:
 		row["department_display"] = _department_display_name(row.get("department"), department_names)
 		row["employee_code_display"] = row.get("custom_employee_code") or ""
+		row["contract_expiry_warning"] = contract_expiry_warning(row, today)
 	return rows
 
 
@@ -4844,8 +4857,11 @@ def upload_employee_material(employee: str, material_type: str, file_url: str, t
 	if not file_name:
 		frappe.throw(_("未找到已上传的材料文件"))
 
+	frappe.db.sql("SELECT name FROM `tabFile` WHERE name=%s FOR UPDATE", (file_name,))
 	file_doc = frappe.get_doc("File", file_name)
 	file_doc.check_permission("read")
+	if str(file_doc.attached_to_field or "").startswith("hrms_revoked_"):
+		frappe.throw(_("已撤销的材料不能重新归档，请重新上传材料"))
 	is_attached_to_employee = (
 		file_doc.attached_to_doctype == EMPLOYEE_DOCTYPE and file_doc.attached_to_name == doc.name
 	)
@@ -5571,6 +5587,11 @@ def _row_to_employee_values(row, matches, fields_by_name, warnings, row_index=No
 		if fieldname in matched_fieldnames or fieldname not in fields_by_name:
 			continue
 		field = fields_by_name[fieldname]
+		if _is_employee_import_deferred_placeholder(raw_value) and _can_defer_employee_import_field(fieldname):
+			values.setdefault("_employee_import_deferred_fields", set()).add(fieldname)
+			if replace_blank:
+				values[fieldname] = None
+			continue
 		if allow_sparse_required and _is_blank_value(raw_value):
 			values[fieldname] = None
 			continue
@@ -5640,7 +5661,7 @@ def _validate_employee_import_row(
 		):
 			errors.append(_field_error(row_index, field, _("必填字段为空")))
 
-	if values.get("custom_work_nature") == "离职" and _is_blank_value(values.get("relieving_date")):
+	if (values.get("custom_work_nature") == "离职" or values.get("status") == "Left") and _is_blank_value(values.get("relieving_date")):
 		field = fields_by_name.get("relieving_date") or {
 			"fieldname": "relieving_date",
 			"field_label": _("离职日期"),
@@ -5936,6 +5957,14 @@ def _employee_roster_mandatory_field_errors(values, action, mode, row_index, fie
 	deferred_fields = values.get("_employee_import_deferred_fields") or set()
 	errors = []
 	for fieldname, meta_field in meta_fields.items():
+		# Roster archives and standalone entry do not require recruitment or a
+		# system account, even if legacy site metadata marked these required.
+		if fieldname == "job_applicant":
+			continue
+		if fieldname in {"personal_email", "company_email", "prefered_contact_email"} and not (
+			values.get("user_id") or values.get("create_user_automatically")
+		):
+			continue
 		if fieldname in EMPLOYEE_INTERNAL_FIELDNAMES:
 			continue
 		if not meta_field.get("reqd"):
@@ -6299,7 +6328,9 @@ def import_employee_roster(
 						doc.set(fieldname, value)
 				if mode in {"replace", "merge"}:
 					doc.custom_roster_excluded = 0
-				doc.save(ignore_permissions=True)
+				from hrms.utils.employee_status_updates import save_employee_status_update
+
+				save_employee_status_update(doc, "roster_import", ignore_permissions=True)
 				result["updated"] += 1
 			elif planned_row["action"] == "insert":
 				doc = frappe.new_doc(EMPLOYEE_DOCTYPE)
@@ -6466,25 +6497,23 @@ def _safe_sheet_title(title, used_titles):
 	return title
 
 
-def _write_sheet_rows(sheet, rows):
-	from openpyxl.styles import Font, PatternFill
-	from openpyxl.utils import get_column_letter
-
-	header_fill = PatternFill("solid", fgColor="F6F7F9")
-	header_font = Font(bold=True)
-	for row_index, row in enumerate(rows, start=1):
+def _write_sheet_rows(sheet, rows, title=None):
+	from hrms.utils.personnel_export_layout import chinese_label, style_personnel_sheet
+	header_row = 3 if title else 1
+	if title:
+		columns = max(1, len(rows[0]) if rows else 1)
+		sheet.cell(1, 1, chinese_label(title))
+		sheet.cell(2, 1, f"记录数：{max(0, len(rows) - 1)}")
+		if columns > 1:
+			sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=columns)
+			sheet.merge_cells(start_row=2, start_column=1, end_row=2, end_column=columns)
+	for row_index, row in enumerate(rows, start=header_row):
 		for column_index, value in enumerate(row, start=1):
-			cell = sheet.cell(row=row_index, column=column_index, value=value)
-			if row_index == 1:
-				cell.fill = header_fill
-				cell.font = header_font
-
-	for column_index, column_cells in enumerate(sheet.columns, start=1):
-		max_width = max(len(str(cell.value or "")) for cell in column_cells)
-		sheet.column_dimensions[get_column_letter(column_index)].width = max(12, min(32, max_width + 4))
+			if row_index == header_row:
+				value = chinese_label(value)
+			sheet.cell(row=row_index, column=column_index, value=value)
 	if rows:
-		sheet.freeze_panes = "A2"
-		sheet.auto_filter.ref = sheet.dimensions
+		style_personnel_sheet(sheet, header_row=header_row, title_row=1 if title else None)
 
 
 def _get_child_export_fields(child_doctype):
@@ -6506,7 +6535,7 @@ def _format_employee_export_value(fieldname, value, department_names):
 	return value
 
 
-def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tables, filters=None, export_key="roster"):
+def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tables, filters=None, export_key="roster", report_title=None):
 	from openpyxl import Workbook
 	from hrms.utils.export_watermark import save_workbook_with_logo_watermark
 
@@ -6516,7 +6545,7 @@ def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tab
 	workbook = Workbook()
 	used_titles = set()
 	main_sheet = workbook.active
-	main_sheet.title = _safe_sheet_title("员工花名册", used_titles)
+	main_sheet.title = _safe_sheet_title(report_title or "员工花名册", used_titles)
 
 	main_headers = [allowed_fields[fieldname]["field_label"] for fieldname in selected_fields]
 	main_rows = [main_headers]
@@ -6531,7 +6560,7 @@ def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tab
 		main_rows.append(
 			[_format_employee_export_value(fieldname, employee.get(fieldname), department_names) for fieldname in selected_fields]
 		)
-	_write_sheet_rows(main_sheet, main_rows)
+	_write_sheet_rows(main_sheet, main_rows, title=report_title)
 
 	employee_rows = frappe.get_all(
 		EMPLOYEE_DOCTYPE,
@@ -6580,7 +6609,7 @@ def _make_employee_export_workbook(selected_fields, allowed_fields, selected_tab
 					[employee_code.get(row.parent, row.parent), employee_label.get(row.parent)]
 					+ [row.get(field.fieldname) for field in child_fields]
 				)
-		_write_sheet_rows(sheet, rows)
+		_write_sheet_rows(sheet, rows, title=table_label if report_title else None)
 
 	output = BytesIO()
 	save_workbook_with_logo_watermark(workbook, output, export_key=export_key)
@@ -6761,6 +6790,7 @@ def download_employee_report(report_id: str):
 			report["tables"],
 			report.get("filters") or {},
 			"employee_report",
+			report_title=report["report_name"],
 		),
 	)
 

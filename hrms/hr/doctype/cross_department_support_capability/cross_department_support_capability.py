@@ -41,6 +41,7 @@ class CrossDepartmentSupportCapability(Document):
 	"""A single, auditable cross-department qualification for an employee."""
 
 	def validate(self):
+		self.support_designation = cstr(self.support_designation or "").strip()
 		if self.valid_from and self.valid_until and getdate(self.valid_from) > getdate(self.valid_until):
 			frappe.throw(_("有效开始日期不能晚于有效截止日期。"))
 
@@ -59,8 +60,32 @@ class CrossDepartmentSupportCapability(Document):
 			if not self.is_new() and self.import_validation_note:
 				self.import_validation_note = ""
 
+		if self.employee and self.support_designation:
+			# Serialize qualifications for one employee, including concurrent imports.
+			frappe.db.sql("SELECT name FROM `tabEmployee` WHERE name=%s FOR UPDATE", (self.employee,))
+			if _find_duplicate_capability(self.employee, self.support_designation, self.name):
+				frappe.throw(_("该员工已有相同的可支援岗位，不能重复新增。请修改已有记录。"))
+
 		if self.qualification_status != "有效":
 			self.is_active = 0
+
+
+def _find_duplicate_capability(employee, designation, exclude_name=None):
+	"""Employee Link is the identity even when a legacy business code is blank."""
+	if not employee or not designation:
+		return None
+	filters = {"employee": employee, "support_designation": cstr(designation).strip()}
+	if exclude_name:
+		filters["name"] = ["!=", exclude_name]
+	return frappe.db.exists("Cross Department Support Capability", filters)
+
+
+@frappe.whitelist()
+def delete_support_capability(name: str):
+	doc = frappe.get_doc("Cross Department Support Capability", name)
+	doc.check_permission("delete")
+	frappe.delete_doc("Cross Department Support Capability", doc.name)
+	return {"name": doc.name}
 
 
 def _can_read_support_capabilities() -> bool:
@@ -211,10 +236,7 @@ def _support_import_plan(file_url: str):
 			"support_designation_name": support_designation,
 			"qualification_status": status,
 		})
-		if not row["errors"] and frappe.db.exists(
-			"Cross Department Support Capability",
-			{"employee": employee, "support_department": support_department, "support_designation": support_designation},
-		):
+		if not row["errors"] and _find_duplicate_capability(employee, support_designation):
 			row["action"] = "跳过（已存在）"
 		rows.append(row)
 
@@ -289,6 +311,11 @@ def import_cross_department_support_capabilities(file_url: str):
 		if row["action"].startswith("跳过"):
 			skipped += 1
 			continue
+		if row.get("employee"):
+			frappe.db.sql("SELECT name FROM `tabEmployee` WHERE name=%s FOR UPDATE", (row["employee"],))
+			if _find_duplicate_capability(row["employee"], row.get("support_designation_name") or row.get("support_designation")):
+				skipped += 1
+				continue
 		review_errors = list(row["errors"])
 		qualified_on = _safe_import_date(row.get("qualified_on"), _("考核通过日期"), review_errors)
 		valid_from = _safe_import_date(row.get("valid_from"), _("有效开始日期"), review_errors)
@@ -351,6 +378,7 @@ def get_available_support_candidates(
 	include_unavailable: int | str = 0,
 	page: int | str = 1,
 	page_length: int | str = 10,
+	dispatch_date: str | None = None,
 ):
 	"""Return supportable employees for the search page.
 
@@ -395,7 +423,13 @@ def get_available_support_candidates(
 		limit_page_length=500,
 	)
 
-	today = getdate()
+	today = getdate(dispatch_date) if dispatch_date else getdate()
+	from hrms.api.cross_department_support import EXCLUSION, storage_ready, visible_rows
+	exclusions_ready = storage_ready(EXCLUSION) and frappe.has_permission(EXCLUSION, "read")
+	employees = list({row.employee for row in rows if row.employee})
+	exclusions = visible_rows(EXCLUSION, {"employee": ["in", employees], "is_active": 1,
+		"from_date": ["<=", today], "to_date": [">=", today]}, ["employee"]) if employees and exclusions_ready else []
+	excluded = {row.employee for row in exclusions}
 	result = []
 	keyword = frappe.utils.cstr(employee_keyword or employee).strip().lower()
 	keyword_parts = [part.strip() for part in keyword.split("/") if part.strip()] or [keyword]
@@ -405,7 +439,10 @@ def get_available_support_candidates(
 			continue
 		is_current = not row.valid_from or getdate(row.valid_from) <= today
 		is_current = is_current and (not row.valid_until or getdate(row.valid_until) >= today)
-		row["availability"] = "可派" if row.is_active and row.qualification_status == "有效" and is_current else "不可派"
+		row["availability"] = "可派" if row.is_active and row.qualification_status == "有效" and is_current and row.employee not in excluded else "不可派"
+		row["exclusion_active"] = row.employee in excluded
+		if row["exclusion_active"]:
+			row["availability"] = "排除派遣"
 		if frappe.utils.cint(include_unavailable) or row["availability"] == "可派":
 			result.append(row)
 
@@ -419,6 +456,7 @@ def get_available_support_candidates(
 		"page": page,
 		"page_length": page_length,
 		"total_pages": max((total_count + page_length - 1) // page_length, 1),
+		"can_delete": frappe.has_permission("Cross Department Support Capability", "delete"),
 	}
 
 
@@ -453,3 +491,25 @@ def get_support_filter_options():
 		"support_designations": values("support_designation"),
 		"employees": employees,
 	}
+
+
+@frappe.whitelist()
+def get_support_capability_options():
+	"""Keep imported qualifications selectable even without matching master data."""
+	if not _can_read_support_capabilities():
+		frappe.throw(_("你没有查看跨部门支援名单的权限。"), frappe.PermissionError)
+	from hrms.api.cross_department_support import visible_rows
+	rows = visible_rows("Cross Department Support Capability", {}, ["support_department", "support_designation"])
+	departments = {cstr(row.support_department).strip() for row in rows if row.support_department}
+	designations = {cstr(row.support_designation).strip() for row in rows if row.support_designation}
+	master_designations = []
+	for doctype, target in (("Department", departments), ("Designation", designations)):
+		if frappe.has_permission(doctype, "read"):
+			masters = visible_rows(doctype, {"is_group": 0} if doctype == "Department" else {}, ["name"])
+			target.update(row.name for row in masters)
+			if doctype == "Designation":
+				master_designations = sorted({row.name for row in masters})
+	return {"departments": sorted(departments), "designations": sorted(designations),
+		"master_designations": master_designations,
+		"pairs": [{"department": row.support_department, "designation": row.support_designation}
+			for row in rows if row.support_department and row.support_designation]}

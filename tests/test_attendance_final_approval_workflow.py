@@ -44,7 +44,7 @@ class AttendanceFinalApprovalWorkflowTests(unittest.TestCase):
 		self.assertIn("approved_for_current_snapshot", generate)
 		self.assertIn("尚未审批通过，不能锁定生成", generate)
 
-	def test_confirmed_monthly_sources_are_ready_with_separate_daily_review_pending(self):
+	def test_confirmed_source_status_is_ready_before_record_quality_checks(self):
 		main_sources = ("attendance_draft", "apple_tree", "missing_card")
 		support_sources = ("housing_allowance", "full_attendance", "special_hours")
 		labels = {source: source for source in main_sources + support_sources}
@@ -61,7 +61,8 @@ class AttendanceFinalApprovalWorkflowTests(unittest.TestCase):
 		"PROCESSING_RECORD_DOCTYPE": "processing record",
 		"_latest_batch": lambda *_args: batch,
 		"_processing_meta": lambda *_args: {"monthly_support_precheck": {"record_count": 1}},
-		"_result_rows": lambda *_args: [],
+			"_result_rows": lambda *_args: [],
+			"_final_input_quality": lambda inputs, _batches: inputs,
 		"_user_display_name": lambda value: value,
 		"_daily_month_workflow": lambda *_args: {"required": True, "ready": False},
 		"frappe": types.SimpleNamespace(db=types.SimpleNamespace(count=lambda *_args: 1)),

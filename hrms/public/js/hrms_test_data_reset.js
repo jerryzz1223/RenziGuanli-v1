@@ -38,7 +38,7 @@
 		lastRoute = currentRoute;
 		enabled = false;
 		removeButton();
-		frappe.call({ method: `${METHOD}.get_test_data_reset_context`, args: { route: currentRoute }, quiet: true })
+		Promise.resolve(frappe.call({ method: `${METHOD}.get_test_data_reset_context`, args: { route: currentRoute }, quiet: true }))
 			.then((response) => addButton(response.message))
 			.catch(() => removeButton());
 	}
@@ -47,7 +47,7 @@
 		if (!enabled) return;
 		// Load immediately before opening the dialog so the visual preview reflects
 		// the records that are eligible for deletion at confirmation time.
-		frappe.call({ method: `${METHOD}.get_test_data_reset_context`, args: { route: route() }, quiet: true })
+		Promise.resolve(frappe.call({ method: `${METHOD}.get_test_data_reset_context`, args: { route: route() }, quiet: true }))
 			.then((response) => openResetDialog(response.message))
 			.catch(() => frappe.show_alert({ message: __("无法读取当前页面的测试数据预览"), indicator: "red" }));
 	}

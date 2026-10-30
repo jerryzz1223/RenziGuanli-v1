@@ -89,7 +89,7 @@ frappe.ui.form.on("Employee", {
 	after_save(frm) {
 		setup_employee_work_nature_field(frm);
 		sync_employee_work_nature_dependent_fields(frm);
-		return_to_employee_roster_after_insert(frm);
+		if (!return_to_employee_detail_after_edit(frm)) return_to_employee_roster_after_insert(frm);
 	},
 });
 
@@ -100,8 +100,30 @@ function hide_employee_form_header_actions(frm) {
 
 window.hrmsEmployeeNavigation = window.hrmsEmployeeNavigation || {};
 window.hrmsEmployeeNavigation.openEmployeeFormForEdit = function (employee) {
+	window.hrmsEmployeeNavigation.returnAfterEdit = employee;
 	frappe.set_route("Form", "Employee", employee);
 };
+
+function return_to_employee_detail_after_edit(frm) {
+	const navigation = window.hrmsEmployeeNavigation;
+	if (frm.is_new() || navigation.returnAfterEdit !== frm.doc.name) return false;
+	const route = frappe.get_route();
+	if (route[0] !== "Form" || route[1] !== "Employee" || route[2] !== frm.doc.name) return false;
+	delete navigation.returnAfterEdit;
+	frappe.set_route("employee-detail", frm.doc.name);
+	return true;
+}
+
+if (!window.hrmsEmployeeNavigation.returnCleanupRegistered && frappe.router?.on) {
+	frappe.router.on("change", () => {
+		const navigation = window.hrmsEmployeeNavigation;
+		const route = frappe.get_route();
+		if (navigation.returnAfterEdit && !(
+			route[0] === "Form" && route[1] === "Employee" && route[2] === navigation.returnAfterEdit
+		)) delete navigation.returnAfterEdit;
+	});
+	window.hrmsEmployeeNavigation.returnCleanupRegistered = true;
+}
 
 function remember_employee_list_return(frm) {
 	if (!frm.is_new()) return;
@@ -311,6 +333,11 @@ function sync_employee_work_nature_dependent_fields(frm, work_nature = frm.doc.c
 	frm.toggle_display("relieving_date", is_leaving);
 	frm.set_df_property("relieving_date", "reqd", is_leaving);
 	frm.fields_dict.relieving_date.$wrapper?.prev(".hrms-employee-group-title").toggle(is_leaving);
+	if (frm.fields_dict.reason_for_leaving) {
+		frm.toggle_display("reason_for_leaving", is_leaving || Boolean(frm.doc.reason_for_leaving));
+		frm.set_df_property("reason_for_leaving", "reqd", is_leaving);
+		frm.set_df_property("reason_for_leaving", "description", __("日常离职请走离职流程；管理员直接纠错须填写实际离职日期和原因，保存后记录操作日志。"));
+	}
 }
 
 function get_employee_work_nature_display(employee = {}) {
@@ -418,6 +445,7 @@ function show_employee_form_as_one_page(frm) {
 	sync_employee_work_nature_dependent_fields(frm);
 	$(frm.wrapper).addClass("hrms-employee-one-page");
 	setup_employee_roster_layout(frm);
+	setup_employee_optional_recruitment_fields(frm);
 
 	// Tab Breaks are the source of Frappe's original per-tab column layout.
 	// Do not reparent their controls or replace the layout.  Giving each
@@ -584,4 +612,20 @@ function setup_personnel_employee_detail(frm) {
 			company: frm.doc.company,
 		});
 	});
+}
+
+function setup_employee_optional_recruitment_fields(frm) {
+	// Reapply after the async field template, which can carry legacy required
+	// flags. Creating an Employee does not require creating a Job Applicant.
+	if (frm.fields_dict.job_applicant) {
+		frm.set_df_property("job_applicant", "reqd", false);
+		frm.set_df_property("job_applicant", "mandatory_depends_on", "");
+	}
+	if (!frm.doc.user_id && !frm.doc.create_user_automatically) {
+		for (const fieldname of ["personal_email", "company_email", "prefered_contact_email"]) {
+			if (!frm.fields_dict[fieldname]) continue;
+			frm.set_df_property(fieldname, "reqd", false);
+			frm.set_df_property(fieldname, "mandatory_depends_on", "");
+		}
+	}
 }

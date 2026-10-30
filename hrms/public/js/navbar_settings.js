@@ -81,7 +81,7 @@ async function render_export_watermark_settings(frm) {
 		const esc = frappe.utils.escape_html;
 		panel.innerHTML = `
 			<h4>${__("Excel 水印")}</h4>
-			<p class="text-muted">${__("设置对今后生成的文件生效，首次打开时沿用各导出原有的水印开启状态。导出水印显示在工作表背景；打开打印开关会在每页页眉增加文字水印。Excel 与 LibreOffice/WPS 对背景图的打印行为可能不同，请在使用的软件里预览打印效果。")}</p>
+			<p class="text-muted">${__("设置对今后生成的文件生效，已有文件需重新导出。导出水印显示在工作表背景，Excel 不会打印背景图；带水印的导出默认同时启用每页文字页眉水印，已保存的打印开关保持不变。请在打印预览中查看页眉水印。")}</p>
 			<div class="hrms-watermark-controls">
 				<label>${__("水印内容")}<input class="form-control" data-watermark-text maxlength="100" value="${esc(settings.text || "")}"></label>
 				<label>${__("深浅（1 最浅，50 最深）")}<input class="form-control" data-watermark-opacity type="number" min="1" max="50" value="${Number(settings.opacity) || 12}"></label>
