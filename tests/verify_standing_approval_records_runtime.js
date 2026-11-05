@@ -1,0 +1,33 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync('hrms/hr/page/payroll_input_center/payroll_input_center.js', 'utf8');
+const context = vm.createContext({ frappe: { pages: { 'payroll-input-center': {} } } });
+vm.runInContext(`${source}\nthis.Center = PayrollInputCenter;`, context);
+const center = Object.create(context.Center.prototype);
+const controls = Object.fromEntries(['category', 'status'].map((key) => [key, { addEventListener(_type, handler) { this.change = handler; } }]));
+const table = { dataset: {} };
+const target = { isConnected: true, dataset: { approvalView: 'history' }, querySelector(selector) {
+    if (selector === 'table') return table;
+    return controls[selector.includes('category') ? 'category' : 'status'];
+} };
+const records = [{ name: 'FIRST-001', employee_name: '测试员工', employee_code: '1001', decision_doctype: 'HRMS Employee Contribution Change', contribution_type: '公积金', status: '已批准', approved_by_name: '审批人甲', approved_on: '2026-11-04 10:00:00', submitted_by_name: '申请人乙', review_note: '核对通过', personal_amount: 248 }, { name: 'CHANGE-002', decision_doctype: 'HRMS Employee Salary Change', previous_standard: { name: 'salary-old' }, status: '已驳回', approved_by_name: '审批人甲', review_note: '<修改后再申请>' }];
+Object.assign(center, { company: 'ACME', escape: (s) => s.replaceAll('<', '&lt;'), standing_time: String, standing_approval_change: (row) => `申请金额 ${row.personal_amount || 0}`, filter_table_rows() { this.filtered = true; }, call_payroll_api: async () => ({ message: records }) });
+(async () => {
+    await center.load_standing_approval_records(target);
+    for (const value of ['FIRST-001', 'CHANGE-002', '公积金首次录入', '薪资修改', '已批准', '已驳回', '审批人甲', '2026-11-04 10:00:00', '申请人乙', '核对通过', '&lt;修改后再申请>']) assert.ok(target.innerHTML.includes(value), value);
+    controls.category.change({ target: { value: '公积金首次录入' } });
+    controls.status.change({ target: { value: '已批准' } });
+    assert.equal(table.dataset.standingApprovalCategory, '公积金首次录入');
+    assert.equal(table.dataset.standingApprovalStatus, '已批准');
+    assert.equal(center.filtered, true);
+    const saved = target.innerHTML;
+    target.dataset.approvalView = 'pending';
+    await center.load_standing_approval_records(target);
+    assert.equal(target.innerHTML, saved, 'Late history response must not replace pending view');
+    target.dataset.approvalView = 'history';
+    center.call_payroll_api = async () => { throw new Error('offline'); };
+    await center.load_standing_approval_records(target);
+    assert.match(target.innerHTML, /读取失败/);
+    console.log('Approval records runtime passed: first entries, modifications, approval/rejection audit, filters, escaped notes, stale response and error display.');
+})().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -261,6 +261,6 @@ assert.strictEqual((ledgerMarkup.match(/2081 李旭/g) || []).length, 2);
 assert.strictEqual((ledgerMarkup.match(/2026-07-15/g) || []).length, 2);
 assert.match(ledgerMarkup, />特休工时</);
 assert.match(ledgerMarkup, />事假工时</);
-assert.match(ledgerMarkup, /规则校验、来源修复和仅处理决定不在此显示/);
+assert.match(ledgerMarkup, /只显示真实发生变化的字段。每个员工、每个日期、每个修改字段单独一行，修改前后值逐行对应。/);
 
 console.log("Attendance exception-date display checks passed.");

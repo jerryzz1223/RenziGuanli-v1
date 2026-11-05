@@ -95,19 +95,20 @@ class HybridOrganizationChart {
 		this.page.set_title(__(this.mode === "list" ? "组织列表" : "组织架构图"));
 		this.setup_actions();
 		this.render_shell();
-		if (this.tree && Date.now() - this.last_refresh_at < this.cache_ttl) {
+		if (this.tree) {
 			this.render_summary();
 			this.render_source_label();
 			this.render_tree();
 			const selected = this.find_node(this.selected_node?.node_id) || this.tree.root;
 			if (selected) this.select_node(selected.node_id, selected.node_type);
+			if (Date.now() - this.last_refresh_at >= this.cache_ttl) this.load_tree();
 		} else this.load_tree();
 	}
 
 	bind_roster_updates() {
 		if (this.roster_update_handler || !frappe.realtime) return;
 		this.roster_update_handler = data => {
-			if (data.company === this.company && this.is_active() && this.mode !== "report") this.load_tree();
+			if (data.company === this.company && this.is_active() && this.mode !== "report") this.load_tree({ force: true });
 		};
 		frappe.realtime.on("organization_roster_updated", this.roster_update_handler);
 	}
@@ -133,7 +134,11 @@ class HybridOrganizationChart {
 			__(this.mode === "list" ? "树状架构图" : "层级通讯录"),
 			() => this.mode === "list" ? frappe.set_route("organizational-chart") : frappe.set_route("organizational-chart", "list"),
 		);
+		if (frappe.user.has_role("HR Manager") || frappe.user.has_role("System Manager")) {
+			this.page.add_inner_button(__("钉钉组织核对"), () => this.show_dingtalk_organization_review());
+		}
 		if (frappe.user.has_role("System Manager")) {
+			this.page.add_inner_button(__("从钉钉建立／同步"), () => this.show_dingtalk_linkage());
 			for (const [label, action] of [["配置关系图", () => this.show_configuration_map()], ["如何建立组织关系", () => this.show_configuration_guide()], ["从花名册初始化", () => this.initialize_from_roster()], ["导出配置", () => this.export_configuration()], ["导入配置", () => this.import_configuration()], ["核对原表工号", () => this.show_reference_report()]]) {
 				const item = this.page.add_inner_button(__(label), action, __("组织配置"));
 				// These are actions, not home links. The site's navigation normalizer
@@ -152,6 +157,144 @@ class HybridOrganizationChart {
 		this.page.add_inner_button(__("收起全部"), () => this.collapse_all());
 		}
 		this.page.set_primary_action(__("新增组织节点"), () => this.show_manual_node_dialog(null, this.mode === "list" ? this.list_node_id : undefined));
+	}
+
+	show_dingtalk_linkage() {
+		const company = this.company;
+		if (!company) return;
+		let token = null, preview = null, busy = false, pulling = false, timer = null, closed = false, nodes = [];
+		const escape = value => frappe.utils.escape_html(String(value ?? ""));
+		const note = message => dialog.fields_dict.status.$wrapper.html(`<p>${escape(message)}</p>`);
+		const rows = () => dialog.fields_dict.departments.df.data || [];
+		const mappings = () => {
+			const bindings = {}, departments = {};
+			for (const row of rows()) {
+				if (row.create_new) bindings[row.external_id] = "__new__";
+				else if (row.target_node) bindings[row.external_id] = row.target_node;
+				if (row.department) departments[row.external_id] = row.department;
+			}
+			return { bindings_json: JSON.stringify(bindings), departments_json: JSON.stringify(departments) };
+		};
+		const active = () => !closed && company === this.company && this.is_active();
+		const call = async (method, args = {}) => {
+			const result = await Promise.resolve(frappe.call({ method: `hrms.api.organization_dingtalk_linkage.${method}`, args: { company, token, ...args } }));
+			if (!active()) throw new Error("STALE_ORGANIZATION_DIALOG");
+			return result.message;
+		};
+		const run = async action => {
+			if (busy || !active()) return;
+			busy = true;
+			try { await action(); }
+			catch (error) { if (active()) note(__("操作未完成，请检查错误提示及服务端日志后重试。")); }
+			finally { busy = pulling; }
+		};
+		const poll = async () => {
+			if (!active()) return;
+			try {
+				const status = await call("pull_status");
+				if (status.status === "failed") { pulling = false; busy = false; note(status.error); return; }
+				if (status.status !== "ready") { timer = setTimeout(poll, 2000); return; }
+				const data = await call("setup_rows");
+				nodes = data.node_names;
+				dialog.fields_dict.departments.df.data = data.rows;
+				dialog.fields_dict.departments.grid.refresh();
+				pulling = false; busy = false;
+				note(__(`已拉取 ${data.rows.length} 个部门（${data.pulled_at}）。${data.initial ? "首次建立可选择全部采用，再预览。" : "默认保留人工结果，请选择需要采用的变化。"}同名部门请先关联现有节点或系统部门。`));
+			} catch (error) { pulling = false; busy = false; if (active()) note(__("读取任务状态失败，可重新拉取。")); }
+		};
+		const dialog = new frappe.ui.Dialog({ title: __("从钉钉建立与同步组织"), size: "extra-large",
+			onhide: () => { closed = true; if (timer) clearTimeout(timer); },
+			fields: [
+				{ fieldtype: "HTML", fieldname: "guide", options: `<p><strong>${escape(company)}</strong> · ${escape(__("首次拉取后选择采用，建立可人工编辑的组织。后续同步默认保留人工结果，可逐项采用钉钉名称和上级。"))}</p><p>${escape(__("仅拉取应用授权可见部门。采用来源会更新选中节点的名称与上级；未选择节点、分管、编制、代理及员工档案保留。未匹配系统部门时会新建部门。"))}</p>` },
+				{ fieldtype: "Button", fieldname: "pull", label: __("1. 拉取最新钉钉部门"), click: () => run(async () => {
+					preview = null; token = null;
+					dialog.fields_dict.departments.df.data = []; dialog.fields_dict.departments.grid.refresh();
+					note(__("正在提交后台拉取任务…"));
+					const task = await call("queue_pull"); token = task.token; pulling = true;
+					note(__("后台正在逐层读取钉钉部门。关闭窗口会停止本窗口等待，正式组织尚未改变。"));
+					timer = setTimeout(poll, 1000);
+				}) },
+				{ fieldtype: "HTML", fieldname: "status", options: `<p>${escape(__("请先拉取来源。预览有效期为 30 分钟，应用前会检查期间的人工修改。"))}</p>` },
+				{ fieldtype: "Table", fieldname: "departments", label: __("部门映射与处理决定"), cannot_add_rows: true, cannot_delete_rows: true,
+					data: [], fields: [
+						{ fieldtype: "Data", fieldname: "external_id", label: __("钉钉编号"), read_only: 1, in_list_view: 1, columns: 1 },
+						{ fieldtype: "Data", fieldname: "department_name", label: __("钉钉部门"), read_only: 1, in_list_view: 1, columns: 2 },
+						{ fieldtype: "Data", fieldname: "parent_id", label: __("钉钉上级编号"), read_only: 1 },
+						{ fieldtype: "Link", fieldname: "target_node", options: "Organization Node", label: __("关联现有节点"), in_list_view: 1, columns: 2, get_query: () => ({ filters: { name: ["in", nodes] } }) },
+						{ fieldtype: "Check", fieldname: "create_new", label: __("明确新建节点（不使用同名候选）") },
+						{ fieldtype: "Link", fieldname: "department", options: "Department", label: __("关联系统部门"), get_query: () => ({ filters: { company, disabled: 0 } }) },
+						{ fieldtype: "Select", fieldname: "decision", label: __("处理"), options: "保留人工结果\n采用钉钉名称与上级", default: "保留人工结果", in_list_view: 1, columns: 2 },
+						{ fieldtype: "Data", fieldname: "status", label: __("核对结果"), read_only: 1, in_list_view: 1, columns: 3 },
+					] },
+				{ fieldtype: "Button", fieldname: "select_all", label: __("全部选择采用（仍需预览）"), click: () => {
+					if (busy) return;
+					rows().forEach(row => { row.decision = "采用钉钉名称与上级"; }); dialog.fields_dict.departments.grid.refresh();
+				} },
+				{ fieldtype: "Button", fieldname: "preview", label: __("2. 校验并预览"), click: () => run(async () => {
+					if (!token || !rows().length) { note(__("请先完成拉取。")); return; }
+					const data = await call("preview", mappings());
+					for (const row of rows()) {
+						const result = data.rows.find(item => item.external_id === row.external_id);
+						row.target_node = result.node; row.department = result.department;
+						row.status = `${result.status}；当前：${result.current_name || "尚无节点"} / 上级：${result.current_parent || "公司"} → 来源：${result.department_name} / 上级编号：${result.parent_id}`;
+					}
+					dialog.fields_dict.departments.grid.refresh();
+					// Candidates returned by the server are now explicit mappings; re-sign them.
+					const final = await call("preview", mappings());
+					preview = { fingerprint: final.fingerprint, signature: JSON.stringify(mappings()) };
+					note(`${final.scope_notice} 来源缺失的已关联部门 ${final.missing_source.length} 个，保留不删除。请核对各行当前值及处理决定后应用。`);
+				}) },
+				{ fieldtype: "Small Text", fieldname: "reason", label: __("建立／同步原因"), reqd: 1 },
+			], primary_action_label: __("3. 应用所选变化"), primary_action: () => {
+				if (busy || !active()) return;
+				if (!preview || preview.signature !== JSON.stringify(mappings())) { note(__("请先校验并预览；修改映射后需重新预览。")); return; }
+				const reason = dialog.get_value("reason");
+				if (!reason?.trim()) { note(__("请填写建立或同步原因。")); return; }
+				const decisions = Object.fromEntries(rows().map(row => [row.external_id, row.decision === "采用钉钉名称与上级" ? "source" : "keep"]));
+				const count = Object.values(decisions).filter(value => value === "source").length;
+				if (!count) { note(__("请至少选择一个采用来源的部门。")); return; }
+				frappe.confirm(__(`将对 ${count} 个部门采用钉钉名称和上级，覆盖这些节点的人工名称及位置。其他节点保持现状。确认应用？`), () => run(async () => {
+					const result = await call("apply", { ...mappings(), fingerprint: preview.fingerprint, decisions_json: JSON.stringify(decisions), reason });
+					dialog.hide();
+					frappe.msgprint({ title: __("组织同步已应用"), message: `${escape(__(`已处理 ${result.changed} 个部门，可以继续编辑节点进行人工加工。`))}<br><a href="${escape(result.audit_file)}">${escape(__("下载本次变更记录"))}</a>` });
+					this.load_tree({ force: true });
+				}));
+			} });
+		dialog.show();
+	}
+
+	async show_dingtalk_organization_review() {
+		if (!this.company || this.dingtalk_review_loading) return;
+		const company = this.company;
+		this.dingtalk_review_loading = true;
+		try {
+			const response = await Promise.resolve(frappe.call({
+				method: "hrms.api.dingtalk_organization_review.preview_organization",
+				args: { company }, freeze: true, freeze_message: __("正在核对已保存的钉钉部门…"),
+			}));
+			if (company !== this.company || !this.is_active()) return;
+			const data = response.message || {};
+			const escape = value => frappe.utils.escape_html(String(value ?? ""));
+			const table = (headers, rows) => `<div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr>${headers.map(value => `<th>${escape(__(value))}</th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(value => `<td>${escape(value)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${headers.length}">${escape(__("暂无记录"))}</td></tr>`}</tbody></table></div>`;
+			frappe.msgprint({ title: __("钉钉组织核对（只读）"), wide: true,
+				message: `<p><strong>${escape(company)}</strong> · ${escape(__("最近来源时间"))}：${escape(data.latest_source_at || __("尚无来源"))}</p>
+				<p>${escape(data.message)}</p>
+				<p>${escape(__("当前架构图由组织配置维护。名称匹配仅为候选；确认部门编号映射并审核变更后，才能联动组织配置。"))}</p>
+				<div class="alert alert-warning">${escape(__(data.mixed_source_batches ? "来源包含多个同步批次，不能视为一份完整的最新组织快照。" : "当前来源尚未验证为完整快照，缺失部门不能直接判定为已删除。"))}</div>
+				<p>${escape(__("来源部门"))} ${escape(data.source_count || 0)} · ${escape(__("名称候选"))} ${escape(data.matched || 0)} · ${escape(__("待核对"))} ${escape(data.review_required || 0)} · ${escape(__("无效来源"))} ${escape(data.invalid_source_records || 0)}</p>
+				${table(["钉钉编号", "钉钉路径", "系统候选路径", "匹配依据", "建议处理", "问题"], (data.rows || []).map(row => [row.department_id, row.source_path || row.department_name, row.system_path, row.match_basis, row.suggested_action, (row.issues || []).join("；")]))}
+				<p><strong>${escape(__("系统中未匹配的部门"))} ${escape(data.unmatched_system_count || 0)}</strong></p>
+				${table(["系统部门编号", "系统路径", "建议处理"], (data.unmatched_system_departments || []).map(row => [row.name, row.system_path, row.suggested_action]))}
+				<p>${escape(__("如需更新来源，请到“更多 → 钉钉集成”同步组织和员工，再返回核对。分管、编制、代理与兼任继续在组织配置维护。"))}</p>`,
+			});
+		} catch (error) {
+			if (company === this.company && this.is_active()) frappe.msgprint({
+				title: __("钉钉组织核对失败"), indicator: "red",
+				message: __("未能读取核对结果。请检查公司配置、钉钉管理权限或服务端错误后重试。"),
+			});
+		} finally {
+			this.dingtalk_review_loading = false;
+		}
 	}
 
 	show_configuration_guide() {
@@ -202,7 +345,7 @@ class HybridOrganizationChart {
 		frappe.confirm(__("将为当前公司生成待设置上级的部门及岗位，并启用花名册人员自动更新。仅适用于尚无组织节点的公司；已有正确配置文件时可直接导入。继续初始化？"), async () => {
 			const { message: data } = await frappe.call({ method: "hrms.api.organization_flow.initialize_from_roster", args: { company }, freeze: true });
 			frappe.msgprint({ title: __("初始化完成"), message: `已生成 ${Number(data.nodes)} 个组织节点。在部门列表中新增管理层、分管，再编辑各课室的“上级组织节点”。` });
-			if (company === this.company) await this.load_tree();
+			if (company === this.company) await this.load_tree({ force: true });
 		});
 	}
 
@@ -296,7 +439,7 @@ class HybridOrganizationChart {
 				dialog.hide();
 				const data = result.message;
 				frappe.msgprint({ title: __("导入完成"), indicator: "green", message: `新增 ${data.created} 个节点，更新 ${data.updated} 个节点，合并空节点 ${data.merged_empty_count || 0} 个。<br><a href="${escape(data.backup.file_url)}" download>${__("下载导入前备份")}</a>` });
-				if (values.company === this.company) await this.load_tree();
+				if (values.company === this.company) await this.load_tree({ force: true });
 			} finally {
 				busy = false;
 				dialog.get_primary_btn().prop("disabled", false);
@@ -466,7 +609,7 @@ class HybridOrganizationChart {
 		this.selected_node = null;
 		this.detail_request_id++;
 		if (this.mode === "report") this.load_organization_report(true);
-		else this.load_tree();
+		else this.load_tree({ force: true });
 	}
 
 	bind_company_context() {
@@ -527,7 +670,7 @@ class HybridOrganizationChart {
 		if (action === "fit-view") this.fit_to_view();
 		if (action === "zoom-in") this.set_zoom(this.zoom + 0.1);
 		if (action === "zoom-out") this.set_zoom(this.zoom - 0.1);
-		if (action === "refresh") this.load_tree();
+		if (action === "refresh") this.load_tree({ force: true });
 		if (action === "toggle-node") this.toggle_node(element?.dataset.toggleNode);
 		if (action === "select-node") this.select_node(element?.dataset.nodeId, element?.dataset.nodeType);
 		if (action === "add-organization-node") this.show_manual_node_dialog(null, element?.dataset.parentNodeId);
@@ -588,7 +731,7 @@ class HybridOrganizationChart {
 			})
 			.then((response) => {
 				frappe.show_alert({ message: response.message?.message || __("组织关系已同步"), indicator: "green" });
-				this.load_tree();
+				this.load_tree({ force: true });
 			})
 			.catch(() => this.clear_drag_targets());
 	}
@@ -607,28 +750,30 @@ class HybridOrganizationChart {
 		return sourceType === "position_group" && targetType === "position_group";
 	}
 
-	load_tree() {
+	load_tree({ force = false } = {}) {
+		const loadKey = JSON.stringify([this.company, this.source_mode]);
+		if (!force && this.tree_load_key === loadKey && this.tree_load_promise) return this.tree_load_promise;
+		this.tree_load_key = loadKey;
 		const request_id = ++this.tree_request_id;
 		const company = this.company;
-		this.last_refresh_at = Date.now();
 		const tree = this.wrapper.querySelector(this.mode === "list" ? "[data-level-list]" : "[data-tree]");
-		if (tree) tree.innerHTML = `<div class="hrms-org-empty">${__("正在加载组织架构...")}</div>`;
-		frappe.call({
+		if (tree && !this.tree) tree.innerHTML = `<div class="hrms-org-empty">${__("正在加载组织架构...")}</div>`;
+		this.tree_load_promise = Promise.resolve().then(() => frappe.call({
 			method: "hrms.api.organization_roster_sync.sync_current_organization", args: { company },
-		}).then(response => {
+		})).then(response => {
 			if (request_id !== this.tree_request_id || company !== this.company || !this.is_active()) return null;
 			this.roster_sync_status = response.message || {};
 			return frappe.call({
 				method: "hrms.hr.page.organizational_chart.organizational_chart.get_hybrid_tree",
 				args: { company, source_mode: this.source_mode },
-				freeze: true,
-				freeze_message: __("正在读取部门层级关系..."),
+				freeze: false,
 			})
 			})
 			.then((r) => {
 				if (!r) return;
 				if (request_id !== this.tree_request_id || company !== this.company || !this.is_active()) return;
 				if (this.mode === "report") return;
+				this.last_refresh_at = Date.now();
 				this.tree = r.message || {};
 				this.source_mode = this.tree.source_mode || this.source_mode;
 				this.field_map = this.tree.field_map || {};
@@ -637,7 +782,7 @@ class HybridOrganizationChart {
 				this.collapsed_nodes = new Set([...this.collapsed_nodes].filter(id => current_ids.has(id)));
 				this.initialized_unit_ids = this.initialized_unit_ids || new Set();
 				const collapse_new_units = node => {
-					if (["室", "课", "组", "线"].includes(node.organization_node_type) && !this.initialized_unit_ids.has(node.node_id)) {
+					if (["部门", "室", "课", "组", "线"].includes(node.organization_node_type) && !this.initialized_unit_ids.has(node.node_id)) {
 						if (node.children?.length) this.collapsed_nodes.add(node.node_id);
 						this.initialized_unit_ids.add(node.node_id);
 					}
@@ -656,8 +801,14 @@ class HybridOrganizationChart {
 			})
 			.catch((error) => {
 				if (request_id !== this.tree_request_id || company !== this.company || !this.is_active()) return;
-				this.render_load_error(error, company);
+				if (this.tree) frappe.show_alert?.({ message: __("组织数据更新失败，已保留上次内容。"), indicator: "orange" });
+				else this.render_load_error(error, company);
+			}).finally(() => {
+				if (request_id !== this.tree_request_id) return;
+				this.tree_load_promise = null;
+				this.tree_load_key = "";
 			});
+		return this.tree_load_promise;
 	}
 
 	find_initial_department_node(node) {
@@ -730,6 +881,7 @@ class HybridOrganizationChart {
 				["实际", summary.current_headcount || 0],
 				["空缺", summary.vacancy_count || 0],
 				["分管", summary.supervisor_count || 0],
+				["部门", summary.department_count || 0],
 				["室", summary.office_count || 0],
 				["课", summary.section_count || 0],
 				["组", summary.group_count || 0],
@@ -788,7 +940,7 @@ class HybridOrganizationChart {
 		if (!source_mode || source_mode === this.source_mode) return;
 		this.source_mode = source_mode;
 		this.selected_node = null;
-		this.load_tree();
+		this.load_tree({ force: true });
 	}
 
 	staffing_value(node, key) {
@@ -852,7 +1004,7 @@ class HybridOrganizationChart {
 				try {
 				await frappe.call({method: "hrms.api.organization_assignment_review.save_review", args: {company, node_name, modified: data.modified, rows: values.rows}, freeze: true, freeze_message: "保存任职确认…"});
 				} catch (error) { frappe.show_alert({message: "保存未完成，请核对提示后重试；当前填写内容已保留", indicator: "red"}); return; }
-				dialog.hide(); await this.load_tree();
+				dialog.hide(); await this.load_tree({ force: true });
 				frappe.show_alert({message: "任职已保存；未绑定或性质待确认的记录继续保留", indicator: "green"});
 			}});
 		dialog.show();
@@ -910,7 +1062,7 @@ class HybridOrganizationChart {
 					return;
 				}
 				dialog.hide();
-				await this.load_tree();
+				await this.load_tree({ force: true });
 				frappe.show_alert({message: `${data.employee_name}已设置一个正职，其余职位已自动设为兼`, indicator: "green"});
 			},
 		});
@@ -994,7 +1146,7 @@ class HybridOrganizationChart {
 			const path = this.node_path(current.node_id);
 			const children = (current.children || []).filter(node => node.node_type !== "roster_unassigned");
 			const isPosition = current.organization_node_type === "岗位" || current.node_type === "organization_position";
-			const canCreatePosition = ["室", "课", "组", "线"].includes(current.organization_node_type);
+			const canCreatePosition = ["部门", "室", "课", "组", "线"].includes(current.organization_node_type);
 			host.html(`<div class="hrms-org-position-picker">
 					<header class="hrms-org-position-person">${this.render_employee_avatar(person, "hrms-org-avatar--roster")}<span><strong>${escape(person.employee_name || person.name)}</strong><small>${__("工号")} ${escape(employeeCode)}${person.designation ? ` · ${escape(person.designation)}` : ""}</small></span></header>
 					<p class="text-muted">${__("逐级选择公司、分管、课室、组线；已有合适岗位时直接选择，没有合适岗位时可在课室或组线下建立新岗位。")}</p>
@@ -1002,7 +1154,7 @@ class HybridOrganizationChart {
 					${isPosition ? `<section class="hrms-org-position-confirm"><small>${__("已选到岗位")}</small><h4>${escape(current.name)}</h4>${current.chart_grade?.label ? `<p>${__("职级")} · ${escape(current.chart_grade.label)}</p>` : ""}<p>${escape(path.map(node => node.name).join(" / "))}</p><button type="button" class="btn btn-primary" data-picker-action="confirm" data-node-name="${escape(this.manual_node_name(current.node_id))}">${__("确认分配到此位置")}</button></section>` : ""}
 					${!isPosition ? `<div class="hrms-org-position-caption">${__("选择下一级")} · ${children.length}</div>${children.length ? `<div class="hrms-org-position-options">${children.map(node => {
 						const position = node.organization_node_type === "岗位" || node.node_type === "organization_position";
-						const enterLabel = ["室", "课", "组", "线"].includes(node.organization_node_type) ? __("进入部门") : __("进入下级");
+						const enterLabel = ["部门", "室", "课", "组", "线"].includes(node.organization_node_type) ? __("进入部门") : __("进入下级");
 						return `<button type="button" class="hrms-org-position-option" data-picker-action="enter" data-node-id="${escape(node.node_id)}"><span>${this.render_list_node_avatar(node)}<span><strong>${escape(node.name)}</strong><small>${escape(node.title || node.organization_node_type || __("组织节点"))}${node.chart_grade?.label ? ` · ${__("职级")} ${escape(node.chart_grade.label)}` : ""}</small></span></span><em>${position ? __("选择岗位") : enterLabel} <b aria-hidden="true">›</b></em></button>`;
 					}).join("")}</div>` : `<div class="hrms-org-position-empty">${canCreatePosition ? __("此层级还没有岗位，可在下方建立岗位后直接分配。") : __("此层级还没有可选下级岗位，请返回上级或先完善组织节点。")}</div>`}${canCreatePosition ? `<section class="hrms-org-position-create"><div><strong>${__("没有合适岗位？")}</strong><small>${__("在当前层级建立或复用同名岗位，再将此人分配进去。")}</small></div><label for="hrms-org-new-position-role">${__("岗位身份")}</label><div class="input-group"><input id="hrms-org-new-position-role" class="form-control" data-picker-role maxlength="140" value="${escape(person.designation || "")}" placeholder="${__("例如：线长、组长、作业员")}"><div class="input-group-append"><button type="button" class="btn btn-primary" data-picker-action="create-position">${__("建立岗位并分配")}</button></div></div><small>${__("如果当前层级已有同名岗位会直接复用；不会修改员工档案中的部门、职位或职级。")}</small></section>` : ""}` : ""}
 					<footer><span>${__("本操作只保存组织位置，不修改员工档案的部门、职位或职级。")}</span></footer>
@@ -1037,7 +1189,7 @@ class HybridOrganizationChart {
 					freeze_message: __("正在保存组织位置…"),
 				});
 				dialog.hide();
-				await this.load_tree();
+				await this.load_tree({ force: true });
 				const position = response.message?.position || __("所选岗位");
 				const message = response.message?.position_created
 					? __("已建立岗位 {0} 并完成分配；员工基本资料未修改", [position])
@@ -1088,7 +1240,7 @@ class HybridOrganizationChart {
 		}
 		const editable = String(current.node_type).startsWith("organization_");
 		const parent = path.length > 1 ? path[path.length - 2] : null;
-		const has_people = (current.people || []).length > 0 || current.node_type === "roster_unassigned" || (current.node_type === "company" && current.unassigned_employees?.length > 0) || ["室", "课", "组", "线", "岗位", "员工"].includes(current.organization_node_type) || ["organization_section", "organization_office", "organization_group", "organization_line", "organization_position", "organization_person"].includes(current.node_type);
+		const has_people = (current.people || []).length > 0 || current.node_type === "roster_unassigned" || (current.node_type === "company" && current.unassigned_employees?.length > 0) || ["部门", "室", "课", "组", "线", "岗位", "员工"].includes(current.organization_node_type) || ["organization_department", "organization_section", "organization_office", "organization_group", "organization_line", "organization_position", "organization_person"].includes(current.node_type);
 		this.wrapper.querySelector(".hrms-org-page")?.classList.toggle("show-personnel", this.show_personnel === true);
 		const unplaced = this.tree.unplaced_departments || [];
 		host.innerHTML = `
@@ -1833,7 +1985,7 @@ class HybridOrganizationChart {
 	}
 
 	manual_child_kinds(parent_node_id) {
-		return this.find_node(parent_node_id)?.organization_node_type === "员工" ? [] : ["管理层", "分管", "室", "课", "组", "线", "岗位", "员工"];
+		return this.find_node(parent_node_id)?.organization_node_type === "员工" ? [] : ["管理层", "分管", "部门", "室", "课", "组", "线", "岗位", "员工"];
 	}
 
 	manual_parent_options(node_kind, excluded_name = "") {
@@ -1876,7 +2028,7 @@ class HybridOrganizationChart {
 		const chart_grades = this.tree?.chart_grades || [];
 		if (!is_edit && initial_department) {
 			config.department = initial_department;
-			config.node_kind = ["室", "课", "组", "线"].find(kind => initial_department.endsWith(kind)) || "课";
+			config.node_kind = ["部门", "室", "课", "组", "线"].find(kind => initial_department.endsWith(kind)) || "课";
 		}
 		const allowed_kinds = is_edit ? [config.node_kind] : this.manual_child_kinds(parent_context_id);
 		if (!allowed_kinds.length) { frappe.msgprint(__("员工节点不能添加下级，请选择部门或岗位节点。")); return; }
@@ -1931,7 +2083,7 @@ class HybridOrganizationChart {
 				poolReady = true;
 				const rosterDepartment = pool.roster_department || department;
 				const sourceLabel = rosterDepartment ? `已关联部门：${rosterDepartment}` : "全公司花名册";
-				const isUnit = ["室", "课", "组", "线"].includes(dialog.get_value("node_kind")) && !dialog.get_value("roster_subset");
+				const isUnit = ["部门", "室", "课", "组", "线"].includes(dialog.get_value("node_kind")) && !dialog.get_value("roster_subset");
 				const hint = !department && !["管理层", "分管"].includes(dialog.get_value("node_kind"))
 					? "请先关联部门，自动读取该部门的在职花名册。"
 					: isUnit
@@ -2098,7 +2250,7 @@ class HybridOrganizationChart {
 					.then((response) => {
 						dialog.hide();
 						frappe.show_alert({ message: __("组织节点已保存"), indicator: "green" });
-						this.load_tree();
+						this.load_tree({ force: true });
 						const saved = response.message || {};
 						if (saved.name) this.selected_node = { node_id: `organization_node:${saved.name}`, node_type: this.manual_node_type(saved.node_kind) };
 					});
@@ -2125,7 +2277,7 @@ class HybridOrganizationChart {
 	}
 
 	manual_node_type(node_kind) {
-		return { 管理层: "organization_management", 分管: "organization_supervisor", 室: "organization_office", 课: "organization_section", 组: "organization_group", 线: "organization_line", 岗位: "organization_position", 员工: "organization_person" }[node_kind] || "organization_node";
+		return { 管理层: "organization_management", 分管: "organization_supervisor", 部门: "organization_department", 室: "organization_office", 课: "organization_section", 组: "organization_group", 线: "organization_line", 岗位: "organization_position", 员工: "organization_person" }[node_kind] || "organization_node";
 	}
 
 	edit_manual_node(node_id = this.selected_node?.node_id) {
@@ -2151,7 +2303,7 @@ class HybridOrganizationChart {
 				.then(() => {
 					this.selected_node = null;
 					frappe.show_alert({ message: __("组织节点已删除"), indicator: "green" });
-					this.load_tree();
+					this.load_tree({ force: true });
 				});
 		});
 	}
@@ -2242,7 +2394,7 @@ class HybridOrganizationChart {
 									message: __("已更新 {0} 个员工", [(response.message?.updated || []).length]),
 									indicator: "green",
 								});
-								this.load_tree();
+								this.load_tree({ force: true });
 							});
 					},
 				);
@@ -2278,7 +2430,7 @@ class HybridOrganizationChart {
 					.then(() => {
 						dialog.hide();
 						frappe.show_alert({ message: __("部门已更新"), indicator: "green" });
-						this.load_tree();
+						this.load_tree({ force: true });
 					});
 			},
 		});
@@ -2452,7 +2604,7 @@ class HybridOrganizationChart {
 					.then((response) => {
 						const result = response.message || {};
 						frappe.show_alert({ message: result.message || __("多岗位组织草稿已建立"), indicator: "green" });
-						this.load_tree();
+						this.load_tree({ force: true });
 					});
 			},
 			__("建立多岗位草稿"),
@@ -2477,7 +2629,7 @@ class HybridOrganizationChart {
 					]),
 					indicator: "green",
 				});
-				this.load_tree();
+				this.load_tree({ force: true });
 			});
 	}
 
@@ -2508,7 +2660,7 @@ class HybridOrganizationChart {
 						return;
 					}
 					frappe.show_alert({ message: __("部门已删除"), indicator: "green" });
-					this.load_tree();
+					this.load_tree({ force: true });
 				});
 		});
 	}

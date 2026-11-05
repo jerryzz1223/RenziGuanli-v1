@@ -424,7 +424,7 @@ def prepare(company, package, state=None):
 			continue
 		if (field == "manager_employee" and kind not in {"管理层", "分管"}
 			or field == "employee" and kind != "员工"
-			or field == "primary_employee" and kind not in {"室", "课", "组", "线", "岗位"}
+			or field == "primary_employee" and kind not in {"部门", "室", "课", "组", "线", "岗位"}
 			or field == "proxy_employee" and kind == "员工"
 			or field == "assigned_employees" and kind != "岗位" and not cfg.get("roster_subset")
 			or field == "organization_placements" and kind != "岗位"):
@@ -594,7 +594,7 @@ def apply_configuration(company, file_url, fingerprint, auto_sync=1):
 		doc = frappe.get_doc("Organization Node", ids[key]) if key in ids else frappe.new_doc("Organization Node")
 		if doc.is_new(): doc.node_code = "MANUAL-" + frappe.generate_hash(length=10).upper()
 		doc.update({"structure_version": version, "display_name": row["name"], "parent_node": ids.get(row["parent"]),
-			"node_type": "部门" if row["config"]["node_kind"] in {"室", "课", "组", "线"} else "其他",
+			"node_type": "部门" if row["config"]["node_kind"] in {"部门", "室", "课", "组", "线"} else "其他",
 			"planned_headcount": row["planned"], "confirmation_status": "已确认",
 			"source_text": json.dumps(row["config"], ensure_ascii=False, sort_keys=True)})
 		doc.save()

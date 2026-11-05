@@ -1,18 +1,25 @@
 """Separate approved workflow/archive writes from manual status corrections."""
+from contextlib import contextmanager
 from contextvars import ContextVar
 from html import escape
 
 _status_write = ContextVar("hrms_employee_status_write", default=None)
 
 
-def save_employee_status_update(employee, source, **kwargs):
-	if source not in {"separation", "roster_import"}:
+@contextmanager
+def employee_status_update(employee, source):
+	if source not in {"separation", "roster_import", "confirmation", "transfer"}:
 		raise ValueError("Unsupported employee status source")
 	token = _status_write.set((id(employee), source))
 	try:
-		return employee.save(**kwargs)
+		yield
 	finally:
 		_status_write.reset(token)
+
+
+def save_employee_status_update(employee, source, **kwargs):
+	with employee_status_update(employee, source):
+		return employee.save(**kwargs)
 
 
 def validate_employee_status_correction(employee):
@@ -56,3 +63,24 @@ def record_employee_status_correction(employee):
 		parts.append("{0}：{1} → {2}".format(label, change["old"][field] or "空", change["new"][field] or "空"))
 	employee.add_comment("Info", "<br>".join(escape(part) for part in parts))
 	employee.flags.hrms_status_correction = None
+
+
+def validate_employee_work_nature_change(employee):
+	"""Reject direct changes before derived work-nature fields are synchronized."""
+	import frappe
+	from frappe import _
+
+	if employee.is_new():
+		return
+	trusted = _status_write.get()
+	if trusted and trusted[0] == id(employee):
+		return
+	# Existing approved archive/import paths keep their established behavior.
+	if getattr(employee.flags, "hrms_employee_roster_import", False) or getattr(employee.flags, "hrms_dingtalk_sync", False):
+		return
+	before = employee.get_doc_before_save()
+	if not before:
+		return
+	fields = ("custom_work_nature", "employment_type", "status", "custom_is_confirmed")
+	if any(str(before.get(field) or "") != str(employee.get(field) or "") for field in fields):
+		frappe.throw(_("工作性质及任职状态不可直接修改，请通过转正、离职或返聘等对应人事流程办理。"), frappe.PermissionError)

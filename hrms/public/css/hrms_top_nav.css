@@ -2832,3 +2832,46 @@ body:has(#employee-basic_details_tab) .form-layout > .form-page > .form-tabs-lis
 		grid-template-columns: 1fr;
 	}
 }
+
+/* Full-roster comparison uses the personnel shell and its own bounded grids. */
+.dingtalk-review { min-width: 0; padding: 20px; color: var(--text-color, #253248); }
+.dingtalk-review [hidden] { display: none !important; }
+.dingtalk-review .review-actions { align-items: center; }
+.dingtalk-review .review-filter { width: 190px; }
+.dingtalk-review .review-list-summary,
+.dingtalk-review .review-detail-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+.dingtalk-review .review-list-summary span { color: var(--text-muted, #69778a); font-size: 13px; }
+.dingtalk-review .review-grid-scroll { max-height: 65vh; overflow: auto; border: 1px solid var(--border-color, #dce2e9); border-radius: 8px; }
+.dingtalk-review .review-grid { width: 100%; min-width: 1050px; margin: 0; border-collapse: separate; border-spacing: 0; }
+.dingtalk-review .review-grid th,
+.dingtalk-review .review-grid td { padding: 12px 14px; vertical-align: middle; border-bottom: 1px solid var(--border-color, #e6eaf0); }
+.dingtalk-review .review-grid thead th { position: sticky; top: 0; z-index: 2; background: var(--subtle-fg, #f4f6f9); white-space: nowrap; }
+.dingtalk-review .review-grid tbody tr:last-child > * { border-bottom: 0; }
+.dingtalk-review .review-grid tbody tr:hover > td { background: var(--subtle-fg, #f7f9fc); }
+.dingtalk-review .review-explanation { min-width: 240px; max-width: 360px; overflow-wrap: anywhere; }
+.dingtalk-review .review-badge { display: inline-block; white-space: nowrap; border-radius: 5px; padding: 3px 8px; font-size: 12px; font-weight: 600; background: #edf1f6; color: #475569; }
+.dingtalk-review .review-badge--conflict { color: #b42318; background: #fee4e2; }
+.dingtalk-review .review-badge--pending { color: #854d0e; background: #fef3c7; }
+.dingtalk-review .review-row-conflict > td:first-child { border-left: 3px solid #d92d20; }
+.dingtalk-review .review-pager { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; padding-top: 14px; }
+.dingtalk-review .review-pager span { margin-right: auto; font-size: 12px; color: var(--text-muted, #69778a); }
+.dingtalk-review .review-detail-header h3 { margin: 12px 0 8px; }
+.dingtalk-review .review-detail-header small { font-size: 14px; color: var(--text-muted, #69778a); }
+.dingtalk-review .review-conflict-count { color: #b42318; background: #fff1f0; border: 1px solid #fecdca; padding: 12px 20px; border-radius: 8px; font-weight: 600; }
+.dingtalk-review .review-instructions { background: var(--subtle-fg, #f4f6f9); padding: 12px 16px; border-radius: 6px; }
+.dingtalk-review .review-editor-scroll { max-height: 58vh; }
+.dingtalk-review .review-editor { table-layout: fixed; }
+.dingtalk-review .review-editor th:first-child { width: 16%; }
+.dingtalk-review .review-editor th:nth-child(4) { width: 24%; }
+.dingtalk-review .review-value { white-space: pre-wrap; overflow-wrap: anywhere; }
+.dingtalk-review .review-field-conflict > * { background: #fff6f5; }
+.dingtalk-review .review-field-conflict > th { border-left: 3px solid #d92d20; color: #b42318; }
+.dingtalk-review .review-field-conflict > td:nth-child(3) { color: #b42318; font-weight: 600; }
+.dingtalk-review [data-custom] { margin-top: 10px; }
+.dingtalk-review .review-save-bar { margin: 16px 0 24px; border: 1px solid var(--border-color, #dce2e9); background: var(--card-bg, #fff); border-radius: 8px; padding: 16px; }
+.dingtalk-review [data-save] { margin: 12px 0 8px; }
+.dingtalk-review .review-source > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
+@media (max-width: 767px) {
+ .dingtalk-review { padding: 12px; }
+ .dingtalk-review .review-grid-scroll { max-height: 60vh; }
+}

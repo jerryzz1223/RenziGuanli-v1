@@ -89,6 +89,7 @@
 				"employee-relationship",
 				"employee-roster-import",
 				"employee-roster-export",
+				"dingtalk-roster-review",
 				"personnel-reports",
 				"employee-talk-form",
 				"employee-duty-change",

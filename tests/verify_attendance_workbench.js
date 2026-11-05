@@ -486,7 +486,7 @@ for (const marker of ["flex: 0 0 220px", "min-width: 220px", "white-space: nowra
 	mustInclude(topNavCss, marker, `Attendance sidebar header layout is missing ${marker}.`);
 }
 
-mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20260926-native-list-chrome-v1", "The sidebar stylesheet cache key must change with its layout.");
+mustInclude(hooks, "/assets/hrms/css/hrms_top_nav.css?v=20261030-dingtalk-review", "The sidebar stylesheet cache key must change with its layout.");
 
 if (attendancePageJs.includes('this.wrapper.querySelector("[data-company]").addEventListener("change"')) {
 	throw new Error("Attendance company must be controlled by the global company selector, not a local editable field.");

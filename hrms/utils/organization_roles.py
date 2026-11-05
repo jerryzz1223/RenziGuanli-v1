@@ -1,7 +1,7 @@
 """Chart roles are presentation metadata, never Employee master-data updates."""
 import re
 
-ROSTER_UNIT_KINDS = {"室", "课", "组", "线"}
+ROSTER_UNIT_KINDS = {"部门", "室", "课", "组", "线"}
 
 
 def chart_assigned_employees(config):

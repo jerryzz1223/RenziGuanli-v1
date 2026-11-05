@@ -182,6 +182,10 @@
 					.hrms-employee-form-records__filters input { flex: 1; }
 					.hrms-employee-form-record { align-items: center; border: 1px solid #e6edf3; border-radius: 10px; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 124px; margin-bottom: 10px; padding: 14px; }
 					.hrms-employee-form-record:last-child { margin-bottom: 0; }
+					.hrms-employee-form-record__revocation .btn { margin-left: 12px; }
+					.hrms-employee-form-record__revocation p { margin: 6px 0 0; color: #687385; }
+					.hrms-employee-form-record__status { display: inline-block; border-radius: 12px; padding: 3px 10px; color: #047857; background: #ecfdf5; }
+					.hrms-employee-form-record__status--revoked { color: #92400e; background: #fffbeb; }
 					.hrms-employee-form-record__revocation { grid-column: 1 / -1; border-top: 1px solid #e6edf3; padding-top: 10px; overflow-wrap: anywhere; }
 					.hrms-employee-form-record__info { display: grid; gap: 8px; grid-template-columns: repeat(5, minmax(0, 1fr)); min-width: 0; }
 					.hrms-employee-form-record__field { min-width: 0; }
@@ -227,25 +231,34 @@
 				const preview = image
 					? `<button type="button" data-preview-src="${this.escape(row.file_url)}" data-preview-name="${this.escape(row.file_name || this.form.label)}"><img src="${this.escape(row.file_url)}" alt="${this.escape(row.file_name || this.form.label)}" loading="lazy"></button>`
 					: `<a class="hrms-employee-form-record__file" href="${this.escape(row.file_url)}" target="_blank" rel="noopener">${this.escape(row.file_name || "打开文件")}</a>`;
-					return `<div class="hrms-employee-form-record"><div><div class="hrms-employee-form-record__info"><div class="hrms-employee-form-record__field hrms-employee-form-record__field--title"><span>${__("标题")}</span><strong>${this.escape(row.title || "未填写标题")}</strong></div><div class="hrms-employee-form-record__field"><span>${__("员工姓名")}</span><strong><a href="#" data-employee="${this.escape(row.employee)}">${this.escape(row.employee_name || "未填写姓名")}</a></strong></div><div class="hrms-employee-form-record__field"><span>${__("工号")}</span><strong>${this.escape(row.employee_code || "未填写工号")}</strong></div><div class="hrms-employee-form-record__field"><span>${__("当前部门")}</span><strong>${this.escape(row.department || "未填写部门")}</strong></div><div class="hrms-employee-form-record__field"><span>${__("当前职务")}</span><strong>${this.escape(row.designation || "未填写职务")}</strong></div><div class="hrms-employee-form-record__field"><span>${__("当前状态")}</span><strong>${this.escape(row.status || "未记录")}</strong></div></div><div class="hrms-employee-form-record__meta"><div><span>${__("提交时间")}</span><strong>${this.escape(row.creation || row.modified || "")}</strong></div><div><span>${__("提交人")}</span><strong>${this.escape(row.submitted_by_name || row.submitted_by || "未记录")}</strong></div></div></div><div class="hrms-employee-form-record__preview">${preview}</div><div class="hrms-employee-form-record__revocation"><strong>${__("表单状态")}：${this.escape(row.entry_status || "已录入")}</strong>${row.entry_status === "已撤销" ? `<p>${__("撤销原因")}：${this.escape(row.revocation_reason)}</p><p>${__("撤销人")}：${this.escape(row.revoked_by)}　${this.escape(row.revoked_at)}</p>` : `<button type="button" class="btn btn-default btn-sm" data-revoke-file="${this.escape(row.name)}">${__("撤销")}</button>`}</div></div>`;
+					return `<div class="hrms-employee-form-record"><div><div class="hrms-employee-form-record__info"><div class="hrms-employee-form-record__field hrms-employee-form-record__field--title"><span>${__("标题")}</span><strong>${this.escape(row.title || "未填写标题")}</strong></div><div class="hrms-employee-form-record__field"><span>${__("员工姓名")}</span><strong><a href="#" data-employee="${this.escape(row.employee)}">${this.escape(row.employee_name || "未填写姓名")}</a></strong></div><div class="hrms-employee-form-record__field"><span>${__("工号")}</span><strong>${this.escape(row.employee_code || "未填写工号")}</strong></div><div class="hrms-employee-form-record__field"><span>${__("当前部门")}</span><strong>${this.escape(row.department || "未填写部门")}</strong></div><div class="hrms-employee-form-record__field"><span>${__("当前职务")}</span><strong>${this.escape(row.designation || "未填写职务")}</strong></div><div class="hrms-employee-form-record__field"><span>${__("当前状态")}</span><strong>${this.escape(row.status || "未记录")}</strong></div></div><div class="hrms-employee-form-record__meta"><div><span>${__("提交时间")}</span><strong>${this.escape(row.creation || row.modified || "")}</strong></div><div><span>${__("提交人")}</span><strong>${this.escape(row.submitted_by_name || row.submitted_by || "未记录")}</strong></div></div></div><div class="hrms-employee-form-record__preview">${preview}</div><div class="hrms-employee-form-record__revocation"><strong class="hrms-employee-form-record__status${row.entry_status === "已撤销" ? " hrms-employee-form-record__status--revoked" : ""}">${__("表单状态")}：${this.escape(row.entry_status || "已录入")}</strong>${row.entry_status === "已撤销" ? `<button type="button" class="btn btn-default btn-sm" data-restore-file="${this.escape(row.name)}">${__("撤回撤销")}</button><p>${__("此表单已从员工个人档案中隐藏，撤回撤销后恢复显示。")}</p>` : `<button type="button" class="btn btn-default btn-sm" data-revoke-file="${this.escape(row.name)}">${__("撤销")}</button>`}${row.revoked_at ? `<p>${__("最近撤销记录")}：${this.escape(row.revoked_by)}　${this.escape(row.revoked_at)}</p>` : ""}</div></div>`;
 			}).join("");
 			view.querySelectorAll("[data-revoke-file]").forEach((button) => button.addEventListener("click", () => this.revoke_record(button.dataset.revokeFile)));
+			view.querySelectorAll("[data-restore-file]").forEach((button) => button.addEventListener("click", () => this.revoke_record(button.dataset.restoreFile, true)));
 			view.querySelectorAll("[data-employee]").forEach((link) => link.addEventListener("click", (event) => { event.preventDefault(); frappe.set_route("employee-detail", event.currentTarget.dataset.employee); }));
 			view.querySelectorAll("[data-preview-src]").forEach((button) => button.addEventListener("click", () => this.open_record_preview(button.dataset.previewSrc, button.dataset.previewName)));
 		}
 
-		revoke_record(file_name) {
+		revoke_record(file_name, restore = false) {
+			this.pending_record_actions ||= new Set();
+			if (this.pending_record_actions.has(file_name)) return;
+			const action = restore ? __("撤回撤销") : __("撤销表单");
+			let submitting = false;
 			const dialog = new frappe.ui.Dialog({
-				title: __("撤销表单"),
-				fields: [{ fieldname: "reason", fieldtype: "Small Text", label: __("撤销原因"), reqd: 1, description: __("撤销后录入记录保留，员工个人档案不再显示此表单。") }],
-				primary_action_label: __("确认撤销"),
-				primary_action: (values) => {
-					if (!String(values.reason || "").trim()) { frappe.msgprint(__("请填写撤销原因")); return; }
-					return Promise.resolve(frappe.call({
-						method: "hrms.api.employee_form_entry.revoke_employee_form_entry",
-						args: { file_name, form_type: this.form_type, reason: values.reason },
+				title: action,
+				fields: [{ fieldtype: "HTML", options: `<p>${restore ? __("确认撤回撤销？恢复后，此表单将重新显示在员工个人档案中。") : __("确认撤销此表单？录入记录及原材料仍会保留，员工个人档案中将隐藏此表单，之后可撤回撤销。")}</p>` }],
+				primary_action_label: restore ? __("确认恢复") : __("确认撤销"),
+				primary_action: () => {
+					if (submitting || this.pending_record_actions.has(file_name)) return;
+					submitting = true;
+					this.pending_record_actions.add(file_name);
+					return Promise.resolve().then(() => frappe.call({
+						method: `hrms.api.employee_form_entry.${restore ? "restore_employee_form_entry" : "revoke_employee_form_entry"}`,
+						args: { file_name, form_type: this.form_type },
 						freeze: true,
-					})).then(() => { dialog.hide(); this.load_record_rows(); });
+					})).then(() => { dialog.hide(); this.load_record_rows(); }).catch(() => {
+						frappe.msgprint(restore ? __("恢复未完成，请重试；如仍失败，请刷新录入记录确认表单状态。") : __("撤销未完成，请重试；如仍失败，请刷新录入记录确认表单状态。"));
+					}).finally(() => { submitting = false; this.pending_record_actions.delete(file_name); });
 				},
 			});
 			dialog.show();

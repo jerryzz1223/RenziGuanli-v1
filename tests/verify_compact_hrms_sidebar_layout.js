@@ -19,7 +19,7 @@ expect(
 	"Opening the compact drawer must reserve its matching desktop lane for the page content.",
 );
 expect(
-	hooks.includes("/assets/hrms/css/hrms_top_nav.css?v=20260901d"),
+	(hooks.match(/hrms_top_nav\.css\?v=(\d{8}[^"\s]*)/)?.[1] || "") >= "20261030",
 	"The compact sidebar stylesheet must use a refreshed asset version.",
 );
 

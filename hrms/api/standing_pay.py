@@ -1,5 +1,6 @@
 """Persistent salary and contribution registers, independent of payroll months."""
 import json
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 
 import frappe
@@ -330,6 +331,25 @@ def list_pending(company: str):
 
 
 @frappe.whitelist()
+def list_approval_records(company: str):
+	"""Include first-entry approvals and rejections, not just later modifications."""
+	company = _access(company, approve=True)
+	result = []
+	for doctype in (SALARY, CONTRIBUTION):
+		filters = {'company': company, 'status': ['in', ['已批准', '已驳回']]}
+		if doctype == SALARY:
+			filters['exclude_from_payroll'] = 0
+		rows = frappe.get_all(doctype, filters=filters, fields=['*'],
+			order_by='approved_on desc, creation desc', limit_page_length=100000)
+		_attach_previous_standards(rows, doctype)
+		for row in rows:
+			row['decision_doctype'] = doctype
+			result.append(row)
+	result.sort(key=lambda row: str(row.get('approved_on') or row.get('modified') or row.get('creation') or ''), reverse=True)
+	return _attach_actor_names(result)
+
+
+@frappe.whitelist()
 def employee_history(company: str, employee: str):
 	company = _access(company)
 	if frappe.db.get_value('Employee', employee, 'company') != company:
@@ -526,47 +546,94 @@ def approve_pending_batch(company: str, requests: str, review_note: str):
 
 
 @frappe.whitelist()
-def import_contribution_workbook(company: str, file_url: str, effective_date: str, preview: int = 1, request_mode: str = 'change'):
-	"""Reuse the existing source parsers; the independent register owns the approval."""
+def import_contribution_workbook(company: str, file_url: str, effective_date: str, preview: int = 1,
+	request_mode: str = 'change', corrections: str = '{}'):
+	"""Validate source rows and explicit preview corrections before submitting approvals."""
 	company = _access(company)
 	from hrms.api.payroll_input import (_load_workbook, _raw_payroll_source_kind, _raw_payroll_source_rows,
 		_first, _payroll_employee_lookup, _raw_variable_entries)
 	if not effective_date:
 		frappe.throw(_('请选择本次变更的生效日期。'))
-	workbook = _load_workbook(file_url)
-	rows, errors, seen = [], [], set()
-	for sheet in workbook:
+	if request_mode not in ('initial', 'change'):
+		frappe.throw(_('无效的录入方式。'))
+	fixes = json.loads(corrections) if isinstance(corrections, str) else corrections
+	if not isinstance(fixes, dict):
+		frappe.throw(_('无效的导入修正数据。'))
+	for fix in fixes.values():
+		if not isinstance(fix, dict) or not str(fix.get('reason') or '').strip():
+			frappe.throw(_('请填写每行的修改说明。'))
+		if fix.get('request_mode', request_mode) not in ('initial', 'change'):
+			frappe.throw(_('无效的录入方式。'))
+	rows, errors, entries, seen, used = [], [], [], set(), set()
+	recognized = 0
+	for sheet_index, sheet in enumerate(_load_workbook(file_url)):
 		kind = _raw_payroll_source_kind(sheet)
 		if kind not in ('social_insurance', 'housing_fund'):
 			continue
+		recognized += 1
 		for index, raw in enumerate(_raw_payroll_source_rows(sheet, kind), 1):
 			code, name = _first(raw, '工号', '员工编号'), _first(raw, '姓名')
 			if not code and not name:
 				continue
+			row_id = f'{sheet_index}:{index}'
+			fix = fixes.get(row_id, {})
+			if row_id in fixes:
+				used.add(row_id)
+			entry = dict(row_id=row_id, source_sheet=sheet.title, source_row=index,
+				employee_code=fix.get('employee_code', code), employee_name=fix.get('employee_name', name),
+				contribution_type='社保' if kind == 'social_insurance' else '公积金',
+				request_mode=fix.get('request_mode', request_mode), correction_reason=fix.get('reason', ''),
+				personal_amount='', company_amount='')
+			entries.append(entry)
 			try:
-				employee = _payroll_employee_lookup(code, name)
+				if kind == 'housing_fund':
+					source_amounts = [_first(raw, '个人承担', '个人缴存额', '公积金个人承担', '公积金个人'),
+						_first(raw, '公司承担', '单位承担', '公司缴存额', '单位缴存额', '公积金公司承担', '公积金公司')]
+				else:
+					source_amounts = [value for _, value in _raw_variable_entries(kind, raw)]
+				for field, value in zip(('personal_amount', 'company_amount'), source_amounts):
+					entry[field] = fix.get(field, value)
+				employee = _payroll_employee_lookup(entry['employee_code'], entry['employee_name'])
 				if not employee or frappe.db.get_value('Employee', employee, 'company') != company:
-					raise ValueError('工号、姓名或公司不匹配')
-				if request_mode == 'initial' and frappe.db.exists(CONTRIBUTION, {'company': company, 'employee': employee,
-					'contribution_type': '社保' if kind == 'social_insurance' else '公积金', 'status': ['in', ['待审核', '已批准']]}):
-					raise ValueError('已录入或正在审批，请通过申请修改处理')
+					raise ValueError('工号、姓名或公司不匹配，请修改本行工号和姓名；员工须属于当前公司')
+				if entry['request_mode'] == 'initial' and frappe.db.exists(CONTRIBUTION, {'company': company,
+					'employee': employee, 'contribution_type': entry['contribution_type'], 'status': ['in', ['待审核', '已批准']]}):
+					raise ValueError('已录入或正在审批，可修改本行并明确选择“申请修改”')
 				key = (employee, kind)
 				if key in seen:
-					raise ValueError('同一员工同一缴费类型重复，请先合并源文件')
+					raise ValueError('同一员工同一缴费类型重复，请先合并源文件后重新上传')
 				seen.add(key)
-				amounts = _raw_variable_entries(kind, raw)
-				if any(amount < 0 for _, amount in amounts):
-					raise ValueError('缴费金额不能为负数')
-				rows.append(dict(employee=employee, employee_name=name or employee,
-					contribution_type='社保' if kind == 'social_insurance' else '公积金',
-					personal_amount=amounts[0][1], company_amount=amounts[1][1]))
+				amounts = []
+				for label, field in (('个人承担', 'personal_amount'), ('公司承担', 'company_amount')):
+					try:
+						amount = Decimal(str(entry[field]).strip().replace(',', '').replace('，', ''))
+					except InvalidOperation:
+						raise ValueError(f'{label}必须填写数字；零缴费请明确填写0')
+					if not amount.is_finite():
+						raise ValueError(f'{label}必须是有效金额')
+					if amount < 0:
+						raise ValueError('缴费金额不能为负数')
+					amounts.append(float(amount))
+				note = f'Excel 导入：{file_url}；来源：{sheet.title} / {index}'
+				if fix:
+					note += f'；预览修正：原工号/姓名/金额 {code} / {name} / {source_amounts}；修正后 {entry["employee_code"]} / {entry["employee_name"]} / {amounts}；方式 {entry["request_mode"]}；说明：{fix["reason"]}'
+				rows.append(dict(employee=employee, employee_name=entry['employee_name'], employee_code=entry['employee_code'],
+					contribution_type=entry['contribution_type'], personal_amount=amounts[0], company_amount=amounts[1],
+					request_mode=entry['request_mode'], remarks=note))
 			except Exception as exc:
+				entry['error'] = str(exc)
 				errors.append(f'{sheet.title} / {index} / {code or name}: {exc}')
+	if set(fixes) != used:
+		frappe.throw(_('修正行已失效，请重新上传并校验文件。'))
+	if not recognized:
+		errors.append('未识别到社保或公积金表。公积金表名或表头需包含“公积金”，并提供姓名、工号及个人承担、公司承担（或个人缴存额、单位缴存额）；无需公积金账号。')
+	elif not rows and not errors:
+		errors.append('已识别缴费表，但没有可导入的员工明细，请检查姓名、工号和表头所在行。')
 	if int(preview):
-		return {'rows': rows, 'errors': errors}
+		return {'rows': rows, 'errors': errors, 'entries': entries}
 	if errors or not rows:
-		frappe.throw(_('请先修正预览中的异常；文件必须包含社保或公积金来源表。'))
+		frappe.throw(_('请先通过“修改本行”修正预览中的异常，或修正源文件后重新上传。'))
 	for row in rows:
 		submit_contribution(company, row['employee'], row['contribution_type'], effective_date,
-			row['personal_amount'], row['company_amount'], remarks=f'Excel 导入：{file_url}', request_mode=request_mode)
+			row['personal_amount'], row['company_amount'], remarks=row['remarks'], request_mode=row['request_mode'])
 	return {'submitted': len(rows)}

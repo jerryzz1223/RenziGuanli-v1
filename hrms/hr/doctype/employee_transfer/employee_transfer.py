@@ -4,6 +4,8 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
+
+from hrms.utils.employee_status_updates import employee_status_update
 from frappe.utils import cstr, getdate, nowdate
 
 from hrms.hr.utils import update_employee_work_history, validate_active_employee
@@ -191,15 +193,17 @@ class EmployeeTransfer(Document):
 
 	def on_submit(self):
 		employee = frappe.get_doc("Employee", self.employee)
-		self.apply_work_nature_changes(employee)
-		update_employee_work_history(employee, self.work_history_details(), date=self.transfer_date)
-		employee.save()
+		with employee_status_update(employee, "transfer"):
+			self.apply_work_nature_changes(employee)
+			update_employee_work_history(employee, self.work_history_details(), date=self.transfer_date)
+			employee.save()
 
 	def on_cancel(self):
 		employee = frappe.get_doc("Employee", self.employee)
-		self.apply_work_nature_changes(employee, cancel=True)
-		update_employee_work_history(employee, self.work_history_details(), date=self.transfer_date, cancel=True)
-		employee.save()
+		with employee_status_update(employee, "transfer"):
+			self.apply_work_nature_changes(employee, cancel=True)
+			update_employee_work_history(employee, self.work_history_details(), date=self.transfer_date, cancel=True)
+			employee.save()
 
 	def work_history_details(self):
 		"""Return auditable business-field changes for Employee work history."""

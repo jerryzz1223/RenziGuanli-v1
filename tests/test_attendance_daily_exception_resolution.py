@@ -299,6 +299,47 @@ class AttendanceDailyExceptionResolutionTest(unittest.TestCase):
 			self.assertEqual(m._effective_result_values(result3)["restday_overtime_hours"], 5)
 			self.assertEqual(m._effective_result_values(result3)["workday_overtime_hours"], 123)
 
+	def test_verified_source_conflicts_can_be_confirmed_without_changing_facts(self):
+		m = self.module
+		source = {
+			"姓名": "测试员工", "工号": "E-001", "日期": "2026-09-07", "日期类型": "工作日",
+			"班次": "生产白班 08:00-16:30", "上班时间": "07:35", "下班时间": "15:48",
+			"标准工时": 8, "实际出勤（小时）": 7.5, "请假/病假(小时)": 1,
+			"关联审批单": "病假09-07 15:30到09-07 16:30 1小时",
+			"source_file": "A.xlsx", "source_sheet": "每日统计", "source_row": 10,
+		}
+		code = "LEAVE_PUNCH_APPROVAL_MISMATCH"
+		for confirmed in (0, 1):
+			with self.subTest(confirmed=confirmed):
+				rows = [source, {**source, "日期": "2026-09-08", "关联审批单": "病假09-08 15:30到09-08 16:30 1小时", "source_file": "B.xlsx"}]
+				row = m.process_attendance_draft_rows(rows, attendance_month="2026-09")["processed_rows"][0]
+				self.assertIn(code, row["exception_codes"])
+				batch = SimpleNamespace(name="B", company="C", attendance_month="2026-09", source_type="attendance_draft", source_file="A.xlsx")
+				doc = SimpleNamespace(**m._record_payload(batch, row), name="R")
+				doc.as_dict = lambda: {key: value for key, value in vars(doc).items() if not callable(value)}
+				doc.save = lambda **kwargs: None
+				with patch.multiple(
+					m, _require_processing_manager=lambda: None, _require_company=lambda value: value,
+					_employee_directory=lambda company: [], _attendance_draft_exception_policy=lambda: {},
+					_refresh_batch_review_status=lambda batch: "待确认",
+					_invalidate_monthly_final_after_source_change=lambda *args: None,
+					_save_batch_notes=lambda *args: None, now_datetime=lambda: datetime(2026, 11, 2),
+				), patch.object(m.frappe, "get_doc", lambda doctype, name: doc if name == "R" else batch, create=True), \
+					patch.object(m.frappe.db, "commit", lambda: None, create=True):
+					if not confirmed:
+						with self.assertRaises(Exception):
+							m.update_attendance_draft_daily_row("C", "2026-09", "R", 10, {}, reason="核实正确", source_file="A.xlsx")
+						continue
+					m.update_attendance_draft_daily_row("C", "2026-09", "R", 10, {}, reason="核实正确", source_file="A.xlsx", confirm_source_facts=1)
+					reopened = m._serialize_record(doc.as_dict())
+					values = m._effective_result_values(reopened)
+					replayed = m.process_attendance_draft_rows(m._effective_daily_source_rows(reopened), attendance_month="2026-09")["processed_rows"][0]
+					replayed = m._apply_daily_exception_decisions(replayed, m._daily_exception_decisions(values))
+					self.assertFalse(m._has_daily_exception(replayed, 10, code, source_file="A.xlsx"))
+					self.assertTrue(m._has_daily_exception(replayed, 10, code, source_file="B.xlsx"))
+					self.assertEqual(values["sick_leave_hours"], 2)
+					self.assertEqual(reopened["review_history"][-1]["confirmed_exception_codes"], [code])
+
 	def test_approved_daily_late_fact_is_retained_without_blocking_other_exceptions(self):
 		m = self.module
 		for status, changes, sibling, mismatch in (

@@ -1622,3 +1622,58 @@
 		grid-column: auto;
 	}
 }
+
+/* Shared feedback for attendance tables, source cards and detail dialogs. */
+.hrms-attendance-loading {
+	min-width: 180px;
+	padding: 12px 4px;
+	text-align: left;
+}
+.hrms-attendance-loading__track {
+	background: #e2e8f0;
+	border-radius: 8px;
+	height: 4px;
+	margin-top: 12px;
+	max-width: 420px;
+	overflow: hidden;
+}
+.hrms-attendance-loading__track > span {
+	animation: hrms-attendance-loading-travel 1.6s ease-in-out infinite;
+	background: var(--primary, #00875a);
+	border-radius: inherit;
+	display: block;
+	height: 100%;
+	width: 35%;
+}
+.hrms-attendance-loading__hint {
+	animation: hrms-attendance-loading-hint 8s step-end forwards;
+	color: var(--text-muted, #6b7280);
+	display: block;
+	margin-top: 8px;
+}
+.hrms-attendance-exception-loading__spinner {
+	width: 16px;
+}
+.hrms-attendance-exception-skeleton__line {
+	background: linear-gradient(90deg, #e2e8f0 25%, #f8fafc 50%, #e2e8f0 75%);
+	background-size: 200% 100%;
+	animation: hrms-attendance-loading-shimmer 1.6s linear infinite;
+}
+@keyframes hrms-attendance-loading-travel {
+	0% { transform: translateX(-100%); }
+	100% { transform: translateX(390%); }
+}
+@keyframes hrms-attendance-loading-shimmer {
+	to { background-position: -200% 0; }
+}
+@keyframes hrms-attendance-loading-hint {
+	from { visibility: hidden; }
+	to { visibility: visible; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.hrms-attendance-loading__track > span,
+	.hrms-attendance-loading__hint,
+	.hrms-attendance-exception-skeleton__line {
+		animation: none;
+	}
+}

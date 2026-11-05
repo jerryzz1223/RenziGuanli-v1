@@ -9,10 +9,6 @@ const page = fs.readFileSync(
 );
 const company = fs.readFileSync(path.join(root, "hrms/public/js/erpnext/company.js"), "utf8");
 const nav = fs.readFileSync(path.join(root, "hrms/public/js/hrms_top_nav.js"), "utf8");
-const settings = fs.readFileSync(
-	path.join(root, "hrms/hr/page/hr_settings_center/hr_settings_center.js"),
-	"utf8",
-);
 const cleanupLog = fs.readFileSync(
 	path.join(root, "hrms/hr/doctype/hrms_data_cleanup_log/hrms_data_cleanup_log.json"),
 	"utf8",
@@ -78,7 +74,6 @@ check(page.includes("page.body[0] || page.body"), "page events must bind to the 
 
 check(nav.includes("reload: reloadCompanyContext"), "company context must expose refresh after company creation");
 check(company.includes("hrmsCompanyContext?.reload"), "Company save must refresh company context");
-check(settings.includes("公司与数据空间管理"), "settings center must link to company data management");
 check(cleanupLog.includes('"company_code"'), "audit log must keep a stable company snapshot");
 check(!cleanupLog.includes('"options": "Company"'), "audit log must not block later Company deletion");
 check(departmentIdentity.includes("get_department_document_name"), "Department links must use stable business names");

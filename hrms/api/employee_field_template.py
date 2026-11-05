@@ -3762,6 +3762,121 @@ def get_employee_roster_summary(filters: str = "{}", include_all: int = 0):
 	return summary
 
 
+# These values are maintained by personnel workflows, never by profile editing.
+EMPLOYEE_PROFILE_PROCESS_FIELDS = {
+	"custom_work_nature", "employment_type", "status", "custom_is_confirmed",
+	"final_confirmation_date", "relieving_date", "reason_for_leaving",
+}
+EMPLOYEE_PROFILE_FIXED_FIELDS = {"name", "employee", "employee_number", "custom_employee_code", "custom_age"}
+EMPLOYEE_PROFILE_EDIT_TYPES = {
+	"Data", "Select", "Link", "Date", "Datetime", "Int", "Float", "Currency",
+	"Percent", "Check", "Small Text", "Text", "Long Text", "Time",
+}
+
+
+def _employee_profile_field_editable(fieldname, meta_field):
+	return bool(
+		meta_field and fieldname not in EMPLOYEE_PROFILE_PROCESS_FIELDS | EMPLOYEE_PROFILE_FIXED_FIELDS
+		and not meta_field.get("read_only") and not meta_field.get("is_virtual")
+		and not meta_field.get("permlevel")
+		and meta_field.get("fieldtype") in EMPLOYEE_PROFILE_EDIT_TYPES
+	)
+
+
+EMPLOYEE_PROFILE_SUPPLEMENT = "Employee Profile Supplement"
+EMPLOYEE_PROFILE_RECORD_BLOCKS = {
+	"教育经历", "工作经历", "语言能力", "工作技能", "职称", "证书/证件",
+	"培训经历", "紧急联系人", "家庭成员", "档案信息",
+}
+
+
+def _profile_supplement(doc):
+	if not frappe.db.exists("DocType", EMPLOYEE_PROFILE_SUPPLEMENT):
+		return None
+	name = frappe.db.get_value(EMPLOYEE_PROFILE_SUPPLEMENT, {"employee": doc.name}, "name")
+	return frappe.get_doc(EMPLOYEE_PROFILE_SUPPLEMENT, name) if name else None
+
+
+def _profile_record_schema(doc, label, labels):
+	child = {"教育经历": "education", "工作经历": "external_work_history"}.get(label)
+	if child:
+		table = doc.meta.get_field(child)
+		if not table or table.get("read_only") or table.get("permlevel"):
+			return None
+		fields = [
+			{"fieldname": f.fieldname, "label": _(f.label or f.fieldname), "fieldtype": f.fieldtype,
+			 "options": f.options, "reqd": f.reqd}
+			for f in frappe.get_meta(table.options).fields
+			if _employee_profile_field_editable(f.fieldname, f) and not f.get("hidden")
+		]
+		rows = [{"name": row.name, **{f["fieldname"]: row.get(f["fieldname"]) for f in fields}} for row in doc.get(child) or []]
+		return {"child": child, "fields": fields, "rows": rows}
+	return {"fields": [{"fieldname": f"value_{i}", "label": label, "fieldtype": "Data"} for i, label in enumerate(labels)], "rows": []}
+
+
+def _save_profile_records(doc, records):
+	if not isinstance(records, dict):
+		frappe.throw(_("记录格式不正确。"))
+	if not records:
+		return
+	blocks = {row["label"]: row for rows in _get_employee_related_records(doc).values() for row in rows if row.get("record_editor")}
+	pending = []
+	for label, rows in records.items():
+		if label not in blocks or not isinstance(rows, list) or len(rows) > 500:
+			frappe.throw(_("不可编辑的记录板块。"), frappe.PermissionError)
+		schema = blocks[label]["record_editor"]
+		allowed = {f["fieldname"] for f in schema["fields"]}
+		known = {row.get("name") for row in schema["rows"] if row.get("name")}
+		for row in rows:
+			if not isinstance(row, dict) or set(row) - allowed - {"name"} or (row.get("name") and row["name"] not in known):
+				frappe.throw(_("记录字段或归属不正确。"), frappe.PermissionError)
+			if any(isinstance(value, (list, dict)) for value in row.values()):
+				frappe.throw(_("记录内容格式不正确。"))
+			for field in schema["fields"]:
+				if field.get("reqd") and row.get(field["fieldname"]) in (None, ""):
+					frappe.throw(_("请填写：{0}").format(field["label"]))
+		pending.append((label, schema, rows))
+	stored = _profile_supplement(doc)
+	data = _parse_json(stored.records_json, {}) if stored else {}
+	for label, schema, rows in pending:
+		if schema.get("child"):
+			# Preserve fields that are hidden/read-only and were not exposed in the editor.
+			existing = {row.name: row.as_dict() for row in doc.get(schema["child"]) or []}
+			doc.set(schema["child"], [{**existing.get(row.get("name"), {}), **row} for row in rows])
+		else:
+			data[label] = rows
+	if any(not schema.get("child") for _, schema, _ in pending):
+		if not frappe.db.exists("DocType", EMPLOYEE_PROFILE_SUPPLEMENT):
+			frappe.throw(_("请先更新站点以启用员工补充记录。"))
+		stored = stored or frappe.new_doc(EMPLOYEE_PROFILE_SUPPLEMENT)
+		stored.employee = doc.name
+		stored.records_json = json.dumps(data, ensure_ascii=False)
+		stored.save()
+
+
+@frappe.whitelist()
+def save_employee_detail_profile(employee: str, values: str = "{}", modified: str = "", records: str = "{}"):
+	if not _can_edit_employee_detail():
+		frappe.throw(_("只有管理员可以编辑员工资料。"), frappe.PermissionError)
+	values = _parse_json(values, {})
+	if not isinstance(values, dict):
+		frappe.throw(_("员工资料格式不正确。"))
+	doc = frappe.get_doc(EMPLOYEE_DOCTYPE, employee)
+	doc.check_permission("write")
+	if not modified or str(doc.modified) != str(modified):
+		frappe.throw(_("员工资料已更新，请刷新页面后重新编辑。"))
+	visible = {field["fieldname"] for section in _get_employee_detail_sections(doc) for field in section["fields"]}
+	meta_fields = _get_employee_meta_field_map()
+	for fieldname in values:
+		if fieldname not in visible or not _employee_profile_field_editable(fieldname, meta_fields.get(fieldname)):
+			frappe.throw(_("字段 {0} 不可直接编辑；工作性质和任职状态请通过对应流程办理。").format(fieldname), frappe.PermissionError)
+	_save_profile_records(doc, _parse_json(records, {}))
+	for fieldname, value in values.items():
+		doc.set(fieldname, value)
+	doc.save()
+	return get_employee_detail(employee)
+
+
 @frappe.whitelist()
 def quick_update_employee_roster(employee: str, values: str = "{}"):
 	values = _parse_json(values, {}) or {}
@@ -3806,7 +3921,14 @@ def _get_employee_detail_sections(doc, department_display=""):
 			value = doc.get(field["fieldname"])
 			if field["fieldname"] == "department" and department_display:
 				value = department_display
-			category_fields.append({**field, "value": value})
+			meta_field = doc.meta.get_field(field["fieldname"])
+			editable = _employee_profile_field_editable(field["fieldname"], meta_field)
+			category_fields.append({
+				**field, "value": value, "edit_value": doc.get(field["fieldname"]), "editable": editable,
+				"edit_fieldtype": meta_field.get("fieldtype") if meta_field else field["fieldtype"],
+				"edit_options": meta_field.get("options") if meta_field else field.get("options"),
+				"process_managed": field["fieldname"] in EMPLOYEE_PROFILE_PROCESS_FIELDS,
+			})
 		if category_fields:
 			sections.append({"label": category, "fields": category_fields})
 	return sections
@@ -4439,6 +4561,23 @@ def _get_employee_related_records(doc, requested_tab=None):
 			if record["label"] not in existing_labels:
 				records.setdefault(tab, []).append(record)
 
+	stored = _profile_supplement(doc)
+	supplements = _parse_json(stored.records_json, {}) if stored else {}
+	for tab, blocks in records.items():
+		if requested_tab and tab != requested_tab:
+			continue
+		for block in blocks:
+			if block["label"] not in EMPLOYEE_PROFILE_RECORD_BLOCKS:
+				continue
+			schema = _profile_record_schema(doc, block["label"], block["fields"])
+			if not schema:
+				continue
+			if not schema.get("child"):
+				schema["rows"] = supplements.get(block["label"], [])
+			block["record_editor"] = schema
+			if schema["rows"]:
+				block["items"] = [{"fields": [{"label": field["label"], "value": row.get(field["fieldname"])} for field in schema["fields"]]} for row in schema["rows"]]
+				block["count"] = len(schema["rows"])
 	if requested_tab:
 		return {requested_tab: records.get(requested_tab, [])}
 	return records
@@ -4663,6 +4802,7 @@ def get_employee_detail(employee: str, scope: str = "all"):
 	previous_employment = _get_previous_employment(doc, employment_history)
 	current_employment = _get_current_employment(doc, employment_history)
 	payload = {
+		"modified": str(doc.modified),
 		"header": _get_employee_detail_header(doc, department_display, previous_employment, current_employment),
 		"growth_records": _get_employee_growth_timeline(doc, employment_history),
 		"training_history": _get_employee_training_summary(doc) if scope == "overview" else _get_employee_training_history(doc),

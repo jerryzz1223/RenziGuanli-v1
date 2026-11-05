@@ -41,12 +41,12 @@ class RevocationTests(unittest.TestCase):
         self.employee = Row(name='EMP-1', employee_name='Test', custom_employee_code='123', status='Active')
         self.frappe = SimpleNamespace(
             throw=fail, session=SimpleNamespace(user='hr'),
-            db=SimpleNamespace(has_column=lambda *a: True, sql=lambda *a: None),
+            db=SimpleNamespace(has_column=lambda *a: True, sql=lambda *a: None, get_value=lambda *a: 'HR'),
             utils=SimpleNamespace(now=lambda: '2026-10-28 10:00:00'),
             get_doc=lambda dt, name: self.file if dt == 'File' else self.employee,
             get_list=self.get_list, get_all=lambda *a, **k: [])
         self.api = functions('hrms/api/employee_form_entry.py',
-            ['revoke_employee_form_entry', 'list_employee_form_entries', 'get_employee_form_entry_summaries'],
+            ['revoke_employee_form_entry', 'restore_employee_form_entry', 'list_employee_form_entries', 'get_employee_form_entry_summaries'],
             dict(frappe=self.frappe, _=lambda s:s, _require_employee_form_entry_access=lambda:None,
                  _form_entry_type=lambda t: {'material_type': t}, EMPLOYEE_MATERIAL_FIELD_PREFIX='hrms_material_',
                  REVOKED_MATERIAL_PREFIX='hrms_revoked_', EMPLOYEE_ATTACHMENT_TITLE_FIELD='title',
@@ -70,15 +70,46 @@ class RevocationTests(unittest.TestCase):
             self.revoke(kind=kind)
             rows = self.api.list_employee_form_entries(kind)
             self.assertEqual(rows[0]['entry_status'], '已撤销')
-            self.assertEqual(rows[0]['revocation_reason'], '录入错误')
+            self.assertEqual(rows[0]['revocation_reason'], '')
             self.assertEqual(rows[0]['file_url'], '/private/files/proof.pdf')
         self.file['attached_to_field'] = 'hrms_revoked_employee_talk_form'
         self.assertIsNone(self.api.get_employee_form_entry_summaries('EMP-1')['talk'])
 
-    def test_reason_required_and_bounded(self):
-        for reason in ['', '  ', 'x' * 1001]:
-            with self.assertRaises(ValueError): self.revoke(reason)
-        self.assertEqual(self.file.attached_to_field, 'hrms_material_employee_talk_form')
+    def test_revocation_needs_no_reason(self):
+        self.api.revoke_employee_form_entry('FILE-1', 'employee_talk_form')
+        self.assertEqual(self.file.attached_to_field, 'hrms_revoked_employee_talk_form')
+        self.assertEqual(self.file.custom_hrms_revocation_reason, '')
+
+    def test_restore_all_types_and_repeat_cycles(self):
+        for kind in ['employee_talk_form', 'employee_transfer_application', 'reward_punishment_report']:
+            for initial_field in [kind, 'hrms_material_' + kind]:
+                self.file['attached_to_field'] = initial_field
+                self.revoke(kind=kind)
+                evidence = self.file.custom_hrms_revoked_at
+                self.api.restore_employee_form_entry('FILE-1', kind)
+                self.assertEqual(self.file.attached_to_field, 'hrms_material_' + kind)
+                self.assertEqual(self.api.list_employee_form_entries(kind)[0]['entry_status'], '已录入')
+                self.assertEqual(self.file.custom_hrms_revoked_at, evidence)
+                self.api.restore_employee_form_entry('FILE-1', kind)
+                self.revoke(kind=kind)
+                self.assertEqual(self.file.attached_to_field, 'hrms_revoked_' + kind)
+        self.api.restore_employee_form_entry('FILE-1', 'reward_punishment_report')
+        self.file['attached_to_field'] = 'hrms_revoked_employee_talk_form'
+        self.api.restore_employee_form_entry('FILE-1', 'employee_talk_form')
+        self.assertIsNotNone(self.api.get_employee_form_entry_summaries('EMP-1')['talk'])
+
+    def test_restore_permissions_and_wrong_type(self):
+        self.revoke()
+        self.employee['denied'] = ['write']
+        with self.assertRaises(PermissionError):
+            self.api.restore_employee_form_entry('FILE-1', 'employee_talk_form')
+        self.employee['denied'] = []
+        with self.assertRaises(ValueError):
+            self.api.restore_employee_form_entry('FILE-1', 'reward_punishment_report')
+        self.file['denied'] = ['read']
+        with self.assertRaises(PermissionError):
+            self.api.restore_employee_form_entry('FILE-1', 'employee_talk_form')
+        self.assertEqual(self.file.attached_to_field, 'hrms_revoked_employee_talk_form')
 
     def test_permissions_and_wrong_type_do_not_mutate(self):
         self.employee['denied'] = ['write']
@@ -89,8 +120,11 @@ class RevocationTests(unittest.TestCase):
 
     def test_repeated_request_preserves_original_evidence(self):
         self.revoke('first')
+        self.frappe.session.user = 'another-hr'
+        self.frappe.utils.now = lambda: '2026-10-30 12:00:00'
         self.revoke('second')
-        self.assertEqual(self.file.custom_hrms_revocation_reason, 'first')
+        self.assertEqual(self.file.custom_hrms_revoked_by, 'hr')
+        self.assertEqual(self.file.custom_hrms_revoked_at, '2026-10-28 10:00:00')
 
     def test_employee_archive_omits_revoked_but_keeps_legacy_and_active(self):
         files = [Row(self.file, attached_to_field=field) for field in [
@@ -105,6 +139,26 @@ class RevocationTests(unittest.TestCase):
         material = api._get_employee_materials(self.employee)[0]['types'][0]
         self.assertEqual(material['current_file'], 'employee_talk_form')
         self.assertEqual(material['history_files'], ['hrms_material_employee_talk_form'])
+
+        # Exercise the actual state changes against the archive reader as well.
+        files[:] = [self.file]
+        self.revoke()
+        material = api._get_employee_materials(self.employee)[0]['types'][0]
+        self.assertIsNone(material['current_file'])
+        self.assertEqual(material['history_files'], [])
+        self.api.restore_employee_form_entry('FILE-1', 'employee_talk_form')
+        material = api._get_employee_materials(self.employee)[0]['types'][0]
+        self.assertEqual(material['current_file'], 'hrms_material_employee_talk_form')
+
+    def test_read_permission_and_migration_guard(self):
+        self.file['denied'] = ['read']
+        with self.assertRaises(PermissionError):
+            self.revoke()
+        self.file['denied'] = []
+        self.frappe.db.has_column = lambda *args: False
+        with self.assertRaisesRegex(ValueError, 'migrate'):
+            self.revoke()
+        self.assertEqual(self.file.attached_to_field, 'hrms_material_employee_talk_form')
 
 
 class SupportTests(unittest.TestCase):

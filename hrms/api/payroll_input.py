@@ -8,6 +8,7 @@ from io import BytesIO
 
 import frappe
 from frappe import _
+from hrms.api.attendance_processors.full_attendance import calculate_full_attendance
 from frappe.utils import cint, flt, getdate, now_datetime
 from hrms.api.standing_pay import active_contributions, CONTRIBUTION_TYPES
 from hrms.payroll.termination_settlement import (
@@ -410,9 +411,9 @@ DEFAULT_PAYROLL_RULES = [
 		"rule_name": "全勤奖",
 		"rule_category": "考勤",
 		"rule_scope": "月度考勤终稿",
-		"formula_expression": "缺勤=标准工时-钉钉导出实际出勤-排休+病假/2；0=200，0~0.5=190，0.5~16=150，16~32=100，32~48=50，>48=0",
-		"parameters_json": {"base_bonus": 200, "late_deduction": 10, "thresholds": [[0, 200], [0.5, 190], [16, 150], [32, 100], [48, 50]]},
-		"rule_text": "特休、公休、公司原因调整上班时间不扣全勤；其他假别计入请假工时。新进与离职员工当月未上班时间计入缺勤。",
+		"formula_expression": "实际请假工时：0=200，0<工时≤16=150，16<工时≤32=100，32<工时≤48=50，>48=0；迟到每次另扣10元，最低0元",
+		"parameters_json": {"base_bonus": 200, "late_deduction": 10, "thresholds": [[0, 200], [16, 150], [32, 100], [48, 50]]},
+		"rule_text": "特休、排休、团圆假不扣全勤；其他假别按实际请假小时计档，半小时请假扣50元；迟到每次另扣10元，请假与迟到分别扣除。",
 		"source_file": "5.1薪资福利.xlsx / 5.2人资考勤.xlsx",
 		"source_sheet": "薪资福利作业规范 / 1.12考勤终稿",
 		"source_cell": "薪资福利作业规范 rows 33-43；1.12考勤终稿 BF列",
@@ -1159,7 +1160,7 @@ def _raw_payroll_source_kind(sheet):
 		return "housing_allowance"
 	if {"工号", "姓名"}.issubset(headers) and headers & {"是否非苏州户籍", "是否在苏州租房", "是否在苏州购房", "是否住公司宿舍"}:
 		return "housing_allowance_base"
-	if "公积金账号" in headers and "公司承担" in headers and "个人承担" in headers:
+	if ("公积金" in title or any("公积金" in header for header in headers)) and headers & {"公司承担", "单位承担", "公司缴存额", "单位缴存额", "公积金公司承担", "公积金公司"} and headers & {"个人承担", "个人缴存额", "公积金个人承担", "公积金个人"}:
 		return "housing_fund"
 	if "社保基数" in headers and "个人合计承担10.5%+5" in headers:
 		return "social_insurance"
@@ -1577,8 +1578,8 @@ def _raw_variable_entries(source_kind, row):
 		return [(_reward_punishment_variable_type(row), _amount_for_type(row, "其他奖金"))]
 	if source_kind == "housing_fund":
 		return [
-			("公积金个人", flt(_first(row, "个人承担"))),
-			("公积金公司", flt(_first(row, "公司承担"))),
+			("公积金个人", flt(_first(row, "个人承担", "个人缴存额", "公积金个人承担", "公积金个人"))),
+			("公积金公司", flt(_first(row, "公司承担", "单位承担", "公司缴存额", "单位缴存额", "公积金公司承担", "公积金公司"))),
 		]
 	if source_kind == "social_insurance":
 		return [
@@ -2562,21 +2563,9 @@ def _rule_number(rule, key, fallback=0):
 
 
 def _full_attendance_bonus(attendance, rule):
-	"""Apply the confirmed threshold table unless a monthly variable overrides it."""
-	parameters = rule.get("parameters", {})
-	absence_basis = max(
-		flt(getattr(attendance, "standard_hours", 0))
-		- flt(getattr(attendance, "actual_attendance_hours", 0))
-		- flt(getattr(attendance, "rest_leave_hours", 0))
-		- flt(getattr(attendance, "reunion_leave_hours", 0))
-		+ flt(getattr(attendance, "sick_leave_hours", 0)) * 0.5,
-		0,
-	)
-	thresholds = sorted(parameters.get("thresholds") or [], key=lambda item: flt(item[0]))
-	for maximum, amount in thresholds:
-		if absence_basis <= flt(maximum):
-			return flt(amount), absence_basis
-	return 0, absence_basis
+	"""Leave award before the separately stored late/full-attendance deduction."""
+	result = calculate_full_attendance(attendance if isinstance(attendance, dict) else vars(attendance))
+	return result["leave_award"], result["absence_basis"]
 
 
 def _company_social_security_from_rule(personal_amount, rule):
@@ -8122,7 +8111,6 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 	rows = preview.get("rows") or []
 	if not rows:
 		frappe.throw(_("锁定考勤终稿没有可参与薪资计算的员工。"))
-	full_attendance_rule = _effective_rule_config("ATTENDANCE_FULL_ATTENDANCE_BONUS", payroll_month, company)
 	scope = _attendance_scope_filters(company, payroll_month, attendance_lock_version)
 	existing = {
 		_employee_identity_key(row): row.name
@@ -8182,10 +8170,8 @@ def sync_locked_attendance_final_to_payroll(company: str, payroll_month: str, at
 			"red_apples": flt(row.get("red_apples")),
 			"apple_reward_amount": flt(row.get("green_apple_amount")) - flt(row.get("red_apple_amount")),
 			"red_apple_penalty": flt(row.get("red_apple_amount")),
-			"full_attendance_deduction": (
-				flt(row.get("late_count"))
-				* _rule_number(full_attendance_rule, "late_deduction")
-			),
+			# The locked final award already includes the late penalty.
+			"full_attendance_deduction": 0,
 			"status": "已确认",
 		}
 		name = existing.get(key)
@@ -8471,7 +8457,11 @@ def generate_payroll_input_records(company: str, payroll_month: str, attendance_
 			"large_night_shift_count": flt(getattr(attendance, "large_night_shift_count", 0)),
 				"small_night_shift_count": flt(getattr(attendance, "small_night_shift_count", 0)),
 				"apple_reward_amount": apple_reward_amount,
-				"attendance_full_deduction": flt(getattr(attendance, "full_attendance_deduction", 0)),
+				"attendance_full_deduction": (
+					0 if attendance_lock_version.startswith(PROCESSING_ATTENDANCE_LOCK_PREFIX)
+					else max(flt(getattr(attendance, "full_attendance_deduction", 0))
+						- (200 - calculated_full_attendance_bonus), 0)
+				),
 				"full_attendance_bonus": full_attendance_bonus,
 				"housing_subsidy": values["住房补贴"],
 				"education_subsidy": values["学历补贴"],
@@ -8985,6 +8975,33 @@ def _previous_payroll_month(payroll_month):
 	return f"{year:04d}-{month - 1:02d}"
 
 
+def _payroll_dashboard_lock_version(company, payroll_month):
+	"""Resolve the scope of existing settlements without rebuilding attendance.
+
+	This read-only overview uses persisted lock metadata. Generation and payroll
+	confirmation still validate the full attendance snapshot through their own
+	workflow; merely opening the homepage must never materialize that snapshot.
+	"""
+	if not payroll_month:
+		return ""
+	try:
+		from hrms.api import attendance_processing_center
+
+		outputs = attendance_processing_center.get_locked_final_outputs(company, payroll_month)
+		snapshot = str(outputs.get("locked_snapshot_version") or "")
+		if snapshot:
+			return f"{PROCESSING_ATTENDANCE_LOCK_PREFIX}{snapshot}"
+	except Exception:
+		# Preserve the existing legacy-lock fallback and attendance access checks.
+		pass
+	lock = frappe.db.get_value(
+		"HRMS Attendance Month Lock",
+		{"company": company, "attendance_month": payroll_month, "status": "已锁定"},
+		"active_version",
+	)
+	return str(lock or "")
+
+
 @frappe.whitelist()
 def get_payroll_home_dashboard(company: str, payroll_month: str = "", attendance_lock_version: str = ""):
 	"""Build the data-backed overview shown above the monthly payroll table.
@@ -8997,41 +9014,35 @@ def get_payroll_home_dashboard(company: str, payroll_month: str = "", attendance
 	"""
 	company = _require_company(company)
 	payroll_month = str(payroll_month or "").strip()
-	if payroll_month and not attendance_lock_version:
-		current_lock = _current_payroll_attendance_lock(company, payroll_month)
-		attendance_lock_version = str((current_lock or {}).get("attendance_lock_version") or "")
-	settlement_fields = [
-		"department", "employee", "employee_code", "employee_name", "base_salary",
-		"function_allowance", "certificate_skill_allowance", "overtime_pay_total",
-		"bonus_total", "gross_pay", "net_pay", "company_cost_total",
-		"social_security_company", "housing_fund_company", "calculation_status",
-	]
+	attendance_lock_version = attendance_lock_version or _payroll_dashboard_lock_version(company, payroll_month)
+	amount_fields = (
+		"base_salary", "function_allowance", "certificate_skill_allowance",
+		"overtime_pay_total", "bonus_total", "gross_pay", "net_pay",
+		"company_cost_total", "social_security_company", "housing_fund_company",
+	)
 
 	def settlement_rows(month, lock_version=""):
-		if not month:
+		# No current lock means no current run, never all historical versions.
+		if not month or not lock_version:
 			return []
-		filters = {"company": company, "payroll_month": month}
-		if lock_version:
-			filters["attendance_lock_version"] = lock_version
 		return frappe.get_all(
 			PAYROLL_SETTLEMENT_DOCTYPE,
-			filters=filters,
-			fields=settlement_fields,
-			limit_page_length=100000,
+			filters={"company": company, "payroll_month": month, "attendance_lock_version": lock_version},
+			fields=["department", "calculation_status", "count(name) as headcount"]
+				+ [f"sum({field}) as {field}" for field in amount_fields],
+			group_by="department, calculation_status",
+			order_by="",
+			limit_page_length=0,
 		)
 
 	def summarize(rows):
 		totals = defaultdict(float)
-		amount_fields = (
-			"base_salary", "function_allowance", "certificate_skill_allowance",
-			"overtime_pay_total", "bonus_total", "gross_pay", "net_pay",
-			"company_cost_total", "social_security_company", "housing_fund_company",
-		)
+
 		for row in rows:
 			for field in amount_fields:
 				totals[field] += flt(row.get(field))
-		headcount = len(rows)
-		confirmed_count = sum(1 for row in rows if row.get("calculation_status") in {"已确认", "已生成工资单"})
+		headcount = sum(int(row.get("headcount") or 0) for row in rows)
+		confirmed_count = sum(int(row.get("headcount") or 0) for row in rows if row.get("calculation_status") in {"已确认", "已生成工资单"})
 		return {
 			"headcount": headcount,
 			"confirmed_count": confirmed_count,
@@ -9042,8 +9053,8 @@ def get_payroll_home_dashboard(company: str, payroll_month: str = "", attendance
 
 	current_rows = settlement_rows(payroll_month, attendance_lock_version)
 	previous_month = _previous_payroll_month(payroll_month)
-	previous_lock = _current_payroll_attendance_lock(company, previous_month) if previous_month else None
-	previous_rows = settlement_rows(previous_month, str((previous_lock or {}).get("attendance_lock_version") or ""))
+	previous_lock = _payroll_dashboard_lock_version(company, previous_month)
+	previous_rows = settlement_rows(previous_month, previous_lock)
 	current = summarize(current_rows)
 	previous = summarize(previous_rows)
 
@@ -9081,7 +9092,7 @@ def get_payroll_home_dashboard(company: str, payroll_month: str = "", attendance
 	for row in current_rows:
 		department = row.get("department") or "未维护部门"
 		department_totals[department]["company_cost_total"] += flt(row.get("company_cost_total"))
-		department_totals[department]["headcount"] += 1
+		department_totals[department]["headcount"] += int(row.get("headcount") or 0)
 	department_rows = sorted(department_totals.items(), key=lambda item: item[1]["company_cost_total"], reverse=True)
 	if len(department_rows) > 5:
 		top_rows, other_rows = department_rows[:5], department_rows[5:]
@@ -9116,6 +9127,7 @@ def get_payroll_home_dashboard(company: str, payroll_month: str = "", attendance
 
 	return {
 		"payroll_month": payroll_month,
+		"attendance_lock_version": attendance_lock_version,
 		"previous_month": previous_month,
 		"summary": current,
 		"previous_summary": previous,

@@ -330,7 +330,7 @@
 					children: [
 						{ label: "人事", route: "/desk/employee", slug: "employee" },
 						{ label: "部门", route: "/desk/organizational-chart/list", slug: "organization-list" },
-						{ label: "招聘", route: "/desk/recruitment", slug: "recruitment" },
+						{ label: "招聘", route: "/desk/recruitment-center", slug: "recruitment-center" },
 						{ label: "考勤假期", route: "/desk/attendance-import-center", slug: "attendance-import-center" },
 						{ label: "薪酬", route: "/desk/payroll-input-center", slug: "payroll-input-center" },
 					],
@@ -349,6 +349,7 @@
 				"employee-relationship",
 				"employee-roster-import",
 				"employee-roster-export",
+				"dingtalk-roster-review",
 				"personnel-reports",
 				"employee-talk-form",
 				"employee-duty-change",
@@ -474,18 +475,7 @@
 			icon: "R",
 			keys: ["recruitment", "recruitment-center", "job-opening", "job-applicant", "interview", "job-offer", "employee-referral", "employee-onboarding"],
 			items: [
-				{ type: "link", label: "招聘中心", route: "/desk/recruitment-center", slug: "recruitment-center" },
-				{
-					type: "section",
-					label: "招聘管理",
-					children: [
-						{ label: "招聘职位", route: "/desk/job-opening", slug: "job-opening" },
-						{ label: "候选人", route: "/desk/job-applicant", slug: "job-applicant" },
-						{ label: "面试", route: "/desk/interview", slug: "interview" },
-						{ label: "录用通知", route: "/desk/job-offer", slug: "job-offer" },
-						{ label: "内推", route: "/desk/employee-referral", slug: "employee-referral" },
-					],
-				},
+				{ type: "link", label: "面试清单导入与查阅", route: "/desk/recruitment-center", slug: "recruitment-center" },
 			],
 		},
 		{
@@ -930,6 +920,7 @@
 	}
 
 	var BREADCRUMB_PARENT_OVERRIDES = {
+		"dingtalk-roster-review": { label: "员工花名册", route: "/desk/employee", slug: "employee" },
 		"employee-detail": { label: "员工花名册", route: "/desk/employee", slug: "employee" },
 		"employee-roster-import": { label: "员工花名册", route: "/desk/employee", slug: "employee" },
 		"employee-roster-export": { label: "员工花名册", route: "/desk/employee", slug: "employee" },

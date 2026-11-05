@@ -21,10 +21,6 @@ for (const marker of [
 	assert(integration.includes(marker), `Missing local DingTalk pilot guard: ${marker}`);
 }
 
-const settingsCenter = read("hrms/hr/page/hr_settings_center/hr_settings_center.js");
-assert(!settingsCenter.includes("SYSTEM_SETTINGS_MODULES = new Set([\"钉钉集成\""), "DingTalk must not remain a Settings Center module.");
-assert(!settingsCenter.includes("render_dingtalk_integration"), "DingTalk controls must not remain duplicated in Settings Center.");
-
 const attendanceCenter = read("hrms/hr/page/attendance_import_center/attendance_import_center.js");
 assert(!attendanceCenter.includes('data-action="dingtalk-local-pilot"'), "The local DingTalk pilot button must not be rendered in the integration page.");
 for (const marker of [

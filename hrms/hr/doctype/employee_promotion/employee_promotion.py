@@ -8,6 +8,7 @@ from frappe.model.document import Document
 from frappe.utils import getdate
 
 from hrms.hr.utils import update_employee_work_history, validate_active_employee
+from hrms.utils.employee_status_updates import employee_status_update
 
 
 CONFIRMATION_PASSED = "转正通过"
@@ -88,25 +89,27 @@ class EmployeePromotion(Document):
 			return
 
 		employee = frappe.get_doc("Employee", self.employee)
-		employee = update_employee_work_history(employee, self.promotion_details, date=self.promotion_date)
-		if employee.meta.has_field("custom_work_nature") and self.custom_confirmation_result == CONFIRMATION_PASSED:
-			employee.custom_work_nature = "在职·正式"
+		with employee_status_update(employee, "confirmation"):
+			employee = update_employee_work_history(employee, self.promotion_details, date=self.promotion_date)
+			if employee.meta.has_field("custom_work_nature") and self.custom_confirmation_result == CONFIRMATION_PASSED:
+				employee.custom_work_nature = "在职·正式"
 
-		if self.revised_ctc:
-			employee.ctc = self.revised_ctc
+			if self.revised_ctc:
+				employee.ctc = self.revised_ctc
 
-		employee.save()
+			employee.save()
 
 	def on_cancel(self):
 		if self.custom_confirmation_result == CONFIRMATION_REJECTED:
 			return
 
 		employee = frappe.get_doc("Employee", self.employee)
-		employee = update_employee_work_history(employee, self.promotion_details, cancel=True)
-		if employee.meta.has_field("custom_work_nature") and self.custom_confirmation_result == CONFIRMATION_PASSED:
-			employee.custom_work_nature = "在职·试用期"
+		with employee_status_update(employee, "confirmation"):
+			employee = update_employee_work_history(employee, self.promotion_details, cancel=True)
+			if employee.meta.has_field("custom_work_nature") and self.custom_confirmation_result == CONFIRMATION_PASSED:
+				employee.custom_work_nature = "在职·试用期"
 
-		if self.revised_ctc:
-			employee.ctc = self.current_ctc
+			if self.revised_ctc:
+				employee.ctc = self.current_ctc
 
-		employee.save()
+			employee.save()

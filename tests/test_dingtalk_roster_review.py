@@ -48,7 +48,7 @@ class ReviewTests(unittest.TestCase):
 		self.employee.save.assert_called_once()
 
 	def test_keep_all_records_review_without_saving_employee(self):
-		result = self.apply([], keep_fieldnames_json='["employee_name","department"]')
+		result = self.api.apply_dingtalk_employee_comparison("I1", "[]", keep_fieldnames_json='["employee_name","department"]')
 		self.assertEqual(result["review_status"], "已人工处理")
 		self.employee.save.assert_not_called()
 		self.doc.save.assert_called_once()
@@ -91,6 +91,121 @@ class ReviewTests(unittest.TestCase):
 		self.api.frappe.db.get_value.return_value = "其他来源"
 		with self.assertRaises(ValueError):
 			self.tasks.get_roster_employee_detail("I1", "A")
+
+	def direct_preview(self):
+		self.doc.sync_log = "S1"
+		self.tasks._task = Mock(return_value=Doc(status="已完成"))
+		self.api._latest_dingtalk_employee_roster_sync_log = Mock(return_value="S1")
+		return self.tasks.preview_direct_roster_update("A", "S1", '["I1"]')
+
+	def test_selected_update_applies_only_confirmed_dingtalk_and_custom_values(self):
+		preview = self.direct_preview()
+		self.assertTrue(preview["can_update"])
+		self.employee.save.assert_not_called()
+		decisions = {"I1": {"employee_name": {"choice": "dingtalk"}, "department": {"choice": "custom", "value": "部门丙"}}}
+		result = self.tasks.apply_direct_roster_update("A", "S1", '["I1"]', preview["preview_token"], json.dumps(decisions))
+		self.assertEqual(self.employee.employee_name, "钉钉姓名")
+		self.assertEqual(self.employee.department, "部门丙")
+		self.assertEqual(result["updated_fields"], 2)
+
+	def test_selected_update_keep_invalid_dingtalk_value_without_overwriting(self):
+		self.api.frappe.db.exists = Mock(side_effect=lambda doctype, *args: doctype != "Department")
+		preview = self.direct_preview()
+		self.assertTrue(preview["can_update"], "invalid source value can still be kept or manually corrected")
+		decisions = {"I1": {"employee_name": {"choice": "keep"}, "department": {"choice": "keep"}}}
+		result = self.tasks.apply_direct_roster_update("A", "S1", '["I1"]', preview["preview_token"], json.dumps(decisions))
+		self.assertEqual(result["updated"], 0)
+		self.employee.save.assert_not_called()
+		self.doc.save.assert_called_once()
+
+	def test_selected_update_rejects_missing_pending_and_stale_choices(self):
+		preview = self.direct_preview()
+		args = ("A", "S1", '["I1"]', preview["preview_token"])
+		for decisions in [{}, {"I1": {}}, {"I1": {"employee_name": {"choice": "pending"}, "department": {"choice": "keep"}}}]:
+			with self.assertRaises(ValueError):
+				self.tasks.apply_direct_roster_update(*args, json.dumps(decisions))
+		self.employee.modified = "changed"
+		with self.assertRaises(ValueError):
+			self.tasks.apply_direct_roster_update(*args, '{}')
+		self.employee.save.assert_not_called()
+
+	def test_selected_update_unmatched_and_cross_company_rows_are_not_updated(self):
+		self.doc.matched_employee = ""
+		preview = self.direct_preview()
+		self.assertFalse(preview["can_update"])
+		self.assertTrue(any("尚未建档" in issue for issue in preview["issues"]))
+		self.doc.company = "B"
+		with self.assertRaises(ValueError):
+			self.tasks.preview_direct_roster_update("A", "S1", '["I1"]')
+		self.employee.save.assert_not_called()
+
+	def new_review(self):
+		self.doc.matched_employee = ""
+		self.doc.sync_log = "S1"
+		self.doc.reload = Mock()
+		self.api._latest_dingtalk_employee_roster_sync_log = Mock(return_value="S1")
+		self.tasks._task = Mock(return_value=Doc(status="已完成"))
+		self.api.frappe.db.get_value = Mock(side_effect=lambda doctype, *args, **kwargs: self.api.DINGTALK_EMPLOYEE_ROSTER_SOURCE_TYPE if doctype == self.api.DINGTALK_RAW_RECORD_DOCTYPE else "A" if doctype == "Department" else None)
+		self.api.frappe.db.exists = Mock(side_effect=lambda doctype, *args: doctype != "Employee")
+		return {"employee_name": {"choice": "dingtalk"}, "department": {"choice": "custom", "value": "部门甲"}, "custom_employee_code": {"choice": "custom", "value": "43"}}
+
+	def test_new_record_exposes_choices_and_missing_profile_fields(self):
+		self.new_review()
+		result = self.tasks.get_roster_employee_detail("I1", "A")
+		fields = {f["fieldname"]: f for f in result["fields"]}
+		self.assertTrue(fields["employee_name"]["editable"])
+		self.assertTrue(fields["custom_employee_code"]["editable"])
+		self.assertIn("date_of_joining", fields)
+
+	def test_new_preview_uses_chosen_values_and_does_not_write(self):
+		choices = self.new_review()
+		preview = self.tasks.preview_roster_new_employee("I1", "A", json.dumps(choices), "核对建档")
+		self.assertTrue(preview["can_create"])
+		self.assertEqual(preview["values"]["employee_name"], "钉钉姓名")
+		self.assertEqual(preview["values"]["first_name"], "钉钉姓名")
+		self.assertEqual(preview["values"]["custom_employee_code"], "43")
+		self.doc.save.assert_not_called()
+
+	def test_new_review_rejects_unconfirmed_protected_and_already_bound(self):
+		choices = self.new_review()
+		for bad in [{}, {**choices, "company": {"choice": "custom", "value": "B"}}, {**choices, "employee_name": {"choice": "pending"}}]:
+			with self.assertRaises(ValueError):
+				self.tasks.preview_roster_new_employee("I1", "A", json.dumps(bad), "原因")
+		self.doc.matched_employee = "E1"
+		with self.assertRaises(ValueError):
+			self.tasks.preview_roster_new_employee("I1", "A", json.dumps(choices), "原因")
+
+	def test_new_review_blocks_duplicate_code_bad_department_and_missing_code(self):
+		choices = self.new_review()
+		self.api.frappe.db.exists = Mock(return_value=True)
+		preview = self.tasks.preview_roster_new_employee("I1", "A", json.dumps(choices), "原因")
+		self.assertFalse(preview["can_create"])
+		self.assertTrue(any("重复建档" in i for i in preview["issues"]))
+		self.api.frappe.db.exists = Mock(side_effect=lambda doctype, *args: doctype != "Employee")
+		choices["custom_employee_code"] = {"choice": "skip"}
+		preview = self.tasks.preview_roster_new_employee("I1", "A", json.dumps(choices), "原因")
+		self.assertIn("缺少公司工号", preview["issues"])
+
+	def test_new_create_requires_current_preview_and_inserts_only_once(self):
+		choices = self.new_review()
+		args = ("I1", "A", json.dumps(choices))
+		preview = self.tasks.preview_roster_new_employee(*args)
+		created = Doc(name="NEW1", flags=types.SimpleNamespace(), meta=self.employee.meta, insert=Mock())
+		self.api.frappe.new_doc = Mock(return_value=created)
+		self.api._set_dingtalk_mapping_after_import = Mock()
+		with self.assertRaises(ValueError):
+			self.tasks.create_roster_new_employee(*args, preview_token="old-token")
+		created.insert.assert_not_called()
+		result = self.tasks.create_roster_new_employee(*args, preview_token=preview["preview_token"])
+		self.assertEqual(result["employee"], "NEW1")
+		created.insert.assert_called_once()
+		self.employee.save.assert_not_called()
+		self.assertEqual(self.doc.matched_employee, "NEW1")
+		self.assertIn("逐项核对新建员工", self.doc.approval_note)
+		self.assertNotIn("原因：", self.doc.approval_note)
+		with self.assertRaises(ValueError):
+			self.tasks.create_roster_new_employee(*args, preview_token=preview["preview_token"])
+		created.insert.assert_called_once()
 
 	def test_selected_attachment_preserves_unselected_metadata(self):
 		self.doc.attachments_json = [{"file_name": "a.png"}, {"file_name": "b.png"}]

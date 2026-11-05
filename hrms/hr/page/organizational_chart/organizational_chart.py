@@ -48,8 +48,8 @@ MANUAL_ORGANIZATION_MODE_MESSAGE = _(
 	"组织架构支持按花名册自动更新和手动维护；此处不再用原表批量覆盖，请在组织节点中设置人员更新方式。"
 )
 MANUAL_ORGANIZATION_REFERENCE_PREFIX = "manual_organization_chart:"
-MANUAL_ORGANIZATION_NODE_KINDS = {"管理层", "分管", "室", "课", "组", "线", "岗位", "员工"}
-MANUAL_ORGANIZATION_DEPARTMENT_KINDS = {"室", "课", "组", "线", "岗位"}
+MANUAL_ORGANIZATION_NODE_KINDS = {"管理层", "分管", "部门", "室", "课", "组", "线", "岗位", "员工"}
+MANUAL_ORGANIZATION_DEPARTMENT_KINDS = {"部门", "室", "课", "组", "线", "岗位"}
 # Manual layout is not the HR department tree. Any container may hold another
 # container or role; only person leaves and cycles are prohibited.
 MANUAL_ORGANIZATION_CHILD_KINDS = {
@@ -1477,7 +1477,7 @@ def _build_manual_organization_tree(company, manual):
 		proxy = employee_labels.get(node.manual_config.get("proxy_employee"))
 		person = manager if kind in {"管理层", "分管"} else primary or employee_labels.get(node.manual_config.get("employee"))
 		node_type = {
-			"管理层": "organization_management", "分管": "organization_supervisor", "室": "organization_office", "课": "organization_section", "组": "organization_group", "线": "organization_line",
+			"管理层": "organization_management", "分管": "organization_supervisor", "部门": "organization_department", "室": "organization_office", "课": "organization_section", "组": "organization_group", "线": "organization_line",
 			"岗位": "organization_position", "员工": "organization_person",
 		}.get(kind, "organization_node")
 		name = node.display_name
@@ -1570,7 +1570,7 @@ def _build_manual_organization_tree(company, manual):
 			"planned_headcount": company_staffing["planned_headcount"],
 			"current_headcount": company_staffing["current_headcount"],
 			"vacancy_count": company_staffing["vacancy_count"],
-			"supervisor_count": counts["分管"], "office_count": counts["室"], "section_count": counts["课"], "group_count": counts["组"],
+			"supervisor_count": counts["分管"], "department_count": counts["部门"], "office_count": counts["室"], "section_count": counts["课"], "group_count": counts["组"],
 			"line_count": counts["线"], "position_count": counts["岗位"], "person_count": counts["员工"],
 			"node_count": len(manual["nodes"]),
 		},
@@ -1609,7 +1609,7 @@ def _get_manual_company_staffing(company, employees):
 
 def _validate_manual_node_parent(node_kind, parent_node, version, node_name=None):
 	if node_kind not in MANUAL_ORGANIZATION_NODE_KINDS:
-		frappe.throw(_("请选择管理层、分管、室、课、组、线、岗位或员工。"))
+		frappe.throw(_("请选择管理层、分管、部门、室、课、组、线、岗位或员工。"))
 	if not parent_node:
 		if node_kind not in MANUAL_ORGANIZATION_CHILD_KINDS[None]:
 			frappe.throw(_("公司根节点下只能添加：{0}。 ").format("、".join(MANUAL_ORGANIZATION_CHILD_KINDS[None])))
@@ -1712,7 +1712,7 @@ def save_manual_organization_node(
 		(company, _manual_organization_reference(company)))
 	node_kind = cstr(node_kind).strip()
 	if node_kind not in MANUAL_ORGANIZATION_NODE_KINDS:
-		frappe.throw(_("请选择管理层、分管、室、课、组、线、岗位或员工。"))
+		frappe.throw(_("请选择管理层、分管、部门、室、课、组、线、岗位或员工。"))
 
 	if node_name:
 		doc = frappe.get_doc("Organization Node", node_name, for_update=True)
@@ -1864,7 +1864,7 @@ def save_manual_organization_node(
 		"employee": employee if node_kind == "员工" else None,
 		# The actual holder is a normal Employee reference. The proxy is the only
 		# display-only substitute and never writes employee, role or workflow data.
-		"primary_employee": primary_employee if node_kind in {"室", "课", "组", "线", "岗位"} else None,
+		"primary_employee": primary_employee if node_kind in {"部门", "室", "课", "组", "线", "岗位"} else None,
 		"proxy_employee": proxy_employee if node_kind != "员工" else None,
 		"assigned_employees": assigned_employees if node_kind not in {"管理层", "分管", "员工"} else [],
 	}
@@ -1888,7 +1888,7 @@ def save_manual_organization_node(
 			# "部门" and "其他" exist in both old and new site metadata. The
 			# detailed kind and selected master records live in source_text so this
 			# page remains available before a DocType reload.
-			"node_type": "部门" if node_kind in {"室", "课", "组", "线"} else "其他",
+			"node_type": "部门" if node_kind in {"部门", "室", "课", "组", "线"} else "其他",
 			"display_name": display_name,
 			"parent_node": parent_node,
 			"source_text": json.dumps(config, ensure_ascii=False, sort_keys=True),
@@ -2322,8 +2322,8 @@ def get_hybrid_node_detail(
 def _get_manual_organization_node_detail(node_id, node_type, company, search):
 	"""Details for the standalone chart; its links are display-only references."""
 	if node_type not in {
-		"organization_management", "organization_supervisor", "organization_office", "organization_section", "organization_group", "organization_line",
-		"organization_department", "organization_position", "organization_person", "organization_node",
+		"organization_management", "organization_supervisor", "organization_department", "organization_office", "organization_section", "organization_group", "organization_line",
+		"organization_position", "organization_person", "organization_node",
 	}:
 		return None
 	manual = _get_manual_organization_records(company)
@@ -2405,7 +2405,7 @@ def _get_manual_organization_node_detail(node_id, node_type, company, search):
 
 def _organization_node_type(node_type):
 	return {
-		"管理层": "organization_management", "分管": "organization_supervisor", "室": "organization_office", "课": "organization_section", "组": "organization_group", "线": "organization_line",
+		"管理层": "organization_management", "分管": "organization_supervisor", "部门": "organization_department", "室": "organization_office", "课": "organization_section", "组": "organization_group", "线": "organization_line",
 		"岗位": "organization_position", "员工": "organization_person",
 	}.get(
 		node_type, "organization_node"

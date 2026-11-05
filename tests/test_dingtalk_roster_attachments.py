@@ -178,7 +178,7 @@ class DingTalkRosterAttachmentTests(unittest.TestCase):
 		module = load_module()
 		module._require_dingtalk_employee_import_approver = lambda: None
 		module._require_sync_company = lambda company: company
-		module._build_dingtalk_roster_initial_import_preview = lambda _company: {
+		module._build_dingtalk_roster_initial_import_preview = lambda _company, _selected=None: {
 			"can_import": True, "sync_log": "SYNC-2", "preview_token": "current", "issues": []
 		}
 		module.frappe.db = types.SimpleNamespace(sql=lambda *_args: None)
@@ -186,6 +186,108 @@ class DingTalkRosterAttachmentTests(unittest.TestCase):
 		module._upsert_dingtalk_employee_values = lambda *_args: self.fail("stale preview reached Employee write")
 		with self.assertRaisesRegex(ValueError, "重新预检"):
 			module.apply_dingtalk_roster_initial_import("永新", "SYNC-2", "stale")
+
+	def test_reviewed_import_requires_only_code_for_missing_profile_facts(self):
+		module = load_module()
+		module.frappe.get_meta = lambda _doctype: types.SimpleNamespace(fields=[])
+		module.frappe.db = types.SimpleNamespace(count=lambda *_args: 0)
+		self.assertEqual(module._dingtalk_new_employee_validation_issues({"custom_employee_code": "260001"}), [])
+		self.assertIn("缺少公司工号", module._dingtalk_new_employee_validation_issues({}))
+		self.assertEqual(module._dingtalk_employee_match({"custom_employee_code": "260001"}, "A")["status"], "待审批")
+		for code in ("", " ", "待定"):
+			self.assertEqual(module._dingtalk_employee_match({"custom_employee_code": code}, "A")["status"], "待匹配")
+		module.frappe.db.count = lambda *_args: 2
+		self.assertEqual(module._dingtalk_employee_match({"custom_employee_code": "260001"}, "A")["status"], "冲突")
+
+	def test_reviewed_sparse_employee_reaches_insert_without_fabricated_profile(self):
+		from unittest.mock import patch, Mock
+		module = load_module()
+		module.frappe.db = types.SimpleNamespace(count=lambda *_args: 0)
+		facts = {}
+		doc = types.SimpleNamespace(name="260001", flags=types.SimpleNamespace(),
+			meta=types.SimpleNamespace(get_valid_columns=lambda: ["custom_employee_code", "company", "employee_name", "date_of_joining"]),
+			set=lambda key, value: facts.update({key: value}), insert=Mock())
+		module.frappe.new_doc = lambda _doctype: doc
+		fake = types.ModuleType("hrms.api.employee_field_template")
+		fake._ensure_employee_base_records = lambda *_args: None
+		with patch.dict(sys.modules, {"hrms.api.employee_field_template": fake}):
+			result = module._upsert_dingtalk_employee_values({"custom_employee_code": "260001", "company": "A"}, "A")
+		self.assertEqual(result["status"], "已创建")
+		self.assertEqual(facts, {"custom_employee_code": "260001", "company": "A"})
+		self.assertTrue(doc.flags.ignore_mandatory)
+		doc.insert.assert_called_once_with(ignore_permissions=True)
+
+	def test_selection_never_defaults_empty_or_invalid_to_all(self):
+		module = load_module()
+		module.frappe.throw = lambda message: (_ for _ in ()).throw(ValueError(message))
+		self.assertIsNone(module._dingtalk_roster_selected_names())
+		self.assertEqual(module._dingtalk_roster_selected_names('["I2", "I1", "I2"]'), ["I1", "I2"])
+		for value in ('[]', '{}', 'null', 'bad', '[""]', '[1]'):
+			with self.assertRaises(ValueError):
+				module._dingtalk_roster_selected_names(value)
+
+	def test_selected_preview_excludes_unselected_issues_and_binds_token_to_scope(self):
+		from unittest.mock import patch
+		module = load_module()
+		module.frappe.throw = lambda message: (_ for _ in ()).throw(ValueError(message))
+		snapshot = dict(sync_log="S1", status="已完成", records_received=3, snapshot_row_count=3,
+			employee_codes={"100", "200"}, missing_employee_code_count=1, duplicate_employee_codes=[], source_record_names={"R1", "R2", "R3"})
+		rows = [types.SimpleNamespace(name=name, employee_code=code, modified="v1", import_status="待审批") for name, code in [("I1", "100"), ("I2", "200"), ("I3", "")]]
+		module.frappe.get_all = lambda *_args, **_kwargs: rows
+		module.frappe.get_doc = lambda _doctype, name: types.SimpleNamespace(payload_hash=name, approval_note="", name=name)
+		module.frappe.db = types.SimpleNamespace(exists=lambda *_args: False)
+		module._recompute_dingtalk_employee_import = lambda doc: ({"custom_employee_code": next(row.employee_code for row in rows if row.name == doc.name)}, {})
+		module._dingtalk_employee_match = lambda *_args: {"status": "待审批", "employee": None}
+		module._dingtalk_new_employee_validation_issues = lambda *_args: []
+		fake = types.ModuleType("hrms.api.employee_field_template")
+		fake._get_latest_dingtalk_onjob_snapshot = lambda _company: snapshot
+		with patch.dict(sys.modules, {"hrms.api.employee_field_template": fake}):
+			one = module._build_dingtalk_roster_initial_import_preview("A", ["I1"])
+			self.assertTrue(one["can_import"])
+			self.assertEqual(one["new"], 1)
+			self.assertIn("人工审核确认后可录入", one["warnings"][0])
+			two = module._build_dingtalk_roster_initial_import_preview("A", ["I2"])
+			self.assertNotEqual(one["preview_token"], two["preview_token"])
+			self.assertFalse(module._build_dingtalk_roster_initial_import_preview("A")["can_import"])
+			self.assertFalse(module._build_dingtalk_roster_initial_import_preview("A", ["I3"])["can_import"])
+			with self.assertRaisesRegex(ValueError, "当前公司最新"):
+				module._build_dingtalk_roster_initial_import_preview("A", ["OTHER-COMPANY"])
+			with self.assertRaisesRegex(ValueError, "重新预检"):
+				module._require_dingtalk_roster_initial_import_preview("A", "S1", one["preview_token"], ["I2"])
+			snapshot["duplicate_employee_codes"] = ["100"]
+			self.assertFalse(module._build_dingtalk_roster_initial_import_preview("A", ["I1"])["can_import"])
+			self.assertTrue(module._build_dingtalk_roster_initial_import_preview("A", ["I2"])["can_import"])
+			snapshot["duplicate_employee_codes"] = []
+			snapshot["status"] = "运行中"
+			self.assertFalse(module._build_dingtalk_roster_initial_import_preview("A", ["I1"])["can_import"])
+			snapshot["status"] = "已完成"
+			writes = []
+			docs = {row.name: types.SimpleNamespace(company="A", employee_code=row.employee_code, name=row.name, save=lambda **_kwargs: None) for row in rows}
+			module.frappe.get_all = lambda *_args, **_kwargs: [row.name for row in rows]
+			module.frappe.get_doc = lambda _doctype, name: docs[name]
+			module._upsert_dingtalk_employee_values = lambda values, _company: (writes.append(values["custom_employee_code"]) or {"status": "已创建", "employee": "E1"})
+			module._set_dingtalk_mapping_after_import = lambda *_args: None
+			result = module._apply_dingtalk_roster_initial_import("A", "S1", "reviewer", ["I1"])
+			self.assertEqual(writes, ["100"])
+			self.assertEqual(result["processed"], 1)
+
+	def test_selected_scope_survives_queue_and_worker_revalidation(self):
+		module = load_module()
+		events, jobs = [], []
+		module._require_dingtalk_employee_import_approver = lambda: None
+		module._require_sync_company = lambda company: company
+		module.frappe.db = types.SimpleNamespace(sql=lambda *_args: None, exists=lambda *_args: False, commit=lambda: None)
+		module.frappe.session = types.SimpleNamespace(user="reviewer")
+		module.frappe.enqueue = lambda *args, **kwargs: jobs.append(kwargs)
+		module._new_sync_log = lambda *_args, **_kwargs: types.SimpleNamespace(name="OP1")
+		module._require_dingtalk_roster_initial_import_preview = lambda *args: events.append(("validate", args[-1]))
+		module.apply_dingtalk_roster_initial_import("A", "S1", "TOKEN", '["I2","I1"]')
+		self.assertEqual(jobs[0]["selected_names"], ["I1", "I2"])
+		module._apply_dingtalk_roster_initial_import = lambda *args: (events.append(("write", args[-1])) or dict(processed=2, created=0, filled_fields=1, preserved_differences=0))
+		module.frappe.get_doc = lambda *_args: object()
+		module._finish_sync_log = lambda *_args: None
+		module.run_queued_dingtalk_roster_initial_import("A", "S1", "TOKEN", "OP1", "reviewer", jobs[0]["selected_names"])
+		self.assertEqual(events, [("validate", ["I1", "I2"]), ("validate", ["I1", "I2"]), ("write", ["I1", "I2"])])
 
 	def test_initial_roster_job_rolls_back_all_employee_writes_on_failure(self):
 		module = load_module()
@@ -284,6 +386,25 @@ class DingTalkRosterAttachmentTests(unittest.TestCase):
 		)
 
 		self.assertEqual([item["fieldname"] for item in differences], ["department"])
+
+	def test_name_comparison_ignores_invisible_copy_artifacts_without_changing_values(self):
+		module = load_module()
+		current = {"person_to_be_contacted": "测试姓名", "employee_name": "José"}
+		incoming = {"person_to_be_contacted": "\ufeff测\u200b试姓名\u2060", "employee_name": "Jose\u0301"}
+		original = incoming.copy()
+		self.assertEqual(module._dingtalk_employee_field_differences(incoming, current), [])
+		self.assertEqual(module._dingtalk_existing_employee_import_plan(incoming, current), ({}, []))
+		self.assertEqual(incoming, original, "comparison must not rewrite source data")
+		self.assertEqual(module._dingtalk_comparable_employee_value("person_to_be_contacted", "Test\u00a0  Name"), "Test Name")
+
+	def test_name_comparison_preserves_real_character_and_identifier_differences(self):
+		module = load_module()
+		differences = module._dingtalk_employee_field_differences(
+			{"person_to_be_contacted": "测试姗", "employee_name": "张三", "department": "部门\u200b甲"},
+			{"person_to_be_contacted": "测试娟", "employee_name": "張三", "department": "部门甲"},
+		)
+		self.assertEqual([item["fieldname"] for item in differences], ["person_to_be_contacted", "employee_name", "department"])
+		self.assertNotEqual(module._dingtalk_comparable_employee_value("custom_employee_code", "1\u200b"), "1")
 
 	def test_unchanged_employee_fields_do_not_enter_delta(self):
 		module = load_module()

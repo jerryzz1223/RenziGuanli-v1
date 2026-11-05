@@ -30,11 +30,8 @@
 .interview-register__panel { min-width: 0; padding: 22px; border: 1px solid var(--recruitment-border); border-radius: 16px; background: #fff; }
 .interview-register__panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
 .interview-register__panel-heading h2 { margin: 0; color: #26364a; font-size: 18px; font-weight: 650; }
-.interview-register__filters { display: grid; align-items: end; grid-template-columns: minmax(140px,1.1fr) minmax(140px,.9fr) minmax(200px,1.5fr) minmax(96px,.65fr) minmax(100px,.7fr) auto; gap: 16px; }
+.interview-register__filters { display: grid; align-items: end; grid-template-columns: minmax(140px,.9fr) minmax(200px,1.5fr) minmax(96px,.65fr) minmax(100px,.7fr) auto; gap: 16px; }
 .interview-register__filters label { display: grid; gap: 8px; font-size: 12px; color: #738198; font-weight: 500; margin: 0; min-width: 0; }
-.interview-register__filters [data-company] { min-width: 0; }
-.interview-register__filters [data-company] .form-group { margin-bottom: 0; }
-.interview-register__filters [data-company] .control-label { margin-bottom: 8px; color: #738198; font-size: 12px; }
 .interview-register__filters .form-control { width: 100%; min-width: 0; height: 38px; border: 1px solid #e5eaf1; background: #f9fafc; box-shadow: none; border-radius: 8px; font-size: 13px; color: #34455e; }
 .interview-register__filter-actions { display: flex; gap: 8px; padding-bottom: 1px; }
 .interview-register__filter-actions .btn { min-height: 38px; }
@@ -124,3 +121,42 @@
 .recruitment-center__empty { color: var(--recruitment-muted); padding: 28px 0 10px; text-align: center; }
 @media (max-width: 1100px) { .recruitment-center__metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .recruitment-center__flow { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 700px) { .recruitment-center { margin: 0; padding: 14px; } .recruitment-center__header, .recruitment-center__panel-head { flex-direction: column; } .recruitment-center__flow, .recruitment-center__metrics, .recruitment-center__grid { grid-template-columns: 1fr; } .recruitment-center__pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Interview register: compact controls and stable, readable columns. */
+.interview-register__eyebrow { margin: 0 0 7px; color: #526984; font-size: 12px; font-weight: 600; }
+.interview-register__description { margin: 9px 0 0; color: #607087; font-size: 13px; line-height: 1.6; }
+.interview-register__hint { margin: 6px 0 0; color: #64748b; font-size: 12px; line-height: 1.6; }
+.interview-register__hero { padding: 22px 24px; border-radius: 12px; }
+.interview-register__hero h1 { font-size: 25px; line-height: 1.3; }
+.interview-register__panel { padding: 20px; border-radius: 12px; }
+.interview-register__panel-heading { margin-bottom: 16px; }
+.interview-register__panel-heading h2 { font-size: 16px; }
+.interview-register__filters label { color: #526178; }
+.interview-register__filters .form-control { height: 40px; background: #fff; border-color: #dce3ed; }
+.interview-register__filter-actions .btn { min-height: 40px; }
+.interview-register__view-switch button { color: #596a81; }
+.interview-register__daily { min-width: 960px; }
+.interview-register__daily th { color: #526178; font-weight: 600; }
+.interview-register__daily td { padding: 15px 14px; line-height: 1.55; }
+.interview-register__daily small { color: #64748b; margin-top: 4px; }
+.interview-register__daily td:nth-child(3), .interview-register__daily td:nth-child(6) { font-variant-numeric: tabular-nums; }
+.interview-register__daily th:last-child { width: 96px; }
+.interview-register__badge--neutral { color: #58677d; }
+.interview-register__table { min-width: 2460px; }
+.interview-register__table th { color: #526178; font-weight: 600; }
+.interview-register__table td { padding: 12px; line-height: 1.5; font-variant-numeric: tabular-nums; background: #fff; }
+.interview-register__table tbody tr:nth-child(even) td { background: #fafbfd; }
+.interview-register__table tbody tr:hover td { background: #eff5fc; }
+.interview-register__table thead tr:first-child th:nth-child(1), .interview-register__table td:nth-child(1) { width: 100px; min-width: 100px; }
+.interview-register__table thead tr:first-child th:nth-child(2), .interview-register__table td:nth-child(2) { width: 68px; min-width: 68px; }
+.interview-register__table thead tr:first-child th:nth-child(3), .interview-register__table td:nth-child(3) { position: sticky; left: 0; z-index: 1; min-width: 112px; border-right: 2px solid #dce5f2; }
+.interview-register__table thead tr:first-child th:nth-child(3) { z-index: 3; }
+.interview-register__footer { color: #607087; }
+.interview-register button { cursor: pointer; }
+.interview-register button:disabled { cursor: default; opacity: .5; }
+@media (max-width: 760px) {
+ .interview-register__daily { min-width: 0; }
+ .interview-register__hero { padding: 20px; }
+ .interview-register__panel { padding: 16px; }
+ .interview-register__footer { align-items: flex-start; flex-direction: column; }
+}

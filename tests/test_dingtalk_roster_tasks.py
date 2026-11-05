@@ -2,7 +2,7 @@ import importlib.util
 import sys
 import types
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, ANY, patch
 
 from test_dingtalk_roster_attachments import ROOT, load_module
 
@@ -37,6 +37,11 @@ class RosterTaskTests(unittest.TestCase):
 		self.api._new_sync_log = Mock(return_value=self.log)
 		self.api._finish_sync_log = Mock()
 		self.api.frappe.db = types.SimpleNamespace(sql=Mock(return_value=[]), commit=Mock(), rollback=Mock(), savepoint=Mock())
+		self.cache_values = {}
+		self.api.frappe.cache = Mock(return_value=types.SimpleNamespace(
+			set_value=lambda key, value, **kwargs: self.cache_values.update({key: value}),
+			get_value=lambda key: self.cache_values.get(key),
+		))
 		self.api.frappe.enqueue = Mock()
 		self.api.frappe.get_doc = Mock(return_value=self.log)
 		self.api.frappe.throw = Mock(side_effect=ValueError)
@@ -78,7 +83,7 @@ class RosterTaskTests(unittest.TestCase):
 	def test_worker_reuses_log_and_commits_success(self):
 		self.api._sync_all_employee_rosters = Mock(return_value={"received": 2})
 		self.assertEqual(self.tasks.run_roster_comparison("Company A", "SYNC-1"), {"received": 2})
-		self.api._sync_all_employee_rosters.assert_called_once_with("Company A", sync_log=self.log, include_directory=True)
+		self.api._sync_all_employee_rosters.assert_called_once_with("Company A", sync_log=self.log, include_directory=True, progress=ANY)
 		self.assertEqual(self.api.frappe.db.commit.call_count, 2)
 
 	def test_completed_task_is_not_replayed_or_changed_if_configuration_changed(self):
@@ -110,7 +115,24 @@ class RosterTaskTests(unittest.TestCase):
 		self.log.error_message = "read permission missing"
 		self.log.finished_at = "2026-10-23"
 		self.assertEqual(set(self.tasks.get_roster_comparison_status("SYNC-1", "Company A")),
-			{"sync_log", "company", "status", "received", "failed", "error_message", "finished_at"})
+			{"sync_log", "company", "status", "received", "failed", "error_message", "finished_at", "progress"})
+
+	def test_progress_survives_uncommitted_work_and_has_no_employee_payload(self):
+		report = self.tasks._progress_reporter(self.log.name)
+		with patch.object(self.tasks.time, "time", return_value=100):
+			report("正在逐人比对资料", 0, 20)
+			report("正在逐人比对资料", 1, 20)
+			self.assertEqual(self.tasks._read_progress(self.log)["completed"], 0)
+		with patch.object(self.tasks.time, "time", return_value=200):
+			report("正在逐人比对资料", 10, 20, 1)
+		with patch.object(self.tasks.time, "time", return_value=295):
+			progress = self.tasks._read_progress(self.log)
+		self.assertEqual(progress["stale_seconds"], 95)
+		self.assertEqual((progress["completed"], progress["total"], progress["failed"]), (10, 20, 1))
+		self.assertEqual(set(progress), {"stage", "completed", "total", "failed", "updated_at", "stale_seconds"})
+		self.api.frappe.db.commit.assert_not_called()
+		self.log.status = "失败"
+		self.assertIsNone(self.tasks._read_progress(self.log))
 
 	def test_initial_roster_fetch_failure_is_inside_log_error_handler(self):
 		for name in ["_fetch_dingtalk_onjob_userids", "_fetch_dingtalk_preentry_details"]:

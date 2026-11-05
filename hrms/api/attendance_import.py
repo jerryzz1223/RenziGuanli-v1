@@ -7,6 +7,7 @@ from io import BytesIO
 
 import frappe
 from frappe import _
+from hrms.api.attendance_processors.full_attendance import calculate_full_attendance
 from frappe.utils import flt, getdate, now_datetime
 
 
@@ -2525,19 +2526,7 @@ def _calculate_monthly_values(values):
 		- adjusted_2_absence_hours
 	)
 	adjusted_absence_hours = max(values["standard_hours"] - adjusted_working_hours, 0)
-	full_attendance_basis = max(values["standard_hours"] - values["actual_attendance_hours"] - values["rest_leave_hours"] - values["reunion_leave_hours"] + sick_half_hours, 0)
-	if full_attendance_basis > 48:
-		full_attendance_deduction = 200
-	elif full_attendance_basis > 32:
-		full_attendance_deduction = 150
-	elif full_attendance_basis > 16:
-		full_attendance_deduction = 100
-	elif full_attendance_basis > 0.5:
-		full_attendance_deduction = 50
-	elif full_attendance_basis > 0:
-		full_attendance_deduction = 10
-	else:
-		full_attendance_deduction = 0
+	full_attendance_deduction = calculate_full_attendance(values)["deduction"]
 	return {
 		"actual_clock_attendance_hours": actual_clock_attendance_hours,
 		"paid_leave_makeup_hours": paid_leave_makeup_hours,
@@ -2581,6 +2570,7 @@ def generate_monthly_attendance_summary(company: str, attendance_month: str):
 		summaries[key]["overtime_1_5_hours"] += flt(row.workday_overtime_hours)
 		summaries[key]["overtime_2_hours"] += flt(row.restday_overtime_hours)
 		summaries[key]["overtime_3_hours"] += flt(row.holiday_overtime_hours)
+		summaries[key]["late_count"] += flt(row.late_count)
 		summaries[key]["leave_hours"] += flt(row.leave_hours)
 		summaries[key]["absent_hours"] += flt(row.absent_hours)
 		summaries[key]["personal_leave_hours"] += flt(row.personal_leave_hours)

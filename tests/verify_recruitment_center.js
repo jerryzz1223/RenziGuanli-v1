@@ -21,15 +21,10 @@ const pageRegistry = fs.readFileSync(path.join(root, "hrms", "api", "employee_fi
 const setup = fs.readFileSync(path.join(root, "hrms", "setup.py"), "utf8");
 
 assert(page.name === "recruitment-center" && page.title === "招聘中心", "招聘中心 Page 元数据不正确。");
-for (const marker of ["Job Requisition", "Job Opening", "Job Applicant", "Interview", "Job Offer", "Employee Onboarding"]) {
-	assert(script.includes(marker), `招聘中心前端未覆盖流程单据: ${marker}`);
-	assert(api.includes(marker), `招聘中心数据接口未覆盖流程单据: ${marker}`);
-}
-assert(api.includes("frappe.has_permission"), "招聘中心数据接口必须按当前用户权限读取。");
-assert(!api.includes("ignore_permissions"), "招聘中心读取不得绕过单据权限。");
-assert(api.includes("frappe.get_list"), "招聘中心读取必须走带权限的列表查询。");
-assert(api.includes('{"COUNT": "name", "as": "total"}'), "聚合字段必须使用当前 Frappe 支持的字典语法。");
-assert(!api.includes("count(name)"), "聚合字段不得使用已禁用的字符串 SQL 函数语法。");
+assert(script.includes("hrms.api.interview_registration.preview_import"), "招聘中心必须预览原表导入。");
+assert(script.includes("hrms.api.interview_registration.import_registrations"), "招聘中心必须提供导入。");
+assert(!script.includes("show_overview"), "招聘中心不再展示旧招聘总览。");
+assert(!script.includes("frappe.new_doc"), "招聘中心应以导入查阅为主。");
 assert(topNav.includes('route: "/desk/recruitment-center"'), "顶部招聘入口必须进入招聘中心。");
 assert(shellNav.includes('route: "/desk/recruitment-center"'), "侧栏招聘入口必须进入招聘中心。");
 assert(pageRegistry.includes('"name": "recruitment-center"'), "迁移页面注册表必须包含招聘中心。");

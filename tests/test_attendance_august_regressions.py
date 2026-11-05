@@ -58,6 +58,15 @@ class AugustAttendanceRegressionTest(unittest.TestCase):
 			with self.subTest(code=row["工号"], expected=expected):
 				self.assertIn(expected, _codes(row))
 
+	def test_manual_overtime_confirmation_resolves_source_approval_difference(self):
+		row = _row({"日期": "26-08-14", "班次": "中班 13:00-22:00", "上班时间": "12:59",
+			"下班时间": "次日03:01", "工作日加班（小时）": 2.5,
+			"关联审批单": "加班08-14 22:00到08-15 03:00 4.5小时"})
+		self.assertIn("WORKDAY_OVERTIME_APPROVAL_MISMATCH", _codes(row))
+		for hours in (0, 2.5):
+			with self.subTest(hours=hours):
+				self.assertNotIn("WORKDAY_OVERTIME_APPROVAL_MISMATCH", _codes({**row, "确认计入的加班时长": hours}))
+
 	def test_reviewed_false_positives_stay_out_of_exception_queue(self):
 		cases = (
 			_row({"工号": "164", "日期": "26-08-09", "日期类型": "周末休息日", "班次": "休息", "标准工时": 0,

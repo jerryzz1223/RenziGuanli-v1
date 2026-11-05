@@ -290,9 +290,7 @@ function setup_employee_work_nature_field(frm) {
 	// choice from implementation fields after every save.
 	frm.set_df_property("custom_work_nature", "label", __("工作性质"));
 	if (frm.is_new()) {
-		// New employees enter through the probationary onboarding path. Work
-		// nature remains available on saved records for an administrator to
-		// complete the manual confirmation later.
+		// New employees enter through the probationary onboarding path.
 		frm.toggle_display("custom_work_nature", false);
 		frm.set_df_property("custom_work_nature", "reqd", false);
 		if (frm.doc.custom_work_nature !== "在职·试用期") {
@@ -301,6 +299,10 @@ function setup_employee_work_nature_field(frm) {
 		return;
 	}
 	frm.toggle_display("custom_work_nature", true);
+	for (const fieldname of ["custom_work_nature", "employment_type", "status", "custom_is_confirmed"]) {
+		frm.set_df_property(fieldname, "read_only", 1);
+	}
+	frm.set_df_property("custom_work_nature", "description", __("请通过转正、离职或返聘等对应人事流程变更。"));
 	const options = EMPLOYEE_WORK_NATURE_VALUES;
 	frm.set_df_property("custom_work_nature", "options", options.join("\n"));
 }

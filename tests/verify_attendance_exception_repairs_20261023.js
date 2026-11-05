@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const path = require("node:path");
-function controller(response) {
+function controller(response, codes = ["LATE_MARKED"]) {
     let dialog;
     const alerts = [];
     const context = { frappe: { pages: { "attendance-import-center": {} },
@@ -20,7 +20,7 @@ function controller(response) {
     page.load_processing_exceptions = () => {};
     page.call_processing_api = (method, args, options) => {
         if (method === "get_processing_record") options.on_success({ daily_rows: [{ source_row: 10,
-            exception_codes: ["LATE_MARKED"], editable_fields: [{ label: "深夜班", fieldname: "深夜班", late_editor: true, value: 0 }]
+            exception_codes: codes, editable_fields: [{ label: "深夜班", fieldname: "深夜班", late_editor: true, value: 0 }]
         }] });
         else options.on_success(response);
     };
@@ -59,4 +59,20 @@ test("download regenerates a processed batch with invalidated export cache", () 
     c.page.download_processing_result = source => downloaded = source;
     c.page.download_slot_result("attendance_draft");
     assert.equal(downloaded, "attendance_draft");
+});
+
+test("verified source conflicts accept unchanged values only with explicit approval", () => {
+    for (const code of ["CLOCK_IN_MISSING", "CLOCK_OUT_MISSING", "LEAVE_PUNCH_APPROVAL_MISMATCH", "WORKDAY_OVERTIME_APPROVAL_MISMATCH"]) {
+        const c = controller({ edited_daily_row_pending: false }, [code]);
+        c.page.open_attendance_daily_row_editor("R", 10);
+        const check = c.dialog().config.fields.find(field => field.fieldname === "confirm_source_facts");
+        assert.equal(check.default, 0);
+        assert.throws(() => c.dialog().config.primary_action({ daily_value_0: 0, review_status: "已通过", reason: "核实正确" }), /未修改任何字段/);
+        assert.throws(() => c.dialog().config.primary_action({ daily_value_0: 0, confirm_source_facts: 1, review_status: "待审核", reason: "待核实" }), /未修改任何字段/);
+        let submitted;
+        c.page.call_processing_api = (method, args) => { submitted = args; };
+        c.dialog().config.primary_action({ daily_value_0: 0, confirm_source_facts: 1, review_status: "已通过", reason: "核实正确" });
+        assert.equal(submitted.confirm_source_facts, 1);
+        assert.equal(Object.keys(submitted.changes).length, 0);
+    }
 });

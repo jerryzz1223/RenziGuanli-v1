@@ -9,7 +9,8 @@
 			// expose Promise.prototype.finally(). Announcement approval and submit
 			// flows use cleanup handlers to re-enable their dialogs, so always expose
 			// a native Promise at this shared boundary.
-			return Promise.resolve(frappe.call({ method, args: args || {}, freeze: true }));
+			const readOnly = method === "hrms.api.announcement.list_announcements" || method === "hrms.api.announcement.get_announcement";
+			return Promise.resolve(frappe.call({ method, args: args || {}, freeze: !readOnly }));
 		},
 		file_url(url) {
 			return url ? frappe.urllib.get_full_url(url) : "";

@@ -19,6 +19,10 @@ class EmployeeDetailPage {
 		this.page = page;
 		this.wrapper = page.main[0];
 		this.employee = "";
+		this.profile_editing = false;
+		this.profile_draft = {};
+		this.profile_record_draft = {};
+		this.profile_controls = [];
 		this.detail = null;
 		this.navigation = {};
 		this.load_request_id = 0;
@@ -100,6 +104,7 @@ class EmployeeDetailPage {
 	}
 
 	return_to_roster() {
+		if (this.has_profile_changes()) { frappe.msgprint(__("请先保存或取消当前资料修改。")); return; }
 		frappe.set_route("List", "Employee");
 	}
 
@@ -113,6 +118,8 @@ class EmployeeDetailPage {
 		const employee = route_employee;
 		const employee_changed = employee !== this.employee;
 		if (employee_changed) {
+			this.profile_editing = false;
+			this.profile_draft = {};
 			this.employee = employee;
 			this.detail = null;
 			this.navigation = {};
@@ -130,6 +137,7 @@ class EmployeeDetailPage {
 		if (this.loading_employee === employee && this.load_promise) {
 			return this.load_promise;
 		}
+		if (!employee_changed && this.profile_editing && this.detail) return Promise.resolve(this.detail);
 		if (!employee_changed && this.detail && Date.now() - this.last_loaded_at < this.cache_ttl) {
 			return Promise.resolve(this.detail);
 		}
@@ -204,6 +212,9 @@ class EmployeeDetailPage {
 	}
 
 	open_tab(tab) {
+		if (this.profile_saving) return Promise.resolve();
+		this.capture_profile_controls();
+		this.capture_record_controls();
 		this.active_tab = tab;
 		const group = this.tab_group(tab);
 		if (this.loaded_tab_groups.has(group)) {
@@ -218,7 +229,11 @@ class EmployeeDetailPage {
 			args: { employee, tab },
 		})).then(({ message }) => {
 			if (employee !== this.employee) return;
-			Object.assign(this.detail, message || {});
+			const incoming = message || {};
+			const sections = new Map((this.detail.sections || []).map((section) => [section.label, section]));
+			for (const section of incoming.sections || []) sections.set(section.label, section);
+			const related = { ...this.detail.related_records, ...incoming.related_records };
+			Object.assign(this.detail, incoming, { sections: [...sections.values()], related_records: related });
 			this.loaded_tab_groups.add(group);
 			if (group === this.tab_group(this.active_tab)) this.render();
 		}).catch(() => {
@@ -264,6 +279,8 @@ class EmployeeDetailPage {
 	}
 
 	render() {
+		this.capture_profile_controls();
+		this.capture_record_controls();
 		const header = this.detail?.header || {};
 		this.set_page_title();
 		this.set_breadcrumb();
@@ -277,6 +294,7 @@ class EmployeeDetailPage {
 			</div>
 		`;
 		this.bind_events();
+		this.mount_profile_controls();
 	}
 
 	render_styles() {
@@ -890,17 +908,6 @@ class EmployeeDetailPage {
 				.hrms-employee-detail-related-row:first-child {
 					border-top: 0;
 				}
-				.hrms-employee-detail-add-field {
-					display: flex;
-					justify-content: space-between;
-					align-items: center;
-					margin-top: 14px;
-					padding: 12px 16px;
-					background: #fff;
-					border: 1px solid #eef1f4;
-					border-radius: 6px;
-					font-size: 13px;
-				}
 				.hrms-employee-detail-bottom-nav {
 					position: fixed;
 					left: 50%;
@@ -987,11 +994,10 @@ class EmployeeDetailPage {
 						${previous_employment?.name ? `<button class="btn btn-default btn-sm" data-action="open-previous-employment" data-previous-employee="${frappe.utils.escape_html(previous_employment.name)}">${frappe.utils.escape_html(__("查看前次任职档案"))}</button>` : ""}
 						${current_employment?.name ? `<button class="btn btn-default btn-sm" data-action="open-current-employment" data-current-employee="${frappe.utils.escape_html(current_employment.name)}">${frappe.utils.escape_html(__("查看当前任职档案"))}</button>` : ""}
 						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="upload-photo">${__("上传照片")}</button>` : ""}
-						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="edit-employee">${__("编辑资料")}</button>` : ""}
+						${this.profile_editing ? this.render_profile_actions() : this.can_edit_employee_detail() ? `<button class="btn btn-default btn-sm" data-action="edit-employee">${__("编辑资料")}</button>` : ""}
 						<button class="btn btn-primary btn-sm" data-action="transfer">${__("办理人事异动")}</button>
 						${this.is_probation_work_nature(header) ? `<button class="btn btn-default btn-sm" data-action="promotion">${__("转正管理")}</button>` : ""}
 						<button class="btn btn-default btn-sm" data-action="separation">${__("离职")}</button>
-						<button class="btn btn-default btn-sm" data-action="contract">${__("合同记录")}</button>
 					</div>
 				</div>
 			</div>
@@ -1255,21 +1261,20 @@ class EmployeeDetailPage {
 				<div class="hrms-employee-detail-section__header">
 					<h3>${frappe.utils.escape_html(__(tab_label))}</h3>
 					<div class="hrms-employee-detail-section-tools">
-						<span class="text-muted">${__("只读")}</span>
-						${this.can_edit_employee_detail() ? `<button class="btn btn-default btn-xs" data-action="edit-employee">${__("编辑资料")}</button>` : ""}
+						${this.profile_editing ? this.render_profile_actions() : this.can_edit_employee_detail() ? `<button class="btn btn-default btn-xs" data-action="edit-employee">${__("编辑资料")}</button>` : `<span class="text-muted">${__("只读")}</span>`}
 					</div>
 				</div>
 				${tab_label === "工资社保" ? this.render_standing_pay_summary() : ""}
 				${
 					fields.length
 						? `<div class="hrms-employee-detail-info-grid">
-							${fields.map((field) => this.render_readonly_field(field)).join("")}
+							${fields.map((field) => this.profile_editing && field.editable ? `<div class="hrms-employee-detail-field"><span>${frappe.utils.escape_html(field.field_label || field.fieldname)}</span><div data-profile-field="${frappe.utils.escape_html(field.fieldname)}" style="min-width:0"></div></div>` : this.render_readonly_field(field)).join("")}
 						</div>`
 						: `<div class="hrms-employee-detail-empty">${__("当前区块没有已启用字段")}</div>`
 				}
+				${this.profile_editing ? `<div class="text-muted" style="margin:12px 0">${__("工作性质、转正和离职状态等由对应人事流程更新，不能在此直接修改。")}</div>` : ""}
 				${this.render_related_blocks(tab_label)}
 				${tab_label === "在职信息" ? this.render_apple_tree_summary() : ""}
-				${tab_label === "工资社保" ? "" : this.render_add_field_hint()}
 			</div>
 		`;
 	}
@@ -1412,7 +1417,10 @@ class EmployeeDetailPage {
 	}
 
 	render_related_blocks(tab_label) {
-		const rows = (this.detail?.related_records || {})[tab_label] || [];
+		// 合同字段已在“合同信息”中展示，不再重复显示同一组合同记录。
+		const rows = ((this.detail?.related_records || {})[tab_label] || []).filter(
+			(row) => row.label !== "合同记录",
+		);
 		if (!rows.length) return "";
 		return `
 			<div class="hrms-employee-detail-related">
@@ -1437,6 +1445,7 @@ class EmployeeDetailPage {
 	}
 
 	render_related_detail(row) {
+		if (this.profile_editing && row.record_editor) return this.render_record_editor(row);
 		const items = row.items || [];
 		if (row.compact) {
 			return `
@@ -1469,15 +1478,6 @@ class EmployeeDetailPage {
 				</div>`,
 			)
 			.join("");
-	}
-
-	render_add_field_hint() {
-		return `
-			<div class="hrms-employee-detail-add-field">
-				<span>${__("没有找到想要的员工字段?")}</span>
-				<a href="#" data-action="field-settings">${__("添加更多员工档案字段")}</a>
-			</div>
-		`;
 	}
 
 	render_bottom_navigation() {
@@ -1525,6 +1525,7 @@ class EmployeeDetailPage {
 		});
 		this.wrapper.querySelectorAll("[data-nav-employee]").forEach((button) => {
 			button.addEventListener("click", () => {
+				if (this.has_profile_changes()) { frappe.msgprint(__("请先保存或取消当前资料修改。")); return; }
 				if (!button.dataset.navEmployee) return;
 				frappe.set_route("employee-detail", button.dataset.navEmployee);
 			});
@@ -1559,12 +1560,6 @@ class EmployeeDetailPage {
 				});
 			});
 		});
-		this.wrapper.querySelectorAll("[data-action='field-settings']").forEach((button) => {
-			button.addEventListener("click", (event) => {
-				event.preventDefault();
-				frappe.set_route("staff-attribute-settings");
-			});
-		});
 		this.wrapper.querySelectorAll("[data-action='edit-employee']").forEach((button) => {
 			button.addEventListener("click", (event) => {
 				event.preventDefault();
@@ -1572,14 +1567,7 @@ class EmployeeDetailPage {
 					frappe.msgprint(__("只有管理员可以编辑员工资料。"));
 					return;
 				}
-				if (window.hrmsEmployeeNavigation?.openEmployeeFormForEdit) {
-					window.hrmsEmployeeNavigation.openEmployeeFormForEdit(this.employee);
-					return;
-				}
-				window.hrmsEmployeeNavigation = window.hrmsEmployeeNavigation || {};
-				window.hrmsEmployeeNavigation.returnAfterEdit = this.employee;
-				frappe.route_options = { hrms_allow_employee_form: 1 };
-				frappe.set_route("Form", "Employee", this.employee);
+				this.start_profile_edit();
 			});
 		});
 		this.wrapper.querySelectorAll("[data-action='open-previous-employment']").forEach((button) => {
@@ -1644,11 +1632,6 @@ class EmployeeDetailPage {
 			button.addEventListener("click", (event) => {
 				event.preventDefault();
 				this.open_separation_reason_picker();
-			});
-		});
-		this.wrapper.querySelectorAll("[data-action='contract']").forEach((button) => {
-			button.addEventListener("click", () => {
-				this.open_tab("合同信息");
 			});
 		});
 		this.wrapper.querySelectorAll("[data-action='open-apple-tree-detail']").forEach((button) => {
@@ -1991,6 +1974,158 @@ class EmployeeDetailPage {
 
 	join_values(values) {
 		return values.filter((value) => value !== null && value !== undefined && value !== "").join(" / ");
+	}
+
+	has_profile_changes() {
+		if (!this.profile_editing) return false;
+		this.capture_profile_controls();
+		this.capture_record_controls();
+		if (Object.keys(this.profile_record_draft).length) return true;
+		return (this.detail?.sections || []).some((section) => section.fields.some((field) =>
+			Object.prototype.hasOwnProperty.call(this.profile_draft, field.fieldname) &&
+			String(this.profile_draft[field.fieldname] ?? "") !== String(field.edit_value ?? field.value ?? "")));
+	}
+
+	render_profile_actions() {
+		return `<span class="text-muted">${__("编辑模式 · 可切换板块")}</span> <button class="btn btn-primary btn-sm" data-action="save-profile" ${this.profile_saving ? "disabled" : ""}>${this.profile_saving ? __("保存中…") : __("保存全部")}</button> <button class="btn btn-default btn-sm" data-action="cancel-profile" ${this.profile_saving ? "disabled" : ""}>${__("取消编辑")}</button>`;
+	}
+
+	capture_profile_controls() {
+		if (!this.profile_editing) return;
+		for (const { field, control } of this.profile_controls || []) {
+			this.profile_draft[field.fieldname] = control.get_value();
+		}
+	}
+
+	async start_profile_edit() {
+		if (!this.can_edit_employee_detail() || this.profile_editing) return;
+		this.profile_editing = true;
+		this.profile_draft = {};
+		this.profile_record_draft = {};
+		this.profile_controls = [];
+		this.profile_record_controls = [];
+		this.render();
+	}
+
+	render_record_editor(row) {
+		const escape = frappe.utils.escape_html;
+		const schema = row.record_editor;
+		const rows = this.profile_record_draft[row.label] || schema.rows || [];
+		return `<div class="hrms-employee-detail-related-detail" data-record-block="${escape(row.label)}">
+			${rows.length ? rows.map((item, index) => `<div style="border-bottom:1px solid #eee;padding:12px 0"><div class="hrms-employee-detail-info-grid">${schema.fields.map((field) => `<div class="hrms-employee-detail-field"><span>${escape(field.label)}</span><div data-record-field="${escape(field.fieldname)}" data-record-index="${index}"></div></div>`).join("")}</div><button class="btn btn-default btn-xs" data-remove-record="${index}" ${this.profile_saving ? "disabled" : ""}>${__("删除此条")}</button></div>`).join("") : `<div class="text-muted">${__("暂无记录，可点击新增记录录入")}</div>`}
+			<button class="btn btn-default btn-xs" style="margin-top:12px" data-add-record ${this.profile_saving ? "disabled" : ""}>${__("新增记录")}</button></div>`;
+	}
+
+	mount_record_controls() {
+		for (const parent of this.wrapper.querySelectorAll("[data-record-block]")) {
+			const label = parent.dataset.recordBlock;
+			const block = Object.values(this.detail.related_records || {}).flat().find((row) => row.label === label);
+			const schema = block.record_editor;
+			const rows = this.profile_record_draft[label] || schema.rows || [];
+			const draft = () => this.profile_record_draft[label] ||= JSON.parse(JSON.stringify(rows));
+			for (const node of parent.querySelectorAll("[data-record-field]")) {
+				const field = schema.fields.find((field) => field.fieldname === node.dataset.recordField);
+				const index = Number(node.dataset.recordIndex);
+				let initializing = true;
+				const control = frappe.ui.form.make_control({parent: node, df: {...field, only_input: 1, change: () => {
+					if (!initializing) draft()[index][field.fieldname] = control.get_value();
+				}}, only_input: true, render_input: true});
+				control.set_value(rows[index][field.fieldname]);
+				initializing = false;
+				this.profile_record_controls.push({label, index, field, control, rows});
+			}
+			parent.querySelector("[data-add-record]").addEventListener("click", () => {
+				this.capture_record_controls(); draft().push({}); this.render();
+			});
+			parent.querySelectorAll("[data-remove-record]").forEach((button) => button.addEventListener("click", () => {
+				this.capture_record_controls(); draft().splice(Number(button.dataset.removeRecord), 1);
+				this.profile_record_controls = []; this.render();
+			}));
+		}
+	}
+
+	capture_record_controls() {
+		if (!this.profile_editing) return;
+		for (const {label, index, field, control, rows} of this.profile_record_controls || []) {
+			const value = control.get_value();
+			if (String(value ?? "") !== String(rows[index]?.[field.fieldname] ?? "") || this.profile_record_draft[label]) {
+				this.profile_record_draft[label] ||= JSON.parse(JSON.stringify(rows));
+				if (this.profile_record_draft[label][index]) this.profile_record_draft[label][index][field.fieldname] = value;
+			}
+		}
+	}
+
+	mount_profile_controls() {
+		this.profile_controls = [];
+		this.profile_record_controls = [];
+		if (!this.profile_editing) return;
+		const fields = (this.detail?.sections || []).find((section) => section.label === this.section_alias[this.active_tab])?.fields || [];
+		for (const field of fields.filter((item) => item.editable)) {
+			const parent = Array.from(this.wrapper.querySelectorAll("[data-profile-field]")).find((node) => node.dataset.profileField === field.fieldname);
+			if (!parent) continue;
+			const control = frappe.ui.form.make_control({
+				parent,
+				df: { fieldname: field.fieldname, label: field.field_label, fieldtype: field.edit_fieldtype || field.fieldtype, options: field.edit_options, reqd: field.required, only_input: 1, change: () => {
+					this.profile_draft[field.fieldname] = control.get_value();
+				} },
+				only_input: true, render_input: true,
+			});
+			control.set_value(Object.prototype.hasOwnProperty.call(this.profile_draft, field.fieldname) ? this.profile_draft[field.fieldname] : (field.edit_value ?? field.value));
+			this.profile_controls.push({ field, control });
+		}
+		this.mount_record_controls();
+		this.wrapper.querySelectorAll("[data-action='save-profile']").forEach((button) => button.addEventListener("click", () => this.save_profile_edit()));
+		this.wrapper.querySelectorAll("[data-action='cancel-profile']").forEach((button) => button.addEventListener("click", () => {
+			if (this.profile_saving) return;
+			this.profile_editing = false;
+			this.profile_draft = {};
+			this.profile_record_draft = {};
+			this.render();
+		}));
+	}
+
+	async save_profile_edit() {
+		if (this.profile_saving || !this.profile_editing) return;
+		this.capture_profile_controls();
+		this.capture_record_controls();
+		const values = {};
+		const fields = (this.detail.sections || []).flatMap((section) => section.fields || []);
+		for (const [fieldname, value] of Object.entries(this.profile_draft)) {
+			const field = fields.find((field) => field.fieldname === fieldname && field.editable);
+			if (!field) continue;
+			if (field.required && (value === null || value === undefined || value === "")) {
+				frappe.msgprint(__("请填写：{0}", [field.field_label]));
+				return;
+			}
+			if (String(value ?? "") !== String(field.edit_value ?? field.value ?? "")) values[field.fieldname] = value;
+		}
+		if (!Object.keys(values).length && !Object.keys(this.profile_record_draft).length) {
+			this.profile_editing = false;
+			this.profile_draft = {};
+			this.render();
+			return;
+		}
+		const employee = this.employee;
+		this.profile_saving = true;
+		try {
+			const response = await Promise.resolve(frappe.call({
+				method: "hrms.api.employee_field_template.save_employee_detail_profile",
+				args: { employee, values: JSON.stringify(values), modified: this.detail.modified, records: JSON.stringify(this.profile_record_draft) },
+				freeze: true, freeze_message: __("正在保存员工资料…"),
+			}));
+			if (employee !== this.employee) return;
+			this.detail = response.message;
+			this.loaded_tab_groups = new Set(this.tabs.map((tab) => this.tab_group(tab)));
+			this.profile_editing = false;
+			this.profile_draft = {};
+			this.last_loaded_at = Date.now();
+			frappe.show_alert({ message: __("员工资料已保存"), indicator: "green" });
+		} catch (error) {
+			// Frappe displays the server validation error; retain the draft for correction.
+		} finally {
+			this.profile_saving = false;
+			if (employee === this.employee) this.render();
+		}
 	}
 
 	can_edit_employee_detail() {

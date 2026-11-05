@@ -21,6 +21,9 @@ class EmployeeMaster(Employee):
 			self.custom_age = calculate_employee_age(self.get("date_of_birth"), frappe.utils.today())
 		self._apply_company_employee_code()
 		link_new_employee_to_previous_employment(self)
+		from hrms.utils.employee_status_updates import validate_employee_work_nature_change
+
+		validate_employee_work_nature_change(self)
 		apply_employee_work_nature(self)
 		from hrms.utils.employee_status_updates import validate_employee_status_correction
 

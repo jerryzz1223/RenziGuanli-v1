@@ -2654,6 +2654,7 @@ def _aggregate_employee_rows(
 		workday_overtime_approval_mismatch = bool(
 			_is_scheduled_workday(row_standard_hours)
 			and raw_workday_overtime_hours > 0
+			and manual_overtime_hours is None
 			and approval_declared_overtime_hours is not None
 			and raw_workday_overtime_hours != approval_declared_overtime_hours
 		)

@@ -9,6 +9,7 @@ from frappe import _
 from frappe.utils import getdate, nowdate
 
 DOCTYPE = "Cross Department Support Record"
+MONTHLY = "Cross Department Support Monthly Count"
 COUNTING_RULE = "仅统计有权查看的已提交支援记录；员工以 Employee.name 为唯一键，同一员工同一来源单号计一次，归属最早支援开始月份，跨月不重复计次；累计为全部月份，草稿和取消不计次。"
 
 
@@ -32,6 +33,49 @@ def summarize_support_records(records, employee, month):
     }
 
 
+def validate_monthly_values(month, support_count):
+    if not isinstance(month, str) or not re.fullmatch(r"[0-9]{4}-(0[1-9]|1[0-2])", month):
+        frappe.throw(_("月份格式应为 YYYY-MM。"))
+    if isinstance(support_count, bool) or not re.fullmatch(r"[0-9]+", str(support_count)):
+        frappe.throw(_("支援次数必须是大于或等于 0 的整数。"))
+    count = int(support_count)
+    if count > 2147483647:
+        frappe.throw(_("支援次数超出允许范围。"))
+    return month, count
+
+
+def merge_monthly_counts(result, rows):
+    counts = {r["month"]: r["count"] for r in result["months"]}
+    for row in rows:
+        if row.get("employee") == result["employee"]:
+            counts[row["month"]] = row["support_count"]
+    return {**result, "monthly_count": counts.get(result["month"], 0),
+            "total_count": sum(counts.values()),
+            "months": [{"month": m, "count": counts[m]} for m in sorted(counts, reverse=True)],
+            "counting_rule": "每位员工每月填写总次数，同月保存更新原次数；已填写月份以月度次数为准，未填写月份保留旧记录统计。"}
+
+
+@frappe.whitelist()
+def save_monthly_support_count(employee: str, month: str, support_count):
+    month, count = validate_monthly_values(month, support_count)
+    frappe.get_doc("Employee", employee).check_permission("read")
+    if not storage_ready(MONTHLY):
+        frappe.throw(_("月度支援次数尚未安装，请管理员更新站点并执行迁移。"))
+    # Serialize writes for one employee, including the first insert of a month.
+    frappe.db.sql("SELECT name FROM `tabEmployee` WHERE name=%s FOR UPDATE", (employee,))
+    name = frappe.db.get_value(MONTHLY, {"employee": employee, "month": month}, "name")
+    if name:
+        doc = frappe.get_doc(MONTHLY, name)
+        doc.check_permission("write")
+        doc.support_count = count
+        doc.save()
+    else:
+        doc = frappe.get_doc({"doctype": MONTHLY, "employee": employee, "month": month,
+                              "support_count": count})
+        doc.insert()
+    return {"name": doc.name}
+
+
 @frappe.whitelist()
 def get_employee_support_counts(employee: str, month: str | None = None):
     """Counts cover visible submitted history, not just the selected month.
@@ -45,14 +89,14 @@ def get_employee_support_counts(employee: str, month: str | None = None):
     if not employee:
         frappe.throw(_("请选择员工。"))
     frappe.get_doc("Employee", employee).check_permission("read")
-    if not storage_ready(DOCTYPE):
+    if not storage_ready(MONTHLY) and not storage_ready(DOCTYPE):
         return {"employee": employee, "month": month, "monthly_count": None, "total_count": None,
                 "months": [], "available": False, "message": "支援台账尚未安装，请管理员更新站点并执行迁移。", "counting_rule": COUNTING_RULE}
-    if not frappe.has_permission(DOCTYPE, "read"):
+    if (storage_ready(DOCTYPE) and not frappe.has_permission(DOCTYPE, "read")) or (storage_ready(MONTHLY) and not frappe.has_permission(MONTHLY, "read")):
         frappe.throw(_("你没有查看支援记录的权限。"), frappe.PermissionError)
     records = []
     start = 0
-    while True:
+    while storage_ready(DOCTYPE):
         batch = frappe.get_list(
             DOCTYPE,
             filters={"employee": employee, "docstatus": 1},
@@ -63,7 +107,12 @@ def get_employee_support_counts(employee: str, month: str | None = None):
         if len(batch) < 500:
             break
         start += len(batch)
-    return {**summarize_support_records(records, employee, month), "available": True}
+    result = summarize_support_records(records, employee, month)
+    if storage_ready(MONTHLY):
+        result = merge_monthly_counts(result, visible_rows(MONTHLY, {"employee": employee},
+                                      ["employee", "month", "support_count"]))
+    return {**result, "available": True, "can_edit": bool(storage_ready(MONTHLY) and
+            frappe.has_permission(MONTHLY, "create") and frappe.has_permission(MONTHLY, "write"))}
 
 
 EXCLUSION = "Cross Department Support Exclusion"
@@ -98,15 +147,19 @@ def get_support_overview(capabilities: str, month: str | None = None, dispatch_d
                                    fields=["name", "employee"], limit_page_length=100) if names else []
     employees = sorted({r.employee for r in capabilities if r.employee})
     employees = [e for e in employees if frappe.has_permission("Employee", "read", doc=frappe.get_doc("Employee", e))]
-    counts_ready = storage_ready(DOCTYPE) and frappe.has_permission(DOCTYPE, "read")
+    legacy_ready = storage_ready(DOCTYPE) and frappe.has_permission(DOCTYPE, "read")
+    monthly_ready = storage_ready(MONTHLY) and frappe.has_permission(MONTHLY, "read")
+    counts_ready = bool(legacy_ready or monthly_ready)
+    monthly = visible_rows(MONTHLY, {"employee": ["in", employees]},
+                           ["employee", "month", "support_count"]) if employees and monthly_ready else []
     exclusions_ready = storage_ready(EXCLUSION) and frappe.has_permission(EXCLUSION, "read")
     records = visible_rows(DOCTYPE, {"employee": ["in", employees], "docstatus": 1},
-                           ["employee", "source_reference", "support_date", "docstatus"]) if employees and counts_ready else []
+                           ["employee", "source_reference", "support_date", "docstatus"]) if employees and legacy_ready else []
     exclusions = visible_rows(EXCLUSION, {"employee": ["in", employees], "is_active": 1,
                               "from_date": ["<=", day], "to_date": [">=", day]},
                               ["name", "employee", "from_date", "to_date", "reason"]) if employees and exclusions_ready else []
-    return {"counts_ready": bool(counts_ready), "exclusions_ready": bool(exclusions_ready),
-            "rows": {e: {**(summarize_support_records(records, e, month) if counts_ready else
+    return {"counts_ready": bool(counts_ready), "monthly_ready": bool(monthly_ready), "exclusions_ready": bool(exclusions_ready),
+            "rows": {e: {**(merge_monthly_counts(summarize_support_records(records, e, month), monthly) if counts_ready else
                                {"monthly_count": None, "total_count": None}),
                          "exclusions": [x for x in exclusions if x.employee == e]} for e in employees}}
 
@@ -116,11 +169,13 @@ def get_support_details(capability: str, month: str | None = None):
     doc = frappe.get_doc("Cross Department Support Capability", capability)
     doc.check_permission("read")
     result = {"counts": None, "records": [], "exclusions": [],
-              "records_ready": bool(storage_ready(DOCTYPE) and frappe.has_permission(DOCTYPE, "read")),
+              "records_ready": bool(storage_ready(MONTHLY) and frappe.has_permission(MONTHLY, "read")),
+              "capabilities": visible_rows(CAPABILITY, {"employee": doc.employee},
+                  ["name", "support_department", "support_designation", "qualification_status", "is_active", "valid_from", "valid_until"]) if doc.employee else [],
               "exclusions_ready": bool(storage_ready(EXCLUSION) and frappe.has_permission(EXCLUSION, "read"))}
     if not doc.employee:
         return result
-    if result["records_ready"] and frappe.has_permission(DOCTYPE, "read"):
+    if result["records_ready"] or (storage_ready(DOCTYPE) and frappe.has_permission(DOCTYPE, "read")):
         result["counts"] = get_employee_support_counts(doc.employee, month)
     if result["exclusions_ready"] and frappe.has_permission(EXCLUSION, "read"):
         result["exclusions"] = visible_rows(EXCLUSION, {"employee": doc.employee, "is_active": 1},
@@ -239,3 +294,46 @@ def dispatch_employee_support(capability: str, support_department: str, support_
     record.insert()
     record.submit()
     return {"name": record.name, "already_created": False}
+
+
+@frappe.whitelist()
+def get_monthly_support_count(employee: str, month: str):
+    month, _count = validate_monthly_values(month, 0)
+    frappe.get_doc("Employee", employee).check_permission("read")
+    if not storage_ready(MONTHLY):
+        return {"available": False, "message": "月度支援次数尚未安装，请管理员更新站点并执行迁移。"}
+    if not frappe.has_permission(MONTHLY, "read"):
+        frappe.throw(_("你没有查看月度支援次数的权限。"), frappe.PermissionError)
+    rows = visible_rows(MONTHLY, {"employee": employee, "month": month}, ["support_count"])
+    return {"available": True, "monthly_count": rows[0]["support_count"] if rows else 0,
+            "can_edit": bool(frappe.has_permission(MONTHLY, "create") and frappe.has_permission(MONTHLY, "write"))}
+
+
+@frappe.whitelist()
+def get_yearly_support_counts(year: str, employee: str | None = None):
+    year = str(year)
+    if not re.fullmatch(r"[0-9]{4}", year) or not 1 <= int(year) <= 9999:
+        frappe.throw(_("年份应为四位数字。"))
+    if employee:
+        frappe.get_doc("Employee", employee).check_permission("read")
+    if not storage_ready(MONTHLY):
+        return {"available": False, "message": "月度支援次数尚未安装，请管理员更新站点并执行迁移。"}
+    if not frappe.has_permission(MONTHLY, "read"):
+        frappe.throw(_("你没有查看月度支援次数的权限。"), frappe.PermissionError)
+    filters = {"month": ["between", [year + "-01", year + "-12"]]}
+    if employee:
+        filters["employee"] = employee
+    rows = visible_rows(MONTHLY, filters, ["employee", "month", "support_count"])
+    grouped = {}
+    for name in sorted({row["employee"] for row in rows}):
+        doc = frappe.get_doc("Employee", name)
+        if not frappe.has_permission("Employee", "read", doc=doc):
+            continue
+        grouped[name] = {"employee": name, "employee_name": doc.employee_name,
+                         "months": [None] * 12, "total_count": 0}
+    for row in rows:
+        if row["employee"] in grouped:
+            grouped[row["employee"]]["months"][int(row["month"][5:7]) - 1] = row["support_count"]
+    for row in grouped.values():
+        row["total_count"] = sum(value for value in row["months"] if value is not None)
+    return {"available": True, "year": year, "rows": list(grouped.values())}

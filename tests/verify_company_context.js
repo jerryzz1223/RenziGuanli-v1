@@ -46,7 +46,7 @@ if (!topNav.includes("!SINGLE_COMPANY_OPERATION_MODE && companies.length && canM
 	throw new Error("Company management entry must stay hidden while Yongxin single-company mode is active.");
 }
 
-mustInclude(hooks, "hrms_top_nav.js?v=20260827b", "Top-nav cache key must change when company-selector visibility changes.");
+mustInclude(hooks, "hrms_top_nav.js?v=20261030-dingtalk-review", "Top-nav cache key must change when company-selector visibility changes.");
 
 for (const marker of [
 	"hrmsCompanyContext",

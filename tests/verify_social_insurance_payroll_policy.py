@@ -33,6 +33,6 @@ assert '"social_security_company", "社保公司"' in EMPLOYEE_FIELDS
 assert 'filters={"employee_code": doc.custom_employee_code}' in EMPLOYEE_FIELDS
 assert "compact=True" in EMPLOYEE_FIELDS
 assert "if (row.compact)" in DETAIL
-assert 'tab_label === "工资社保" ? "" : this.render_add_field_hint()' in DETAIL
+assert "render_add_field_hint" not in DETAIL
 
 print("social-insurance payroll policy verified")

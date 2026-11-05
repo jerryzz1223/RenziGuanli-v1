@@ -1,3 +1,5 @@
+import re
+import sqlite3
 import sys
 import types
 import unittest
@@ -71,7 +73,8 @@ class FullEmployeeTests(unittest.TestCase):
 
 	def test_result_list_includes_unchanged_and_manual_comparison_and_paginates(self):
 		rows = [{"employee_code": str(i), "import_status": "无变更" if i % 2 else "待人工比对"} for i in range(101)]
-		self.api.frappe.get_all = Mock(side_effect=[["RAW-1"], rows])
+		self.api.frappe.get_all = Mock(return_value=["RAW-1"])
+		self.api.frappe.db.sql = Mock(side_effect=[[(1350,)], rows])
 		self.api.frappe.db.count = Mock(return_value=1350)
 		self.log.records_received = 1350
 		self.log.records_failed = 0
@@ -81,12 +84,62 @@ class FullEmployeeTests(unittest.TestCase):
 		self.assertTrue(result["has_more"])
 		self.assertEqual(result["next_start"], 1100)
 		self.assertEqual(result["total"], 1350)
-		kwargs = self.api.frappe.get_all.call_args.kwargs
-		self.assertNotIn("import_status", kwargs["filters"])
-		self.assertEqual(kwargs["filters"]["source_record"], ["in", ["RAW-1"]])
-		self.assertEqual(kwargs["limit_start"], 1000)
-		self.assertEqual(kwargs["limit_page_length"], 101)
-		self.assertNotIn("payload_json", kwargs["fields"])
+		query, params = self.api.frappe.db.sql.call_args.args
+		self.assertEqual(result["filtered_total"], 1350)
+		self.assertEqual(params["sources"], ("RAW-1",))
+		self.assertEqual(params["start"], 1000)
+		self.assertEqual(params["limit"], 101)
+		self.assertIn("CAST(employee_code AS DECIMAL(65,0))", query)
+		self.assertNotIn("payload_json", query)
+
+	def test_query_and_status_apply_before_pagination_with_bound_literal_text(self):
+		self.api.frappe.get_all = Mock(return_value=["RAW-1"])
+		self.api.frappe.db.sql = Mock(side_effect=[[(1,)], [{"name": "I200"}]])
+		self.api.frappe.db.count = Mock(return_value=1350)
+		self.log.records_received = 1350
+		self.log.records_failed = 0
+		self.log.error_message = ""
+		result = self.tasks.list_roster_employees("Company A", "SYNC-1", query="姓名%_!", review_filter="conflict", sort_by="date_of_joining", sort_order="desc")
+		query, params = self.api.frappe.db.sql.call_args.args
+		self.assertEqual(params["query"], "%姓名!%!_!!%")
+		self.assertNotIn("姓名", query)
+		self.assertIn("import_status!='无变更'", query)
+		self.assertIn("`date_of_joining` desc, name asc", query)
+		self.assertEqual(result["filtered_total"], 1)
+		self.assertFalse(result["has_more"])
+		for kwargs in [{"sort_by": "name; DROP TABLE Employee"}, {"sort_order": "desc;"}, {"review_filter": "invalid"}]:
+			with self.assertRaises(ValueError):
+				self.tasks.list_roster_employees("Company A", "SYNC-1", **kwargs)
+
+
+	def test_database_query_sorts_numbers_and_finds_rows_beyond_first_page(self):
+		db = sqlite3.connect(":memory:")
+		self.addCleanup(db.close)
+		db.create_function("REGEXP", 2, lambda pattern, value: bool(re.search(pattern, value or "")))
+		db.execute("CREATE TABLE `tabHRMS DingTalk Employee Import` (name TEXT, company TEXT, sync_log TEXT, source_record TEXT, employee_code TEXT, employee_name TEXT, department TEXT, designation TEXT, date_of_joining TEXT, matched_employee TEXT, import_status TEXT, error_message TEXT)")
+		for i in range(1, 151):
+			db.execute("INSERT INTO `tabHRMS DingTalk Employee Import` VALUES (?, 'Company A', 'SYNC-1', 'RAW-1', ?, ?, '部门甲', '', '', '', '无变更', '')", (f"I{i}", str(i), f"员工{i}"))
+		db.execute("INSERT INTO `tabHRMS DingTalk Employee Import` VALUES ('OTHER', 'Company B', 'SYNC-1', 'RAW-1', '151', '员工150', '', '', '', '', '', '')")
+		def sql(query, params, as_dict=False):
+			query = query.replace("IN %(sources)s", "IN (:source)")
+			query = re.sub(r"%\((\w+)\)s", r":\1", query)
+			cursor = db.execute(query, {**params, "source": params["sources"][0]})
+			rows = cursor.fetchall()
+			return [dict(zip([c[0] for c in cursor.description], row)) for row in rows] if as_dict else rows
+		self.api.frappe.get_all = Mock(return_value=["RAW-1"])
+		self.api.frappe.db.sql = sql
+		self.api.frappe.db.count = Mock(return_value=150)
+		self.log.records_received = 150
+		self.log.records_failed = 0
+		self.log.error_message = ""
+		first = self.tasks.list_roster_employees("Company A", "SYNC-1")
+		self.assertEqual([row["employee_code"] for row in first["rows"][:3]], ["1", "2", "3"])
+		self.assertEqual(first["rows"][-1]["employee_code"], "100")
+		found = self.tasks.list_roster_employees("Company A", "SYNC-1", query="员工150")
+		self.assertEqual(found["filtered_total"], 1)
+		self.assertEqual(found["rows"][0]["name"], "I150")
+		desc = self.tasks.list_roster_employees("Company A", "SYNC-1", sort_order="desc")
+		self.assertEqual(desc["rows"][0]["employee_code"], "150")
 
 	def test_worker_pipeline_stages_existing_and_directory_only_employees(self):
 		api = self.api

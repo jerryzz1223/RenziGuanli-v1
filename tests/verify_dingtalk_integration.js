@@ -184,11 +184,6 @@ for (const fieldname of [
 	}
 }
 
-const settingsCenter = read("hrms/hr/page/hr_settings_center/hr_settings_center.js");
-if (settingsCenter.includes("SYSTEM_SETTINGS_MODULES = new Set([\"钉钉集成\"")) {
-	throw new Error("DingTalk must not remain a Settings Center module.");
-}
-
 const attendanceCenter = read("hrms/hr/page/attendance_import_center/attendance_import_center.js");
 for (const marker of [
 	"standalone_views",
@@ -201,7 +196,7 @@ for (const marker of [
 	"queue_dingtalk_directory_sync",
 	"get_dingtalk_directory_sync_status",
 	"sync_preentry_employees_from_dingtalk",
-	"sync_all_employee_rosters_from_dingtalk",
+	"hrms.api.dingtalk_roster_tasks.queue_roster_comparison",
 	"preview_dingtalk_roster_initial_import",
 	"apply_dingtalk_roster_initial_import",
 	"钉钉一次建档预检",

@@ -307,13 +307,10 @@ def get_employee_form_entry_summaries(employee: str, company: str = ""):
 
 
 @frappe.whitelist()
-def revoke_employee_form_entry(file_name: str, form_type: str, reason: str):
+def revoke_employee_form_entry(file_name: str, form_type: str, reason: str = ""):
 	"""Retain evidence in the entry ledger while removing it from active archives."""
 	_require_employee_form_entry_access()
 	form_entry = _form_entry_type(form_type)
-	reason = str(reason or "").strip()
-	if not reason or len(reason) > 1000:
-		frappe.throw(_("请填写撤销原因（最多 1000 个字符）"))
 	if not all(frappe.db.has_column("File", field) for field in REVOCATION_FIELDS):
 		frappe.throw(_("撤销字段尚未完成迁移，请先执行站点 migrate"))
 	# Serialize repeat requests so the first operator's evidence is retained.
@@ -331,8 +328,29 @@ def revoke_employee_form_entry(file_name: str, form_type: str, reason: str):
 		return {"name": file_doc.name, "entry_status": "已撤销"}
 	file_doc.db_set({
 		"attached_to_field": revoked_field,
-		"custom_hrms_revocation_reason": reason,
+		"custom_hrms_revocation_reason": "",
 		"custom_hrms_revoked_by": frappe.session.user,
 		"custom_hrms_revoked_at": frappe.utils.now(),
 	})
 	return {"name": file_doc.name, "entry_status": "已撤销"}
+
+
+@frappe.whitelist()
+def restore_employee_form_entry(file_name: str, form_type: str):
+	"""Restore a revoked form without replacing its original attachment or title."""
+	_require_employee_form_entry_access()
+	form_entry = _form_entry_type(form_type)
+	frappe.db.sql("SELECT name FROM `tabFile` WHERE name=%s FOR UPDATE", (file_name,))
+	file_doc = frappe.get_doc("File", file_name)
+	file_doc.check_permission("read")
+	material_type = form_entry["material_type"]
+	active_field = f"{EMPLOYEE_MATERIAL_FIELD_PREFIX}{material_type}"
+	revoked_field = f"{REVOKED_MATERIAL_PREFIX}{material_type}"
+	if file_doc.attached_to_doctype != "Employee" or file_doc.attached_to_field not in [active_field, material_type, revoked_field]:
+		frappe.throw(_("该材料不属于指定员工表单"))
+	employee = frappe.get_doc("Employee", file_doc.attached_to_name)
+	employee.check_permission("write")
+	if file_doc.attached_to_field == revoked_field:
+		# Retain the last revocation operator/time as a record of the withdrawal.
+		file_doc.db_set({"attached_to_field": active_field})
+	return {"name": file_doc.name, "entry_status": "已录入"}

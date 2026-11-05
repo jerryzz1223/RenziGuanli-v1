@@ -24,7 +24,7 @@ def load_api():
     frappe.get_doc = lambda *args: SimpleNamespace(check_permission=lambda value: None)
     frappe.has_permission = lambda *args: True
     frappe.get_list = lambda *args, **kwargs: []
-    frappe.db = SimpleNamespace(exists=lambda *args: True, table_exists=lambda *args: True)
+    frappe.db = SimpleNamespace(exists=lambda dt, name: name != "Cross Department Support Monthly Count", table_exists=lambda *args: True)
     with patch.dict(sys.modules, {'frappe': frappe, 'frappe.utils': utils}):
         spec = importlib.util.spec_from_file_location('support_counts_under_test', ROOT / 'hrms/api/cross_department_support.py')
         module = importlib.util.module_from_spec(spec)

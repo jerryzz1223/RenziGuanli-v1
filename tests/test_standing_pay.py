@@ -461,4 +461,141 @@ class StandingPayTests(unittest.TestCase):
         self.assertEqual(dict(totals['e1']),{'其他奖金':50,'社保个人':100,'社保公司':200})
         self.assertEqual([r['name'] for r in sources['e1']],['bonus','standing','standing'])
 
+    def contribution_workbook(self, headers, values, title='公积金名单'):
+        import re
+        # Exercise the real parser against the worksheet values interface;
+        # no Frappe site or optional Excel dependency is needed.
+        sheet = SimpleNamespace(title=title, iter_rows=lambda **kwargs: iter([headers, values]))
+        workbook = [sheet]
+        names = {'_text', '_normalise', '_read_rows', '_sheet_headers', '_raw_payroll_source_kind',
+                 '_find_header_index', '_rows_as_dicts', '_first', '_is_employee_source_row',
+                 '_raw_payroll_source_rows', '_raw_variable_entries'}
+        tree = ast.parse((ROOT / 'hrms/api/payroll_input.py').read_text())
+        ns = dict(re=re, defaultdict=defaultdict, date=date, datetime=datetime,
+                  flt=lambda value: float(value or 0))
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        exec(compile(ast.Module(body=functions, type_ignores=[]), 'payroll_input.py', 'exec'), ns)
+        payroll = sys.modules['hrms.api.payroll_input']
+        for name in names:
+            setattr(payroll, name, ns[name])
+        payroll._load_workbook = lambda url: workbook
+        payroll._payroll_employee_lookup = lambda code, name: 'e1'
+        self.api._access = lambda company: company
+        return workbook
+
+    def test_housing_import_accepts_no_account_and_alternate_amount_headers(self):
+        self.contribution_workbook(['工号', '姓名', '个人缴存额', '单位缴存额'],
+                                   ['1001', '测试员工', '1,234.50', 248])
+        result = self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01')
+        self.assertEqual(result['errors'], [])
+        self.assertEqual(result['rows'][0]['personal_amount'], 1234.5)
+        self.assertEqual(result['rows'][0]['company_amount'], 248)
+        self.api.submit_contribution = Mock()
+        result = self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01', preview=0)
+        self.assertEqual(result, {'submitted': 1})
+        self.api.submit_contribution.assert_called_once()
+
+    def test_housing_import_rejects_missing_invalid_and_negative_amounts(self):
+        for amount in ('', '未填写', 'NaN', '-1'):
+            self.contribution_workbook(['工号', '姓名', '个人承担', '公司承担'],
+                                       ['1001', '测试员工', amount, 248])
+            result = self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01')
+            self.assertTrue(result['errors'], amount)
+            self.api.submit_contribution = Mock()
+            with self.assertRaises(ValueError):
+                self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01', preview=0)
+            self.api.submit_contribution.assert_not_called()
+
+    def test_housing_import_keeps_explicit_zero_and_reports_unrecognized_sheet(self):
+        self.contribution_workbook(['工号', '姓名', '个人承担', '公司承担'], ['1001', '测试员工', 0, 0])
+        result = self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01')
+        self.assertEqual(result['errors'], [])
+        self.assertEqual(result['rows'][0]['personal_amount'], 0)
+        self.contribution_workbook(['工号', '姓名', '金额'], ['1001', '测试员工', 248], title='Sheet1')
+        result = self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01')
+        self.assertIn('未识别', result['errors'][0])
+
+    def test_contribution_identity_correction_revalidates_and_preserves_audit(self):
+        self.contribution_workbook(['工号', '姓名', '个人承担', '公司承担'], ['9999', '旧姓名', 270, 270])
+        payroll = sys.modules['hrms.api.payroll_input']
+        payroll._payroll_employee_lookup = lambda code, name: 'e1' if (code, name) == ('1001', '测试员工') else None
+        preview = self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01')
+        self.assertEqual(len(preview['entries']), 1)
+        self.assertTrue(preview['entries'][0]['error'])
+        self.assertEqual(str(preview['entries'][0]['personal_amount']), '270')
+        fixes = {'0:1': dict(employee_code='1001', employee_name='测试员工', personal_amount='248',
+                             company_amount='248', reason='核对原表后修正员工和金额')}
+        checked = self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01', corrections=json.dumps(fixes))
+        self.assertEqual(checked['errors'], [])
+        self.assertEqual(checked['rows'][0]['personal_amount'], 248)
+        self.api.submit_contribution = Mock()
+        self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01', preview=0, corrections=fixes)
+        audit = self.api.submit_contribution.call_args.kwargs['remarks']
+        for value in ('9999', '旧姓名', '1001', '测试员工', '270', '248', fixes['0:1']['reason']):
+            self.assertIn(value, audit)
+
+    def test_contribution_corrections_require_reason_and_valid_source_row(self):
+        self.contribution_workbook(['工号', '姓名', '个人承担', '公司承担'], ['1001', '测试员工', 270, 270])
+        for fixes in ({'0:1': {'employee_code': '1001'}}, {'99:1': {'reason': '核对修正'}},
+                      {'0:1': {'reason': '核对修正', 'request_mode': 'bypass'}}):
+            with self.assertRaises(ValueError):
+                self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01', corrections=fixes)
+
+    def test_contribution_correction_cannot_bypass_company_or_amount_validation(self):
+        self.contribution_workbook(['工号', '姓名', '个人承担', '公司承担'], ['1001', '测试员工', 270, 270])
+        for wrong_company, amount in ((True, '248'), (False, '-1'), (False, 'NaN'), (False, '')):
+            self.frappe.db.get_value.return_value = 'OTHER' if wrong_company else 'ACME'
+            self.api.submit_contribution = Mock()
+            with self.assertRaises(ValueError):
+                self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01', preview=0,
+                    corrections={'0:1': {'personal_amount': amount, 'reason': '核对修正'}})
+            self.api.submit_contribution.assert_not_called()
+
+    def test_contribution_existing_record_requires_explicit_change_choice(self):
+        self.contribution_workbook(['工号', '姓名', '个人承担', '公司承担'], ['1001', '测试员工', 270, 270])
+        self.frappe.db.exists.return_value = True
+        result = self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01', request_mode='initial')
+        self.assertTrue(result['entries'][0]['error'])
+        self.api.submit_contribution = Mock()
+        self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01', preview=0, request_mode='initial',
+            corrections={'0:1': {'request_mode': 'change', 'reason': '修改已有缴费标准'}})
+        self.assertEqual(self.api.submit_contribution.call_args.kwargs['request_mode'], 'change')
+
+    def test_corrected_duplicate_employee_is_still_blocked(self):
+        workbook = self.contribution_workbook(['工号', '姓名', '个人承担', '公司承担'], ['1001', '测试员工', 270, 270])
+        workbook.append(SimpleNamespace(title='公积金名单2', iter_rows=lambda **kwargs: iter([
+            ['工号', '姓名', '个人承担', '公司承担'], ['1002', '另一员工', 248, 248]])))
+        self.api.submit_contribution = Mock()
+        result = self.api.import_contribution_workbook('ACME', '/test.xlsx', '2026-11-01',
+            corrections={'1:1': {'employee_code': '1001', 'employee_name': '测试员工', 'reason': '核对员工'}})
+        self.assertIn('重复', result['entries'][1]['error'])
+        self.api.submit_contribution.assert_not_called()
+
+    def test_approval_records_include_initial_approval_rejection_and_audit(self):
+        def record(name, status, submitted, reviewed):
+            return Row(name=name, company='ACME', employee='e1', contribution_type='公积金',
+                       status=status, effective_date='2026-08-01', submitted_on=submitted,
+                       creation=submitted, approved_on=reviewed, approved_by='reviewer',
+                       submitted_by='editor', review_note='核对意见', personal_amount=248, company_amount=248)
+        initial = record('first', '已批准', '2026-08-01 09:00:00', '2026-08-01 10:00:00')
+        rejected = record('rejected', '已驳回', '2026-09-01 09:00:00', '2026-09-01 10:00:00')
+        self.api._access = Mock(return_value='ACME')
+        self.api._attach_actor_names = lambda rows: rows
+        def read(doctype, **kwargs):
+            self.assertEqual(kwargs['filters']['company'], 'ACME')
+            self.assertEqual(kwargs['filters']['status'], ['in', ['已批准', '已驳回']])
+            if doctype == self.api.SALARY:
+                self.assertEqual(kwargs['filters']['exclude_from_payroll'], 0)
+                return []
+            return [rejected, initial]
+        self.frappe.get_all = read
+        rows = self.api.list_approval_records('ACME')
+        self.api._access.assert_called_once_with('ACME', approve=True)
+        self.assertEqual([row.name for row in rows], ['rejected', 'first'])
+        self.assertIsNone(rows[1].previous_standard)
+        self.assertEqual(rows[0].previous_standard.name, 'first')
+        self.assertEqual(rows[0].approved_by, 'reviewer')
+        self.assertEqual(rows[0].review_note, '核对意见')
+        self.assertEqual(rows[0].decision_doctype, self.api.CONTRIBUTION)
+
 if __name__=='__main__':unittest.main()

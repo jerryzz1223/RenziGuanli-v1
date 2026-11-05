@@ -73,7 +73,8 @@ if (!topNavCssVersion || topNavCssVersion < "20260903f") {
 	throw new Error("The top navigation CSS cache version must change when its desktop layout is corrected.");
 }
 
-if (!hooksSource.includes("/assets/hrms/js/hrms_top_nav.js?v=20260930-remove-more-tax-v1")) {
+const topNavJsVersion = hooksSource.match(/hrms_top_nav\.js\?v=(\d{8}[^"\s]*)/)?.[1];
+if (!topNavJsVersion || topNavJsVersion < "20261030") {
 	throw new Error("The top navigation JavaScript cache version must change when route-transition behavior changes.");
 }
 

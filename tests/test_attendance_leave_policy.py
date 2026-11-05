@@ -11,6 +11,13 @@ DRAFT_PATH = ROOT / "hrms" / "api" / "attendance_processors" / "attendance_draft
 ATTENDANCE_IMPORT_PATH = ROOT / "hrms" / "api" / "attendance_import.py"
 PAYROLL_INPUT_PATH = ROOT / "hrms" / "api" / "payroll_input.py"
 
+_full_attendance_spec = importlib.util.spec_from_file_location(
+    "full_attendance_policy_test", ROOT / "hrms" / "api" / "attendance_processors" / "full_attendance.py")
+_full_attendance_module = importlib.util.module_from_spec(_full_attendance_spec)
+_full_attendance_spec.loader.exec_module(_full_attendance_module)
+calculate_full_attendance = _full_attendance_module.calculate_full_attendance
+
+
 
 def _draft_processor():
 	spec = importlib.util.spec_from_file_location("attendance_leave_policy_draft", DRAFT_PATH)
@@ -22,7 +29,7 @@ def _draft_processor():
 def _full_attendance_bonus():
 	tree = ast.parse(PAYROLL_INPUT_PATH.read_text())
 	function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_full_attendance_bonus")
-	namespace = {"flt": lambda value: float(value or 0)}
+	namespace = {"flt": lambda value: float(value or 0), "calculate_full_attendance": calculate_full_attendance}
 	exec(compile(ast.Module(body=[function], type_ignores=[]), str(PAYROLL_INPUT_PATH), "exec"), namespace)
 	return namespace["_full_attendance_bonus"]
 
@@ -30,7 +37,7 @@ def _full_attendance_bonus():
 def _legacy_monthly_values():
 	tree = ast.parse(ATTENDANCE_IMPORT_PATH.read_text())
 	function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_calculate_monthly_values")
-	namespace = {"LARGE_NIGHT_SHIFT_ALLOWANCE": 45, "SMALL_NIGHT_SHIFT_ALLOWANCE": 24, "APPLE_UNIT_AMOUNT": 5}
+	namespace = {"LARGE_NIGHT_SHIFT_ALLOWANCE": 45, "SMALL_NIGHT_SHIFT_ALLOWANCE": 24, "APPLE_UNIT_AMOUNT": 5, "calculate_full_attendance": calculate_full_attendance}
 	exec(compile(ast.Module(body=[function], type_ignores=[]), str(ATTENDANCE_IMPORT_PATH), "exec"), namespace)
 	return namespace["_calculate_monthly_values"]
 

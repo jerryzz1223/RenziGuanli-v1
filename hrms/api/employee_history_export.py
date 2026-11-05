@@ -361,11 +361,11 @@ def collect_employee_history(employee):
 
 def _support_sections(employee):
 	from hrms.api.cross_department_support import get_employee_support_counts, DOCTYPE
-	source = "hrms.api.cross_department_support.get_employee_support_counts；实际已提交支援单据"
-	if not frappe.db.exists("DocType", DOCTYPE):
+	source = "hrms.api.cross_department_support.get_employee_support_counts；月度填写次数及历史支援记录"
+	if not frappe.db.exists("DocType", DOCTYPE) and not frappe.db.exists("DocType", "Cross Department Support Monthly Count"):
 		return [_section("支援次数", source, status="支援记录模型尚未安装；需站点迁移，不能将缺失模型当成零次")]
 	def collect():
-		_require_source(DOCTYPE)
+		_require_source("Cross Department Support Monthly Count" if frappe.db.exists("DocType", "Cross Department Support Monthly Count") else DOCTYPE)
 		counts = get_employee_support_counts(employee.name)
 		rows = [{"period": "累计", "count": counts["total_count"]}]
 		rows.extend({"period": row["month"], "count": row["count"]} for row in counts["months"])
@@ -410,7 +410,7 @@ def _source_description(section):
 		"人事异动": "员工人事异动单", "转正晋升": "员工转正晋升单", "离职办理": "员工离职办理单",
 		"考勤日记录": "员工日考勤记录", "导入考勤日记录": "导入考勤明细；按批次保留历史，有效结果以考勤月度终稿为准",
 		"考勤月度终稿": "已锁定的有效考勤月度终稿；保留原有签字及异常处理结果",
-		"奖惩记录": "员工奖惩记录", "支援次数": "实际已提交的支援单据；按系统支援统计口径计算",
+		"奖惩记录": "员工奖惩记录", "支援次数": "月度填写次数及历史支援记录；按系统支援统计口径计算",
 	}
 	if section["title"] in {"奖惩提报单", "员工谈话表", "材料附件"}:
 		return "本人归档原件索引及链接；原件正文需经站点授权查看"

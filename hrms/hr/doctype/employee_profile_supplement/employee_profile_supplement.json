@@ -1,0 +1,37 @@
+{
+ "doctype": "DocType",
+ "name": "Employee Profile Supplement",
+ "module": "HR",
+ "autoname": "field:employee",
+ "engine": "InnoDB",
+ "track_changes": 1,
+ "field_order": [
+  "employee",
+  "records_json"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "options": "Employee",
+   "label": "员工",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "records_json",
+   "fieldtype": "Long Text",
+   "label": "补充档案记录",
+   "reqd": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1
+  }
+ ]
+}

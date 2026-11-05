@@ -1,3 +1,4 @@
+// HRMS_PAYROLL_PAGE_REVISION: 20261104-dashboard-performance-v5
 frappe.pages["payroll-input-center"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
@@ -359,7 +360,7 @@ class PayrollInputCenter {
 			// textContent avoids a synchronous layout read for every cell. Include
 			// form values explicitly because textContent does not contain them.
 			const employeeCode = row.dataset.payrollEmployeeCode || row.dataset.payrollParticipationRow || "";
-			row.dataset.tableFilterMatch = (!pendingEmployeeCodes.size || pendingEmployeeCodes.has(employeeCode)) && (!table.dataset.globalSearch || (row.dataset.search || row.textContent.toLocaleLowerCase()).includes(table.dataset.globalSearch)) && filters.every((filter) => {
+			row.dataset.tableFilterMatch = (!table.dataset.standingApprovalStatus || row.dataset.standingApprovalStatus === table.dataset.standingApprovalStatus) && (!table.dataset.standingApprovalCategory || row.dataset.standingApprovalCategory === table.dataset.standingApprovalCategory) && (!pendingEmployeeCodes.size || pendingEmployeeCodes.has(employeeCode)) && (!table.dataset.globalSearch || (row.dataset.search || row.textContent.toLocaleLowerCase()).includes(table.dataset.globalSearch)) && filters.every((filter) => {
 				const cell = row.cells[filter.column];
 				const inputValues = cell ? Array.from(cell.querySelectorAll("input, select, textarea")).map((input) => input.value).join(" ") : "";
 				if (filter.exact) return (cell?.textContent || "").trim().toLocaleLowerCase() === filter.value;
@@ -835,6 +836,9 @@ class PayrollInputCenter {
 	}
 
 	load_attendance_dependency({ force = false, allow_standing_tab = false } = {}) {
+		// The homepage reads existing settlements; only an explicit pending
+		// calculation resume may synchronize attendance while it is open.
+		if (this.active_tab === "monthly-workbench" && !allow_standing_tab) return Promise.resolve(null);
 		if (!allow_standing_tab && ["salary-assignments", "salary-register", "salary-changes", "salary-approvals", "salary-history", "contribution-register", "contribution-view", "contribution-changes", "contribution-approvals", "contribution-history"].includes(this.active_tab)) return Promise.resolve(null);
 		if (!this.company || !this.payroll_month) return Promise.resolve(null);
 		const company = this.company;
@@ -848,8 +852,7 @@ class PayrollInputCenter {
 		const pending = this.attendance_dependency_requests.get(key);
 		if (pending) return pending;
 
-		const request = frappe
-			.call({
+		const request = this.call_payroll_api({
 				method: "hrms.api.payroll_input.get_payroll_attendance_dependency",
 				args: { company, payroll_month },
 			})
@@ -892,7 +895,107 @@ class PayrollInputCenter {
 		);
 	}
 
-	load_active_tab() {
+	load_active_tab({ reuseReads = true } = {}) {
+		this.reuse_navigation_reads = reuseReads;
+		try { return this.load_active_tab_data(); }
+		finally { this.reuse_navigation_reads = false; }
+	}
+
+	call_payroll_api(options) {
+		const method = options.method || "";
+		// Only named read endpoints may be reused. Exports, previews that write
+		// files, recalculation, imports and approvals always reach the server.
+		const cacheable = new Set([
+			"hrms.api.payroll_input.get_payroll_home_dashboard",
+			"hrms.api.payroll_input.get_payroll_month_runbook",
+			"hrms.api.payroll_input.get_payroll_attendance_dependency",
+			"hrms.api.payroll_input.get_payroll_attendance_rule_overview",
+			"hrms.api.payroll_input.get_payroll_formula_catalog",
+			"hrms.api.payroll_input.get_payroll_calculation_audit",
+			"hrms.api.payroll_input.get_salary_architecture_workbench",
+			"hrms.api.payroll_input.list_employee_salary_profiles",
+			"hrms.api.payroll_input.list_monthly_payroll_overview",
+			"hrms.api.payroll_input.list_payroll_disbursement_records",
+			"hrms.api.payroll_input.list_payroll_input_records",
+			"hrms.api.payroll_input.list_payroll_settlement_records",
+			"hrms.api.payroll_input.list_payroll_variable_records",
+			"hrms.api.payroll_input.list_payroll_variable_import_batches",
+			"hrms.api.payroll_input.list_payroll_configuration_items",
+			"hrms.api.payroll_input.list_payroll_rules",
+			"hrms.api.payroll_input.list_payroll_field_mappings",
+			"hrms.api.payroll_input.list_payroll_welfare_source_records",
+			"hrms.api.payroll_input.list_payroll_welfare_source_rules",
+			"hrms.api.payroll_input.list_payroll_report_summary",
+			"hrms.api.payroll_input.list_payroll_analysis",
+			"hrms.api.payroll_input.list_salary_grades",
+			"hrms.api.payroll_input.list_salary_structure_versions",
+			"hrms.api.payroll_input.list_employee_salary_change_import_batches",
+			"hrms.api.standing_pay.list_register",
+			"hrms.api.standing_pay.list_pending",
+			"hrms.api.standing_pay.list_approval_records",
+			"hrms.api.standing_pay.list_change_records",
+			"hrms.api.standing_pay.employee_history",
+		]).has(method);
+		this.page_read_cache ||= new Map();
+		this.page_read_requests ||= new Map();
+		this.page_read_epoch ||= 0;
+		if (!cacheable) {
+			this.page_read_cache.clear();
+			this.page_read_requests.clear();
+			this.page_read_epoch++;
+		}
+		const epoch = this.page_read_epoch;
+		const key = JSON.stringify([frappe.session?.user || "", method, options.args || {}]);
+		const cached = cacheable && this.reuse_navigation_reads ? this.page_read_cache.get(key) : null;
+		const tab = this.active_tab, company = this.company, month = this.payroll_month;
+		const current = () => tab === this.active_tab && company === this.company && month === this.payroll_month;
+		const copy = (value) => JSON.parse(JSON.stringify(value));
+		let showingCached = false;
+		if (cached && Date.now() - cached.loaded_at < 5 * 60_000 && !this.has_unsaved_salary_changes()) {
+			if (Date.now() - cached.loaded_at < 15_000) {
+				options.callback?.(copy(cached.response));
+				return Promise.resolve(copy(cached.response));
+			}
+			if (options.callback) { options.callback(copy(cached.response)); showingCached = true; }
+			if (options.callback) this.body()?.insertAdjacentHTML?.("afterbegin", `<div class="alert alert-info" role="status" data-payroll-cached-read>${this.escape(__("已显示上次结果，正在后台更新…"))}</div>`);
+		}
+		const pending = cacheable && this.page_read_requests.get(key);
+		if (pending) return Promise.resolve(pending).then((response) => {
+			if (current() && epoch === this.page_read_epoch && !this.has_unsaved_salary_changes()) options.callback?.(copy(response));
+			return response;
+		}, (error) => { if (current()) options.error?.(error); throw error; });
+		const request = frappe.call({ ...options,
+			freeze: cacheable ? false : options.freeze,
+			callback: (response) => {
+				if (cacheable && epoch === this.page_read_epoch) {
+					this.page_read_cache.delete(key);
+					this.page_read_cache.set(key, { response: copy(response), loaded_at: Date.now() });
+					if (this.page_read_cache.size > 20) this.page_read_cache.delete(this.page_read_cache.keys().next().value);
+				}
+				if (cacheable && (!current() || epoch !== this.page_read_epoch || this.has_unsaved_salary_changes())) return;
+				if (showingCached) this.body()?.querySelectorAll("[data-payroll-cached-read]").forEach((notice) => notice.remove());
+				options.callback?.(response);
+			},
+			error: (error) => {
+				if (cacheable && (!current() || epoch !== this.page_read_epoch)) return;
+				if (showingCached) {
+					const notice = this.body()?.querySelector("[data-payroll-cached-read]");
+					if (notice) notice.textContent = __("更新失败，已保留上次结果，请刷新重试。");
+					return;
+				}
+				options.error?.(error);
+			},
+		});
+		if (cacheable) {
+			this.page_read_requests.set(key, request);
+			const clear = () => { if (this.page_read_requests.get(key) === request) this.page_read_requests.delete(key); };
+			Promise.resolve(request).then(clear, clear);
+		}
+		return request;
+	}
+
+	load_active_tab_data() {
+		if (this.has_unsaved_salary_changes()) return;
 		const master = ["salary-assignments", "salary-register", "contribution-register", "contribution-view", "salary-changes", "salary-approvals", "salary-history", "contribution-changes", "contribution-approvals", "contribution-history"].includes(this.active_tab);
 		const scope = this.wrapper.querySelector(".hrms-payroll-global-scope");
 		if (scope) scope.hidden = master;
@@ -1034,8 +1137,7 @@ class PayrollInputCenter {
 	import_bulk_variable_file(file) {
 		const fileUrl = file.file_url;
 		const fileLabel = file.file_name || file.name || fileUrl;
-		return frappe
-			.call({
+		return this.call_payroll_api({
 				method: "hrms.api.payroll_input.preview_payroll_variable_workbook",
 				args: { file_url: fileUrl, company: this.company, payroll_month: this.payroll_month },
 				freeze: true,
@@ -1068,7 +1170,7 @@ class PayrollInputCenter {
 					frappe.show_alert({ message: __("已跳过 {0}：未找到对应的启用来源配置。", [fileLabel]), indicator: "orange" });
 					return null;
 				}
-				return frappe.call({
+				return this.call_payroll_api({
 					method: "hrms.api.payroll_input.import_payroll_variable_workbook",
 					args: this.scope_args({ file_url: fileUrl, source_type: sourceCode }),
 					freeze: true,
@@ -1127,7 +1229,7 @@ class PayrollInputCenter {
 
 	open_source_form_import_selector() {
 		if (!this.variable_source_catalog.length) {
-			frappe.call({
+			this.call_payroll_api({
 				method: "hrms.api.payroll_input.list_payroll_variable_source_types",
 				callback: (response) => {
 					this.variable_source_catalog = response.message || [];
@@ -1198,28 +1300,41 @@ class PayrollInputCenter {
 			<div data-payroll-calculation-table></div>
 		`;
 		this.body().querySelector("[data-refresh-payroll-dashboard]")?.addEventListener("click", () => this.load_monthly_workbench());
-		frappe.call({
-			method: "hrms.api.payroll_input.get_payroll_home_dashboard",
-			args: this.scope_args(),
-			callback: (response) => {
-				if (!isCurrentWorkbenchLoad()) return;
-				const target = this.wrapper.querySelector("[data-payroll-dashboard-content]");
-				if (target) target.innerHTML = this.render_payroll_home_dashboard(response.message || {});
-			},
-		});
-		this.load_attendance_dependency().then(() => {
+		const showLoadError = () => {
 			if (!isCurrentWorkbenchLoad()) return;
-			frappe.call({
+			const target = this.wrapper.querySelector("[data-payroll-dashboard-content]");
+			if (target) target.innerHTML = `<div class="alert alert-warning" role="alert">${this.escape(__("薪资汇总加载失败，请点击刷新数据重试。"))}</div>`;
+		};
+		Promise.resolve(this.call_payroll_api({
+			method: "hrms.api.payroll_input.get_payroll_home_dashboard",
+			timeout: 30000,
+			// Resolve the current month on the server; a prior tab's lock may be stale.
+			args: this.scope_args({ attendance_lock_version: "" }),
+			error: showLoadError,
+		})).then((response) => {
+			if (!isCurrentWorkbenchLoad()) return;
+			const data = response.message || {};
+			const target = this.wrapper.querySelector("[data-payroll-dashboard-content]");
+			if (target) target.innerHTML = this.render_payroll_home_dashboard(data);
+			const table = this.wrapper.querySelector("[data-payroll-calculation-table]");
+			if (!data.attendance_lock_version) {
+				if (table) this.render_monthly_calculation_table(table, []);
+				return;
+			}
+			// Viewing existing settlements does not sync/write attendance inputs.
+			return Promise.resolve(this.call_payroll_api({
 				method: "hrms.api.payroll_input.list_payroll_settlement_records",
-				args: this.scope_args({ page_length: 500 }),
-				callback: (response) => {
+				timeout: 30000,
+				args: this.scope_args({ attendance_lock_version: data.attendance_lock_version, page_length: 500 }),
+				callback: (result) => {
 					if (!isCurrentWorkbenchLoad()) return;
-					const target = this.wrapper.querySelector("[data-payroll-calculation-table]");
-					if (!target) return;
-					this.render_monthly_calculation_table(target, response.message || []);
+					if (table) this.render_monthly_calculation_table(table, result.message || []);
 				},
-			});
-		});
+				error: () => {
+					if (isCurrentWorkbenchLoad() && table) table.innerHTML = `<div class="alert alert-warning">${this.escape(__("薪资明细加载失败，请刷新重试。"))}</div>`;
+				},
+			})).catch(() => {});
+		}).catch(showLoadError);
 	}
 
 	format_dashboard_money(value) {
@@ -1452,7 +1567,7 @@ class PayrollInputCenter {
 			</div>`;
 			return;
 		}
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.get_payroll_month_runbook",
 			args: this.scope_args(),
 			callback: (response) => this.render_monthly_runbook(response.message || {}),
@@ -1498,7 +1613,7 @@ class PayrollInputCenter {
 		this.body().querySelector("[data-open-personnel-master]").addEventListener("click", () => frappe.set_route("List", "Employee"));
 		this.body().querySelector("[data-reload-payroll-population]").addEventListener("click", () => this.reload_payroll_participation_population());
 		this.load_payroll_participation_preview(this.body().querySelector("[data-payroll-participation-preview]"));
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_employee_salary_profiles",
 			args: this.scope_args({ page_length: 5000 }),
 			callback: (response) => {
@@ -1529,7 +1644,7 @@ class PayrollInputCenter {
 		frappe.confirm(
 			__("将重新读取当前已锁定的考勤终稿，更新薪酬侧人员名单，并删除该锁定版本尚未确认的薪资输入和试算结果。已确认工资不会被删除。是否继续？"),
 			() => {
-				frappe.call({
+				this.call_payroll_api({
 					method: "hrms.api.payroll_input.reload_payroll_participation_population",
 					args: { company: this.company, payroll_month: this.payroll_month },
 					freeze: true,
@@ -1624,7 +1739,7 @@ class PayrollInputCenter {
 					frappe.msgprint(__("不参与计算需勾选审核确认后才能批量生效。"));
 					return;
 				}
-				frappe.call({
+				this.call_payroll_api({
 					method: "hrms.api.payroll_input.bulk_save_monthly_payroll_participation_decisions",
 					args: this.scope_args({ employee_codes: JSON.stringify(employeeCodes), ...values }),
 					freeze: true,
@@ -1676,7 +1791,7 @@ class PayrollInputCenter {
 		if (!target) return;
 		const state = this.capture_payroll_participation_table_state(target);
 		const scope = `${this.attendance_dependency_key()}::${this.attendance_lock_version || ""}`;
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.get_payroll_participation_preview",
 			args: this.scope_args(),
 			callback: (response) => {
@@ -1709,7 +1824,7 @@ class PayrollInputCenter {
 					dialog.hide();
 					return this.open_termination_settlement(row.employee);
 				}
-				frappe.call({
+				this.call_payroll_api({
 					method: "hrms.api.payroll_input.save_monthly_payroll_participation_decision",
 					args: { company: this.company, payroll_month: this.payroll_month, attendance_lock_version: this.attendance_lock_version, employee: row.employee, ...values },
 					freeze: true,
@@ -1739,7 +1854,7 @@ class PayrollInputCenter {
 		}
 		target.innerHTML = `<div class="hrms-payroll-source-empty-detail text-muted">${frappe.utils.escape_html(__("正在读取本月锁定考勤终稿…"))}</div>`;
 		this.payroll_participation_preview_loading_scope = scope;
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.get_payroll_participation_preview",
 			args: this.scope_args(),
 			callback: (response) => {
@@ -1779,7 +1894,7 @@ class PayrollInputCenter {
 		`;
 		this.body().querySelector("[data-generate-monthly]").addEventListener("click", () => this.generate_payroll_settlement_records());
 		this.body().querySelector("[data-refresh-dependencies]").addEventListener("click", () => this.load_monthly_payroll());
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_monthly_payroll_overview",
 			args: this.scope_args(),
 			callback: (response) => {
@@ -1787,7 +1902,7 @@ class PayrollInputCenter {
 				if (target) target.innerHTML = this.render_metric_cards(response.message?.cards || []);
 			},
 		});
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_dependency_status",
 			args: this.scope_args(),
 			callback: (response) => {
@@ -1820,7 +1935,7 @@ class PayrollInputCenter {
 			this.render();
 			this.load_active_tab();
 		});
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_disbursement_records",
 			args: this.scope_args(),
 			callback: (response) => {
@@ -1866,7 +1981,7 @@ class PayrollInputCenter {
 	}
 
 	load_payroll_import_templates() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_import_templates",
 			callback: (response) => {
 				const data = response.message || {};
@@ -1916,8 +2031,7 @@ class PayrollInputCenter {
 	}
 
 	preview_payroll_data_closure_workbook() {
-		frappe
-			.call({
+		this.call_payroll_api({
 				method: "hrms.api.payroll_input.preview_payroll_data_closure_workbook",
 				args: { file_url: this.data_closure_file_url },
 				freeze: true,
@@ -1927,7 +2041,7 @@ class PayrollInputCenter {
 	}
 
 	download_data_closure_template() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.create_payroll_data_closure_template_file",
 			freeze: true,
 			freeze_message: __("正在生成导入模板..."),
@@ -1939,7 +2053,7 @@ class PayrollInputCenter {
 	}
 
 	import_payroll_data_closure_workbook() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.import_payroll_data_closure_workbook",
 			args: this.scope_args({ file_url: this.data_closure_file_url }),
 			freeze: true,
@@ -2038,7 +2152,7 @@ class PayrollInputCenter {
 		if (rule.rule_code === "ATTENDANCE_FULL_ATTENDANCE_BONUS") {
 			settings.thresholds = Array.from(target.querySelectorAll("[data-full-threshold-limit]")).map((field) => [field.value, target.querySelector(`[data-full-threshold-amount="${field.dataset.fullThresholdLimit}"]`)?.value || 0]);
 		}
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.save_attendance_pay_rule",
 			args: { company: this.company, payroll_month: this.payroll_month, rule_code: rule.rule_code, settings },
 			freeze: true,
@@ -2064,7 +2178,7 @@ class PayrollInputCenter {
 		`;
 		this.body().querySelector("[data-open-attendance-center]").addEventListener("click", () => frappe.set_route("attendance-import-center"));
 		this.load_rule_permission();
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.get_payroll_attendance_rule_overview",
 			args: { company: this.company, payroll_month: this.payroll_month },
 			callback: (response) => {
@@ -2100,7 +2214,7 @@ class PayrollInputCenter {
 			<div data-salary-template-summary></div>
 		`;
 		this.body().querySelector("[data-open-salary-templates]").addEventListener("click", () => frappe.set_route("List", "Salary Structure"));
-		frappe.call({
+		this.call_payroll_api({
 			method: "frappe.client.get_list",
 			args: { doctype: "Salary Structure", fields: ["name", "company", "is_active", "payroll_frequency"], filters: this.company ? { company: this.company } : {}, limit_page_length: 50 },
 			callback: (response) => {
@@ -2135,7 +2249,7 @@ class PayrollInputCenter {
 				frappe.msgprint(`${label}未发生变化，无需提交申请。`);
 				return;
 			}
-			await frappe.call({ method: "hrms.api.payroll_input.update_employee_salary_change", args: { company, employee: row.employee, name: row.name || "", values: JSON.stringify(values) }, freeze: true });
+			await this.call_payroll_api({ method: "hrms.api.payroll_input.update_employee_salary_change", args: { company, employee: row.employee, name: row.name || "", values: JSON.stringify(values) }, freeze: true });
 			dialog.hide();
 			frappe.show_alert({ message: "申请已提交，审批前当前薪资不变。可在修改记录查看进度。", indicator: "green" });
 			this.load_active_tab();
@@ -2149,16 +2263,49 @@ class PayrollInputCenter {
 			this.body().innerHTML = '<div class="hrms-payroll-input-panel"><h3>无审批权限</h3><p>当前账户可以提交修改申请和查看记录，审批需要授权账户处理。</p></div>';
 			return;
 		}
-		this.body().innerHTML = `<div class="hrms-payroll-input-list-head"><div><h3>审批 · ${label}</h3><p>审批通过后按生效日期更新标准。最高管理员 Administrator 可审批本人申请，其他审批账户须由另一位审批人审核。</p></div></div><div data-standing-approvals></div>`;
-		this.load_standing_approvals(this.body().querySelector("[data-standing-approvals]"), kind === "all" ? "" : kind === "salary" ? "HRMS Employee Salary Change" : "HRMS Employee Contribution Change");
+		this.body().innerHTML = `<div class="hrms-payroll-input-list-head"><div><h3>审批 · ${label}</h3><p>批准、驳回及批量审批的结果均保留，可切换到“审批记录”查询。</p></div><div class="hrms-payroll-action-group"><button class="btn btn-primary" data-standing-approval-view="pending">待审批</button><button class="btn btn-default" data-standing-approval-view="history">审批记录</button></div></div><div data-standing-approvals></div>`;
+		const target = this.body().querySelector("[data-standing-approvals]");
+		const doctype = kind === "all" ? "" : kind === "salary" ? "HRMS Employee Salary Change" : "HRMS Employee Contribution Change";
+		const show = (view) => {
+			target.dataset.approvalView = view;
+			target.innerHTML = '<p>正在读取…</p>';
+			this.body().querySelectorAll("[data-standing-approval-view]").forEach((button) => {
+				button.classList.toggle("btn-primary", button.dataset.standingApprovalView === view);
+				button.classList.toggle("btn-default", button.dataset.standingApprovalView !== view);
+			});
+			if (view === "history") this.load_standing_approval_records(target, doctype);
+			else this.load_standing_approvals(target, doctype);
+		};
+		this.body().querySelectorAll("[data-standing-approval-view]").forEach((button) => button.addEventListener("click", () => show(button.dataset.standingApprovalView)));
+		show("pending");
+	}
+
+	async load_standing_approval_records(target, doctype = "") {
+		const company = this.company;
+		try {
+			const response = await this.call_payroll_api({ method: "hrms.api.standing_pay.list_approval_records", args: { company } });
+			if (!target.isConnected || this.company !== company || target.dataset.approvalView !== "history") return;
+			const rows = (response.message || []).filter((row) => !doctype || row.decision_doctype === doctype);
+			const esc = (value) => this.escape(String(value ?? ""));
+			target.innerHTML = `<section class="hrms-payroll-input-panel"><h3>审批记录（${rows.length}）</h3><p>包含首次录入与修改申请的批准、驳回记录，按审批时间从新到旧排列。每条批量审批申请分别保留审批人、时间和意见。</p><div class="hrms-payroll-action-group"><label>审批类型 <select class="form-control input-sm" data-standing-record-category><option value="">全部类型</option>${["薪资首次录入", "薪资修改", "社保首次录入", "社保修改", "公积金首次录入", "公积金修改"].map((kind) => `<option value="${esc(kind)}">${esc(kind)}</option>`).join("")}</select></label><label>审批结果 <select class="form-control input-sm" data-standing-record-status><option value="">全部结果</option><option>已批准</option><option>已驳回</option></select></label></div><div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr>${["申请编号", "姓名", "工号", "审批类型", "生效日期", "申请内容", "审批结果", "申请人", "申请时间", "审批人", "审批时间", "申请原因", "审批意见"].map((label) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr data-standing-approval-category="${esc(this.standing_approval_category(row))}" data-standing-approval-status="${esc(row.status)}"><td>${esc(row.name)}</td><td>${esc(row.employee_name)}</td><td>${esc(row.employee_code)}</td><td>${esc(this.standing_approval_category(row))}</td><td>${esc(row.effective_date)}</td><td>${this.standing_approval_change(row, "history")}</td><td>${esc(row.status)}</td><td>${esc(row.submitted_by_name || row.submitted_by || row.owner || "未记录")}</td><td>${esc(this.standing_time(row.submitted_on || row.creation))}</td><td>${esc(row.approved_by_name || row.approved_by || "未记录")}</td><td>${esc(this.standing_time(row.approved_on))}</td><td>${esc(row.remarks)}</td><td>${esc(row.review_note || "未记录")}</td></tr>`).join("") || '<tr><td colspan="13">暂无审批记录</td></tr>'}</tbody></table></div></section>`;
+			for (const [selector, key] of [["[data-standing-record-category]", "standingApprovalCategory"], ["[data-standing-record-status]", "standingApprovalStatus"]]) {
+				target.querySelector(selector).addEventListener("change", (event) => {
+					const table = target.querySelector("table");
+					table.dataset[key] = event.target.value;
+					this.filter_table_rows(table);
+				});
+			}
+		} catch (error) {
+			if (target.isConnected && this.company === company && target.dataset.approvalView === "history") target.innerHTML = '<p class="text-danger">审批记录读取失败，请重新点击“审批记录”重试。</p>';
+		}
 	}
 
 	async load_standing_records(kind) {
 		const company = this.company, route = this.active_tab;
 		this.body().innerHTML = '<p>正在读取修改记录…</p>';
 		const responses = kind === "all"
-			? await Promise.all(["salary", "contribution"].map((record_kind) => frappe.call({ method: "hrms.api.standing_pay.list_change_records", args: { company, kind: record_kind } })))
-			: [await frappe.call({ method: "hrms.api.standing_pay.list_change_records", args: { company, kind } })];
+			? await Promise.all(["salary", "contribution"].map((record_kind) => this.call_payroll_api({ method: "hrms.api.standing_pay.list_change_records", args: { company, kind: record_kind } })))
+			: [await this.call_payroll_api({ method: "hrms.api.standing_pay.list_change_records", args: { company, kind } })];
 		if (this.company !== company || this.active_tab !== route) return;
 		const rows = responses.flatMap((response) => response.message || []).sort((a, b) => String(b.submitted_on || b.creation || "").localeCompare(String(a.submitted_on || a.creation || ""))), esc = (value) => this.escape(String(value ?? ""));
 		this.body().innerHTML = `<div class="hrms-payroll-input-list-head"><div><h3>修改记录 · 薪资与社保公积金</h3><p>仅显示首次标准建立后的修改申请及审批结果；每条记录只展示实际发生变化的项目。待审核、已驳回不会更改当前标准。</p></div><span class="hrms-payroll-template-status">共 ${rows.length} 条</span></div><div class="table-responsive"><table class="table table-bordered table-sm hrms-standing-history-list"><thead><tr>${["姓名", "工号", "部门", "类型", "生效日期", "实际变更（原始 → 修改后）", "状态", "修改人", "修改时间", "审批人", "审批时间", "修改原因 / 审批意见"].map((label) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr><td><button class="btn btn-link btn-xs" data-standing-history="${esc(row.employee)}">${esc(row.employee_name)}</button></td><td>${esc(row.employee_code)}</td><td>${esc(row.department)}</td><td>${esc(row.contribution_type || "定薪")}</td><td>${esc(row.effective_date)}</td><td>${this.standing_approval_change(row, "history")}</td><td>${esc(row.status)}</td><td>${esc(row.submitted_by_name || row.submitted_by || row.owner || "未记录")}</td><td>${esc(this.standing_time(row.submitted_on || row.creation))}</td><td>${esc(row.approved_by_name || row.approved_by || "未记录")}</td><td>${esc(this.standing_time(row.approved_on))}</td><td>${esc([row.remarks, row.review_note].filter(Boolean).join("；"))}</td></tr>`).join("") || '<tr><td colspan="12">暂无修改记录</td></tr>'}</tbody></table></div>`;
@@ -2182,7 +2329,7 @@ class PayrollInputCenter {
 				frappe.msgprint(`${contribution_type}标准未发生变化，无需提交申请。`);
 				return;
 			}
-			await frappe.call({ method: "hrms.api.standing_pay.submit_contribution", args: { company, employee: employee.employee, contribution_type, ...values, request_mode: "change" }, freeze: true });
+			await this.call_payroll_api({ method: "hrms.api.standing_pay.submit_contribution", args: { company, employee: employee.employee, contribution_type, ...values, request_mode: "change" }, freeze: true });
 			dialog.hide();
 			frappe.show_alert({ message: `${contribution_type}修改已提交，审批前当前标准不变。`, indicator: "green" });
 			this.load_active_tab();
@@ -2243,7 +2390,7 @@ class PayrollInputCenter {
 						frappe.msgprint(`${selected.label}未发生变化，无需提交申请。`);
 						return;
 					}
-					await frappe.call({
+					await this.call_payroll_api({
 						method: "hrms.api.payroll_input.update_employee_salary_change",
 						args: { company, employee: row.employee, name: row.name || "", values: JSON.stringify({ effective_date: values.effective_date, [selected.value]: values.requested_amount, remarks: values.remarks }) },
 						freeze: true,
@@ -2261,7 +2408,7 @@ class PayrollInputCenter {
 					frappe.msgprint(`${selected.label}标准未发生变化，无需提交申请。`);
 					return;
 				}
-				await frappe.call({
+				await this.call_payroll_api({
 					method: "hrms.api.standing_pay.submit_contribution",
 					args: { company, employee: row.employee, contribution_type: selected.value, effective_date: values.effective_date, enabled: values.requested_enabled, personal_amount: values.requested_personal_amount, company_amount: values.requested_company_amount, remarks: values.remarks, request_mode: "change" },
 					freeze: true,
@@ -2333,7 +2480,7 @@ class PayrollInputCenter {
 				const primaryButton = dialog.get_primary_btn();
 				primaryButton.prop("disabled", true).text(__("正在生成…"));
 				try {
-					const response = await frappe.call({
+					const response = await this.call_payroll_api({
 						method: "hrms.api.standing_pay.export_compensation_register",
 						args: { company, start_date: values.start_date, end_date: values.end_date, department: values.department || "", employee: values.employee || "", selected_fields: JSON.stringify(selected) },
 						freeze: true,
@@ -2368,7 +2515,7 @@ class PayrollInputCenter {
 		this.body().innerHTML = '<p>正在读取薪资与社保公积金档案…</p>';
 		const [salary_rows, contribution_response] = await Promise.all([
 			this.load_employee_salary_changes({ render: false }),
-			frappe.call({ method: "hrms.api.standing_pay.list_register", args: { company } }),
+			this.call_payroll_api({ method: "hrms.api.standing_pay.list_register", args: { company } }),
 		]);
 		if (this.active_tab !== route || this.company !== company) return;
 		const result = contribution_response.message || {};
@@ -2389,7 +2536,7 @@ class PayrollInputCenter {
 			const sortValue = enabled ? Number(row[field] || 0) : 0;
 			const content = !row
 				? "尚未建档"
-				: `${enabled ? money(row[field]) : "已停缴"}<br><small>${esc(row.effective_date)} 起</small>`;
+				: enabled ? money(row[field]) : "已停缴";
 			return `<td data-sort-value="${sortValue}">${content}</td>`;
 		};
 		const salary_fields = [["base_salary", "底薪"], ["function_allowance", "职能津贴"], ["certificate_allowance", "证书津贴"], ["multi_skill_allowance", "多能工津贴"]];
@@ -2473,7 +2620,7 @@ class PayrollInputCenter {
 	}
 
 	load_assignable_salary_grades() {
-		return frappe.call({
+		return this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_assignable_salary_grades",
 			args: { payroll_month: this.payroll_month },
 		}).then((response) => {
@@ -2484,16 +2631,16 @@ class PayrollInputCenter {
 	exclude_employee_from_payroll(employee, row = null) {
 		if (row && !this.confirm_salary_changes_saved()) return;
 		frappe.confirm(__("确认该员工本月不参与薪资计算？此操作不会删除原有定薪，恢复参与后会继续使用此前已提交的定薪。"), () => {
-		frappe.call({ method: "hrms.api.payroll_input.set_employee_payroll_participation", args: { employee, company: this.company, payroll_month: this.payroll_month, participates: 0 }, freeze: true, freeze_message: __("正在更新本月参与范围..."), callback: () => { frappe.show_alert({ message: __("已标记为本月不参与计算"), indicator: "green" }); this.process_readiness = {}; this.load_salary_assignment_step(); } });
+		this.call_payroll_api({ method: "hrms.api.payroll_input.set_employee_payroll_participation", args: { employee, company: this.company, payroll_month: this.payroll_month, participates: 0 }, freeze: true, freeze_message: __("正在更新本月参与范围..."), callback: () => { frappe.show_alert({ message: __("已标记为本月不参与计算"), indicator: "green" }); this.process_readiness = {}; this.load_salary_assignment_step(); } });
 		});
 	}
 
 	restore_employee_payroll_participation(employee) {
-		frappe.call({ method: "hrms.api.payroll_input.set_employee_payroll_participation", args: { employee, company: this.company, payroll_month: this.payroll_month, participates: 1 }, freeze: true, freeze_message: __("正在恢复本月参与范围..."), callback: () => { frappe.show_alert({ message: __("已恢复参与本月计算，请补齐定薪后再试算"), indicator: "blue" }); this.process_readiness = {}; this.load_salary_assignment_step(); } });
+		this.call_payroll_api({ method: "hrms.api.payroll_input.set_employee_payroll_participation", args: { employee, company: this.company, payroll_month: this.payroll_month, participates: 1 }, freeze: true, freeze_message: __("正在恢复本月参与范围..."), callback: () => { frappe.show_alert({ message: __("已恢复参与本月计算，请补齐定薪后再试算"), indicator: "blue" }); this.process_readiness = {}; this.load_salary_assignment_step(); } });
 	}
 
 	load_payroll_formula_catalog() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.get_payroll_formula_catalog",
 			args: { company: this.company, payroll_month: this.payroll_month },
 			callback: (response) => {
@@ -2509,7 +2656,7 @@ class PayrollInputCenter {
 		const target = this.wrapper.querySelector("[data-payroll-calculation-audit]");
 		if (!target) return;
 		target.innerHTML = `<div class="text-muted small">${frappe.utils.escape_html(__("正在核查公式参与、字段映射与已有结算记录..."))}</div>`;
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.get_payroll_calculation_audit",
 			args: { company: this.company, payroll_month: this.payroll_month },
 			callback: (response) => this.render_payroll_calculation_audit(response.message || {}),
@@ -2626,7 +2773,7 @@ class PayrollInputCenter {
 	toggle_inline_formula_editor(formula, index) {
 		if (this.inline_formula_editor_index === index) { this.inline_formula_editor_index = undefined; this.render_payroll_formula_table(); return; }
 		if (!this.can_edit_payroll_rules) {
-			frappe.call({ method: "hrms.api.payroll_input.can_edit_payroll_rules", callback: (response) => { this.can_edit_payroll_rules = Boolean(response.message); if (this.can_edit_payroll_rules) this.toggle_inline_formula_editor(formula, index); else frappe.msgprint(__("您没有维护薪资公式的权限")); } });
+			this.call_payroll_api({ method: "hrms.api.payroll_input.can_edit_payroll_rules", callback: (response) => { this.can_edit_payroll_rules = Boolean(response.message); if (this.can_edit_payroll_rules) this.toggle_inline_formula_editor(formula, index); else frappe.msgprint(__("您没有维护薪资公式的权限")); } });
 			return;
 		}
 		this.inline_formula_editor_index = index;
@@ -2642,10 +2789,10 @@ class PayrollInputCenter {
 		root.querySelector("[data-cancel-inline-formula]")?.addEventListener("click", () => { this.inline_formula_editor_index = undefined; this.render_payroll_formula_table(); });
 		root.querySelector("[data-save-inline-formula]")?.addEventListener("click", () => {
 			const expression = root.dataset.formulaExpression || "";
-			frappe.call({ method: "hrms.api.payroll_input.validate_payroll_formula", args: { company: this.company, output_field: formula.output_field, expression }, callback: (response) => {
+			this.call_payroll_api({ method: "hrms.api.payroll_input.validate_payroll_formula", args: { company: this.company, output_field: formula.output_field, expression }, callback: (response) => {
 				const result = response.message || {};
 				if (!result.valid) { frappe.msgprint({ title: __("公式无法保存"), indicator: "red", message: result.message || __("公式无效") }); return; }
-				frappe.call({ method: "hrms.api.payroll_input.upsert_payroll_formula", args: { company: this.company, payroll_month: this.payroll_month, output_field: formula.output_field, formula_expression: expression, rule_text: root.querySelector("[data-inline-formula-description]")?.value || "" }, freeze: true, freeze_message: __("正在保存公式..."), callback: () => { this.inline_formula_editor_index = undefined; frappe.show_alert({ message: __("公式已保存并进入下一次试算"), indicator: "green" }); this.load_payroll_formula_catalog(); } });
+				this.call_payroll_api({ method: "hrms.api.payroll_input.upsert_payroll_formula", args: { company: this.company, payroll_month: this.payroll_month, output_field: formula.output_field, formula_expression: expression, rule_text: root.querySelector("[data-inline-formula-description]")?.value || "" }, freeze: true, freeze_message: __("正在保存公式..."), callback: () => { this.inline_formula_editor_index = undefined; frappe.show_alert({ message: __("公式已保存并进入下一次试算"), indicator: "green" }); this.load_payroll_formula_catalog(); } });
 			} });
 		});
 	}
@@ -2657,7 +2804,7 @@ class PayrollInputCenter {
 
 	edit_payroll_formula(formula = {}, permissionChecked = false) {
 		if (!this.can_edit_payroll_rules && !permissionChecked) {
-			frappe.call({ method: "hrms.api.payroll_input.can_edit_payroll_rules", callback: (response) => {
+			this.call_payroll_api({ method: "hrms.api.payroll_input.can_edit_payroll_rules", callback: (response) => {
 				this.can_edit_payroll_rules = Boolean(response.message);
 				if (this.can_edit_payroll_rules) return this.edit_payroll_formula(formula, true);
 				frappe.msgprint(__("您没有维护薪资公式的权限"));
@@ -2685,10 +2832,10 @@ class PayrollInputCenter {
 			],
 			primary_action_label: __("校验并保存"),
 			primary_action: (values) => {
-				frappe.call({ method: "hrms.api.payroll_input.validate_payroll_formula", args: { company: this.company, output_field: values.output_field, expression: values.formula_expression }, callback: (response) => {
+				this.call_payroll_api({ method: "hrms.api.payroll_input.validate_payroll_formula", args: { company: this.company, output_field: values.output_field, expression: values.formula_expression }, callback: (response) => {
 					const result = response.message || {};
 					if (!result.valid) { dialog.get_field("validation").$wrapper.html(`<div class="alert alert-danger">${frappe.utils.escape_html(result.message || __("公式无效"))}</div>`); return; }
-					frappe.call({ method: "hrms.api.payroll_input.upsert_payroll_formula", args: this.scope_args(values), freeze: true, freeze_message: __("正在保存公式..."), callback: () => { dialog.hide(); frappe.show_alert({ message: __("公式已保存并进入下一次试算"), indicator: "green" }); this.load_payroll_formula_catalog(); } });
+					this.call_payroll_api({ method: "hrms.api.payroll_input.upsert_payroll_formula", args: this.scope_args(values), freeze: true, freeze_message: __("正在保存公式..."), callback: () => { dialog.hide(); frappe.show_alert({ message: __("公式已保存并进入下一次试算"), indicator: "green" }); this.load_payroll_formula_catalog(); } });
 				} });
 			},
 		});
@@ -2737,11 +2884,11 @@ class PayrollInputCenter {
 	}
 
 	ensure_default_payroll_formulas() {
-		frappe.call({ method: "hrms.api.payroll_input.ensure_default_payroll_formulas", args: { company: this.company }, freeze: true, freeze_message: __("正在初始化公司公式..."), callback: () => { frappe.show_alert({ message: __("公司公式已初始化"), indicator: "green" }); this.load_payroll_formula_catalog(); } });
+		this.call_payroll_api({ method: "hrms.api.payroll_input.ensure_default_payroll_formulas", args: { company: this.company }, freeze: true, freeze_message: __("正在初始化公司公式..."), callback: () => { frappe.show_alert({ message: __("公司公式已初始化"), indicator: "green" }); this.load_payroll_formula_catalog(); } });
 	}
 
 	download_payroll_formula_template() {
-		frappe.call({ method: "hrms.api.payroll_input.create_payroll_formula_template_file", args: { company: this.company }, freeze: true, freeze_message: __("正在生成公式模板..."), callback: (response) => this.download_generated_file(response.message?.file_url, response.message?.file_name) });
+		this.call_payroll_api({ method: "hrms.api.payroll_input.create_payroll_formula_template_file", args: { company: this.company }, freeze: true, freeze_message: __("正在生成公式模板..."), callback: (response) => this.download_generated_file(response.message?.file_url, response.message?.file_name) });
 	}
 
 	open_payroll_formula_import() {
@@ -2749,11 +2896,11 @@ class PayrollInputCenter {
 	}
 
 	preview_payroll_formula_import(fileUrl) {
-		frappe.call({ method: "hrms.api.payroll_input.preview_payroll_formula_source_workbook", args: { file_url: fileUrl, company: this.company }, freeze: true, freeze_message: __("正在识别 Excel 公式..."), callback: (response) => {
+		this.call_payroll_api({ method: "hrms.api.payroll_input.preview_payroll_formula_source_workbook", args: { file_url: fileUrl, company: this.company }, freeze: true, freeze_message: __("正在识别 Excel 公式..."), callback: (response) => {
 			const result = response.message || {};
 			const previewHtml = `<div class="hrms-payroll-import-formula-note">${frappe.utils.escape_html(result.source_type === "Excel薪资结算表" ? __("已将 Excel 单元格引用转换为系统业务字段；确认后会写入本公司的公式版本。") : __("已识别为系统公式模板。"))}</div>${this.render_table("", ["结果项目", "Excel 公式", "系统公式", "状态"], result.rows || [], (row) => [row["结果项目"], row["Excel公式"] || "-", row["计算公式"], row.valid ? __("通过") : row.message])}`;
 			const dialog = new frappe.ui.Dialog({ title: __("Excel 公式导入预览"), fields: [{ fieldname: "preview", fieldtype: "HTML", options: previewHtml }], primary_action_label: __("确认导入"), primary_action: () => {
-				frappe.call({ method: "hrms.api.payroll_input.import_payroll_formula_source_workbook", args: { file_url: fileUrl, company: this.company }, freeze: true, freeze_message: __("正在录入系统公式..."), callback: () => { dialog.hide(); frappe.show_alert({ message: __("Excel 公式已录入系统"), indicator: "green" }); this.load_payroll_formula_catalog(); } });
+				this.call_payroll_api({ method: "hrms.api.payroll_input.import_payroll_formula_source_workbook", args: { file_url: fileUrl, company: this.company }, freeze: true, freeze_message: __("正在录入系统公式..."), callback: () => { dialog.hide(); frappe.show_alert({ message: __("Excel 公式已录入系统"), indicator: "green" }); this.load_payroll_formula_catalog(); } });
 			} });
 			dialog.show();
 			if (result.valid_count !== result.row_count) dialog.get_primary_btn().prop("disabled", true);
@@ -2808,7 +2955,7 @@ class PayrollInputCenter {
 	}
 
 	load_payroll_configuration_items() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_configuration_items",
 			args: { company: this.company },
 			callback: (response) => {
@@ -2896,7 +3043,7 @@ class PayrollInputCenter {
 	}
 
 	load_rule_permission() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.can_edit_payroll_rules",
 			callback: (response) => {
 				this.can_edit_payroll_rules = Boolean(response.message);
@@ -2908,7 +3055,7 @@ class PayrollInputCenter {
 	}
 
 	load_payroll_rules() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_rules",
 			args: { company: this.company, payroll_month: this.payroll_month },
 			callback: (response) => {
@@ -2935,7 +3082,7 @@ class PayrollInputCenter {
 	}
 
 	validate_payroll_rule_execution() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.validate_payroll_rule_execution",
 			args: { company: this.company, payroll_month: this.payroll_month },
 			callback: (response) => {
@@ -2953,7 +3100,7 @@ class PayrollInputCenter {
 			frappe.msgprint(__("您没有维护薪资规则的权限"));
 			return;
 		}
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.ensure_default_payroll_rules",
 			args: { company: this.company },
 			freeze: true,
@@ -3013,7 +3160,7 @@ class PayrollInputCenter {
 				parameters[field.dataset.quickRuleField] = type === "json" ? JSON.parse(field.value || "null") : type === "boolean" ? field.value === "1" : field.value;
 			});
 		} catch (error) { frappe.msgprint(__("数组/对象设置不是有效 JSON，请修正后再保存。")); return; }
-		frappe.call({ method: "hrms.api.payroll_input.save_payroll_rule_version", args: { company: this.company, payroll_month: this.payroll_month, rule_code: rule.rule_code, parameters_json: JSON.stringify(parameters), status: target.querySelector("[data-quick-rule-status]")?.value || "已启用" }, freeze: true, freeze_message: __("正在保存本月起规则版本..."), callback: () => { frappe.show_alert({ message: __("规则版本已保存"), indicator: "green" }); this.load_payroll_rules(); this.load_payroll_configuration_items(); } });
+		this.call_payroll_api({ method: "hrms.api.payroll_input.save_payroll_rule_version", args: { company: this.company, payroll_month: this.payroll_month, rule_code: rule.rule_code, parameters_json: JSON.stringify(parameters), status: target.querySelector("[data-quick-rule-status]")?.value || "已启用" }, freeze: true, freeze_message: __("正在保存本月起规则版本..."), callback: () => { frappe.show_alert({ message: __("规则版本已保存"), indicator: "green" }); this.load_payroll_rules(); this.load_payroll_configuration_items(); } });
 	}
 
 	edit_payroll_rule(rule = {}) {
@@ -3024,7 +3171,7 @@ class PayrollInputCenter {
 	}
 
 	load_payroll_field_mappings() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_field_mappings",
 			callback: (response) => {
 					this.payroll_mapping_rows = response.message || [];
@@ -3048,7 +3195,7 @@ class PayrollInputCenter {
 			frappe.msgprint(__("您没有维护薪资字段映射的权限"));
 			return;
 		}
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.ensure_default_payroll_field_mappings",
 			freeze: true,
 			freeze_message: __("正在刷新薪资结算字段映射..."),
@@ -3080,8 +3227,7 @@ class PayrollInputCenter {
 				{ fieldname: "status", fieldtype: "Select", label: __("状态"), options: "已启用\n已停用", default: mapping.status || "已启用" },
 			],
 			(values) => {
-				frappe
-					.call({
+				this.call_payroll_api({
 						method: "hrms.api.payroll_input.upsert_payroll_field_mapping",
 						args: values,
 						freeze: true,
@@ -3135,7 +3281,7 @@ class PayrollInputCenter {
 	}
 
 	load_salary_architecture_overview() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.get_salary_architecture_workbench",
 			args: { company: this.company, payroll_month: this.payroll_month },
 			callback: (response) => {
@@ -3217,7 +3363,7 @@ class PayrollInputCenter {
 	}
 
 	download_employee_salary_change_template() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.create_employee_salary_change_template_file",
 			freeze: true,
 			freeze_message: __("正在生成员工定薪模板..."),
@@ -3234,7 +3380,7 @@ class PayrollInputCenter {
 			restrictions: { allowed_file_types: [".xlsx"] },
 			on_success: (file) => {
 				this.employee_salary_change_file_url = file.file_url;
-				frappe.call({
+				this.call_payroll_api({
 					method: "hrms.api.payroll_input.preview_employee_salary_change_workbook",
 					args: { file_url: file.file_url, company: this.company, payroll_month: "", request_mode: "initial" },
 					freeze: true,
@@ -3277,7 +3423,7 @@ class PayrollInputCenter {
 
 	import_employee_salary_change_workbook() {
 		if (!this.employee_salary_change_file_url) return;
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.import_employee_salary_change_workbook",
 			args: { file_url: this.employee_salary_change_file_url, company: this.company, payroll_month: "", request_mode: "initial" },
 			freeze: true,
@@ -3296,7 +3442,7 @@ class PayrollInputCenter {
 	}
 
 	load_employee_salary_change_import_batches() {
-		return frappe.call({
+		return this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_employee_salary_change_import_batches",
 			args: { company: this.company, page_length: 10 },
 		}).then((response) => {
@@ -3321,7 +3467,7 @@ class PayrollInputCenter {
 	request_salary_change_import_rollback(batchName) {
 		frappe.prompt([{ fieldname: "reason", fieldtype: "Small Text", label: __("撤销原因"), reqd: 1 }], (values) => {
 			frappe.confirm(__("确认撤销该批次吗？新建的员工定薪将被删除，原有记录将恢复到导入前。"), () => {
-				frappe.call({
+				this.call_payroll_api({
 					method: "hrms.api.payroll_input.rollback_employee_salary_change_import_batch",
 					args: { batch_name: batchName, company: this.company, reason: values.reason },
 					freeze: true,
@@ -3354,8 +3500,7 @@ class PayrollInputCenter {
 	}
 
 	preview_salary_structure_workbook() {
-		frappe
-			.call({
+		this.call_payroll_api({
 				method: "hrms.api.payroll_input.preview_salary_structure_workbook",
 				args: { file_url: this.salary_structure_file_url },
 				freeze: true,
@@ -3372,8 +3517,7 @@ class PayrollInputCenter {
 				{ fieldname: "effective_to", fieldtype: "Date", label: __("生效结束") },
 			],
 			(values) => {
-				frappe
-					.call({
+				this.call_payroll_api({
 						method: "hrms.api.payroll_input.import_salary_structure_workbook",
 						args: {
 							file_url: this.salary_structure_file_url,
@@ -3394,7 +3538,7 @@ class PayrollInputCenter {
 	}
 
 	load_salary_structure_versions() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_salary_structure_versions",
 			args: { page_length: 100000 },
 			callback: (response) => {
@@ -3412,7 +3556,7 @@ class PayrollInputCenter {
 	}
 
 	load_salary_grades() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_salary_grades",
 			args: { page_length: 100000 },
 			callback: (response) => {
@@ -3435,7 +3579,7 @@ class PayrollInputCenter {
 	}
 
 	load_employee_salary_changes({ render = true } = {}) {
-		return frappe.call({
+		return this.call_payroll_api({
 			method: this.active_tab === "salary-assignments" ? "hrms.api.standing_pay.initial_salary_rows" : "hrms.api.payroll_input.list_employee_salary_change_grid",
 			args: this.active_tab === "salary-assignments" ? { company: this.company } : { company: this.company, payroll_month: "", page_length: 1000 },
 		}).then((response) => {
@@ -3577,7 +3721,7 @@ class PayrollInputCenter {
 		}
 		row.dataset.salaryChangeSaving = "1";
 		this.set_salary_change_dirty_state(row, true, "saving");
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.update_employee_salary_change",
 			args: { name: row.dataset.salaryChangeName, employee: row.dataset.salaryChangeEmployee, company: this.company, values: JSON.stringify(values), request_mode: this.active_tab === "salary-assignments" ? "initial" : "change" },
 			callback: (response) => {
@@ -3694,7 +3838,7 @@ class PayrollInputCenter {
 		const body = this.body();
 		if (!body) return;
 		body.innerHTML = '<p>正在读取个人薪资变化…</p>';
-		const response = await frappe.call({ method: "hrms.api.standing_pay.employee_history", args: { company, employee } });
+		const response = await this.call_payroll_api({ method: "hrms.api.standing_pay.employee_history", args: { company, employee } });
 		if (this.company !== company || this.active_tab !== route || !this.body()) return;
 		const rows = response.message || [];
 		const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
@@ -3778,15 +3922,25 @@ class PayrollInputCenter {
 		sync();
 	}
 
+	standing_approval_category(row) {
+		const kind = row.decision_doctype === "HRMS Employee Salary Change" ? "薪资" : row.contribution_type || "社保";
+		return `${kind}${row.previous_standard ? "修改" : "首次录入"}`;
+	}
+
 	async load_standing_approvals(target, doctype) {
 		if (!target || !this.can_approve_standing()) return;
-		const response = await frappe.call({ method: "hrms.api.standing_pay.list_pending", args: { company: this.company } });
-		if (!target?.isConnected) return;
+		const response = await this.call_payroll_api({ method: "hrms.api.standing_pay.list_pending", args: { company: this.company } });
+		if (!target?.isConnected || (target.dataset?.approvalView && target.dataset.approvalView !== "pending")) return;
 		const rows = (response.message || []).filter((row) => !doctype || row.decision_doctype === doctype);
 		const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
 		const eligible = rows.filter((row) => frappe.session.user === "Administrator" || (row.submitted_by || row.owner) !== frappe.session.user);
-		target.innerHTML = `<section class="hrms-payroll-input-panel"><div class="hrms-standing-approval-heading"><h3>待审批变更（${rows.length}）</h3><div class="hrms-payroll-action-group"><label><input type="checkbox" data-standing-select-filtered ${eligible.length ? "" : "disabled"}> 全选当前筛选结果（跨页）</label><span data-standing-selection-count>已选 0 条</span><button class="btn btn-primary btn-sm" type="button" data-standing-approve-all disabled>批量批准</button></div></div><p>审批通过前继续使用当前标准；申请内容会逐项显示“当前标准 → 申请后标准”。最高管理员 Administrator 可自审，其他审批账户不能自审。勾选需要批准的申请后批量批准；筛选后不匹配的申请会取消勾选。</p><div class="table-responsive hrms-standing-table-scroll" role="region" aria-label="待审批变更" tabindex="0"><table class="table table-bordered table-sm hrms-standing-approval-table"><thead><tr><th>选择</th><th>姓名</th><th>工号</th><th>类型 / 生效日期</th><th>变更内容（当前 → 申请后）</th><th>修改人 / 修改时间</th><th>修改原因</th><th>操作</th></tr></thead><tbody>${rows.map((row, index) => `<tr data-standing-index="${index}" data-payroll-employee-code="${esc(row.employee_code || "")}"><td><input type="checkbox" data-standing-select="${index}" aria-label="选择${esc(row.employee_name)}的申请" ${eligible.includes(row) ? "" : "disabled"}></td><td><button class="btn btn-link btn-xs" data-standing-history="${esc(row.employee)}">${esc(row.employee_name)}</button></td><td>${esc(row.employee_code)}</td><td>${esc(row.contribution_type || "定薪")} / ${esc(row.effective_date)}</td><td>${this.standing_approval_change(row)}</td><td>${esc(row.submitted_by || row.owner)}<br>${esc(this.standing_time(row.submitted_on || row.creation))}</td><td>${esc(row.remarks)}</td><td>${(row.submitted_by || row.owner) === frappe.session.user && frappe.session.user !== "Administrator" ? "等待其他管理员审批" : `<button class="btn btn-primary btn-xs" data-standing-review="${index}" data-decision="已批准">批准</button> <button class="btn btn-default btn-xs" data-standing-review="${index}" data-decision="已驳回">驳回</button>`}</td></tr>`).join("") || '<tr><td colspan="8">暂无待审批变更</td></tr>'}</tbody></table></div></section>`;
+		target.innerHTML = `<section class="hrms-payroll-input-panel"><div class="hrms-standing-approval-heading"><h3>待审批变更（${rows.length}）</h3><div class="hrms-payroll-action-group"><label>审批类型 <select class="form-control input-sm" data-standing-approval-category aria-label="审批类型"><option value="">全部类型（${rows.length}）</option>${["薪资首次录入", "薪资修改", "社保首次录入", "社保修改", "公积金首次录入", "公积金修改"].map((category) => `<option value="${esc(category)}">${esc(category)}（${rows.filter((row) => this.standing_approval_category(row) === category).length}）</option>`).join("")}</select></label><label><input type="checkbox" data-standing-select-filtered ${eligible.length ? "" : "disabled"}> 全选当前筛选结果（跨页）</label><span data-standing-selection-count>已选 0 条</span><button class="btn btn-primary btn-sm" type="button" data-standing-approve-all disabled>批量批准</button></div></div><p>审批通过前继续使用当前标准；申请内容会逐项显示“当前标准 → 申请后标准”。最高管理员 Administrator 可自审，其他审批账户不能自审。勾选需要批准的申请后批量批准；筛选后不匹配的申请会取消勾选。</p><div class="table-responsive hrms-standing-table-scroll" role="region" aria-label="待审批变更" tabindex="0"><table class="table table-bordered table-sm hrms-standing-approval-table"><thead><tr><th>选择</th><th>姓名</th><th>工号</th><th>类型 / 生效日期</th><th>变更内容（当前 → 申请后）</th><th>修改人 / 修改时间</th><th>修改原因</th><th>操作</th></tr></thead><tbody>${rows.map((row, index) => `<tr data-standing-approval-category="${esc(this.standing_approval_category(row))}" data-standing-index="${index}" data-payroll-employee-code="${esc(row.employee_code || "")}"><td><input type="checkbox" data-standing-select="${index}" aria-label="选择${esc(row.employee_name)}的申请" ${eligible.includes(row) ? "" : "disabled"}></td><td><button class="btn btn-link btn-xs" data-standing-history="${esc(row.employee)}">${esc(row.employee_name)}</button></td><td>${esc(row.employee_code)}</td><td>${esc(this.standing_approval_category(row))} / ${esc(row.effective_date)}</td><td>${this.standing_approval_change(row)}</td><td>${esc(row.submitted_by || row.owner)}<br>${esc(this.standing_time(row.submitted_on || row.creation))}</td><td>${esc(row.remarks)}</td><td>${(row.submitted_by || row.owner) === frappe.session.user && frappe.session.user !== "Administrator" ? "等待其他管理员审批" : `<button class="btn btn-primary btn-xs" data-standing-review="${index}" data-decision="已批准">批准</button> <button class="btn btn-default btn-xs" data-standing-review="${index}" data-decision="已驳回">驳回</button>`}</td></tr>`).join("") || '<tr><td colspan="8">暂无待审批变更</td></tr>'}</tbody></table></div></section>`;
 		this.bind_standing_approval_selection(target);
+		target.querySelector("[data-standing-approval-category]")?.addEventListener("change", (event) => {
+			const table = target.querySelector("table");
+			table.dataset.standingApprovalCategory = event.target.value;
+			this.filter_table_rows(table);
+		});
 
 		target.querySelector("[data-standing-approve-all]")?.addEventListener("click", () => {
 			const selected = eligible.filter((row) => {
@@ -3798,7 +3952,7 @@ class PayrollInputCenter {
 			if (!count) { frappe.msgprint("请先勾选需要批准的申请。"); return; }
 			frappe.prompt([{ fieldname: "review_note", fieldtype: "Small Text", label: "统一审批意见", reqd: 1 }], (values) => {
 				frappe.confirm(`确认批准已勾选的 ${count} 条申请？这些申请将使用同一审批意见；任一申请已变化或校验失败时，本次全部不批准。`, async () => {
-					const result = await frappe.call({ method: "hrms.api.standing_pay.approve_pending_batch", args: {
+					const result = await this.call_payroll_api({ method: "hrms.api.standing_pay.approve_pending_batch", args: {
 						company: this.company,
 						requests: JSON.stringify(selected.map((row) => ({ decision_doctype: row.decision_doctype, name: row.name }))),
 						review_note: values.review_note,
@@ -3813,7 +3967,7 @@ class PayrollInputCenter {
 		target.querySelectorAll("[data-standing-review]").forEach((button) => button.addEventListener("click", () => {
 			const row = rows[Number(button.dataset.standingReview)];
 			frappe.prompt([{ fieldname: "review_note", fieldtype: "Small Text", label: "审批意见", reqd: 1 }], async (values) => {
-				await frappe.call({ method: "hrms.api.standing_pay.review_decision", args: { company: this.company, decision_doctype: row.decision_doctype, name: row.name, decision: button.dataset.decision, review_note: values.review_note }, freeze: true });
+				await this.call_payroll_api({ method: "hrms.api.standing_pay.review_decision", args: { company: this.company, decision_doctype: row.decision_doctype, name: row.name, decision: button.dataset.decision, review_note: values.review_note }, freeze: true });
 				frappe.show_alert({ message: `申请${button.dataset.decision}`, indicator: "green" });
 				if (button.dataset.decision === "已批准" && row.decision_doctype === "HRMS Employee Salary Change") this.resume_pending_payroll_calculation();
 				else this.load_active_tab();
@@ -3895,7 +4049,7 @@ class PayrollInputCenter {
 		const readOnly = route === "contribution-view";
 		const modifying = route === "contribution-changes";
 		this.body().innerHTML = '<p>正在读取持续生效缴费档案…</p>';
-		const response = await frappe.call({ method: "hrms.api.standing_pay.list_register", args: { company } });
+		const response = await this.call_payroll_api({ method: "hrms.api.standing_pay.list_register", args: { company } });
 		if (this.active_tab !== route || this.company !== company) return;
 		const result = response.message || {};
 		if (readOnly) { this.render_contribution_view(result); return; }
@@ -3930,7 +4084,7 @@ class PayrollInputCenter {
 				{ fieldname: "company_amount", fieldtype: "Currency", label: "公司承担", default: initial?.company_amount || 0 },
 				{ fieldname: "remarks", fieldtype: "Small Text", label: modifying ? "修改原因" : "录入说明", reqd: 1 },
 			], primary_action_label: modifying ? "提交申请，等待审批" : "提交首次录入", primary_action: async (values) => {
-				await frappe.call({ method: "hrms.api.standing_pay.submit_contribution", args: { company, employee: employee.employee, ...values, request_mode: modifying ? "change" : "initial" }, freeze: true });
+				await this.call_payroll_api({ method: "hrms.api.standing_pay.submit_contribution", args: { company, employee: employee.employee, ...values, request_mode: modifying ? "change" : "initial" }, freeze: true });
 				dialog.hide(); frappe.show_alert({ message: "变更已提交，审批通过后生效", indicator: "green" }); this.load_active_tab();
 			} });
 			dialog.show();
@@ -3942,17 +4096,54 @@ class PayrollInputCenter {
 		frappe.prompt([{ fieldname: "effective_date", fieldtype: "Date", label: "本次导入生效日期", default: frappe.datetime.get_today(), reqd: 1 }], ({ effective_date }) => {
 			new frappe.ui.FileUploader({ allow_multiple: false, restrictions: { allowed_file_types: [".xlsx"] }, on_success: async (file) => {
 				const args = { company: this.company, file_url: file.file_url, effective_date, request_mode: "initial" };
-				const response = await frappe.call({ method: "hrms.api.standing_pay.import_contribution_workbook", args: { ...args, preview: 1 }, freeze: true });
-				const data = response.message || {};
+				const response = await this.call_payroll_api({ method: "hrms.api.standing_pay.import_contribution_workbook", args: { ...args, preview: 1 }, freeze: true });
+				let data = response.message || {};
+				const corrections = {};
 				const esc = (value) => frappe.utils.escape_html(String(value ?? ""));
 				const dialog = new frappe.ui.Dialog({ title: "社保 / 公积金导入预览", size: "extra-large", fields: [{ fieldname: "preview", fieldtype: "HTML" }], primary_action_label: "提交全部变更审批", primary_action: async () => {
 					if (data.errors?.length || !data.rows?.length) return;
-					await frappe.call({ method: "hrms.api.standing_pay.import_contribution_workbook", args: { ...args, preview: 0 }, freeze: true });
-					dialog.hide(); this.load_contribution_register();
+					dialog.get_primary_btn().prop("disabled", true);
+					try {
+						const submitted = await this.call_payroll_api({ method: "hrms.api.standing_pay.import_contribution_workbook", args: { ...args, corrections: JSON.stringify(corrections), preview: 0 }, freeze: true });
+						dialog.hide();
+						frappe.msgprint({ title: "缴费导入已提交", message: `已提交 ${Number(submitted.message?.submitted || 0)} 条缴费申请，请到第四步“审批”处理。批准并到达生效日期后，此处才会显示缴费标准。`, indicator: "green" });
+						this.load_contribution_register();
+					} finally {
+						dialog.get_primary_btn().prop("disabled", false);
+					}
 				} });
-				dialog.fields_dict.preview.$wrapper.html(`<p>${esc(effective_date)} 起生效，审批前原标准保持有效。</p><p class="text-danger">${(data.errors || []).map(esc).join("<br>")}</p><table class="table table-bordered"><thead><tr><th>姓名</th><th>工号</th><th>类型</th><th>个人承担</th><th>公司承担</th></tr></thead><tbody>${(data.rows || []).map((row) => `<tr><td>${esc(row.employee_name)}</td><td>${esc(row.employee_code || row.employee)}</td><td>${esc(row.contribution_type)}</td><td>${esc(row.personal_amount)}</td><td>${esc(row.company_amount)}</td></tr>`).join("")}</tbody></table>`);
+				const render = () => {
+					const sourceEntries = data.entries || [];
+					// Keep source order within each group and edit the same displayed row.
+					const entries = sourceEntries.filter((row) => row.error).concat(sourceEntries.filter((row) => !row.error));
+					const wrapper = dialog.fields_dict.preview.$wrapper;
+					wrapper.html(`<style>.hrms-contribution-import-preview tr.hrms-contribution-import-error > td { background-color: #fff1f0 !important; color: #b42318 !important; }.hrms-contribution-import-preview tr.hrms-contribution-import-error button { color: #b42318; border-color: #f5b7b1; }</style><p>${esc(effective_date)} 起生效，审批前原标准保持有效。</p><p>发现异常时，点击“修改本行”修正工号、姓名或金额并重新校验。已有缴费记录可明确选择“申请修改”。修改说明将随申请保留；也可关闭预览，修正 Excel 后重新上传。</p><p class="text-danger">${(data.errors || []).map(esc).join("<br>")}</p><p>校验未通过 ${entries.filter((row) => row.error).length} 条，已置顶标红；校验通过 ${entries.filter((row) => !row.error).length} 条。</p><div class="table-responsive"><table class="table table-bordered hrms-contribution-import-preview"><thead><tr><th>来源 / 明细序号</th><th>姓名</th><th>工号</th><th>类型 / 方式</th><th>个人承担</th><th>公司承担</th><th>校验 / 修改说明</th><th>操作</th></tr></thead><tbody>${entries.map((row, index) => `<tr class="${row.error ? "hrms-contribution-import-error" : ""}"><td>${esc(row.source_sheet)} / ${esc(row.source_row)}</td><td>${esc(row.employee_name)}</td><td>${esc(row.employee_code)}</td><td>${esc(row.contribution_type)} / ${row.request_mode === "change" ? "申请修改" : "首次录入"}</td><td>${esc(row.personal_amount)}</td><td>${esc(row.company_amount)}</td><td>${esc(row.error ? `校验未通过：${row.error}` : "校验通过")}${row.correction_reason ? `<br>修改说明：${esc(row.correction_reason)}` : ""}</td><td><button type="button" class="btn btn-default btn-xs" data-correct-contribution="${index}">修改本行</button></td></tr>`).join("")}</tbody></table></div>`);
+					wrapper.find("[data-correct-contribution]").on("click", (event) => {
+						const row = entries[Number(event.currentTarget.dataset.correctContribution)];
+						const editor = new frappe.ui.Dialog({ title: `修改导入行 · ${row.source_sheet} / ${row.source_row}`, fields: [
+							{ fieldname: "employee_code", fieldtype: "Data", label: "工号", default: row.employee_code, reqd: 1 },
+							{ fieldname: "employee_name", fieldtype: "Data", label: "姓名", default: row.employee_name, reqd: 1 },
+							{ fieldname: "personal_amount", fieldtype: "Data", label: "个人承担（元）", default: row.personal_amount, reqd: 1 },
+							{ fieldname: "company_amount", fieldtype: "Data", label: "公司承担（元）", default: row.company_amount, reqd: 1 },
+							{ fieldname: "mode", fieldtype: "Select", label: "录入方式", options: "首次录入\n申请修改", default: row.request_mode === "change" ? "申请修改" : "首次录入", reqd: 1 },
+							{ fieldname: "reason", fieldtype: "Small Text", label: "修改说明", default: row.correction_reason, reqd: 1 },
+						], primary_action_label: "保存修正并重新校验", primary_action: async (values) => {
+							const next = { ...corrections, [row.row_id]: { ...values, request_mode: values.mode === "申请修改" ? "change" : "initial" } };
+							editor.get_primary_btn().prop("disabled", true);
+							try {
+								const checked = await this.call_payroll_api({ method: "hrms.api.standing_pay.import_contribution_workbook", args: { ...args, corrections: JSON.stringify(next), preview: 1 }, freeze: true });
+								Object.assign(corrections, next);
+								data = checked.message || {};
+								editor.hide();
+								render();
+							} finally { editor.get_primary_btn().prop("disabled", false); }
+						} });
+						editor.show();
+					});
+					dialog.get_primary_btn().prop("disabled", !!data.errors?.length || !data.rows?.length);
+				};
 				dialog.show();
-				if (data.errors?.length || !data.rows?.length) dialog.get_primary_btn().prop("disabled", true);
+				render();
 			} });
 		}, "导入缴费变更");
 	}
@@ -3981,7 +4172,7 @@ class PayrollInputCenter {
 	}
 
 	load_welfare_rules() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_welfare_source_rules",
 			callback: (response) => {
 				const target = this.wrapper.querySelector("[data-welfare-rules]");
@@ -4010,8 +4201,7 @@ class PayrollInputCenter {
 				{ fieldname: "remarks", fieldtype: "Small Text", label: __("备注") },
 			],
 			(values) => {
-				frappe
-					.call({
+				this.call_payroll_api({
 						method: "hrms.api.payroll_input.upsert_payroll_welfare_source_record",
 						args: this.scope_args({ ...values, record_manual_change: 1 }),
 						freeze: true,
@@ -4027,7 +4217,7 @@ class PayrollInputCenter {
 	}
 
 	load_welfare_source_records() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_welfare_source_records",
 			args: this.scope_args(),
 			callback: (response) => {
@@ -4050,7 +4240,7 @@ class PayrollInputCenter {
 	}
 
 	sync_welfare_sources_to_payroll_variables() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.sync_welfare_sources_to_payroll_variables",
 			args: this.scope_args(),
 			freeze: true,
@@ -4065,7 +4255,7 @@ class PayrollInputCenter {
 
 	confirm_all_welfare_sources() {
 		frappe.confirm(__("确认并同步本月全部福利/扣款来源？系统会先检查员工匹配，异常记录不会被确认。"), () => {
-			frappe.call({
+			this.call_payroll_api({
 				method: "hrms.api.payroll_input.confirm_all_payroll_welfare_sources",
 				args: this.scope_args(),
 				freeze: true,
@@ -4108,14 +4298,13 @@ class PayrollInputCenter {
 
 	calculate_monthly_payroll() {
 		if (!this.ensure_payroll_generation_scope(__("薪资计算"))) return;
-		frappe
-			.call({
+		this.call_payroll_api({
 				method: "hrms.api.payroll_input.generate_payroll_input_records",
 				args: this.scope_args(),
 				freeze: true,
 				freeze_message: __("正在生成薪资输入表..."),
 			})
-			.then(() => frappe.call({
+			.then(() => this.call_payroll_api({
 				method: "hrms.api.payroll_input.generate_payroll_settlement_records",
 				args: this.scope_args(),
 				freeze: true,
@@ -4131,7 +4320,7 @@ class PayrollInputCenter {
 	}
 
 	load_variable_source_catalog() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_variable_source_types",
 			callback: (response) => {
 				this.variable_source_catalog = Array.isArray(response.message) ? response.message : [];
@@ -4227,7 +4416,7 @@ class PayrollInputCenter {
 		if (!previewTarget) return;
 		previewTarget.hidden = false;
 		previewTarget.innerHTML = `<div class="hrms-payroll-source-empty-detail text-muted">${frappe.utils.escape_html(__("正在读取已锁定的考勤终稿预览…"))}</div>`;
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.attendance_processing_center.get_monthly_final_preview",
 			args: { company: this.company, attendance_month: this.payroll_month, kind: "finance" },
 			callback: (response) => {
@@ -4414,7 +4603,7 @@ class PayrollInputCenter {
 		if (!this.company || !this.payroll_month || (!force && this.attendance_final_preview?._scope === scope)) return;
 		if (this.attendance_final_preview_loading_scope === scope) return;
 		this.attendance_final_preview_loading_scope = scope;
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.attendance_processing_center.get_monthly_final_preview",
 			args: { company: this.company, attendance_month: this.payroll_month, kind: "finance" },
 			callback: (response) => {
@@ -4431,7 +4620,7 @@ class PayrollInputCenter {
 	}
 
 	download_housing_allowance_base_template() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.create_housing_allowance_base_data_template_file",
 			args: { company: this.company, payroll_month: this.payroll_month },
 			freeze: true,
@@ -4445,7 +4634,7 @@ class PayrollInputCenter {
 
 	download_source_signature_sheet(batchName, exportView = "personal") {
 		if (!batchName) return;
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.download_payroll_source_signature_sheet",
 			args: { batch_name: batchName, company: this.company, payroll_month: this.payroll_month, export_view: exportView },
 			freeze: true,
@@ -4458,7 +4647,7 @@ class PayrollInputCenter {
 	}
 
 	create_editable_batch_version(batch_name) {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.create_editable_payroll_variable_batch_version",
 			args: { batch_name, company: this.company, payroll_month: this.payroll_month },
 			freeze: true,
@@ -4474,7 +4663,7 @@ class PayrollInputCenter {
 	}
 
 	load_source_card_records(batch_name, target) {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_variable_records",
 			args: this.scope_args({ import_batch: batch_name, page_length: 5000 }),
 			callback: (response) => {
@@ -4503,8 +4692,7 @@ class PayrollInputCenter {
 	}
 
 	preview_payroll_variable_workbook() {
-		frappe
-			.call({
+		this.call_payroll_api({
 				method: "hrms.api.payroll_input.preview_payroll_variable_workbook",
 				args: { file_url: this.file_url, company: this.company, payroll_month: this.payroll_month },
 				freeze: true,
@@ -4523,8 +4711,7 @@ class PayrollInputCenter {
 			frappe.msgprint(__("请从对应来源卡重新选择文件并完成预览。"));
 			return;
 		}
-		frappe
-			.call({
+		this.call_payroll_api({
 				method: "hrms.api.payroll_input.import_payroll_variable_workbook",
 				args: this.scope_args({ file_url: this.file_url, source_type: this.selected_payroll_source?.source_code || "" }),
 				freeze: true,
@@ -4543,7 +4730,7 @@ class PayrollInputCenter {
 	}
 
 	load_import_batches() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_variable_import_batches",
 			args: this.scope_args(),
 			callback: (response) => {
@@ -4569,7 +4756,7 @@ class PayrollInputCenter {
 	load_import_batch_history(target, refresh) {
 		if (!target?.isConnected) return;
 		target.innerHTML = `<div class="text-muted">${frappe.utils.escape_html(__("正在读取导入记录…"))}</div>`;
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_variable_import_batches",
 			args: { company: this.company, payroll_month: "", page_length: 200 },
 			callback: (response) => {
@@ -4694,7 +4881,7 @@ class PayrollInputCenter {
 	}
 
 	select_import_batch_version(batch_name) {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.select_payroll_variable_import_batch",
 			args: { batch_name, company: this.company, payroll_month: this.payroll_month },
 			freeze: true,
@@ -4717,7 +4904,7 @@ class PayrollInputCenter {
 			? __("确认该来源本月无数据？系统会保留来源文件、录入人与确认时间作为追溯，但不会产生计薪记录。")
 			: __("确认当前数据入账？确认后会参与下次薪资计算；如需调整，可新建修改版本留痕。");
 		frappe.confirm(prompt, () => {
-			frappe.call({
+			this.call_payroll_api({
 				method: "hrms.api.payroll_input.confirm_payroll_variable_import_batch",
 				args: { batch_name, company: this.company, payroll_month: this.payroll_month, confirm_empty },
 				freeze: true,
@@ -4732,7 +4919,7 @@ class PayrollInputCenter {
 
 	confirm_all_import_batches() {
 		frappe.confirm(__("一键确认本月所有当前版本的数据？系统会先校验全部异常和重复项；任一批次有问题时不会确认任何批次。"), () => {
-			frappe.call({
+			this.call_payroll_api({
 				method: "hrms.api.payroll_input.confirm_all_payroll_variable_import_batches",
 				args: this.scope_args(),
 				freeze: true,
@@ -4749,7 +4936,7 @@ class PayrollInputCenter {
 		frappe.prompt(
 			[{ fieldname: "reason", fieldtype: "Small Text", label: revoke_confirmation ? __("撤销原因") : __("作废原因"), reqd: 1 }],
 			(values) => {
-				frappe.call({
+				this.call_payroll_api({
 					method: "hrms.api.payroll_input.void_payroll_variable_import_batch",
 					args: { batch_name, company: this.company, payroll_month, reason: values.reason },
 					freeze: true,
@@ -4777,7 +4964,7 @@ class PayrollInputCenter {
 				? __("确认清空本月全部未确认批次？已确认入账的批次会保留；旧薪资输入表和未确认试算将失效。")
 				: __("确认删除所选 {0} 个未确认导入批次？已确认入账的批次会保留；旧薪资输入表和未确认试算将失效。", [batch_names.length]),
 			() => {
-				frappe.call({
+				this.call_payroll_api({
 					method: "hrms.api.payroll_input.delete_payroll_variable_import_batches",
 					args: { company: this.company, payroll_month, batch_names: JSON.stringify(batch_names) },
 					freeze: true,
@@ -5021,7 +5208,7 @@ class PayrollInputCenter {
 			if (!remaining) this.load_import_batches();
 		};
 		names.forEach((name) => {
-			frappe.call({
+			this.call_payroll_api({
 				method: "hrms.api.payroll_input.set_payroll_variable_record_excluded",
 				args: { name, excluded: 1 },
 				callback: finish,
@@ -5055,7 +5242,7 @@ class PayrollInputCenter {
 		const saveState = rowElement.querySelector("[data-inline-contribution-employee-save-state]");
 		if (saveState) saveState.textContent = __("保存中…");
 		Promise.all(group.rows.map((row) => new Promise((resolve, reject) => {
-			frappe.call({
+			this.call_payroll_api({
 				method: "hrms.api.payroll_input.update_payroll_variable_record",
 				args: { name: row.name, employee: "", employee_code: employeeCode, employee_name: employeeName, department: row.department || group.department || "", variable_type: row.variable_type, amount: row.amount, source_sheet: row.source_sheet || "", remarks: row.remarks || "" },
 				callback: (response) => resolve({ row, value: response.message || {} }),
@@ -5080,7 +5267,7 @@ class PayrollInputCenter {
 	save_contribution_amount(row, input) {
 		const saveState = input.parentElement?.querySelector(`[data-inline-contribution-save-state="${row.name}"]`);
 		if (saveState) saveState.textContent = __("保存中…");
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.update_payroll_variable_record",
 			args: { name: row.name, employee: "", employee_code: row.employee_code || "", employee_name: row.employee_name || "", department: row.department || "", variable_type: row.variable_type, amount: input.value, source_sheet: row.source_sheet || "", remarks: row.remarks || "" },
 			callback: (response) => {
@@ -5118,7 +5305,7 @@ class PayrollInputCenter {
 		});
 		const saveState = rowElement.querySelector(`[data-inline-variable-save-state="${row.name}"]`);
 		if (saveState) saveState.textContent = __("保存中…");
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.update_payroll_variable_record",
 			args: {
 				name: row.name,
@@ -5150,7 +5337,7 @@ class PayrollInputCenter {
 	}
 
 	toggle_variable_record(name, excluded) {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.set_payroll_variable_record_excluded",
 			args: { name, excluded },
 			callback: () => {
@@ -5179,7 +5366,7 @@ class PayrollInputCenter {
 				{ fieldname: "remarks", fieldtype: "Small Text", label: __("备注"), default: row.remarks },
 			],
 			(values) => {
-				frappe.call({
+				this.call_payroll_api({
 					method: "hrms.api.payroll_input.update_payroll_variable_record",
 					args: Object.assign({ name: row.name }, values),
 					freeze: true,
@@ -5215,7 +5402,7 @@ class PayrollInputCenter {
 			<div data-input-table></div>
 		`;
 		this.body().querySelector("[data-generate]").addEventListener("click", () => this.generate_payroll_input_records());
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_input_records",
 			args: this.scope_args({ page_length: 500 }),
 			callback: (response) => {
@@ -5226,7 +5413,7 @@ class PayrollInputCenter {
 
 	generate_payroll_input_records(after_generate = null) {
 		if (!this.ensure_payroll_generation_scope(__("生成薪资输入表"))) return;
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.generate_payroll_input_records",
 			args: this.scope_args(),
 			freeze: true,
@@ -5312,7 +5499,7 @@ class PayrollInputCenter {
 			this.load_settlements();
 		});
 		this.load_settlement_dependencies();
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_settlement_records",
 			args: this.scope_args({ page_length: 500 }),
 			callback: (response) => {
@@ -5330,7 +5517,7 @@ class PayrollInputCenter {
 			return;
 		}
 		const scope = this.scope_args();
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.get_termination_settlement_workbench", args: scope,
 			callback: ({ message: data }) => {
 				if (!target.isConnected || this.active_tab !== "termination-settlement" || JSON.stringify(scope) !== JSON.stringify(this.scope_args())) return;
@@ -5363,7 +5550,7 @@ class PayrollInputCenter {
 	open_termination_settlement(employee) {
 		const scope = this.scope_args();
 		const escape = (value) => frappe.utils.escape_html(String(value ?? ""));
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.get_termination_settlement_context", args: { ...scope, employee },
 			callback: ({ message: context }) => {
 				if (!context || JSON.stringify(scope) !== JSON.stringify(this.scope_args())) return;
@@ -5395,7 +5582,7 @@ class PayrollInputCenter {
 					secondary_action_label: "试算预览",
 					secondary_action: () => {
 						const inputJson = JSON.stringify(readInputs());
-						frappe.call({ method: "hrms.api.payroll_input.preview_termination_settlement", args: { ...scope, employee, inputs_json: inputJson }, callback: ({ message: result }) => {
+						this.call_payroll_api({ method: "hrms.api.payroll_input.preview_termination_settlement", args: { ...scope, employee, inputs_json: inputJson }, callback: ({ message: result }) => {
 							if (JSON.stringify(readInputs()) !== inputJson) return;
 							reviewedInputs = inputJson;
 							dialog.fields_dict.preview.$wrapper.html(this.termination_result_html(result));
@@ -5405,7 +5592,7 @@ class PayrollInputCenter {
 					primary_action: (values) => {
 						if (JSON.stringify(scope) !== JSON.stringify(this.scope_args())) return frappe.msgprint("公司、月份或考勤版本已切换，请重新打开离职结算。");
 						if (reviewedInputs !== JSON.stringify(readInputs())) return frappe.msgprint("请先试算预览；修改输入后需要重新试算。");
-						frappe.call({
+						this.call_payroll_api({
 							method: "hrms.api.payroll_input.save_monthly_payroll_participation_decision",
 							args: { ...scope, employee, decision: "离职结算", approved: 1, decision_reason: values.decision_reason,
 								settlement_basis: values.settlement_basis, termination_inputs_json: JSON.stringify({ inputs: readInputs(), source_hash: context.source_hash, settlement_date: values.settlement_date }) },
@@ -5444,7 +5631,7 @@ class PayrollInputCenter {
 	}
 
 	load_settlement_dependencies() {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_dependency_status",
 			args: this.scope_args(),
 			callback: (response) => {
@@ -5578,7 +5765,7 @@ class PayrollInputCenter {
 		frappe.confirm(
 			__("确认后，本公司、本月份、本考勤锁定版本的薪资结算不能再被重新试算覆盖。确认继续吗？"),
 			() => {
-				frappe.call({
+				this.call_payroll_api({
 					method: "hrms.api.payroll_input.confirm_payroll_settlement_records",
 					args: this.scope_args(),
 					freeze: true,
@@ -5594,7 +5781,7 @@ class PayrollInputCenter {
 
 	generate_payroll_settlement_records(after_generate = null) {
 		if (!this.ensure_payroll_generation_scope(__("试算本月工资"))) return;
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.get_payroll_generation_preflight",
 			args: this.scope_args(),
 			callback: (response) => {
@@ -5609,12 +5796,12 @@ class PayrollInputCenter {
 	}
 
 	run_payroll_settlement_generation(after_generate = null) {
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.generate_payroll_input_records",
 			args: this.scope_args(),
 			freeze: true,
 			freeze_message: __("异常已处理，正在重建薪资输入表…"),
-		}).then(() => frappe.call({
+		}).then(() => this.call_payroll_api({
 			method: "hrms.api.payroll_input.generate_payroll_settlement_records",
 			args: this.scope_args(),
 			freeze: true,
@@ -5635,7 +5822,7 @@ class PayrollInputCenter {
 			this.load_active_tab();
 			return;
 		}
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.get_payroll_generation_preflight",
 			args: this.scope_args(),
 			callback: (response) => {
@@ -5742,7 +5929,7 @@ class PayrollInputCenter {
 	load_payroll_manual_adjustments() {
 		const body = this.body();
 		body.innerHTML = this.render_payroll_manual_adjustments({ items: [] });
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_manual_adjustments",
 			args: this.scope_args(),
 			callback: (response) => {
@@ -5780,7 +5967,7 @@ class PayrollInputCenter {
 			this.render();
 			this.load_active_tab();
 		});
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_report_summary",
 			args: this.scope_args(),
 			callback: (response) => {
@@ -5822,7 +6009,7 @@ class PayrollInputCenter {
 			this.render();
 			this.load_active_tab();
 		});
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_analysis",
 			args: this.scope_args(),
 			callback: (response) => {
@@ -5881,7 +6068,7 @@ class PayrollInputCenter {
 			this.render();
 			this.load_active_tab();
 		});
-		frappe.call({
+		this.call_payroll_api({
 			method: "hrms.api.payroll_input.list_payroll_disbursement_records",
 			args: this.scope_args(),
 			callback: (response) => {

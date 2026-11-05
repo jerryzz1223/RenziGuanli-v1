@@ -22,6 +22,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from hrms.api.attendance_processors.full_attendance import POLICY_VERSION as FULL_ATTENDANCE_POLICY_VERSION, calculate_full_attendance
+
 import frappe
 from frappe import _
 from frappe.utils import cint, flt, getdate, now_datetime
@@ -4425,6 +4427,7 @@ def update_attendance_draft_daily_row(
 	attendance_date: str = "",
 	overtime_start_time: str = "",
 	overtime_end_time: str = "",
+	confirm_source_facts: int = 0,
 ):
 	"""Correct one DingTalk daily row, then rebuild only that employee's totals.
 
@@ -4464,7 +4467,13 @@ def update_attendance_draft_daily_row(
 	if not target:
 		frappe.throw(_("未找到该员工的钉钉来源行。"))
 	confirm_late = review_status == "已通过" and "LATE_MARKED" in (target.get("exception_codes") or [])
-	if not changes and not confirm_late:
+	confirmed_codes = set()
+	if cint(confirm_source_facts) and review_status == "已通过":
+		confirmed_codes = set(target.get("exception_codes") or []) & {
+			"CLOCK_IN_MISSING", "CLOCK_OUT_MISSING", "LEAVE_PUNCH_APPROVAL_MISMATCH",
+			"WORKDAY_OVERTIME_APPROVAL_MISMATCH",
+		}
+	if not changes and not confirm_late and not confirmed_codes:
 		frappe.throw(_("请至少修改一个每日考勤字段。"))
 	allowed_fields = {field["fieldname"] for field in target["editable_fields"]}
 	invalid_fields = sorted(set(changes) - allowed_fields)
@@ -4500,6 +4509,9 @@ def update_attendance_draft_daily_row(
 		# Approval confirms this dated late fact without erasing its count or
 		# approving any other exception on this date or elsewhere in the month.
 		decisions[target_key] = {**decisions.get(target_key, {}), "LATE_MARKED": True}
+
+	if confirmed_codes:
+		decisions[target_key] = {**decisions.get(target_key, {}), **{code: True for code in confirmed_codes}}
 
 	# Rebuild this employee from its original rows plus the approved overlay and
 	# the company's current structured shift rules. The uploaded source remains
@@ -4580,6 +4592,7 @@ def update_attendance_draft_daily_row(
 		"source_sheet": target.get("source_sheet") or "",
 		"attendance_date": target.get("attendance_date") or "",
 		"reference_values": reference_values,
+		"confirmed_exception_codes": sorted(confirmed_codes),
 	})
 	doc.processed_value_json = _json(confirmed)
 	doc.confirmed_value_json = _json(confirmed)
@@ -7334,8 +7347,8 @@ def _attendance_final_excel_config_hash() -> str:
 
 # New files use each employee's dated daily standard-hours total. Keep the
 # shared-standard versions identifiable so their locked previews stay unchanged.
-MONTHLY_FINAL_LAYOUT_VERSION = 25
-FIRST_SIGNED_LAYOUT_VERSION = 12
+MONTHLY_FINAL_LAYOUT_VERSION = 26
+FIRST_SIGNED_LAYOUT_VERSION = 13
 APPLE_REWARD_AMOUNT_PER_APPLE = 5
 SHARED_STANDARD_FINAL_LAYOUT_VERSIONS = frozenset({13, 14})
 SHARED_STANDARD_FIRST_SIGNED_LAYOUT_VERSIONS = frozenset({5})
@@ -7555,6 +7568,7 @@ def _monthly_snapshot_version(batches: dict[str, Any]) -> str:
 			"source_type": source_type,
 			# A changed exclusion policy requires a new review and lock snapshot.
 			"settlement_policy_version": 2,
+			"full_attendance_policy_version": FULL_ATTENDANCE_POLICY_VERSION,
 			"batch": batch.name,
 			"checksum": batch.source_checksum,
 			"processing_state": _processing_state_hash(batch),
@@ -7811,6 +7825,10 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 				for field, _label in ATTENDANCE_DRAFT_RESULT_COLUMNS:
 					default = None if field in {"special_hours", "special_workday_hours", "special_restday_hours", "special_holiday_hours"} else 0
 					output[field] = values.get(field, output.get(field, default))
+				output["late_personal_leave_hours"] = sum(
+					_as_number(detail.get("late_personal_leave_hours"))
+					for detail in values.get("attendance_details") or []
+				)
 				daily_standard_hours = _signed_standard_hours_from_daily_source(record)
 				if daily_standard_hours is not None:
 					output["standard_hours"] = daily_standard_hours
@@ -7884,6 +7902,10 @@ def _monthly_final_rows(batches: dict[str, Any], employee_code: str = "", shared
 					continue
 				output[field] = _as_number(values.get(field)) if recovered_support else _as_number(output.get(field)) + _as_number(values.get(field))
 	for output in rows_by_employee.values():
+		# Preserve audited edits and signed historical finals. Imported award
+		# amounts remain source evidence; new finals use the confirmed policy.
+		if "full_attendance_award" not in output.get("_explicit_final_fields", set()) and not output.get("signed_final_override"):
+			output["full_attendance_award"] = calculate_full_attendance(output)["award"]
 		output.pop("_explicit_final_fields", None)
 		# None is a missing fact, while a supplied numeric zero remains zero.
 		for field in ("housing_allowance", "full_attendance_award", "green_apple_amount", "red_apple_amount", "missing_card_count"):
